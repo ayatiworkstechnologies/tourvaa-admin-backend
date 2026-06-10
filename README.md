@@ -40,8 +40,8 @@ JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 
 API_BASE_URL=http://127.0.0.1:8000
-FRONTEND_URL=http://127.0.0.1:3000
-ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
+FRONTEND_URL=https://tourvaa.vercel.app
+ALLOWED_ORIGINS=https://tourvaa.vercel.app,http://127.0.0.1:3000,http://localhost:3000
 MOBILE_DEEP_LINK_URL=tourvaa://reset-password
 
 SUPER_ADMIN_NAME=Super Admin
