@@ -1,46 +1,32 @@
 # Tourvaa Backend
 
-FastAPI REST API for the Tourvaa travel platform. The backend is designed for both the current Next.js web admin panel and future mobile apps using the same JSON API and Bearer token authentication.
-
-## Features
-
-- JWT login and session restore
-- Public registration with admin approval
-- Forgot/reset password for web and mobile deep links
-- User CRUD and approval/rejection workflow
-- Role CRUD
-- Permission CRUD
-- Role-to-permission assignment
-- Dynamic dashboard data and role-based menus
-- Profile update and password update
-- Settings management
-- Email template management
-- Profile image upload
-- Public client configuration endpoint for web/mobile apps
-- Automatic SQLAlchemy table creation and seed data on startup
+Tourvaa Backend is a FastAPI REST API for the Tourvaa travel platform. It supports the admin web app and future mobile app with authentication, users, roles, permissions, dashboard data, profile, settings, email templates, uploads, and seeded default roles/admin user.
 
 ## Tech Stack
 
-- Python 3.11+
+- Python
 - FastAPI
-- Uvicorn
 - MySQL
-- SQLAlchemy ORM
+- SQLAlchemy
 - PyMySQL
-- Pydantic Settings
-- python-jose
-- Passlib bcrypt
-- FastAPI TestClient dependencies: `httpx`, `httpx2`
+- JWT authentication
 
-## Requirements
+## How To Run
 
-- Python 3.11 or newer
-- MySQL server
-- pip
+1. Create and activate virtual environment:
 
-## Environment
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
 
-Create `backend/.env`:
+2. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3. Create `.env` in the `backend` folder:
 
 ```env
 APP_NAME=Tourvaa Backend
@@ -58,266 +44,37 @@ FRONTEND_URL=http://127.0.0.1:3000
 ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
 MOBILE_DEEP_LINK_URL=tourvaa://reset-password
 
-SMTP_HOST=
-SMTP_PORT=465
-SMTP_USERNAME=
-SMTP_PASSWORD=
-SMTP_FROM_NAME=Tourvaa
+SUPER_ADMIN_NAME=Super Admin
+SUPER_ADMIN_EMAIL=admin@tourvaa.com
+SUPER_ADMIN_PASSWORD=Admin@123
+SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false
 ```
 
-Do not commit production credentials or real JWT secrets.
+4. Create the MySQL database used in `DATABASE_URL`.
 
-## Setup
-
-From the `backend` folder:
-
-```bash
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-Create the MySQL database configured in `DATABASE_URL`.
-
-Start the API:
+5. Start the API:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-The API runs at:
+6. Open API docs:
 
 ```txt
-http://127.0.0.1:8000
+http://127.0.0.1:8000/docs
 ```
 
-## API Docs
+## Default Login
 
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
-
-## Web and Mobile Client Support
-
-All protected clients use:
-
-```http
-Authorization: Bearer <access_token>
-```
-
-Optional client metadata:
-
-```http
-X-Client-Type: web | mobile
-X-Client-Version: 1.0.0
-X-Device-Id: device-id
-```
-
-Public client config:
-
-- `GET /api/client/config`
-
-This returns API prefix, auth header format, upload limits, web reset URL, and mobile deep-link reset URL.
-
-Session restore for web/mobile apps:
-
-- `GET /api/auth/me`
-
-Mobile password reset:
-
-```json
-{
-  "email": "user@example.com",
-  "client_type": "mobile"
-}
-```
-
-The reset email uses:
+The backend seeds a Super Admin user on startup:
 
 ```txt
-tourvaa://reset-password?token=<token>
+Email: admin@tourvaa.com
+Password: Admin@123
 ```
 
-Web reset continues to use:
-
-```txt
-{FRONTEND_URL}/reset-password?token=<token>
-```
-
-## Health Checks
-
-- `GET /`
-- `GET /api/health`
-
-## API Modules
-
-### Client
-
-- `GET /api/client/config`
-
-### Auth
-
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `GET /api/auth/me`
-- `POST /api/auth/forgot-password`
-- `POST /api/auth/reset-password`
-- `GET /api/auth/reset-password/validate`
-
-Public registration defaults to the `customer` role when available and remains pending until admin approval.
-
-Login returns:
-
-- `access_token`
-- `token_type`
-- `expires_in`
-- `client_type`
-- `user`
-- `role`
-- `permissions`
-
-### Dashboard
-
-- `GET /api/dashboard/me`
-
-Returns the current user, role permissions, role-based menus, stats, and pending approvals when the role can manage users.
-
-### Users
-
-- `GET /api/users/`
-- `GET /api/users/{user_id}`
-- `POST /api/users/`
-- `PUT /api/users/{user_id}`
-- `DELETE /api/users/{user_id}`
-- `POST /api/users/{user_id}/approve`
-- `POST /api/users/{user_id}/reject`
-- `POST /api/users/{user_id}/send-reset-mail`
-
-### Roles
-
-- `GET /api/roles/`
-- `GET /api/roles/{role_id}`
-- `POST /api/roles/`
-- `PUT /api/roles/{role_id}`
-- `DELETE /api/roles/{role_id}`
-- `POST /api/roles/{role_id}/permissions`
-- `GET /api/roles/{role_id}/permissions`
-- `GET /api/roles/public/options`
-
-### Permissions
-
-- `GET /api/permissions/`
-- `GET /api/permissions/{permission_id}`
-- `POST /api/permissions/`
-- `PUT /api/permissions/{permission_id}`
-- `DELETE /api/permissions/{permission_id}`
-
-### Profile
-
-- `GET /api/profile/me`
-- `PUT /api/profile/me`
-- `PUT /api/profile/password`
-
-Profile email is read-only from profile update. Required profile update fields are name, phone, and address. Profile image and location fields are optional.
-
-### Settings
-
-- `GET /api/settings/`
-- `PUT /api/settings/`
-
-### Email Templates
-
-- `GET /api/email-templates/`
-- `POST /api/email-templates/`
-- `PUT /api/email-templates/{template_id}`
-- `DELETE /api/email-templates/{template_id}`
-
-### Uploads
-
-- `POST /api/uploads/profile-image`
-
-## Permission Menu Slugs
-
-The dashboard/sidebar recognizes:
-
-- `view-dashboard`
-- `view-users`
-- `view-roles`
-- `view-permissions`
-- `view-suppliers`
-- `view-agents`
-- `view-resellers`
-- `view-customers`
-- `view-tours`
-- `view-bookings`
-- `view-payments`
-- `view-reports`
-- `view-email`
-- `view-settings`
-- `view-profile`
-
-## Seeded Roles
-
-The backend seeds these roles on startup:
-
-- `super-admin`
-- `admin`
-- `sub-admin`
-- `supplier`
-- `agent-reseller`
-- `customer`
-
-Default role permissions are defined in `app/seed.py`. `super-admin` receives all permissions.
-
-## Project Structure
-
-```txt
-backend/
-|-- app/
-|   |-- main.py
-|   |-- config.py
-|   |-- database.py
-|   |-- security.py
-|   |-- seed.py
-|   `-- modules/
-|       |-- auth/
-|       |-- client/
-|       |-- common/
-|       |-- dashboard/
-|       |-- email_templates/
-|       |-- permissions/
-|       |-- profile/
-|       |-- roles/
-|       |-- settings/
-|       |-- uploads/
-|       `-- users/
-|-- requirements.txt
-|-- .gitignore
-`-- README.md
-```
-
-## Testing
-
-FastAPI smoke tests can be run with `TestClient`.
-
-Example checks currently used:
-
-- Root route
-- Health route
-- OpenAPI generation
-- Client config route
-- Auth/session protected-route behavior
-- Minimal schema validation for profile, auth, and user creation
-
-Quick import check:
+## Test / Check
 
 ```bash
-set PYTHONDONTWRITEBYTECODE=1
 venv\Scripts\python -c "import app.main; print('backend import ok')"
 ```
-
-## Development Notes
-
-- `Base.metadata.create_all(bind=engine)` creates tables automatically but is not a migration system.
-- Use a strong `JWT_SECRET_KEY` outside local development.
-- Seed data is idempotent.
-- `uploads/`, `storage/`, `.env`, virtual environments, local DB files, and caches are ignored by Git.

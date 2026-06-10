@@ -1,7 +1,10 @@
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.roles.models import Role
+from app.modules.users.models import User
+from app.security import hash_password
 
 
 DEFAULT_ROLES = [
@@ -81,6 +84,42 @@ def assign_if_missing(db: Session, role: Role, permission: Permission):
         )
 
 
+def seed_super_admin_user(db: Session, role: Role | None):
+    if not role:
+        return
+
+    email = settings.SUPER_ADMIN_EMAIL.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+
+    if not user:
+        user = User(
+            name=settings.SUPER_ADMIN_NAME.strip() or "Super Admin",
+            email=email,
+            phone="",
+            profile_image="",
+            address="",
+            country="",
+            state="",
+            city="",
+            pincode="",
+            password=hash_password(settings.SUPER_ADMIN_PASSWORD),
+            role_id=role.id,
+            is_active=True,
+            approval_status="approved",
+        )
+        db.add(user)
+        db.flush()
+        return
+
+    user.name = user.name or settings.SUPER_ADMIN_NAME.strip() or "Super Admin"
+    user.role_id = role.id
+    user.is_active = True
+    user.approval_status = "approved"
+
+    if settings.SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP:
+        user.password = hash_password(settings.SUPER_ADMIN_PASSWORD)
+
+
 def seed_default_roles_and_permissions(db: Session):
     roles_by_slug = {}
 
@@ -126,6 +165,8 @@ def seed_default_roles_and_permissions(db: Session):
     if super_admin:
         for permission in permissions:
             assign_if_missing(db, super_admin, permission)
+
+        seed_super_admin_user(db, super_admin)
 
     default_role_permissions = {
         admin: [

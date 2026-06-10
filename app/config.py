@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = "*"
     MOBILE_DEEP_LINK_URL: str = "tourvaa://reset-password"
 
+    SUPER_ADMIN_NAME: str = "Super Admin"
+    SUPER_ADMIN_EMAIL: str = "admin@tourvaa.com"
+    SUPER_ADMIN_PASSWORD: str = "Admin@123"
+    SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP: bool = False
+
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 465
     SMTP_USERNAME: str | None = None
