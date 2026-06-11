@@ -151,7 +151,8 @@ def register_user(db: Session, data):
 
 
 def login_user(db: Session, data):
-    user = db.query(User).filter(User.email == data.email).first()
+    email = str(data.email).strip().lower()
+    user = db.query(User).filter(User.email == email).first()
 
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
