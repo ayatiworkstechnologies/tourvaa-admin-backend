@@ -1,9 +1,10 @@
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.modules.admin_modules.models import AdminModule
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.roles.models import Role
-from app.modules.users.models import User
+from app.modules.users.models import User, UserRole
 from app.security import hash_password
 
 
@@ -66,6 +67,22 @@ DEFAULT_PERMISSIONS = [
     for action, label in ACTION_LABELS.items()
 ]
 
+CUSTOMER_GRANULAR_PERMISSIONS = [
+    {"name": "View Customers", "slug": "customers.view", "module": "customers", "action": "get"},
+    {"name": "Create Customers", "slug": "customers.create", "module": "customers", "action": "post"},
+    {"name": "Edit Customers", "slug": "customers.edit", "module": "customers", "action": "put"},
+    {"name": "Block Customers", "slug": "customers.block", "module": "customers", "action": "put"},
+    {"name": "Unblock Customers", "slug": "customers.unblock", "module": "customers", "action": "put"},
+    {"name": "Reset Customer Password", "slug": "customers.reset_password", "module": "customers", "action": "post"},
+    {"name": "View Customer Bookings", "slug": "customers.view_bookings", "module": "customers", "action": "get"},
+    {"name": "View Customer Payments", "slug": "customers.view_payments", "module": "customers", "action": "get"},
+    {"name": "View Customer Communications", "slug": "customers.view_communications", "module": "customers", "action": "get"},
+    {"name": "Communicate With Customers", "slug": "customers.communicate", "module": "customers", "action": "post"},
+    {"name": "Export Customers", "slug": "customers.export", "module": "customers", "action": "get"},
+]
+
+DEFAULT_PERMISSIONS.extend(CUSTOMER_GRANULAR_PERMISSIONS)
+
 
 def assign_if_missing(db: Session, role: Role, permission: Permission):
     exists = (
@@ -82,6 +99,18 @@ def assign_if_missing(db: Session, role: Role, permission: Permission):
                 permission_id=permission.id,
             )
         )
+
+
+def assign_user_role_if_missing(db: Session, user: User, role: Role):
+    exists = (
+        db.query(UserRole)
+        .filter(UserRole.user_id == user.id)
+        .filter(UserRole.role_id == role.id)
+        .first()
+    )
+
+    if not exists:
+        db.add(UserRole(user_id=user.id, role_id=role.id))
 
 
 def seed_super_admin_user(db: Session, role: Role | None):
@@ -109,10 +138,12 @@ def seed_super_admin_user(db: Session, role: Role | None):
         )
         db.add(user)
         db.flush()
+        assign_user_role_if_missing(db, user, role)
         return
 
     user.name = user.name or settings.SUPER_ADMIN_NAME.strip() or "Super Admin"
     user.role_id = role.id
+    assign_user_role_if_missing(db, user, role)
     user.is_active = True
     user.approval_status = "approved"
 
@@ -121,6 +152,25 @@ def seed_super_admin_user(db: Session, role: Role | None):
 
 
 def seed_default_roles_and_permissions(db: Session):
+    for slug, name in MODULES:
+        admin_module = db.query(AdminModule).filter(AdminModule.slug == slug).first()
+
+        if not admin_module:
+            db.add(
+                AdminModule(
+                    name=name,
+                    slug=slug,
+                    description=f"{name} admin module",
+                    is_active=True,
+                    is_system=True,
+                )
+            )
+        else:
+            admin_module.name = name
+            admin_module.is_system = True
+
+    db.flush()
+
     roles_by_slug = {}
 
     for role_data in DEFAULT_ROLES:
@@ -189,6 +239,17 @@ def seed_default_roles_and_permissions(db: Session):
             "view-customers",
             "create-customers",
             "update-customers",
+            "customers.view",
+            "customers.create",
+            "customers.edit",
+            "customers.block",
+            "customers.unblock",
+            "customers.reset_password",
+            "customers.view_bookings",
+            "customers.view_payments",
+            "customers.view_communications",
+            "customers.communicate",
+            "customers.export",
             "view-tours",
             "create-tours",
             "update-tours",
@@ -222,6 +283,16 @@ def seed_default_roles_and_permissions(db: Session):
             "view-customers",
             "create-customers",
             "update-customers",
+            "customers.view",
+            "customers.create",
+            "customers.edit",
+            "customers.block",
+            "customers.unblock",
+            "customers.reset_password",
+            "customers.view_bookings",
+            "customers.view_payments",
+            "customers.view_communications",
+            "customers.communicate",
             "view-tours",
             "create-tours",
             "update-tours",
@@ -260,6 +331,16 @@ def seed_default_roles_and_permissions(db: Session):
             "view-customers",
             "create-customers",
             "update-customers",
+            "customers.view",
+            "customers.create",
+            "customers.edit",
+            "customers.block",
+            "customers.unblock",
+            "customers.reset_password",
+            "customers.view_bookings",
+            "customers.view_payments",
+            "customers.view_communications",
+            "customers.communicate",
             "view-tours",
             "view-bookings",
             "create-bookings",

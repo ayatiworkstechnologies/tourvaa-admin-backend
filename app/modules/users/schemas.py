@@ -110,6 +110,10 @@ class UserApprovalUpdate(BaseModel):
     role_id: Optional[int] = None
 
 
+class UserRolesUpdate(BaseModel):
+    role_ids: list[int] = Field(default_factory=list)
+
+
 class UserResponse(BaseModel):
     id: int
     name: str

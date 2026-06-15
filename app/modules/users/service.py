@@ -12,7 +12,7 @@ from app.modules.common.email_templates import (
 )
 from app.modules.common.mailer import send_email, try_send_email
 from app.modules.audit.service import log_audit
-from app.modules.users.models import User
+from app.modules.users.models import User, UserRole
 from app.modules.users.schemas import UserCreate, UserUpdate
 from app.security import create_password_reset_token, hash_password
 from app.modules.auth.service import build_password_reset_url
@@ -22,6 +22,17 @@ APPROVAL_STATUSES = ["pending", "approved", "rejected"]
 
 
 def serialize_user(user: User):
+    roles = [
+        {
+            "id": user_role.role.id,
+            "name": user_role.role.name,
+            "slug": user_role.role.slug,
+            "is_active": user_role.role.is_active,
+        }
+        for user_role in user.user_roles
+        if user_role.role
+    ]
+
     return {
         "id": user.id,
         "name": user.name,
@@ -40,6 +51,7 @@ def serialize_user(user: User):
             "slug": user.role.slug,
             "is_active": user.role.is_active,
         } if user.role else None,
+        "roles": roles,
         "is_active": user.is_active,
         "token_version": user.token_version,
         "approval_status": user.approval_status,
@@ -104,17 +116,40 @@ def validate_role(db: Session, role_id: int):
     return role
 
 
+def sync_user_roles(db: Session, user: User, role_ids: list[int]):
+    unique_role_ids = list(dict.fromkeys(role_ids))
+
+    if user.role_id and user.role_id not in unique_role_ids:
+        unique_role_ids.insert(0, user.role_id)
+
+    roles = []
+    for role_id in unique_role_ids:
+        roles.append(validate_role(db, role_id))
+
+    db.query(UserRole).filter(UserRole.user_id == user.id).delete()
+
+    for role in roles:
+        db.add(UserRole(user_id=user.id, role_id=role.id))
+
+    return roles
+
+
 def is_super_admin(user: User):
-    return bool(user.role and user.role.slug == "super-admin")
+    if user.role and user.role.slug == "super-admin":
+        return True
+
+    return any(user_role.role and user_role.role.slug == "super-admin" for user_role in user.user_roles)
 
 
 def count_active_super_admins(db: Session):
     return (
         db.query(User)
-        .join(Role, Role.id == User.role_id)
+        .outerjoin(UserRole, UserRole.user_id == User.id)
+        .outerjoin(Role, (Role.id == User.role_id) | (Role.id == UserRole.role_id))
         .filter(Role.slug == "super-admin")
         .filter(User.is_active == True)
         .filter(User.approval_status == "approved")
+        .distinct()
         .count()
     )
 
@@ -180,6 +215,8 @@ def create_user(
 
     db.add(user)
     db.flush()
+    if user.role_id:
+        sync_user_roles(db, user, [user.role_id])
 
     log_audit(
         db,
@@ -250,6 +287,7 @@ def update_user(
         if user.role_id != data.role_id:
             user.token_version += 1
         user.role_id = data.role_id
+        sync_user_roles(db, user, [data.role_id])
         new_role_id = data.role_id
 
     if data.is_active is not None:
@@ -316,6 +354,7 @@ def approve_user(
     if role_id is not None:
         validate_role(db, role_id)
         user.role_id = role_id
+        sync_user_roles(db, user, [role_id])
 
     if user.role_id is None:
         raise HTTPException(status_code=400, detail="Assign a role before approval")
@@ -343,6 +382,53 @@ def approve_user(
             "Your Tourvaa account is approved",
             approved_email(user.name, f"{settings.FRONTEND_URL}/login"),
         )
+
+    return serialize_user(user)
+
+
+def assign_roles_to_user(
+    db: Session,
+    user_id: int,
+    role_ids: list[int],
+    actor: User | None = None,
+    request: Request | None = None,
+):
+    user = get_user_by_id(db, user_id)
+
+    if not role_ids:
+        raise HTTPException(status_code=400, detail="At least one role is required")
+
+    old_values = serialize_user(user)
+    new_primary_role_id = role_ids[0]
+    if is_super_admin(user):
+        keeps_super_admin = (
+            db.query(Role)
+            .filter(Role.id.in_(role_ids))
+            .filter(Role.slug == "super-admin")
+            .first()
+        )
+        if not keeps_super_admin and count_active_super_admins(db) <= 1:
+            raise HTTPException(status_code=400, detail="Cannot remove the last active super admin")
+
+    roles = sync_user_roles(db, user, role_ids)
+
+    if user.role_id != new_primary_role_id:
+        user.token_version += 1
+
+    user.role_id = new_primary_role_id
+
+    log_audit(
+        db,
+        actor=actor,
+        action="assign_user_roles",
+        entity_type="user",
+        entity_id=user.id,
+        old_values=old_values,
+        new_values={"role_ids": [role.id for role in roles]},
+        request=request,
+    )
+    db.commit()
+    db.refresh(user)
 
     return serialize_user(user)
 

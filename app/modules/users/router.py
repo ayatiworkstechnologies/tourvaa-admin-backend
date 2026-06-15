@@ -4,7 +4,7 @@ from app.database import get_db
 from app.modules.common.auth import require_permission
 from app.modules.common.pagination import pagination_params
 from app.modules.users.models import User
-from app.modules.users.schemas import UserApprovalUpdate, UserCreate, UserUpdate
+from app.modules.users.schemas import UserApprovalUpdate, UserCreate, UserRolesUpdate, UserUpdate
 from app.modules.users.service import (
     get_all_users,
     get_user_detail,
@@ -14,6 +14,7 @@ from app.modules.users.service import (
     approve_user,
     reject_user,
     send_user_password_reset,
+    assign_roles_to_user,
 )
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -146,4 +147,27 @@ def send_reset_mail(
         "status": "success",
         "message": "Password reset email sent successfully",
         "data": user
+    }
+
+
+@router.post("/{user_id}/roles")
+def assign_user_roles(
+    user_id: int,
+    data: UserRolesUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("update-users")),
+):
+    user = assign_roles_to_user(
+        db,
+        user_id,
+        data.role_ids,
+        actor=current_user,
+        request=request,
+    )
+
+    return {
+        "status": "success",
+        "message": "Roles assigned successfully",
+        "data": user,
     }

@@ -5,7 +5,13 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.modules.permissions.models import Permission, RolePermission
-from app.modules.users.models import User
+from app.modules.users.models import User, UserRole
+
+
+def get_user_role_ids(user: User):
+    role_ids = {user.role_id} if user.role_id else set()
+    role_ids.update(user_role.role_id for user_role in user.user_roles)
+    return [role_id for role_id in role_ids if role_id]
 
 
 def get_current_user(
@@ -49,18 +55,24 @@ def get_current_user(
 
 
 def require_permission(permission_slug: str):
+    return require_any_permission(permission_slug)
+
+
+def require_any_permission(*permission_slugs: str):
     def dependency(
         current_user: User = Depends(get_current_user),
         db: Session = Depends(get_db),
     ):
-        if not current_user.role_id:
+        role_ids = get_user_role_ids(current_user)
+
+        if not role_ids:
             raise HTTPException(status_code=403, detail="Role is required")
 
         allowed = (
             db.query(Permission)
             .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .filter(RolePermission.role_id == current_user.role_id)
-            .filter(Permission.slug == permission_slug)
+            .filter(RolePermission.role_id.in_(role_ids))
+            .filter(Permission.slug.in_(permission_slugs))
             .filter(Permission.is_active == True)
             .first()
         )
