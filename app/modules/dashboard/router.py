@@ -1,42 +1,13 @@
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from jose import jwt, JWTError
 
 from app.database import get_db
-from app.config import settings
+from app.modules.common.auth import get_current_user
 from app.modules.users.models import User
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
-
-
-def get_current_user_from_token(
-    authorization: str = Header(None),
-    db: Session = Depends(get_db)
-):
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization token missing")
-
-    try:
-        token = authorization.replace("Bearer ", "")
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET_KEY,
-            algorithms=[settings.JWT_ALGORITHM]
-        )
-
-        user_id = payload.get("user_id")
-
-        user = db.query(User).filter(User.id == user_id).first()
-
-        if not user:
-            raise HTTPException(status_code=401, detail="Invalid user")
-
-        return user
-
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 def get_dashboard_menus(permissions):
@@ -73,7 +44,7 @@ def get_dashboard_menus(permissions):
 
 @router.get("/me")
 def my_dashboard(
-    current_user: User = Depends(get_current_user_from_token),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     permissions = (

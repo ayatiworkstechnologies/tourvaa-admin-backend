@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.common.auth import require_permission
+from app.modules.common.pagination import pagination_params
 from app.modules.permissions.schemas import PermissionCreate, PermissionUpdate
 from app.modules.permissions.service import (
     get_permissions,
@@ -17,10 +18,17 @@ router = APIRouter(prefix="/permissions", tags=["Permissions"])
 
 @router.get("/")
 def list_permissions(
+    params: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
     _=Depends(require_permission("view-permissions")),
 ):
-    return {"status": "success", "data": get_permissions(db)}
+    paginated = get_permissions(
+        db,
+        page=params["page"],
+        limit=params["limit"],
+        search=params["search"],
+    )
+    return {"status": "success", "data": paginated["items"], **paginated}
 
 
 @router.get("/{permission_id}")

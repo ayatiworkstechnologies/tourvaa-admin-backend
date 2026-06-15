@@ -1,6 +1,10 @@
+import re
+
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
 from datetime import datetime
+
+PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,19}$")
 
 
 class UserCreate(BaseModel):
@@ -26,8 +30,12 @@ class UserCreate(BaseModel):
 
         return value
 
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr):
+        return str(value).strip().lower()
+
     @field_validator(
-        "phone",
         "profile_image",
         "address",
         "country",
@@ -38,6 +46,14 @@ class UserCreate(BaseModel):
     @classmethod
     def trim_optional_text(cls, value: str):
         return value.strip()
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str):
+        value = value.strip()
+        if value and not PHONE_PATTERN.fullmatch(value):
+            raise ValueError("Enter a valid mobile number")
+        return value
 
 
 class UserUpdate(BaseModel):
@@ -56,7 +72,6 @@ class UserUpdate(BaseModel):
 
     @field_validator(
         "name",
-        "phone",
         "profile_image",
         "address",
         "country",
@@ -70,6 +85,25 @@ class UserUpdate(BaseModel):
             return value
 
         return value.strip()
+
+    @field_validator("phone")
+    @classmethod
+    def validate_optional_phone(cls, value: Optional[str]):
+        if value is None:
+            return value
+
+        value = value.strip()
+        if value and not PHONE_PATTERN.fullmatch(value):
+            raise ValueError("Enter a valid mobile number")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def normalize_optional_email(cls, value: Optional[EmailStr]):
+        if value is None:
+            return value
+
+        return str(value).strip().lower()
 
 
 class UserApprovalUpdate(BaseModel):

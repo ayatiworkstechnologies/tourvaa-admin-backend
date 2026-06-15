@@ -13,6 +13,7 @@ class Permission(Base):
     module = Column(String(100), nullable=False)
     action = Column(String(20), default="get", nullable=False)
     is_active = Column(Boolean, default=True)
+    is_system = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     roles = relationship("RolePermission", back_populates="permission")

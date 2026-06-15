@@ -11,6 +11,7 @@ class Role(Base):
     name = Column(String(100), nullable=False)
     slug = Column(String(100), unique=True, nullable=False)
     is_active = Column(Boolean, default=True)
+    is_system = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     users = relationship("User", back_populates="role")

@@ -49,10 +49,14 @@ def update_password(
     if not verify_password(data.current_password, current_user.password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-    if len(data.new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    if data.current_password == data.new_password:
+        raise HTTPException(
+            status_code=400,
+            detail="New password must be different from current password",
+        )
 
     current_user.password = hash_password(data.new_password)
+    current_user.token_version += 1
     db.commit()
 
     return {"status": "success", "message": "Password updated successfully"}

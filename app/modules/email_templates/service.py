@@ -1,4 +1,5 @@
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.modules.email_templates.models import EmailTemplate
@@ -55,9 +56,34 @@ def seed_email_templates(db: Session):
     db.commit()
 
 
-def get_templates(db: Session):
+def get_templates(db: Session, page: int | None = None, limit: int | None = None, search: str = ""):
     seed_email_templates(db)
-    return db.query(EmailTemplate).order_by(EmailTemplate.id.desc()).all()
+    query = db.query(EmailTemplate)
+
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        query = query.filter(
+            or_(
+                EmailTemplate.key.ilike(pattern),
+                EmailTemplate.name.ilike(pattern),
+                EmailTemplate.subject.ilike(pattern),
+            )
+        )
+
+    query = query.order_by(EmailTemplate.id.desc())
+
+    if page is None or limit is None:
+        return query.all()
+
+    total = query.count()
+    items = query.offset((page - 1) * limit).limit(limit).all()
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, (total + limit - 1) // limit),
+    }
 
 
 def get_template(db: Session, template_id: int):

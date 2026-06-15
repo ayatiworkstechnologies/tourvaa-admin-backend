@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import logging
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -10,7 +11,7 @@ from app.modules.common.email_templates import (
     password_reset_email,
     pending_approval_email,
 )
-from app.modules.common.mailer import send_email
+from app.modules.common.mailer import send_email, try_send_email
 from app.modules.users.models import User
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
@@ -21,6 +22,9 @@ from app.security import (
     hash_reset_token,
     verify_password,
 )
+
+logger = logging.getLogger(__name__)
+GENERIC_RESET_MESSAGE = "If an eligible account exists, a reset link has been sent."
 
 
 def get_user_permissions(db: Session, role_id: int):
@@ -108,6 +112,8 @@ def register_user(db: Session, data):
             .first()
         )
 
+    is_customer = selected_role.slug == "customer" if selected_role else False
+
     new_user = User(
         name=data.name.strip(),
         email=email,
@@ -120,32 +126,33 @@ def register_user(db: Session, data):
         pincode=data.pincode.strip(),
         password=hash_password(data.password),
         role_id=selected_role.id if selected_role else None,
-        is_active=False,
-        approval_status="pending"
+        is_active=is_customer,
+        approval_status="approved" if is_customer else "pending"
     )
 
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    subject, html = render_database_email(
-        db,
-        "registration_pending",
-        {
-            "name": new_user.name,
-            "email": new_user.email,
-            "phone": new_user.phone,
-            "role_name": new_user.role.name if new_user.role else "Customer",
-        },
-        "Tourvaa registration received",
-        pending_approval_email(new_user.name),
-    )
+    if not is_customer:
+        subject, html = render_database_email(
+            db,
+            "registration_pending",
+            {
+                "name": new_user.name,
+                "email": new_user.email,
+                "phone": new_user.phone,
+                "role_name": new_user.role.name if new_user.role else "Customer",
+            },
+            "Tourvaa registration received",
+            pending_approval_email(new_user.name),
+        )
 
-    send_email(
-        new_user.email,
-        subject,
-        html,
-    )
+        try_send_email(
+            new_user.email,
+            subject,
+            html,
+        )
 
     return new_user
 
@@ -177,6 +184,7 @@ def login_user(db: Session, data):
         "role": auth_user["role"]["slug"],
         "client_type": data.client_type or "web",
         "device_id": data.device_id,
+        "token_version": user.token_version,
         "permissions": [
             permission["slug"] for permission in auth_user["permissions"]
         ],
@@ -196,16 +204,20 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web"):
     user = db.query(User).filter(User.email == normalized_email).first()
 
     if not user:
-        raise HTTPException(status_code=404, detail="No account found with this email")
+        logger.info("Password reset requested for unknown email: %s", normalized_email)
+        return False
 
     if user.approval_status == "pending":
-        raise HTTPException(status_code=403, detail="Account is waiting for admin approval")
+        logger.info("Password reset skipped for pending user id=%s", user.id)
+        return False
 
     if user.approval_status == "rejected":
-        raise HTTPException(status_code=403, detail="Account approval was rejected")
+        logger.info("Password reset skipped for rejected user id=%s", user.id)
+        return False
 
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="User is inactive")
+        logger.info("Password reset skipped for inactive user id=%s", user.id)
+        return False
 
     token, token_hash = create_password_reset_token()
     user.reset_password_token = token_hash
@@ -228,11 +240,14 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web"):
         password_reset_email(user.name, reset_url),
     )
 
-    send_email(
-        user.email,
-        subject,
-        html,
-    )
+    try:
+        send_email(
+            user.email,
+            subject,
+            html,
+        )
+    except Exception as error:
+        logger.warning("Password reset email failed for user id=%s: %s", user.id, error)
 
     return True
 
@@ -259,6 +274,7 @@ def reset_password(db: Session, token: str, password: str):
     user.password = hash_password(password)
     user.reset_password_token = None
     user.reset_password_expires_at = None
+    user.token_version += 1
 
     db.commit()
 

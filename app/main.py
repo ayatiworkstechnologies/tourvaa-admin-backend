@@ -1,19 +1,18 @@
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect
+import logging
 
-from app.database import Base, SessionLocal, engine
-from app.config import settings
+from app.database import SessionLocal, engine
+from app.config import get_storage_root, settings
 
-# Import models before create_all
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.users.models import User
 from app.modules.settings.models import AppSetting
 from app.modules.email_templates.models import EmailTemplate
+from app.modules.audit.models import AuditLog
 from app.seed import seed_default_roles_and_permissions
 from app.modules.email_templates.service import seed_email_templates
 
@@ -28,76 +27,57 @@ from app.modules.email_templates.router import router as email_templates_router
 from app.modules.uploads.router import router as uploads_router
 from app.modules.client.router import router as client_router
 
-Base.metadata.create_all(bind=engine)
+logger = logging.getLogger(__name__)
 
 
-def sync_existing_schema():
+def schema_is_ready():
     inspector = inspect(engine)
-
-    if "users" not in inspector.get_table_names():
-        return
-
-    user_columns = {column["name"] for column in inspector.get_columns("users")}
-
-    if "approval_status" not in user_columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE users "
-                    "ADD COLUMN approval_status VARCHAR(20) DEFAULT 'approved' NOT NULL"
-                )
-            )
-
-    user_profile_columns = {
-        "phone": "ALTER TABLE users ADD COLUMN phone VARCHAR(30) DEFAULT '' NOT NULL",
-        "profile_image": "ALTER TABLE users ADD COLUMN profile_image VARCHAR(255) DEFAULT '' NOT NULL",
-        "address": "ALTER TABLE users ADD COLUMN address VARCHAR(255) DEFAULT '' NOT NULL",
-        "country": "ALTER TABLE users ADD COLUMN country VARCHAR(100) DEFAULT '' NOT NULL",
-        "state": "ALTER TABLE users ADD COLUMN state VARCHAR(100) DEFAULT '' NOT NULL",
-        "city": "ALTER TABLE users ADD COLUMN city VARCHAR(100) DEFAULT '' NOT NULL",
-        "pincode": "ALTER TABLE users ADD COLUMN pincode VARCHAR(20) DEFAULT '' NOT NULL",
+    tables = set(inspector.get_table_names())
+    required_tables = {
+        "roles",
+        "permissions",
+        "role_permissions",
+        "users",
+        "email_templates",
+        "app_settings",
+        "audit_logs",
     }
 
-    for column_name, alter_statement in user_profile_columns.items():
-        if column_name not in user_columns:
-            with engine.begin() as connection:
-                connection.execute(text(alter_statement))
+    if not required_tables.issubset(tables):
+        return False
 
-    if "reset_password_token" not in user_columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE users ADD COLUMN reset_password_token VARCHAR(255)")
-            )
+    required_columns = {
+        "roles": {"is_system"},
+        "permissions": {"action", "is_system"},
+        "users": {
+            "approval_status",
+            "reset_password_token",
+            "reset_password_expires_at",
+            "token_version",
+        },
+    }
 
-    if "reset_password_expires_at" not in user_columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text("ALTER TABLE users ADD COLUMN reset_password_expires_at DATETIME")
-            )
-
-    if "permissions" in inspector.get_table_names():
-        permission_columns = {
-            column["name"] for column in inspector.get_columns("permissions")
+    for table_name, column_names in required_columns.items():
+        existing_columns = {
+            column["name"] for column in inspector.get_columns(table_name)
         }
+        if not column_names.issubset(existing_columns):
+            return False
 
-        if "action" not in permission_columns:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "ALTER TABLE permissions "
-                        "ADD COLUMN action VARCHAR(20) DEFAULT 'get' NOT NULL"
-                    )
-                )
+    return True
 
 
-sync_existing_schema()
-
-db = SessionLocal()
-try:
-    seed_default_roles_and_permissions(db)
-    seed_email_templates(db)
-finally:
-    db.close()
+if schema_is_ready():
+    db = SessionLocal()
+    try:
+        seed_default_roles_and_permissions(db)
+        seed_email_templates(db)
+    finally:
+        db.close()
+else:
+    logger.warning(
+        "Database schema is not ready; skipping seed. Run `python -m alembic upgrade head` before starting the API."
+    )
 
 app = FastAPI(
     title="Tourvaa Backend",
@@ -113,8 +93,9 @@ app.add_middleware(
     expose_headers=["X-Client-Type", "X-Client-Version", "X-Device-Id"],
 )
 
-Path("storage/uploads/profile-images").mkdir(parents=True, exist_ok=True)
-app.mount("/storage", StaticFiles(directory="storage"), name="storage")
+storage_root = get_storage_root()
+storage_root.joinpath("uploads", "profile-images").mkdir(parents=True, exist_ok=True)
+app.mount("/storage", StaticFiles(directory=str(storage_root)), name="storage")
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")

@@ -1,8 +1,11 @@
 import smtplib
+import logging
 from email.message import EmailMessage
 from email.utils import formataddr
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def send_email(to_email: str, subject: str, html: str):
@@ -21,3 +24,12 @@ def send_email(to_email: str, subject: str, html: str):
     with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=20) as smtp:
         smtp.login(smtp_user, settings.SMTP_PASSWORD)
         smtp.send_message(message)
+
+
+def try_send_email(to_email: str, subject: str, html: str):
+    try:
+        send_email(to_email, subject, html)
+        return True
+    except Exception as error:
+        logger.warning("Could not send email to %s: %s", to_email, error)
+        return False

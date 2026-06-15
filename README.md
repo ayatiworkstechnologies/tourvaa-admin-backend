@@ -52,13 +52,19 @@ SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false
 
 4. Create the MySQL database used in `DATABASE_URL`.
 
-5. Start the API:
+5. Run database migrations:
+
+```bash
+python -m alembic upgrade head
+```
+
+6. Start the API:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-6. Open API docs:
+7. Open API docs:
 
 ```txt
 http://127.0.0.1:8000/docs

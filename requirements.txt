@@ -11,3 +11,5 @@ python-multipart
 email-validator
 httpx
 httpx2
+alembic
+pytest

@@ -15,21 +15,33 @@ def get_current_user(
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization token missing")
 
+    parts = authorization.split()
+
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1]:
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+
     try:
-        token = authorization.replace("Bearer ", "")
+        token = parts[1]
         payload = jwt.decode(
             token,
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
         )
         user_id = payload.get("user_id")
+        token_version = payload.get("token_version")
         user = db.query(User).filter(User.id == user_id).first()
 
         if not user:
             raise HTTPException(status_code=401, detail="Invalid user")
 
+        if token_version is None or token_version != user.token_version:
+            raise HTTPException(status_code=401, detail="Token has expired")
+
         if user.approval_status != "approved" or not user.is_active:
             raise HTTPException(status_code=403, detail="User is not approved")
+
+        if user.role and not user.role.is_active:
+            raise HTTPException(status_code=403, detail="Role is inactive")
 
         return user
     except JWTError:

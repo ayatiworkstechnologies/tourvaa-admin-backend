@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -16,6 +17,7 @@ class Settings(BaseSettings):
     API_BASE_URL: str = "http://127.0.0.1:8000"
     ALLOWED_ORIGINS: str = "*"
     MOBILE_DEEP_LINK_URL: str = "tourvaa://reset-password"
+    STORAGE_ROOT: str = "storage"
 
     SUPER_ADMIN_NAME: str = "Super Admin"
     SUPER_ADMIN_EMAIL: str = "admin@tourvaa.com"
@@ -47,3 +49,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_storage_root() -> Path:
+    path = Path(settings.STORAGE_ROOT)
+
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parents[1] / path
+
+    return path
