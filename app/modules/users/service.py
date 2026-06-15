@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.modules.roles.models import Role
@@ -8,9 +9,9 @@ from app.config import settings
 from app.modules.common.email_templates import (
     approved_email,
     password_reset_email,
-    user_created_email,
 )
-from app.modules.common.mailer import send_email
+from app.modules.common.mailer import send_email, try_send_email
+from app.modules.audit.service import log_audit
 from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate, UserUpdate
 from app.security import create_password_reset_token, hash_password
@@ -40,14 +41,40 @@ def serialize_user(user: User):
             "is_active": user.role.is_active,
         } if user.role else None,
         "is_active": user.is_active,
+        "token_version": user.token_version,
         "approval_status": user.approval_status,
         "created_at": user.created_at,
     }
 
 
-def get_all_users(db: Session):
-    users = db.query(User).order_by(User.id.desc()).all()
-    return [serialize_user(user) for user in users]
+def get_all_users(db: Session, page: int | None = None, limit: int | None = None, search: str = ""):
+    query = db.query(User)
+
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        query = query.filter(
+            or_(
+                User.name.ilike(pattern),
+                User.email.ilike(pattern),
+                User.phone.ilike(pattern),
+            )
+        )
+
+    query = query.order_by(User.id.desc())
+
+    if page is None or limit is None:
+        users = query.all()
+        return [serialize_user(user) for user in users]
+
+    total = query.count()
+    users = query.offset((page - 1) * limit).limit(limit).all()
+    return {
+        "items": [serialize_user(user) for user in users],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, (total + limit - 1) // limit),
+    }
 
 
 def get_user_by_id(db: Session, user_id: int):
@@ -77,8 +104,54 @@ def validate_role(db: Session, role_id: int):
     return role
 
 
-def create_user(db: Session, data: UserCreate):
-    existing_user = db.query(User).filter(User.email == data.email).first()
+def is_super_admin(user: User):
+    return bool(user.role and user.role.slug == "super-admin")
+
+
+def count_active_super_admins(db: Session):
+    return (
+        db.query(User)
+        .join(Role, Role.id == User.role_id)
+        .filter(Role.slug == "super-admin")
+        .filter(User.is_active == True)
+        .filter(User.approval_status == "approved")
+        .count()
+    )
+
+
+def ensure_not_removing_last_super_admin(
+    db: Session,
+    user: User,
+    *,
+    new_role_id: int | None | object = None,
+    new_is_active: bool | None = None,
+    new_approval_status: str | None = None,
+):
+    if not is_super_admin(user):
+        return
+
+    removing_super_admin_role = False
+
+    if new_role_id is not None:
+        new_role = db.query(Role).filter(Role.id == new_role_id).first()
+        removing_super_admin_role = not new_role or new_role.slug != "super-admin"
+
+    disabling = new_is_active is False
+    unapproving = new_approval_status in {"pending", "rejected"}
+
+    if removing_super_admin_role or disabling or unapproving:
+        if count_active_super_admins(db) <= 1:
+            raise HTTPException(status_code=400, detail="Cannot remove the last active super admin")
+
+
+def create_user(
+    db: Session,
+    data: UserCreate,
+    actor: User | None = None,
+    request: Request | None = None,
+):
+    email = str(data.email).strip().lower()
+    existing_user = db.query(User).filter(User.email == email).first()
 
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already exists")
@@ -86,58 +159,76 @@ def create_user(db: Session, data: UserCreate):
     if data.role_id is not None:
         validate_role(db, data.role_id)
 
+    token, token_hash = create_password_reset_token()
     user = User(
-        name=data.name,
-        email=data.email,
-        phone=data.phone,
-        profile_image=data.profile_image,
-        address=data.address,
-        country=data.country,
-        state=data.state,
-        city=data.city,
-        pincode=data.pincode,
-        password=hash_password(data.password),
+        name=data.name.strip(),
+        email=email,
+        phone=data.phone.strip(),
+        profile_image=data.profile_image.strip(),
+        address=data.address.strip(),
+        country=data.country.strip(),
+        state=data.state.strip(),
+        city=data.city.strip(),
+        pincode=data.pincode.strip(),
+        password=hash_password(create_password_reset_token()[0]),
         role_id=data.role_id,
         is_active=True,
         approval_status="approved",
+        reset_password_token=token_hash,
+        reset_password_expires_at=datetime.utcnow() + timedelta(minutes=30),
     )
 
     db.add(user)
+    db.flush()
+
+    log_audit(
+        db,
+        actor=actor,
+        action="create_user",
+        entity_type="user",
+        entity_id=user.id,
+        new_values=serialize_user(user),
+        request=request,
+    )
     db.commit()
     db.refresh(user)
 
-    if data.password:
-        send_email(
-            user.email,
-            "Your Tourvaa account is ready",
-            user_created_email(
-                user.name,
-                user.email,
-                data.password,
-                f"{settings.FRONTEND_URL}/login",
-            ),
-        )
+    reset_url = build_password_reset_url(token)
+    try_send_email(
+        user.email,
+        "Set up your Tourvaa password",
+        password_reset_email(user.name, reset_url),
+    )
 
     return serialize_user(user)
 
 
-def update_user(db: Session, user_id: int, data: UserUpdate):
+def update_user(
+    db: Session,
+    user_id: int,
+    data: UserUpdate,
+    actor: User | None = None,
+    request: Request | None = None,
+):
     user = get_user_by_id(db, user_id)
+    old_values = serialize_user(user)
+    was_approved = user.approval_status == "approved"
 
     if data.name is not None:
-        user.name = data.name
+        user.name = data.name.strip()
 
     if data.email is not None:
+        email = str(data.email).strip().lower()
         existing_user = (
             db.query(User)
-            .filter(User.email == data.email, User.id != user_id)
+            .filter(User.email == email, User.id != user_id)
             .first()
         )
 
         if existing_user:
             raise HTTPException(status_code=400, detail="Email already exists")
 
-        user.email = data.email
+        user.email = email
 
     for field in [
         "phone",
@@ -150,13 +241,21 @@ def update_user(db: Session, user_id: int, data: UserUpdate):
     ]:
         value = getattr(data, field)
         if value is not None:
-            setattr(user, field, value)
+            setattr(user, field, value.strip())
 
+    new_role_id = None
     if data.role_id is not None:
         validate_role(db, data.role_id)
+        ensure_not_removing_last_super_admin(db, user, new_role_id=data.role_id)
+        if user.role_id != data.role_id:
+            user.token_version += 1
         user.role_id = data.role_id
+        new_role_id = data.role_id
 
     if data.is_active is not None:
+        ensure_not_removing_last_super_admin(db, user, new_is_active=data.is_active)
+        if user.is_active != data.is_active:
+            user.token_version += 1
         user.is_active = data.is_active
 
     if data.approval_status is not None:
@@ -166,23 +265,53 @@ def update_user(db: Session, user_id: int, data: UserUpdate):
         if data.approval_status == "approved" and user.role_id is None:
             raise HTTPException(status_code=400, detail="Assign a role before approval")
 
+        ensure_not_removing_last_super_admin(
+            db,
+            user,
+            new_role_id=new_role_id,
+            new_approval_status=data.approval_status,
+        )
+        if user.approval_status != data.approval_status:
+            user.token_version += 1
+        new_active = data.approval_status == "approved"
+        if user.is_active != new_active:
+            user.token_version += 1
         user.approval_status = data.approval_status
-        user.is_active = data.approval_status == "approved"
+        user.is_active = new_active
 
+    log_audit(
+        db,
+        actor=actor,
+        action="update_user",
+        entity_type="user",
+        entity_id=user.id,
+        old_values=old_values,
+        new_values=serialize_user(user),
+        request=request,
+    )
     db.commit()
     db.refresh(user)
 
-    send_email(
-        user.email,
-        "Your Tourvaa account is approved",
-        approved_email(user.name, f"{settings.FRONTEND_URL}/login"),
-    )
+    if data.approval_status == "approved" and not was_approved:
+        try_send_email(
+            user.email,
+            "Your Tourvaa account is approved",
+            approved_email(user.name, f"{settings.FRONTEND_URL}/login"),
+        )
 
     return serialize_user(user)
 
 
-def approve_user(db: Session, user_id: int, role_id: int | None = None):
+def approve_user(
+    db: Session,
+    user_id: int,
+    role_id: int | None = None,
+    actor: User | None = None,
+    request: Request | None = None,
+):
     user = get_user_by_id(db, user_id)
+    old_values = serialize_user(user)
+    was_approved = user.approval_status == "approved"
 
     if role_id is not None:
         validate_role(db, role_id)
@@ -193,18 +322,54 @@ def approve_user(db: Session, user_id: int, role_id: int | None = None):
 
     user.approval_status = "approved"
     user.is_active = True
+    user.token_version += 1
 
+    log_audit(
+        db,
+        actor=actor,
+        action="approve_user",
+        entity_type="user",
+        entity_id=user.id,
+        old_values=old_values,
+        new_values=serialize_user(user),
+        request=request,
+    )
     db.commit()
     db.refresh(user)
+
+    if not was_approved:
+        try_send_email(
+            user.email,
+            "Your Tourvaa account is approved",
+            approved_email(user.name, f"{settings.FRONTEND_URL}/login"),
+        )
 
     return serialize_user(user)
 
 
-def reject_user(db: Session, user_id: int):
+def reject_user(
+    db: Session,
+    user_id: int,
+    actor: User | None = None,
+    request: Request | None = None,
+):
     user = get_user_by_id(db, user_id)
+    ensure_not_removing_last_super_admin(db, user, new_approval_status="rejected")
+    old_values = serialize_user(user)
     user.approval_status = "rejected"
     user.is_active = False
+    user.token_version += 1
 
+    log_audit(
+        db,
+        actor=actor,
+        action="reject_user",
+        entity_type="user",
+        entity_id=user.id,
+        old_values=old_values,
+        new_values=serialize_user(user),
+        request=request,
+    )
     db.commit()
     db.refresh(user)
 
@@ -229,10 +394,34 @@ def send_user_password_reset(db: Session, user_id: int):
     return serialize_user(user)
 
 
-def delete_user(db: Session, user_id: int):
+def delete_user(
+    db: Session,
+    user_id: int,
+    actor: User | None = None,
+    request: Request | None = None,
+):
     user = get_user_by_id(db, user_id)
 
+    if actor and actor.id == user.id:
+        raise HTTPException(status_code=400, detail="Users cannot delete themselves")
+
+    ensure_not_removing_last_super_admin(
+        db,
+        user,
+        new_is_active=False,
+        new_approval_status="rejected",
+    )
+    old_values = serialize_user(user)
     db.delete(user)
+    log_audit(
+        db,
+        actor=actor,
+        action="delete_user",
+        entity_type="user",
+        entity_id=user_id,
+        old_values=old_values,
+        request=request,
+    )
     db.commit()
 
     return True

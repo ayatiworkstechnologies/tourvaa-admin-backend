@@ -127,9 +127,11 @@ def seed_default_roles_and_permissions(db: Session):
         role = db.query(Role).filter(Role.slug == role_data["slug"]).first()
 
         if not role:
-            role = Role(**role_data, is_active=True)
+            role = Role(**role_data, is_active=True, is_system=True)
             db.add(role)
             db.flush()
+        else:
+            role.is_system = True
 
         roles_by_slug[role.slug] = role
 
@@ -143,13 +145,14 @@ def seed_default_roles_and_permissions(db: Session):
         )
 
         if not permission:
-            permission = Permission(**permission_data, is_active=True)
+            permission = Permission(**permission_data, is_active=True, is_system=True)
             db.add(permission)
             db.flush()
         else:
             permission.name = permission_data["name"]
             permission.module = permission_data["module"]
             permission.action = permission_data["action"]
+            permission.is_system = True
 
         permissions.append(permission)
 

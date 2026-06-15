@@ -1,8 +1,11 @@
 import imghdr
-from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+
+from app.config import get_storage_root
+from app.modules.common.auth import get_current_user
+from app.modules.users.models import User
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
 
@@ -17,13 +20,15 @@ ALLOWED_IMAGE_TYPES = {
     "png": "png",
     "webp": "webp",
 }
-PROFILE_IMAGE_DIR = (
-    Path(__file__).resolve().parents[3] / "storage" / "uploads" / "profile-images"
-)
+PROFILE_IMAGE_DIR = get_storage_root() / "uploads" / "profile-images"
 
 
 @router.post("/profile-image")
-async def upload_profile_image(request: Request, file: UploadFile = File(...)):
+async def upload_profile_image(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=400, detail="Only JPG, PNG, and WEBP images are allowed")
 
@@ -57,5 +62,6 @@ async def upload_profile_image(request: Request, file: UploadFile = File(...)):
             "path": image_path,
             "url": image_url,
             "filename": filename,
+            "uploaded_by": current_user.id,
         },
     }

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.common.auth import require_permission
+from app.modules.common.pagination import pagination_params
 from app.modules.email_templates.schemas import EmailTemplateCreate, EmailTemplateUpdate
 from app.modules.email_templates.service import (
     create_template,
@@ -17,10 +18,17 @@ router = APIRouter(prefix="/email-templates", tags=["Email Templates"])
 
 @router.get("/")
 def list_templates(
+    params: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
     _=Depends(require_permission("view-email")),
 ):
-    return {"status": "success", "data": get_templates(db)}
+    paginated = get_templates(
+        db,
+        page=params["page"],
+        limit=params["limit"],
+        search=params["search"],
+    )
+    return {"status": "success", "data": paginated["items"], **paginated}
 
 
 @router.get("/{template_id}")

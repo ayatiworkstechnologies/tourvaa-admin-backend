@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
 
+from app.modules.audit.service import log_audit
 from app.modules.settings.models import AppSetting
+from app.modules.users.models import User
 
 
 DEFAULT_SETTINGS = [
@@ -30,8 +32,17 @@ def get_settings(db: Session):
     return db.query(AppSetting).order_by(AppSetting.group.asc(), AppSetting.id.asc()).all()
 
 
-def update_settings(db: Session, values: dict[str, str | None]):
+def update_settings(
+    db: Session,
+    values: dict[str, str | None],
+    actor: User | None = None,
+    request=None,
+):
     seed_settings(db)
+    old_values = {
+        setting.key: setting.value
+        for setting in db.query(AppSetting).filter(AppSetting.key.in_(values.keys())).all()
+    }
 
     for key, value in values.items():
         setting = db.query(AppSetting).filter(AppSetting.key == key).first()
@@ -39,5 +50,14 @@ def update_settings(db: Session, values: dict[str, str | None]):
         if setting:
             setting.value = value
 
+    log_audit(
+        db,
+        actor=actor,
+        action="update_settings",
+        entity_type="settings",
+        old_values=old_values,
+        new_values=values,
+        request=request,
+    )
     db.commit()
     return get_settings(db)

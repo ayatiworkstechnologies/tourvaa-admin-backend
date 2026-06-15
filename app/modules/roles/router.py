@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.common.auth import require_permission
+from app.modules.common.pagination import pagination_params
+from app.modules.users.models import User
 from app.modules.roles.schemas import RoleCreate, RoleUpdate, AssignPermissions
 from app.modules.roles.service import (
     get_roles,
@@ -27,8 +29,18 @@ def public_role_options(db: Session = Depends(get_db)):
 
 
 @router.get("/")
-def list_roles(db: Session = Depends(get_db), _=Depends(require_permission("view-roles"))):
-    return {"status": "success", "data": get_roles(db)}
+def list_roles(
+    params: dict = Depends(pagination_params),
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-roles")),
+):
+    paginated = get_roles(
+        db,
+        page=params["page"],
+        limit=params["limit"],
+        search=params["search"],
+    )
+    return {"status": "success", "data": paginated["items"], **paginated}
 
 
 @router.get("/{role_id}")
@@ -43,13 +55,14 @@ def detail_role(
 @router.post("/")
 def add_role(
     data: RoleCreate,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("create-roles")),
+    current_user: User = Depends(require_permission("create-roles")),
 ):
     return {
         "status": "success",
         "message": "Role created successfully",
-        "data": create_role(db, data),
+        "data": create_role(db, data, actor=current_user, request=request),
     }
 
 
@@ -57,23 +70,25 @@ def add_role(
 def edit_role(
     role_id: int,
     data: RoleUpdate,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("update-roles")),
+    current_user: User = Depends(require_permission("update-roles")),
 ):
     return {
         "status": "success",
         "message": "Role updated successfully",
-        "data": update_role(db, role_id, data),
+        "data": update_role(db, role_id, data, actor=current_user, request=request),
     }
 
 
 @router.delete("/{role_id}")
 def remove_role(
     role_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("delete-roles")),
+    current_user: User = Depends(require_permission("delete-roles")),
 ):
-    delete_role(db, role_id)
+    delete_role(db, role_id, actor=current_user, request=request)
     return {"status": "success", "message": "Role deleted successfully"}
 
 
@@ -81,10 +96,17 @@ def remove_role(
 def assign_permissions(
     role_id: int,
     data: AssignPermissions,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("update-roles")),
+    current_user: User = Depends(require_permission("update-roles")),
 ):
-    permissions = assign_permissions_to_role(db, role_id, data.permission_ids)
+    permissions = assign_permissions_to_role(
+        db,
+        role_id,
+        data.permission_ids,
+        actor=current_user,
+        request=request,
+    )
 
     return {
         "status": "success",

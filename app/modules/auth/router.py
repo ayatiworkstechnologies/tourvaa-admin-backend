@@ -11,6 +11,7 @@ from app.modules.auth.schemas import (
     ResetPasswordSchema,
 )
 from app.modules.auth.service import (
+    GENERIC_RESET_MESSAGE,
     forgot_password,
     get_auth_user_payload,
     login_user,
@@ -74,7 +75,7 @@ def forgot_password_request(data: ForgotPasswordSchema, db: Session = Depends(ge
 
     return {
         "status": "success",
-        "message": "Reset link has been sent to your email"
+        "message": GENERIC_RESET_MESSAGE
     }
 
 

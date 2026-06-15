@@ -25,6 +25,7 @@ class User(Base):
     approval_status = Column(String(20), default="approved", nullable=False)
     reset_password_token = Column(String(255), nullable=True)
     reset_password_expires_at = Column(DateTime(timezone=True), nullable=True)
+    token_version = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     role = relationship("Role", back_populates="users")

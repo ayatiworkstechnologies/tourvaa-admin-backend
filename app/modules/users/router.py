@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.common.auth import require_permission
+from app.modules.common.pagination import pagination_params
+from app.modules.users.models import User
 from app.modules.users.schemas import UserApprovalUpdate, UserCreate, UserUpdate
 from app.modules.users.service import (
     get_all_users,
@@ -19,14 +21,21 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 @router.get("/")
 def list_users(
+    params: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
     _=Depends(require_permission("view-users")),
 ):
-    users = get_all_users(db)
+    paginated = get_all_users(
+        db,
+        page=params["page"],
+        limit=params["limit"],
+        search=params["search"],
+    )
 
     return {
         "status": "success",
-        "data": users
+        "data": paginated["items"],
+        **paginated,
     }
 
 
@@ -47,10 +56,11 @@ def user_detail(
 @router.post("/")
 def add_user(
     data: UserCreate,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("create-users")),
+    current_user: User = Depends(require_permission("create-users")),
 ):
-    user = create_user(db, data)
+    user = create_user(db, data, actor=current_user, request=request)
 
     return {
         "status": "success",
@@ -63,10 +73,11 @@ def add_user(
 def edit_user(
     user_id: int,
     data: UserUpdate,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("update-users")),
+    current_user: User = Depends(require_permission("update-users")),
 ):
-    user = update_user(db, user_id, data)
+    user = update_user(db, user_id, data, actor=current_user, request=request)
 
     return {
         "status": "success",
@@ -78,10 +89,11 @@ def edit_user(
 @router.delete("/{user_id}")
 def remove_user(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("delete-users")),
+    current_user: User = Depends(require_permission("delete-users")),
 ):
-    delete_user(db, user_id)
+    delete_user(db, user_id, actor=current_user, request=request)
 
     return {
         "status": "success",
@@ -93,10 +105,11 @@ def remove_user(
 def approve_pending_user(
     user_id: int,
     data: UserApprovalUpdate,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("update-users")),
+    current_user: User = Depends(require_permission("update-users")),
 ):
-    user = approve_user(db, user_id, data.role_id)
+    user = approve_user(db, user_id, data.role_id, actor=current_user, request=request)
 
     return {
         "status": "success",
@@ -108,10 +121,11 @@ def approve_pending_user(
 @router.post("/{user_id}/reject")
 def reject_pending_user(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("update-users")),
+    current_user: User = Depends(require_permission("update-users")),
 ):
-    user = reject_user(db, user_id)
+    user = reject_user(db, user_id, actor=current_user, request=request)
 
     return {
         "status": "success",

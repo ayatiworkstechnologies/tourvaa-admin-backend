@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.common.auth import require_permission
+from app.modules.users.models import User
 from app.modules.settings.schemas import SettingsBulkUpdate
 from app.modules.settings.service import get_settings, update_settings
 
@@ -20,11 +21,12 @@ def list_settings(
 @router.put("/")
 def save_settings(
     data: SettingsBulkUpdate,
+    request: Request,
     db: Session = Depends(get_db),
-    _=Depends(require_permission("update-settings")),
+    current_user: User = Depends(require_permission("update-settings")),
 ):
     return {
         "status": "success",
         "message": "Settings updated successfully",
-        "data": update_settings(db, data.settings),
+        "data": update_settings(db, data.settings, actor=current_user, request=request),
     }
