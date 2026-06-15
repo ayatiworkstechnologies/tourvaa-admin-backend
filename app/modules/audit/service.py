@@ -7,6 +7,19 @@ from app.modules.audit.models import AuditLog
 from app.modules.users.models import User
 
 
+def _json_safe(value: Any):
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+
+    return value
+
+
 def log_audit(
     db: Session,
     *,
@@ -31,8 +44,8 @@ def log_audit(
             action=action,
             entity_type=entity_type,
             entity_id=entity_id,
-            old_values=old_values,
-            new_values=new_values,
+            old_values=_json_safe(old_values),
+            new_values=_json_safe(new_values),
             ip_address=ip_address,
             user_agent=user_agent,
         )

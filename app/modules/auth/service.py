@@ -13,6 +13,7 @@ from app.modules.common.email_templates import (
 )
 from app.modules.common.mailer import send_email, try_send_email
 from app.modules.users.models import User
+from app.modules.users.models import UserRole
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
 from app.security import (
@@ -27,12 +28,13 @@ logger = logging.getLogger(__name__)
 GENERIC_RESET_MESSAGE = "If an eligible account exists, a reset link has been sent."
 
 
-def get_user_permissions(db: Session, role_id: int):
+def get_user_permissions(db: Session, role_ids: list[int]):
     permissions = (
         db.query(Permission)
         .join(RolePermission, RolePermission.permission_id == Permission.id)
-        .filter(RolePermission.role_id == role_id)
+        .filter(RolePermission.role_id.in_(role_ids))
         .filter(Permission.is_active == True)
+        .distinct()
         .all()
     )
 
@@ -49,7 +51,18 @@ def get_user_permissions(db: Session, role_id: int):
 
 
 def get_auth_user_payload(db: Session, user: User):
-    permissions = get_user_permissions(db, user.role_id) if user.role_id else []
+    role_ids = {user.role_id} if user.role_id else set()
+    role_ids.update(user_role.role_id for user_role in user.user_roles)
+    permissions = get_user_permissions(db, list(role_ids)) if role_ids else []
+    roles = [
+        {
+            "id": user_role.role.id,
+            "name": user_role.role.name,
+            "slug": user_role.role.slug,
+        }
+        for user_role in user.user_roles
+        if user_role.role
+    ]
 
     return {
         "id": user.id,
@@ -62,6 +75,7 @@ def get_auth_user_payload(db: Session, user: User):
             "name": user.role.name if user.role else None,
             "slug": user.role.slug if user.role else None,
         },
+        "roles": roles,
         "permissions": permissions,
     }
 
@@ -131,6 +145,9 @@ def register_user(db: Session, data):
     )
 
     db.add(new_user)
+    db.flush()
+    if new_user.role_id:
+        db.add(UserRole(user_id=new_user.id, role_id=new_user.role_id))
     db.commit()
     db.refresh(new_user)
 
