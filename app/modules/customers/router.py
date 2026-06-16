@@ -30,6 +30,7 @@ from app.modules.users.models import User
 router = APIRouter(prefix="/customers", tags=["Customers"])
 
 
+@router.get("")
 @router.get("/")
 def list_customers(
     params: dict = Depends(pagination_params),

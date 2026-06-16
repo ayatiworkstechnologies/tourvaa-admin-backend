@@ -10,6 +10,7 @@ from app.modules.users.models import User
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.users.models import UserRole
+from app.modules.common.media import existing_storage_path
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -109,7 +110,7 @@ def my_dashboard(
                 "id": current_user.id,
                 "name": current_user.name,
                 "email": current_user.email,
-                "profile_image": current_user.profile_image,
+                "profile_image": existing_storage_path(current_user.profile_image),
                 "role": {
                     "id": current_user.role.id if current_user.role else None,
                     "name": current_user.role.name if current_user.role else None,

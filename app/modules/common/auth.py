@@ -8,6 +8,51 @@ from app.modules.permissions.models import Permission, RolePermission
 from app.modules.users.models import User, UserRole
 
 
+ACTION_TO_DOTTED = {
+    "view": "view",
+    "create": "create",
+    "update": "edit",
+    "delete": "delete",
+}
+
+DOTTED_TO_ACTION = {
+    "view": "view",
+    "create": "create",
+    "edit": "update",
+    "update": "update",
+    "delete": "delete",
+}
+
+MODULE_ALIASES = {
+    "email": "email_templates",
+    "email_templates": "email",
+}
+
+
+def expand_permission_slugs(permission_slugs: tuple[str, ...]):
+    expanded = set(permission_slugs)
+
+    for slug in permission_slugs:
+        if "." in slug:
+            module, action = slug.split(".", 1)
+            legacy_action = DOTTED_TO_ACTION.get(action)
+            legacy_module = MODULE_ALIASES.get(module, module)
+
+            if legacy_action:
+                expanded.add(f"{legacy_action}-{legacy_module}")
+            continue
+
+        if "-" in slug:
+            action, module = slug.split("-", 1)
+            dotted_action = ACTION_TO_DOTTED.get(action)
+            dotted_module = MODULE_ALIASES.get(module, module)
+
+            if dotted_action:
+                expanded.add(f"{dotted_module}.{dotted_action}")
+
+    return list(expanded)
+
+
 def get_user_role_ids(user: User):
     role_ids = {user.role_id} if user.role_id else set()
     role_ids.update(user_role.role_id for user_role in user.user_roles)
@@ -64,6 +109,7 @@ def require_any_permission(*permission_slugs: str):
         db: Session = Depends(get_db),
     ):
         role_ids = get_user_role_ids(current_user)
+        allowed_slugs = expand_permission_slugs(permission_slugs)
 
         if not role_ids:
             raise HTTPException(status_code=403, detail="Role is required")
@@ -72,7 +118,7 @@ def require_any_permission(*permission_slugs: str):
             db.query(Permission)
             .join(RolePermission, RolePermission.permission_id == Permission.id)
             .filter(RolePermission.role_id.in_(role_ids))
-            .filter(Permission.slug.in_(permission_slugs))
+            .filter(Permission.slug.in_(allowed_slugs))
             .filter(Permission.is_active == True)
             .first()
         )

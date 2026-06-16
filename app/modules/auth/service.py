@@ -16,6 +16,7 @@ from app.modules.users.models import User
 from app.modules.users.models import UserRole
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
+from app.modules.common.media import existing_storage_path
 from app.security import (
     create_password_reset_token,
     create_token,
@@ -69,7 +70,7 @@ def get_auth_user_payload(db: Session, user: User):
         "name": user.name,
         "email": user.email,
         "phone": user.phone,
-        "profile_image": user.profile_image,
+        "profile_image": existing_storage_path(user.profile_image),
         "role": {
             "id": user.role_id,
             "name": user.role.name if user.role else None,
