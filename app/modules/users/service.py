@@ -16,6 +16,7 @@ from app.modules.users.models import User, UserRole
 from app.modules.users.schemas import UserCreate, UserUpdate
 from app.security import create_password_reset_token, hash_password
 from app.modules.auth.service import build_password_reset_url
+from app.modules.common.media import existing_storage_path
 
 
 APPROVAL_STATUSES = ["pending", "approved", "rejected"]
@@ -38,7 +39,7 @@ def serialize_user(user: User):
         "name": user.name,
         "email": user.email,
         "phone": user.phone,
-        "profile_image": user.profile_image,
+        "profile_image": existing_storage_path(user.profile_image),
         "address": user.address,
         "country": user.country,
         "state": user.state,

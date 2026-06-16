@@ -15,6 +15,10 @@ from app.modules.settings.models import ApiSetting, AppSetting, PaymentSetting
 from app.modules.email_templates.models import EmailTemplate
 from app.modules.audit.models import AuditLog
 from app.modules.customers.models import Customer, CustomerCommunication
+from app.modules.cms.models import Country, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
+from app.modules.suppliers.models import Supplier, SupplierContact, SupplierBusinessInfo, SupplierVehicle, SupplierInvoicing, SupplierDocument
+from app.modules.agents.models import Agent, AgentContact, AgentBusinessInfo, AgentInvoicing, AgentDocument
+from app.modules.affiliates.models import Affiliate, AffiliateMarketingInfo, AffiliateInvoicing, AffiliateDocument
 from app.seed import seed_default_roles_and_permissions
 from app.modules.email_templates.service import seed_email_templates
 
@@ -30,6 +34,10 @@ from app.modules.email_templates.router import router as email_templates_router
 from app.modules.uploads.router import router as uploads_router
 from app.modules.client.router import router as client_router
 from app.modules.customers.router import router as customers_router
+from app.modules.suppliers.router import router as suppliers_router
+from app.modules.agents.router import router as agents_router
+from app.modules.affiliates.router import router as affiliates_router
+from app.modules.cms.router import router as cms_router
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +59,27 @@ def schema_is_ready():
         "user_roles",
         "customers",
         "customer_communications",
+        "countries",
+        "cities",
+        "tour_categories",
+        "tour_subcategories",
+        "tour_subcategory_map",
+        "tours",
+        "suppliers",
+        "supplier_contacts",
+        "supplier_business_info",
+        "supplier_vehicles",
+        "supplier_invoicing",
+        "supplier_documents",
+        "agents",
+        "agent_contacts",
+        "agent_business_info",
+        "agent_invoicing",
+        "agent_documents",
+        "affiliates",
+        "affiliate_marketing_info",
+        "affiliate_invoicing",
+        "affiliate_documents",
     }
 
     if not required_tables.issubset(tables):
@@ -105,6 +134,7 @@ app.add_middleware(
 
 storage_root = get_storage_root()
 storage_root.joinpath("uploads", "profile-images").mkdir(parents=True, exist_ok=True)
+storage_root.joinpath("uploads", "admin-assets").mkdir(parents=True, exist_ok=True)
 app.mount("/storage", StaticFiles(directory=str(storage_root)), name="storage")
 
 app.include_router(auth_router, prefix="/api")
@@ -119,20 +149,10 @@ app.include_router(email_templates_router, prefix="/api")
 app.include_router(uploads_router, prefix="/api")
 app.include_router(client_router, prefix="/api")
 app.include_router(customers_router, prefix="/api")
-
-app.include_router(auth_router, prefix="/api/v1")
-app.include_router(users_router, prefix="/api/v1")
-app.include_router(roles_router, prefix="/api/v1")
-app.include_router(permissions_router, prefix="/api/v1")
-app.include_router(admin_modules_router, prefix="/api/v1")
-app.include_router(dashboard_router, prefix="/api/v1")
-app.include_router(profile_router, prefix="/api/v1")
-app.include_router(settings_router, prefix="/api/v1")
-app.include_router(email_templates_router, prefix="/api/v1")
-app.include_router(uploads_router, prefix="/api/v1")
-app.include_router(client_router, prefix="/api/v1")
-app.include_router(customers_router, prefix="/api/v1")
-
+app.include_router(suppliers_router, prefix="/api")
+app.include_router(agents_router, prefix="/api")
+app.include_router(affiliates_router, prefix="/api")
+app.include_router(cms_router, prefix="/api")
 
 @app.get("/")
 def home():

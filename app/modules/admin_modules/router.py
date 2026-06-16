@@ -8,6 +8,7 @@ from app.modules.common.auth import require_permission
 router = APIRouter(prefix="/modules", tags=["Admin Modules"])
 
 
+@router.get("")
 @router.get("/")
 def list_admin_modules(
     db: Session = Depends(get_db),

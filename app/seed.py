@@ -24,9 +24,14 @@ MODULES = [
     ("permissions", "Permissions"),
     ("suppliers", "Suppliers"),
     ("agents", "Agents"),
+    ("affiliates", "Affiliates"),
     ("resellers", "Resellers"),
     ("customers", "Customers"),
+    ("countries", "Countries"),
+    ("cities", "Cities"),
     ("tours", "Tours"),
+    ("categories", "Tour Categories"),
+    ("subcategories", "Tour Sub-Categories"),
     ("bookings", "Bookings"),
     ("payments", "Payments"),
     ("reports", "Reports"),
@@ -82,6 +87,28 @@ CUSTOMER_GRANULAR_PERMISSIONS = [
 ]
 
 DEFAULT_PERMISSIONS.extend(CUSTOMER_GRANULAR_PERMISSIONS)
+
+OPERATIONAL_PERMISSIONS = [
+    ("suppliers", "Suppliers", ["view", "create", "edit", "approve", "reject", "partial_approve", "manage_markup", "view_documents", "reset_password", "communicate", "export"]),
+    ("agents", "Agents", ["view", "create", "edit", "approve", "reject", "partial_approve", "manage_discount", "view_documents", "reset_password", "communicate", "export"]),
+    ("affiliates", "Affiliates", ["view", "create", "approve", "reject", "manage_api_link", "view_documents", "export"]),
+    ("countries", "Countries", ["view", "create", "edit", "disable"]),
+    ("cities", "Cities", ["view", "create", "edit", "disable"]),
+    ("categories", "Categories", ["view", "create", "edit", "disable"]),
+    ("subcategories", "Sub-Categories", ["view", "create", "edit", "disable"]),
+    ("tours", "Tours", ["view", "create", "edit", "publish", "disable"]),
+]
+
+for module, label, actions in OPERATIONAL_PERMISSIONS:
+    for action in actions:
+        DEFAULT_PERMISSIONS.append(
+            {
+                "name": f"{action.replace('_', ' ').title()} {label}",
+                "slug": f"{module}.{action}",
+                "module": module,
+                "action": action,
+            }
+        )
 
 
 def assign_if_missing(db: Session, role: Role, permission: Permission):
@@ -265,6 +292,7 @@ def seed_default_roles_and_permissions(db: Session):
             "update-settings",
             "view-profile",
             "update-profile",
+            *[f"{module}.{action}" for module, _label, actions in OPERATIONAL_PERMISSIONS for action in actions],
         ],
         sub_admin: [
             "view-dashboard",
@@ -307,6 +335,47 @@ def seed_default_roles_and_permissions(db: Session):
             "view-settings",
             "view-profile",
             "update-profile",
+            "suppliers.view",
+            "suppliers.create",
+            "suppliers.edit",
+            "suppliers.approve",
+            "suppliers.reject",
+            "suppliers.partial_approve",
+            "suppliers.manage_markup",
+            "suppliers.view_documents",
+            "agents.view",
+            "agents.create",
+            "agents.edit",
+            "agents.approve",
+            "agents.reject",
+            "agents.partial_approve",
+            "agents.manage_discount",
+            "agents.view_documents",
+            "affiliates.view",
+            "affiliates.approve",
+            "affiliates.reject",
+            "affiliates.manage_api_link",
+            "countries.view",
+            "countries.create",
+            "countries.edit",
+            "countries.disable",
+            "cities.view",
+            "cities.create",
+            "cities.edit",
+            "cities.disable",
+            "categories.view",
+            "categories.create",
+            "categories.edit",
+            "categories.disable",
+            "subcategories.view",
+            "subcategories.create",
+            "subcategories.edit",
+            "subcategories.disable",
+            "tours.view",
+            "tours.create",
+            "tours.edit",
+            "tours.publish",
+            "tours.disable",
         ],
         supplier: [
             "view-dashboard",
@@ -321,6 +390,12 @@ def seed_default_roles_and_permissions(db: Session):
             "view-reports",
             "view-profile",
             "update-profile",
+            "suppliers.view",
+            "suppliers.edit",
+            "suppliers.view_documents",
+            "tours.view",
+            "tours.create",
+            "tours.edit",
         ],
         agent_reseller: [
             "view-dashboard",
@@ -349,6 +424,9 @@ def seed_default_roles_and_permissions(db: Session):
             "view-reports",
             "view-profile",
             "update-profile",
+            "agents.view",
+            "agents.edit",
+            "tours.view",
         ],
         customer: [
             "view-dashboard",
