@@ -89,15 +89,7 @@ class RefreshTokenSchema(BaseModel):
 
 
 class VerifyEmailSchema(BaseModel):
-    token: Optional[str] = ""
-    email: Optional[EmailStr] = None
-
-    @field_validator("email")
-    @classmethod
-    def normalize_optional_email(cls, value: Optional[EmailStr]):
-        if value is None:
-            return value
-        return str(value).strip().lower()
+    token: str = Field(min_length=1)
 
 
 class ForceLogoutSchema(BaseModel):

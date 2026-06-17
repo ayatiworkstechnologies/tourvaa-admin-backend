@@ -133,7 +133,7 @@ def serialize_common_review(item: Any, name_field: str, code_field: str):
 def filter_review_query(query, model, *, search="", country_id="", status="", approval_status="", start_date="", end_date="", name_field=""):
     if search:
         pattern = f"%{search.strip()}%"
-        search_columns = [getattr(model, name_field), getattr(model, status and "status" or name_field)]
+        search_columns = [getattr(model, name_field)]
         code_name = name_field.replace("_name", "_code")
         if hasattr(model, code_name):
             search_columns.append(getattr(model, code_name))
