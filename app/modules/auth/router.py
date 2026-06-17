@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.common.auth import get_current_user, require_permission
+from app.modules.common.ratelimit import check_rate_limit
 from app.modules.users.models import User
 
 from app.modules.auth.schemas import (
@@ -52,7 +53,8 @@ def register(data: RegisterSchema, db: Session = Depends(get_db)):
 
 
 @router.post("/login")
-def login(data: LoginSchema, db: Session = Depends(get_db)):
+def login(request: Request, data: LoginSchema, db: Session = Depends(get_db)):
+    check_rate_limit(request, "login", max_calls=10, window_seconds=60)
     result = login_user(db, data)
 
     return {
@@ -77,7 +79,8 @@ def current_session(
 
 
 @router.post("/forgot-password")
-def forgot_password_request(data: ForgotPasswordSchema, db: Session = Depends(get_db)):
+def forgot_password_request(request: Request, data: ForgotPasswordSchema, db: Session = Depends(get_db)):
+    check_rate_limit(request, "forgot-password", max_calls=5, window_seconds=300)
     forgot_password(db, data.email, data.client_type)
 
     return {
@@ -129,8 +132,9 @@ def refresh_token(
 
 
 @router.post("/verify-email")
-def verify_email_request(data: VerifyEmailSchema, db: Session = Depends(get_db)):
-    verify_email(db, data.token, str(data.email) if data.email else None)
+def verify_email_request(request: Request, data: VerifyEmailSchema, db: Session = Depends(get_db)):
+    check_rate_limit(request, "verify-email", max_calls=10, window_seconds=60)
+    verify_email(db, data.token)
     return {
         "status": "success",
         "message": "Email verified successfully",

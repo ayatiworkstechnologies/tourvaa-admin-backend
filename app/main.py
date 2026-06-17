@@ -106,27 +106,33 @@ def schema_is_ready():
     return True
 
 
-if schema_is_ready():
-    db = SessionLocal()
-    try:
-        seed_default_roles_and_permissions(db)
-        seed_email_templates(db)
-    finally:
-        db.close()
-else:
-    logger.warning(
-        "Database schema is not ready; skipping seed. Run `python -m alembic upgrade head` before starting the API."
-    )
-
 app = FastAPI(
     title="Tourvaa Backend",
     version="1.0.0"
 )
 
+
+@app.on_event("startup")
+def run_seed():
+    if schema_is_ready():
+        db = SessionLocal()
+        try:
+            seed_default_roles_and_permissions(db)
+            seed_email_templates(db)
+        finally:
+            db.close()
+    else:
+        logger.warning(
+            "Database schema is not ready; skipping seed. Run `python -m alembic upgrade head` before starting the API."
+        )
+
+_cors_origins = settings.cors_origins
+_allow_credentials = _cors_origins != ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Client-Type", "X-Client-Version", "X-Device-Id"],

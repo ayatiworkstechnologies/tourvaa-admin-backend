@@ -224,9 +224,6 @@ def login_user(db: Session, data):
         "client_type": data.client_type or "web",
         "device_id": data.device_id,
         "token_version": user.token_version,
-        "permissions": [
-            permission["slug"] for permission in auth_user["permissions"]
-        ],
     })
 
     log_audit(
@@ -262,9 +259,6 @@ def refresh_user_token(db: Session, user: User, client_type: str | None = "web",
         "client_type": client_type or "web",
         "device_id": device_id,
         "token_version": user.token_version,
-        "permissions": [
-            permission["slug"] for permission in auth_user["permissions"]
-        ],
     })
 
     return {
@@ -276,26 +270,12 @@ def refresh_user_token(db: Session, user: User, client_type: str | None = "web",
     }
 
 
-def verify_email(db: Session, token: str | None = "", email: str | None = None):
-    if email:
-        user = db.query(User).filter(User.email == email.strip().lower()).first()
+def verify_email(db: Session, token: str | None = ""):
+    if not token:
+        raise HTTPException(status_code=400, detail="Verification token is required")
 
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        if user.approval_status == "approved" and user.is_active:
-            return True
-
-        user.approval_status = "approved"
-        user.is_active = True
-        db.commit()
-        return True
-
-    if token:
-        validate_reset_token(db, token)
-        return True
-
-    raise HTTPException(status_code=400, detail="Verification token or email is required")
+    validate_reset_token(db, token)
+    return True
 
 
 def get_login_history(db: Session, user: User, limit: int = 20):

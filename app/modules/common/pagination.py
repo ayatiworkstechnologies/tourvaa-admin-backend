@@ -8,7 +8,7 @@ T = TypeVar("T")
 
 def pagination_params(
     page: int = Query(default=1, ge=1),
-    limit: int = Query(default=100, ge=1, le=100),
+    limit: int = Query(default=100, ge=1, le=1000),
     search: str = Query(default=""),
 ):
     return {
