@@ -12,6 +12,8 @@ from app.modules.common.email_templates import (
     pending_approval_email,
 )
 from app.modules.common.mailer import send_email, try_send_email
+from app.modules.audit.models import AuditLog
+from app.modules.audit.service import log_audit
 from app.modules.users.models import User
 from app.modules.users.models import UserRole
 from app.modules.roles.models import Role
@@ -180,9 +182,28 @@ def login_user(db: Session, data):
     user = db.query(User).filter(User.email == email).first()
 
     if not user:
+        log_audit(
+            db,
+            actor=None,
+            action="login_failed",
+            entity_type="auth",
+            old_values=None,
+            new_values={"email": email, "reason": "unknown_user"},
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not verify_password(data.password, user.password):
+        log_audit(
+            db,
+            actor=user,
+            action="login_failed",
+            entity_type="auth",
+            entity_id=user.id,
+            old_values=None,
+            new_values={"email": email, "reason": "bad_password"},
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if user.approval_status == "pending":
@@ -208,6 +229,21 @@ def login_user(db: Session, data):
         ],
     })
 
+    log_audit(
+        db,
+        actor=user,
+        action="login_success",
+        entity_type="auth",
+        entity_id=user.id,
+        old_values=None,
+        new_values={
+            "client_type": data.client_type or "web",
+            "device_id": data.device_id,
+            "device_name": data.device_name,
+        },
+    )
+    db.commit()
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -215,6 +251,94 @@ def login_user(db: Session, data):
         "client_type": data.client_type or "web",
         "user": auth_user,
     }
+
+
+def refresh_user_token(db: Session, user: User, client_type: str | None = "web", device_id: str | None = None):
+    auth_user = get_auth_user_payload(db, user)
+    token = create_token({
+        "user_id": user.id,
+        "email": user.email,
+        "role": auth_user["role"]["slug"],
+        "client_type": client_type or "web",
+        "device_id": device_id,
+        "token_version": user.token_version,
+        "permissions": [
+            permission["slug"] for permission in auth_user["permissions"]
+        ],
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "client_type": client_type or "web",
+        "user": auth_user,
+    }
+
+
+def verify_email(db: Session, token: str | None = "", email: str | None = None):
+    if email:
+        user = db.query(User).filter(User.email == email.strip().lower()).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if user.approval_status == "approved" and user.is_active:
+            return True
+
+        user.approval_status = "approved"
+        user.is_active = True
+        db.commit()
+        return True
+
+    if token:
+        validate_reset_token(db, token)
+        return True
+
+    raise HTTPException(status_code=400, detail="Verification token or email is required")
+
+
+def get_login_history(db: Session, user: User, limit: int = 20):
+    limit = max(1, min(limit, 100))
+    rows = (
+        db.query(AuditLog)
+        .filter(AuditLog.entity_type == "auth")
+        .filter(AuditLog.action.in_(["login_success", "login_failed"]))
+        .filter((AuditLog.actor_user_id == user.id) | (AuditLog.actor_user_id.is_(None)))
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "id": row.id,
+            "action": row.action,
+            "ip_address": row.ip_address,
+            "user_agent": row.user_agent,
+            "details": row.new_values or {},
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
+def force_logout_user(db: Session, target_user: User, actor: User | None = None, request=None):
+    old_version = target_user.token_version
+    target_user.token_version += 1
+    log_audit(
+        db,
+        actor=actor,
+        action="force_logout",
+        entity_type="user",
+        entity_id=target_user.id,
+        old_values={"token_version": old_version},
+        new_values={"token_version": target_user.token_version},
+        request=request,
+    )
+    db.commit()
+    db.refresh(target_user)
+    return {"user_id": target_user.id, "token_version": target_user.token_version}
 
 
 def forgot_password(db: Session, email: str, client_type: str | None = "web"):

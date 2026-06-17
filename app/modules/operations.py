@@ -11,7 +11,7 @@ from app.modules.audit.service import log_audit
 from app.modules.users.models import User
 
 ACTIVE_STATUSES = {"active", "inactive", "blocked"}
-APPROVAL_STATUSES = {"pending", "approved", "partially_approved", "rejected"}
+APPROVAL_STATUSES = {"pending", "approved", "partial_approved", "rejected"}
 VALUE_TYPES = {"percentage", "fixed"}
 DOCUMENT_STATUSES = {"pending", "approved", "rejected"}
 
@@ -187,7 +187,7 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
 
 def partial_approve_item(db: Session, item, data: PartialApprovalRequest, actor: User, entity_type: str, serializer, request: Request | None = None):
     old = serializer(item)
-    item.approval_status = "partially_approved"
+    item.approval_status = "partial_approved"
     item.admin_comments = data.admin_comments
     item.pending_requirements = data.pending_requirements
     log_audit(db, actor=actor, action=f"partial_approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)

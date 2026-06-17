@@ -150,6 +150,11 @@ def serialize_customer(customer: Customer):
         "full_name": customer.full_name,
         "email": customer.email,
         "phone": customer.phone,
+        "country_id": customer.country_id,
+        "city_id": customer.city_id,
+        "address_line_1": customer.address_line_1,
+        "address_line_2": customer.address_line_2,
+        "postal_code": customer.postal_code,
         "address": customer.address,
         "profile_image": customer.profile_image,
         "country": customer.country,
@@ -163,6 +168,12 @@ def serialize_customer(customer: Customer):
         "blocked_by": customer.blocked_by,
         "created_at": customer.created_at,
         "updated_at": customer.updated_at,
+        "total_bookings_count": customer.total_bookings,
+        "completed_bookings": customer.completed_bookings,
+        "cancelled_bookings": customer.cancelled_bookings,
+        "upcoming_bookings": customer.upcoming_bookings,
+        "total_amount_paid": float(customer.total_amount_paid or 0),
+        "total_amount_pending": float(customer.total_amount_pending or 0),
         **summary,
     }
 
@@ -330,6 +341,11 @@ def create_customer(
         full_name=data.full_name.strip(),
         email=email,
         phone=data.phone.strip(),
+        country_id=data.country_id,
+        city_id=data.city_id,
+        address_line_1=data.address_line_1.strip(),
+        address_line_2=data.address_line_2.strip(),
+        postal_code=data.postal_code.strip(),
         address=data.address.strip(),
         profile_image=data.profile_image.strip(),
         country=data.country.strip(),
@@ -383,6 +399,9 @@ def update_customer(
         "last_name",
         "full_name",
         "phone",
+        "address_line_1",
+        "address_line_2",
+        "postal_code",
         "address",
         "profile_image",
         "country",
@@ -393,6 +412,11 @@ def update_customer(
         value = getattr(data, field)
         if value is not None:
             setattr(customer, field, value.strip())
+
+    for field in ["country_id", "city_id"]:
+        value = getattr(data, field)
+        if value is not None:
+            setattr(customer, field, value)
 
     log_audit(
         db,
@@ -520,11 +544,16 @@ def reset_customer_password(
     user.token_version += 1
 
     reset_url = build_password_reset_url(token)
-    send_email(
-        user.email,
-        "Reset your Tourvaa password",
-        password_reset_email(user.name, reset_url),
-    )
+    email_status = "pending"
+    try:
+        send_email(
+            user.email,
+            "Reset your Tourvaa password",
+            password_reset_email(user.name, reset_url),
+        )
+        email_status = "sent"
+    except Exception:
+        email_status = "failed"
 
     log_audit(
         db,
@@ -532,7 +561,7 @@ def reset_customer_password(
         action="reset_customer_password",
         entity_type="customer",
         entity_id=customer.id,
-        new_values={"email": customer.email},
+        new_values={"email": customer.email, "email_status": email_status},
         request=request,
     )
     db.commit()

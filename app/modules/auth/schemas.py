@@ -81,3 +81,24 @@ class ForgotPasswordSchema(BaseModel):
 class ResetPasswordSchema(BaseModel):
     token: str
     password: str = Field(min_length=8)
+
+
+class RefreshTokenSchema(BaseModel):
+    client_type: Optional[str] = "web"
+    device_id: Optional[str] = None
+
+
+class VerifyEmailSchema(BaseModel):
+    token: Optional[str] = ""
+    email: Optional[EmailStr] = None
+
+    @field_validator("email")
+    @classmethod
+    def normalize_optional_email(cls, value: Optional[EmailStr]):
+        if value is None:
+            return value
+        return str(value).strip().lower()
+
+
+class ForceLogoutSchema(BaseModel):
+    user_id: Optional[int] = None
