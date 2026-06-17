@@ -4,13 +4,27 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.common.auth import require_permission
 from app.modules.users.models import User
-from app.modules.settings.schemas import ApiSettingUpdate, PaymentSettingUpdate, SettingsBulkUpdate
+from app.modules.settings.schemas import (
+    ApiSettingUpdate,
+    ApiSettingsUpdate,
+    PaymentSettingUpdate,
+    PaymentSettingsUpdate,
+    SettingsBulkUpdate,
+    SystemSettingsUpdate,
+)
 from app.modules.settings.service import (
+    get_api_settings_payload,
     get_api_settings,
     get_payment_settings,
+    get_payment_settings_payload,
     get_settings,
+    get_system_settings,
+    mask_secret,
+    update_api_settings_payload,
     update_api_setting,
+    update_payment_settings_payload,
     update_payment_setting,
+    update_system_settings,
     update_settings,
 )
 
@@ -39,12 +53,82 @@ def save_settings(
     }
 
 
+@router.get("/system")
+def system_settings(
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-settings")),
+):
+    return {"status": "success", "data": get_system_settings(db)}
+
+
+@router.put("/system")
+def save_system_settings(
+    data: SystemSettingsUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("update-settings")),
+):
+    return {
+        "status": "success",
+        "message": "System settings updated successfully",
+        "data": update_system_settings(
+            db,
+            data.model_dump(exclude_unset=True),
+            actor=current_user,
+            request=request,
+        ),
+    }
+
+
 @router.get("/payment")
 def list_payment_settings(
     db: Session = Depends(get_db),
     _=Depends(require_permission("view-settings")),
 ):
-    return {"status": "success", "data": get_payment_settings(db)}
+    return {
+        "status": "success",
+        "data": [
+            {
+                "id": item.id,
+                "provider_name": item.provider_name,
+                "is_enabled": item.is_enabled,
+                "public_key": item.public_key,
+                "secret_key": mask_secret(item.secret_key),
+                "surcharge_percentage": item.surcharge_percentage,
+                "mode": item.mode,
+                "created_at": item.created_at,
+                "updated_at": item.updated_at,
+            }
+            for item in get_payment_settings(db)
+        ],
+    }
+
+
+@router.put("/payment")
+def save_payment_settings(
+    data: PaymentSettingsUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("update-settings")),
+):
+    return {
+        "status": "success",
+        "message": "Payment settings updated successfully",
+        "data": update_payment_settings_payload(
+            db,
+            data.model_dump(exclude_unset=True),
+            actor=current_user,
+            request=request,
+        ),
+    }
+
+
+@router.get("/payment/summary")
+def payment_settings_summary(
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-settings")),
+):
+    return {"status": "success", "data": get_payment_settings_payload(db)}
 
 
 @router.put("/payment/{provider_name}")
@@ -74,7 +158,49 @@ def list_api_settings(
     db: Session = Depends(get_db),
     _=Depends(require_permission("view-settings")),
 ):
-    return {"status": "success", "data": get_api_settings(db)}
+    return {
+        "status": "success",
+        "data": [
+            {
+                "id": item.id,
+                "api_name": item.api_name,
+                "api_key": mask_secret(item.api_key),
+                "api_secret": mask_secret(item.api_secret),
+                "api_url": item.api_url,
+                "is_enabled": item.is_enabled,
+                "created_at": item.created_at,
+                "updated_at": item.updated_at,
+            }
+            for item in get_api_settings(db)
+        ],
+    }
+
+
+@router.put("/api")
+def save_api_settings(
+    data: ApiSettingsUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("update-settings")),
+):
+    return {
+        "status": "success",
+        "message": "API settings updated successfully",
+        "data": update_api_settings_payload(
+            db,
+            data.model_dump(exclude_unset=True),
+            actor=current_user,
+            request=request,
+        ),
+    }
+
+
+@router.get("/api/summary")
+def api_settings_summary(
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-settings")),
+):
+    return {"status": "success", "data": get_api_settings_payload(db)}
 
 
 @router.put("/api/{api_name}")
