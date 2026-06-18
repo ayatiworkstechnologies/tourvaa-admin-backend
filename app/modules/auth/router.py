@@ -113,17 +113,48 @@ def validate_reset_password_link(
 
 @router.post("/refresh-token")
 def refresh_token(
+    request: Request,
     data: RefreshTokenSchema | None = None,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from jose import jwt as jose_jwt, JWTError
+    from app.config import settings as _settings
+
+    authorization = request.headers.get("Authorization", "")
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Authorization token missing")
+
+    token = parts[1]
+    try:
+        # Decode without expiry check so an expired token can still be refreshed
+        payload = jose_jwt.decode(
+            token,
+            _settings.JWT_SECRET_KEY,
+            algorithms=[_settings.JWT_ALGORITHM],
+            options={"verify_exp": False},
+        )
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user_id = payload.get("user_id")
+    token_version = payload.get("token_version")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if token_version is None or token_version != user.token_version:
+        raise HTTPException(status_code=401, detail="Session invalidated. Please log in again.")
+    if user.approval_status != "approved" or not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is not active")
+
     refresh_data = data or RefreshTokenSchema()
     return {
         "status": "success",
         "message": "Token refreshed successfully",
         "data": refresh_user_token(
             db,
-            current_user,
+            user,
             client_type=refresh_data.client_type,
             device_id=refresh_data.device_id,
         ),
