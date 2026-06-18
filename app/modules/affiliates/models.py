@@ -9,6 +9,7 @@ class Affiliate(Base):
     __tablename__ = "affiliates"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     affiliate_code = Column(String(30), unique=True, nullable=True, index=True)
     business_type = Column(String(75), default="", nullable=False)
     name = Column(String(150), nullable=False)
@@ -29,6 +30,7 @@ class Affiliate(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    user = relationship("User", foreign_keys=[user_id])
     country = relationship("Country")
     city = relationship("City")
     marketing_info = relationship("AffiliateMarketingInfo", back_populates="affiliate", uselist=False, cascade="all, delete-orphan")

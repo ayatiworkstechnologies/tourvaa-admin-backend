@@ -18,6 +18,9 @@ from app.modules.users.models import User
 from app.modules.users.models import UserRole
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
+from app.modules.customers.models import Customer
+from app.modules.suppliers.models import Supplier
+from app.modules.agents.models import Agent
 from app.modules.common.media import existing_storage_path
 from app.security import (
     create_password_reset_token,
@@ -28,7 +31,7 @@ from app.security import (
 )
 
 logger = logging.getLogger(__name__)
-GENERIC_RESET_MESSAGE = "If an eligible account exists, a reset link has been sent."
+PUBLIC_REGISTRATION_ROLES = {"customer", "supplier", "agent-reseller"}
 
 
 def get_user_permissions(db: Session, role_ids: list[int]):
@@ -112,6 +115,9 @@ def register_user(db: Session, data):
         if not selected_role:
             raise HTTPException(status_code=400, detail="Selected role is not available")
 
+        if selected_role.slug not in PUBLIC_REGISTRATION_ROLES:
+            raise HTTPException(status_code=403, detail="Selected role is not available for registration")
+
         if selected_role.slug == "super-admin":
             user_count = db.query(User).count()
 
@@ -151,6 +157,48 @@ def register_user(db: Session, data):
     db.flush()
     if new_user.role_id:
         db.add(UserRole(user_id=new_user.id, role_id=new_user.role_id))
+
+    role_slug = selected_role.slug if selected_role else None
+
+    # Auto-create the corresponding profile record linked by user_id
+    if role_slug == "customer":
+        existing_customer = db.query(Customer).filter(Customer.email == email).first()
+        if not existing_customer:
+            name_parts = new_user.name.strip().split(None, 1)
+            first = name_parts[0] if name_parts else ""
+            last = name_parts[1] if len(name_parts) > 1 else ""
+            db.add(Customer(
+                user_id=new_user.id,
+                first_name=first,
+                last_name=last,
+                full_name=new_user.name.strip(),
+                email=email,
+                phone=new_user.phone,
+                status="active",
+            ))
+        else:
+            existing_customer.user_id = new_user.id
+
+    elif role_slug == "supplier":
+        existing_supplier = db.query(Supplier).filter(Supplier.user_id == new_user.id).first()
+        if not existing_supplier:
+            db.add(Supplier(
+                user_id=new_user.id,
+                supplier_name=new_user.name.strip(),
+                status="inactive",
+                approval_status="pending",
+            ))
+
+    elif role_slug == "agent-reseller":
+        existing_agent = db.query(Agent).filter(Agent.user_id == new_user.id).first()
+        if not existing_agent:
+            db.add(Agent(
+                user_id=new_user.id,
+                agent_name=new_user.name.strip(),
+                status="inactive",
+                approval_status="pending",
+            ))
+
     db.commit()
     db.refresh(new_user)
 
@@ -322,24 +370,26 @@ def force_logout_user(db: Session, target_user: User, actor: User | None = None,
 
 
 def forgot_password(db: Session, email: str, client_type: str | None = "web"):
+    from fastapi import HTTPException
+
     normalized_email = email.strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
 
     if not user:
         logger.info("Password reset requested for unknown email: %s", normalized_email)
-        return False
+        raise HTTPException(status_code=404, detail="No account found with this email address.")
 
     if user.approval_status == "pending":
         logger.info("Password reset skipped for pending user id=%s", user.id)
-        return False
+        raise HTTPException(status_code=403, detail="Your account is pending approval. You cannot reset your password yet.")
 
     if user.approval_status == "rejected":
         logger.info("Password reset skipped for rejected user id=%s", user.id)
-        return False
+        raise HTTPException(status_code=403, detail="Your account has been rejected. Please contact support.")
 
     if not user.is_active:
         logger.info("Password reset skipped for inactive user id=%s", user.id)
-        return False
+        raise HTTPException(status_code=403, detail="Your account is inactive. Please contact support.")
 
     token, token_hash = create_password_reset_token()
     user.reset_password_token = token_hash

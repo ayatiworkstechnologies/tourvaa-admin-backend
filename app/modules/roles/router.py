@@ -21,10 +21,15 @@ router = APIRouter(prefix="/roles", tags=["Roles"])
 
 @router.get("/public/options")
 def public_role_options(db: Session = Depends(get_db)):
+    public_role_slugs = {"customer", "supplier", "agent-reseller"}
     roles = get_roles(db)
     return {
         "status": "success",
-        "data": [role for role in roles if role.is_active],
+        "data": [
+            role
+            for role in roles
+            if role.is_active and role.slug in public_role_slugs
+        ],
     }
 
 
