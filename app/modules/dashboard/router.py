@@ -265,7 +265,9 @@ def my_dashboard(
             profile_status = agent.status
             approval_status = agent.approval_status
     elif role_slug == "affiliate":
-        affiliate = db.query(Affiliate).filter(Affiliate.email == current_user.email).first()
+        affiliate = db.query(Affiliate).filter(
+            (Affiliate.user_id == current_user.id) | (Affiliate.email == current_user.email)
+        ).first()
         if affiliate:
             profile_status = affiliate.status
             approval_status = affiliate.approval_status
@@ -428,7 +430,9 @@ def dashboard_summary(
 
     # Affiliate summary
     if role_slug == "affiliate":
-        affiliate = db.query(Affiliate).filter(Affiliate.email == current_user.email).first()
+        affiliate = db.query(Affiliate).filter(
+            (Affiliate.user_id == current_user.id) | (Affiliate.email == current_user.email)
+        ).first()
         marketing = None
         if affiliate and affiliate.marketing_info:
             marketing = affiliate.marketing_info
@@ -901,7 +905,9 @@ def dashboard_alerts(
 
     # Affiliate alerts
     if role_slug == "affiliate":
-        affiliate = db.query(Affiliate).filter(Affiliate.email == current_user.email).first()
+        affiliate = db.query(Affiliate).filter(
+            (Affiliate.user_id == current_user.id) | (Affiliate.email == current_user.email)
+        ).first()
         alerts = []
 
         if affiliate:

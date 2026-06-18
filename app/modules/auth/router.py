@@ -15,7 +15,6 @@ from app.modules.auth.schemas import (
     VerifyEmailSchema,
 )
 from app.modules.auth.service import (
-    GENERIC_RESET_MESSAGE,
     force_logout_user,
     forgot_password,
     get_auth_user_payload,
@@ -85,7 +84,7 @@ def forgot_password_request(request: Request, data: ForgotPasswordSchema, db: Se
 
     return {
         "status": "success",
-        "message": GENERIC_RESET_MESSAGE
+        "message": "A password reset link has been sent to your email address."
     }
 
 

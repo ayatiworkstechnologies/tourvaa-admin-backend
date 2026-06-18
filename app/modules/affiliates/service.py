@@ -18,6 +18,7 @@ def serialize_affiliate(item: Affiliate):
     city = item.city
     return {
         "id": item.id,
+        "user_id": item.user_id,
         "affiliate_code": item.affiliate_code,
         "code": item.affiliate_code,
         "business_type": item.business_type,
@@ -81,6 +82,10 @@ def get_affiliate(db: Session, affiliate_id: int):
 
 def create_affiliate(db: Session, data: AffiliateCreate, actor: User, request: Request | None = None):
     item = Affiliate(**data.model_dump())
+    # Auto-link to existing user account if email matches
+    linked_user = db.query(User).filter(User.email == str(data.email).strip().lower()).first()
+    if linked_user:
+        item.user_id = linked_user.id
     db.add(item)
     db.flush()
     item.affiliate_code = code_for("TVA-AFF", item.id)
