@@ -16,6 +16,14 @@ from app.modules.email_templates.models import EmailTemplate
 from app.modules.audit.models import AuditLog
 from app.modules.customers.models import Customer, CustomerCommunication
 from app.modules.cms.models import Country, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
+from app.modules.bookings.models import Booking
+from app.modules.payments.models import Payment
+from app.modules.tours.models import (
+    TourOverview, TourItinerary, TourInclusion, TourExclusion, TourHighlight,
+    TourSimilar, TourExtension, TourGalleryImage,
+    TourPricing, TourOptionalActivity, TourAccommodationExtra,
+    TourCalendar, TourUnavailableDate, TourDiscount,
+)
 from app.modules.suppliers.models import Supplier, SupplierContact, SupplierBusinessInfo, SupplierVehicle, SupplierInvoicing, SupplierDocument
 from app.modules.agents.models import Agent, AgentContact, AgentBusinessInfo, AgentInvoicing, AgentDocument
 from app.modules.affiliates.models import Affiliate, AffiliateMarketingInfo, AffiliateInvoicing, AffiliateDocument
@@ -38,6 +46,9 @@ from app.modules.suppliers.router import router as suppliers_router
 from app.modules.agents.router import router as agents_router
 from app.modules.affiliates.router import router as affiliates_router
 from app.modules.cms.router import router as cms_router
+from app.modules.bookings.router import router as bookings_router
+from app.modules.payments.router import router as payments_router
+from app.modules.tours.router import router as tour_detail_router
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +91,8 @@ def schema_is_ready():
         "affiliate_marketing_info",
         "affiliate_invoicing",
         "affiliate_documents",
+        "bookings",
+        "payments",
     }
 
     if not required_tables.issubset(tables):
@@ -159,6 +172,9 @@ app.include_router(suppliers_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
 app.include_router(affiliates_router, prefix="/api")
 app.include_router(cms_router, prefix="/api")
+app.include_router(bookings_router, prefix="/api")
+app.include_router(payments_router, prefix="/api")
+app.include_router(tour_detail_router, prefix="/api")
 
 @app.get("/")
 def home():

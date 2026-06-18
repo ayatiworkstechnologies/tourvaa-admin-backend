@@ -204,6 +204,7 @@ def customer_booking_history(
 ):
     get_customer_detail(db, customer_id)
     paginated = get_customer_booking_history(
+        db,
         customer_id,
         page=params["page"],
         limit=params["limit"],
@@ -224,6 +225,7 @@ def customer_payment_history(
 ):
     get_customer_detail(db, customer_id)
     paginated = get_customer_payment_history(
+        db,
         customer_id,
         page=params["page"],
         limit=params["limit"],

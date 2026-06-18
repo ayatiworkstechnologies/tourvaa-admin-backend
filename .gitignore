@@ -1,48 +1,55 @@
-# Python
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
 
-# Virtual environments
+# ── Virtual Environments ──────────────────────────────────────────────────────
 venv/
 .venv/
 env/
 ENV/
 
-# Environment and secrets
+# ── Environment / Secrets ─────────────────────────────────────────────────────
 .env
 .env.*
 !.env.example
 
-# Local databases
+# ── Databases ─────────────────────────────────────────────────────────────────
 *.db
 *.sqlite
 *.sqlite3
 *.db-journal
 
-# Logs and runtime files
+# ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 logs/
 *.pid
 
-# Test and coverage output
+# ── Tests & Coverage ──────────────────────────────────────────────────────────
 .pytest_cache/
 .coverage
 htmlcov/
 coverage.xml
+pytest-cache-files-*/
 
-# Type checking and tooling caches
+# ── Type Checking / Linting Caches ────────────────────────────────────────────
 .mypy_cache/
 .ruff_cache/
 .pyre/
 
-# Uploads and generated storage
+# ── Uploads & Storage ─────────────────────────────────────────────────────────
 uploads/
 storage/
 
-# OS/editor
+# ── OS / Editor ───────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+*.swp
+*.swo

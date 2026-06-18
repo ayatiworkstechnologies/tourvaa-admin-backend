@@ -10,6 +10,8 @@ from app.modules.auth.service import build_password_reset_url
 from app.modules.common.email_templates import password_reset_email
 from app.modules.common.mailer import send_email
 from app.modules.customers.models import Customer, CustomerCommunication
+from app.modules.bookings.models import Booking
+from app.modules.payments.models import Payment
 from app.modules.customers.schemas import (
     CustomerBlockRequest,
     CustomerCreate,
@@ -111,17 +113,33 @@ def _placeholder_payments(customer_id: int):
     ]
 
 
-def _history_summary(customer_id: int):
-    bookings = _placeholder_bookings(customer_id)
-    payments = _placeholder_payments(customer_id)
+def _history_summary_from_db(db: Session, customer_id: int):
+    from sqlalchemy import func as sqlfunc
+
+    total = db.query(Booking).filter(Booking.customer_id == customer_id).count()
+    completed = db.query(Booking).filter(
+        Booking.customer_id == customer_id, Booking.booking_status == "completed"
+    ).count()
+    cancelled = db.query(Booking).filter(
+        Booking.customer_id == customer_id, Booking.booking_status == "cancelled"
+    ).count()
+    upcoming = db.query(Booking).filter(
+        Booking.customer_id == customer_id, Booking.booking_status == "upcoming"
+    ).count()
+    amount_paid = db.query(sqlfunc.coalesce(sqlfunc.sum(Payment.paid_amount), 0)).filter(
+        Payment.customer_id == customer_id, Payment.payment_status != "refunded"
+    ).scalar()
+    amount_pending = db.query(sqlfunc.coalesce(sqlfunc.sum(Payment.pending_amount), 0)).filter(
+        Payment.customer_id == customer_id, Payment.payment_status.in_(["pending", "partial"])
+    ).scalar()
 
     return {
-        "total_bookings": len(bookings),
-        "completed_tours": sum(1 for item in bookings if item["booking_status"] == "completed"),
-        "cancelled_tours": sum(1 for item in bookings if item["booking_status"] == "cancelled"),
-        "upcoming_tours": sum(1 for item in bookings if item["booking_status"] == "upcoming"),
-        "amount_paid": sum(item["paid_amount"] for item in payments),
-        "amount_pending": sum(item["pending_amount"] for item in payments),
+        "total_bookings": total,
+        "completed_tours": completed,
+        "cancelled_tours": cancelled,
+        "upcoming_tours": upcoming,
+        "amount_paid": float(amount_paid or 0),
+        "amount_pending": float(amount_pending or 0),
     }
 
 
@@ -139,8 +157,15 @@ def _paginate(items: list[dict], page: int, limit: int):
     }
 
 
-def serialize_customer(customer: Customer):
-    summary = _history_summary(customer.id)
+def serialize_customer(customer: Customer, db: Session | None = None):
+    summary = {
+        "total_bookings": customer.total_bookings or 0,
+        "completed_tours": customer.completed_bookings or 0,
+        "cancelled_tours": customer.cancelled_bookings or 0,
+        "upcoming_tours": customer.upcoming_bookings or 0,
+        "amount_paid": float(customer.total_amount_paid or 0),
+        "amount_pending": float(customer.total_amount_pending or 0),
+    }
     return {
         "id": customer.id,
         "user_id": customer.user_id,
@@ -226,6 +251,20 @@ def get_customers(
     if status:
         query = query.filter(Customer.status == status.strip().lower())
 
+    if booking_status:
+        query = query.filter(
+            Customer.id.in_(
+                db.query(Booking.customer_id).filter(Booking.booking_status == booking_status.strip().lower())
+            )
+        )
+
+    if payment_status:
+        query = query.filter(
+            Customer.id.in_(
+                db.query(Payment.customer_id).filter(Payment.payment_status == payment_status.strip().lower())
+            )
+        )
+
     if start_date:
         query = query.filter(Customer.created_at >= start_date)
 
@@ -245,18 +284,6 @@ def get_customers(
     total = query.count()
     customers = query.offset((page - 1) * limit).limit(limit).all()
     items = [serialize_customer(customer) for customer in customers]
-
-    if booking_status:
-        items = [
-            item for item in items
-            if any(booking["booking_status"] == booking_status for booking in _placeholder_bookings(item["id"]))
-        ]
-
-    if payment_status:
-        items = [
-            item for item in items
-            if any(payment["payment_status"] == payment_status for payment in _placeholder_payments(item["id"]))
-        ]
 
     if sort_key == "highest_amount_paid":
         items.sort(key=lambda item: item["amount_paid"], reverse=direction_desc)
@@ -284,12 +311,41 @@ def get_customer_by_id(db: Session, customer_id: int):
 def get_customer_detail(db: Session, customer_id: int, actor: User | None = None, request: Request | None = None):
     customer = get_customer_by_id(db, customer_id)
     data = serialize_customer(customer)
-    bookings = _placeholder_bookings(customer_id)
-    payments = _placeholder_payments(customer_id)
+
+    # Try to enrich with live booking/payment data if tables exist
+    try:
+        from app.modules.bookings.models import Booking as BookingModel
+        from app.modules.payments.models import Payment as PaymentModel
+        from app.modules.bookings.service import serialize_booking
+        from app.modules.payments.service import serialize_payment
+        from sqlalchemy import func as sqlfunc
+
+        recent_bookings = (
+            db.query(BookingModel)
+            .filter(BookingModel.customer_id == customer_id)
+            .order_by(BookingModel.id.desc())
+            .limit(3)
+            .all()
+        )
+        recent_payments = (
+            db.query(PaymentModel)
+            .filter(PaymentModel.customer_id == customer_id)
+            .order_by(PaymentModel.id.desc())
+            .limit(3)
+            .all()
+        )
+        live = _history_summary_from_db(db, customer_id)
+        data.update(live)
+        serialized_bookings = [serialize_booking(b) for b in recent_bookings]
+        serialized_payments = [serialize_payment(p) for p in recent_payments]
+    except Exception:
+        serialized_bookings = []
+        serialized_payments = []
+
     data.update(
         {
             "booking_summary": {
-                "total": len(bookings),
+                "total": data["total_bookings"],
                 "completed": data["completed_tours"],
                 "cancelled": data["cancelled_tours"],
                 "upcoming": data["upcoming_tours"],
@@ -298,8 +354,8 @@ def get_customer_detail(db: Session, customer_id: int, actor: User | None = None
                 "paid": data["amount_paid"],
                 "pending": data["amount_pending"],
             },
-            "recent_bookings": bookings[:3],
-            "recent_payments": payments[:3],
+            "recent_bookings": serialized_bookings,
+            "recent_payments": serialized_payments,
             "last_login_at": None,
         }
     )
@@ -569,33 +625,41 @@ def reset_customer_password(
 
 
 def get_customer_booking_history(
+    db: Session,
     customer_id: int,
     page: int = 1,
     limit: int = 100,
     booking_status: str = "",
     payment_status: str = "",
 ):
-    items = _placeholder_bookings(customer_id)
-    if booking_status:
-        items = [item for item in items if item["booking_status"] == booking_status]
-    if payment_status:
-        items = [item for item in items if item["payment_status"] == payment_status]
-    return _paginate(items, page, limit)
+    from app.modules.bookings.service import get_customer_bookings
+    return get_customer_bookings(
+        db,
+        customer_id=customer_id,
+        page=page,
+        limit=limit,
+        booking_status=booking_status,
+        payment_status=payment_status,
+    )
 
 
 def get_customer_payment_history(
+    db: Session,
     customer_id: int,
     page: int = 1,
     limit: int = 100,
     payment_status: str = "",
     payment_method: str = "",
 ):
-    items = _placeholder_payments(customer_id)
-    if payment_status:
-        items = [item for item in items if item["payment_status"] == payment_status]
-    if payment_method:
-        items = [item for item in items if item["payment_method"] == payment_method]
-    return _paginate(items, page, limit)
+    from app.modules.payments.service import get_customer_payments
+    return get_customer_payments(
+        db,
+        customer_id=customer_id,
+        page=page,
+        limit=limit,
+        payment_status=payment_status,
+        payment_method=payment_method,
+    )
 
 
 def get_customer_communication_history(db: Session, customer_id: int, page: int = 1, limit: int = 100):
