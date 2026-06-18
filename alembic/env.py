@@ -12,6 +12,14 @@ from app.modules.permissions.models import Permission, RolePermission
 from app.modules.roles.models import Role
 from app.modules.settings.models import AppSetting
 from app.modules.users.models import User
+from app.modules.bookings.models import Booking
+from app.modules.payments.models import Payment
+from app.modules.tours.models import (
+    TourOverview, TourItinerary, TourInclusion, TourExclusion, TourHighlight,
+    TourSimilar, TourExtension, TourGalleryImage,
+    TourPricing, TourOptionalActivity, TourAccommodationExtra,
+    TourCalendar, TourUnavailableDate, TourDiscount,
+)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

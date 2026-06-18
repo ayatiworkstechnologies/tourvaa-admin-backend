@@ -194,6 +194,20 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     old = _tour(item) if tour_id else None
     payload = data.model_dump()
     subcategory_ids = payload.pop("subcategory_ids", [])
+
+    # Validate FK IDs exist before attempting insert
+    if payload.get("supplier_id"):
+        from app.modules.suppliers.models import Supplier
+        get_or_404(db, Supplier, payload["supplier_id"], "Supplier")
+    if payload.get("country_id"):
+        get_or_404(db, Country, payload["country_id"], "Country")
+    if payload.get("city_id"):
+        get_or_404(db, City, payload["city_id"], "City")
+    if payload.get("category_id"):
+        get_or_404(db, TourCategory, payload["category_id"], "Tour category")
+    for sub_id in subcategory_ids:
+        get_or_404(db, TourSubcategory, sub_id, "Tour subcategory")
+
     payload["slug"] = _unique_slug(db, Tour, payload["slug"] or payload["title"], tour_id)
     for key, value in payload.items():
         setattr(item, key, value)

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
 
     FRONTEND_URL: str = "http://127.0.0.1:3000"
     API_BASE_URL: str = "http://127.0.0.1:8000"
