@@ -54,7 +54,7 @@ def register(data: RegisterSchema, db: Session = Depends(get_db)):
 @router.post("/login")
 def login(request: Request, data: LoginSchema, db: Session = Depends(get_db)):
     check_rate_limit(request, "login", max_calls=10, window_seconds=60)
-    result = login_user(db, data)
+    result = login_user(db, data, request=request)
 
     return {
         "status": "success",

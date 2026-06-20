@@ -26,6 +26,9 @@ class User(Base):
     reset_password_token = Column(String(255), nullable=True)
     reset_password_expires_at = Column(DateTime(timezone=True), nullable=True)
     token_version = Column(Integer, default=0, nullable=False)
+    two_factor_enabled = Column(Boolean, default=False, nullable=False)
+    two_factor_secret = Column(String(255), nullable=True)
+    force_password_reset = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     role = relationship("Role", back_populates="users")
@@ -42,3 +45,4 @@ class UserRole(Base):
 
     user = relationship("User", back_populates="user_roles")
     role = relationship("Role")
+

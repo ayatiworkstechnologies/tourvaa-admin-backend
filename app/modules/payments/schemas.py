@@ -1,19 +1,25 @@
+from decimal import Decimal
 from typing import Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 PAYMENT_METHODS = {"card", "upi", "bank_transfer", "cash", "other"}
 PAYMENT_TYPES = {"advance", "partial", "full", "refund"}
-PAYMENT_STATUSES = {"pending", "partial", "paid", "failed", "refunded"}
+PAYMENT_STATUSES = {"pending", "authorized", "partially_paid", "paid", "failed", "refunded", "partially_refunded", "voided", "partial"}
 
 
 class PaymentCreate(BaseModel):
     booking_id: int
     customer_id: int
     payment_method: str = "card"
-    payment_type: str = "advance"
-    total_amount: float
-    paid_amount: float
-    gst_amount: float = 0.0
+    payment_type: str = "full"
+    total_amount: Decimal
+    paid_amount: Decimal = Decimal("0")
+    gst_amount: Decimal = Decimal("0")
+    surcharge_amount: Decimal = Decimal("0")
+    gateway: str = "manual"
+    gateway_payment_id: Optional[str] = None
+    gateway_order_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
     transaction_id: Optional[str] = None
     payment_date: Optional[str] = None
     notes: Optional[str] = None
@@ -35,11 +41,34 @@ class PaymentCreate(BaseModel):
         return v
 
 
+class PaymentAuthorize(BaseModel):
+    booking_id: int
+    amount: Decimal = Field(gt=0)
+    payment_method: str = "card"
+    payment_type: str = "full"
+    gateway: str = "manual"
+    gateway_payment_id: Optional[str] = None
+    gateway_order_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PaymentCapture(BaseModel):
+    amount: Decimal = Field(gt=0)
+    transaction_id: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class PaymentVoid(BaseModel):
+    reason: Optional[str] = "Payment voided"
+
+
 class PaymentUpdate(BaseModel):
     payment_method: Optional[str] = None
     payment_type: Optional[str] = None
-    paid_amount: Optional[float] = None
-    gst_amount: Optional[float] = None
+    paid_amount: Optional[Decimal] = None
+    gst_amount: Optional[Decimal] = None
+    surcharge_amount: Optional[Decimal] = None
     transaction_id: Optional[str] = None
     payment_date: Optional[str] = None
     notes: Optional[str] = None
@@ -58,5 +87,5 @@ class PaymentStatusUpdate(BaseModel):
 
 
 class RefundRequest(BaseModel):
-    amount: float
+    amount: Decimal = Field(gt=0)
     reason: Optional[str] = "Refund issued by admin"

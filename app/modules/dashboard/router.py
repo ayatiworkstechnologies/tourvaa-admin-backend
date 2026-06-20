@@ -1,3 +1,4 @@
+import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
@@ -19,6 +20,8 @@ from app.modules.cms.models import Tour
 from app.modules.bookings.models import Booking
 from app.modules.payments.models import Payment
 from app.modules.customers.models import Customer
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -962,8 +965,8 @@ def dashboard_alerts(
             failed_payments = db.query(Payment).filter(Payment.payment_status == "failed").count()
             if failed_payments > 0:
                 alerts.append({"type": "error", "message": f"{failed_payments} payment failure(s) need review", "action": "payments"})
-        except Exception:
-            pass
+        except Exception as error:
+            logger.warning("Failed to load payment alerts for dashboard: %s", error)
 
     return {
         "status": "success",
@@ -1056,27 +1059,32 @@ def reports_summary(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     country_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
     _current_user: User = Depends(require_any_permission("dashboard.view", "view-dashboard")),
 ):
+    from sqlalchemy import func
+    from app.modules.invoices.models import Invoice
+
+    booking_query = db.query(Booking)
+    if country_id:
+        booking_query = booking_query.filter(Booking.country_id == country_id)
+    total_bookings = booking_query.count()
+    paid = db.query(func.coalesce(func.sum(Payment.captured_amount), 0)).filter(Payment.payment_status.notin_(["voided", "failed"])).scalar() or 0
+    pending = db.query(func.coalesce(func.sum(Booking.amount_pending), 0)).scalar() or 0
+    invoices = db.query(func.count(Invoice.id)).scalar() or 0
     return {
         "status": "success",
         "data": {
             "filters": _filters_payload(start_date, end_date, country_id),
-            "total_reports": 6,
-            "scheduled_reports": 3,
-            "exported_reports": 18,
+            "total_reports": 4,
+            "scheduled_reports": 0,
+            "exported_reports": invoices,
             "report_cards": [
-                {"name": "Booking Performance", "value": "128", "change": "+12%", "status": "ready"},
-                {"name": "Revenue Summary", "value": "₹4.8L", "change": "+8%", "status": "ready"},
-                {"name": "Supplier Approval", "value": "14", "change": "5 pending", "status": "review"},
-                {"name": "Agent Sales", "value": "36", "change": "+6%", "status": "ready"},
-                {"name": "Payment Collection", "value": "92%", "change": "8% pending", "status": "review"},
-                {"name": "Country-wise Bookings", "value": "9", "change": "countries", "status": "ready"},
+                {"name": "Booking Performance", "value": str(total_bookings), "change": "live", "status": "ready"},
+                {"name": "Revenue Summary", "value": str(paid), "change": "captured", "status": "ready"},
+                {"name": "Payment Pending", "value": str(pending), "change": "open balance", "status": "review"},
+                {"name": "Invoices Generated", "value": str(invoices), "change": "generated", "status": "ready"},
             ],
-            "recent_exports": [
-                {"id": 1, "name": "Monthly Booking Report", "format": "XLSX", "generated_at": "2026-06-15 09:30"},
-                {"id": 2, "name": "Supplier Pending Approval", "format": "PDF", "generated_at": "2026-06-14 17:10"},
-                {"id": 3, "name": "Payment Collection Summary", "format": "CSV", "generated_at": "2026-06-14 11:45"},
-            ],
+            "recent_exports": [],
         },
     }

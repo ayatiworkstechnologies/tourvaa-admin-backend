@@ -16,8 +16,8 @@ from app.modules.email_templates.models import EmailTemplate
 from app.modules.audit.models import AuditLog
 from app.modules.customers.models import Customer, CustomerCommunication
 from app.modules.cms.models import Country, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
-from app.modules.bookings.models import Booking
-from app.modules.payments.models import Payment
+from app.modules.bookings.models import Booking, BookingTraveller, BookingOptionalActivity, BookingAccommodation, BookingExtension, BookingStatusHistory, BookingCommunication, MessageReply, EmailLog
+from app.modules.payments.models import Payment, PaymentTransaction, PaymentHold
 from app.modules.tours.models import (
     TourOverview, TourItinerary, TourInclusion, TourExclusion, TourHighlight,
     TourSimilar, TourExtension, TourGalleryImage,
@@ -46,9 +46,19 @@ from app.modules.suppliers.router import router as suppliers_router
 from app.modules.agents.router import router as agents_router
 from app.modules.affiliates.router import router as affiliates_router
 from app.modules.cms.router import router as cms_router
-from app.modules.bookings.router import router as bookings_router
+from app.modules.bookings.router import router as bookings_router, supplier_router as bookings_supplier_router
 from app.modules.payments.router import router as payments_router
 from app.modules.tours.router import router as tour_detail_router
+from app.modules.invoices.models import Invoice, InvoiceItem
+from app.modules.notifications.models import Notification, NotificationLog
+from app.modules.sessions.models import UserSession, LoginHistory
+from app.modules.invoices.router import router as invoices_router
+from app.modules.notifications.router import router as notifications_router
+from app.modules.reports.router import router as reports_router
+from app.modules.sessions.router import router as sessions_router
+from app.modules.audit.router import router as activity_logs_router
+from app.modules.chatbot.models import ChatFAQ, ChatSession, ChatMessage
+from app.modules.chatbot.router import router as chatbot_router
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +103,25 @@ def schema_is_ready():
         "affiliate_documents",
         "bookings",
         "payments",
+        "booking_travellers",
+        "booking_optional_activities",
+        "booking_accommodations",
+        "booking_extensions",
+        "booking_status_history",
+        "booking_communications",
+        "payment_transactions",
+        "payment_holds",
+        "invoices",
+        "invoice_items",
+        "notifications",
+        "user_sessions",
+        "message_replies",
+        "email_logs",
+        "notification_logs",
+        "login_history",
+        "chat_faqs",
+        "chat_sessions",
+        "chat_messages",
     }
 
     if not required_tables.issubset(tables):
@@ -106,6 +135,8 @@ def schema_is_ready():
             "reset_password_token",
             "reset_password_expires_at",
             "token_version",
+            "two_factor_enabled",
+            "force_password_reset",
         },
     }
 
@@ -174,7 +205,14 @@ app.include_router(affiliates_router, prefix="/api")
 app.include_router(cms_router, prefix="/api")
 app.include_router(bookings_router, prefix="/api")
 app.include_router(payments_router, prefix="/api")
+app.include_router(invoices_router, prefix="/api")
+app.include_router(notifications_router, prefix="/api")
+app.include_router(reports_router, prefix="/api")
+app.include_router(sessions_router, prefix="/api")
+app.include_router(activity_logs_router, prefix="/api")
+app.include_router(bookings_supplier_router, prefix="/api")
 app.include_router(tour_detail_router, prefix="/api")
+app.include_router(chatbot_router, prefix="/api")
 
 @app.get("/")
 def home():
@@ -190,3 +228,7 @@ def health():
         "status": "success",
         "message": "API working fine"
     }
+
+
+
+
