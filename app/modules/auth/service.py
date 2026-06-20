@@ -21,6 +21,8 @@ from app.modules.permissions.models import Permission, RolePermission
 from app.modules.customers.models import Customer
 from app.modules.suppliers.models import Supplier
 from app.modules.agents.models import Agent
+from app.modules.sessions.models import LoginHistory
+from app.modules.sessions.service import create_session
 from app.modules.common.media import existing_storage_path
 from app.security import (
     create_password_reset_token,
@@ -32,6 +34,31 @@ from app.security import (
 
 logger = logging.getLogger(__name__)
 PUBLIC_REGISTRATION_ROLES = {"customer", "supplier", "agent-reseller"}
+
+
+def _request_ip(request) -> str | None:
+    return request.client.host if request and request.client else None
+
+
+def _request_user_agent(request) -> str | None:
+    return request.headers.get("user-agent") if request else None
+
+
+def _record_login_history(db: Session, *, data, email: str, status: str, user: User | None = None, failure_reason: str | None = None, session_id: str | None = None, request=None) -> None:
+    db.add(
+        LoginHistory(
+            user_id=user.id if user else None,
+            email=email,
+            status=status,
+            failure_reason=failure_reason,
+            client_type=data.client_type or "web",
+            device_id=data.device_id,
+            device_name=data.device_name,
+            ip_address=_request_ip(request),
+            user_agent=_request_user_agent(request),
+            session_id=session_id,
+        )
+    )
 
 
 def get_user_permissions(db: Session, role_ids: list[int]):
@@ -225,11 +252,12 @@ def register_user(db: Session, data):
     return new_user
 
 
-def login_user(db: Session, data):
+def login_user(db: Session, data, request=None):
     email = str(data.email).strip().lower()
     user = db.query(User).filter(User.email == email).first()
 
     if not user:
+        _record_login_history(db, data=data, email=email, status="failed", failure_reason="unknown_user", request=request)
         log_audit(
             db,
             actor=None,
@@ -242,6 +270,7 @@ def login_user(db: Session, data):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not verify_password(data.password, user.password):
+        _record_login_history(db, data=data, email=email, status="failed", user=user, failure_reason="bad_password", request=request)
         log_audit(
             db,
             actor=user,
@@ -274,6 +303,21 @@ def login_user(db: Session, data):
         "token_version": user.token_version,
     })
 
+    try:
+        session = create_session(db, user, request=request)
+        _record_login_history(
+            db,
+            data=data,
+            email=email,
+            status="success",
+            user=user,
+            session_id=session.session_id,
+            request=request,
+        )
+    except Exception as error:
+        logger.warning("Login session tracking failed for user %s: %s", user.id, error)
+        session = None
+
     log_audit(
         db,
         actor=user,
@@ -294,6 +338,7 @@ def login_user(db: Session, data):
         "token_type": "bearer",
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "client_type": data.client_type or "web",
+        "session_id": session.session_id if session else None,
         "user": auth_user,
     }
 

@@ -35,6 +35,10 @@ MODULES = [
     ("bookings", "Bookings"),
     ("payments", "Payments"),
     ("reports", "Reports"),
+    ("invoices", "Invoices"),
+    ("notifications", "Notifications"),
+    ("activity_logs", "Activity Logs"),
+    ("sessions", "Sessions"),
     ("email", "Email Templates"),
     ("settings", "Settings"),
     ("profile", "Profile"),
@@ -118,6 +122,20 @@ OPERATIONAL_PERMISSIONS = [
     ("tours", "Tours", ["view", "create", "edit", "publish", "disable"]),
 ]
 
+
+WEEK_11_15_PERMISSIONS = [
+    ("bookings", "Bookings", ["view", "create", "edit", "update_status", "assign_supplier", "cancel", "view_travellers", "view_payments", "view_history", "export"]),
+    ("payments", "Payments", ["view", "create", "edit", "capture", "void", "refund", "view_transactions", "export", "manage_settings"]),
+    ("invoices", "Invoices", ["view", "generate", "email", "download", "export"]),
+    ("notifications", "Notifications", ["view", "manage", "retry"]),
+    ("reports", "Reports", ["view", "admin", "supplier", "agent", "export"]),
+    ("activity_logs", "Activity Logs", ["view", "export"]),
+    ("sessions", "Sessions", ["view", "revoke", "force_logout"]),
+]
+
+for module, label, actions in WEEK_11_15_PERMISSIONS:
+    for action in actions:
+        DEFAULT_PERMISSIONS.append({"name": f"{action.replace('_', ' ').title()} {label}", "slug": f"{module}.{action}", "module": module, "action": action})
 for module, label, actions in OPERATIONAL_PERMISSIONS:
     for action in actions:
         DEFAULT_PERMISSIONS.append(
@@ -503,6 +521,20 @@ def seed_default_roles_and_permissions(db: Session):
         ],
     }
 
+    week_permission_slugs = [f"{module}.{action}" for module, _label, actions in WEEK_11_15_PERMISSIONS for action in actions]
+    if admin:
+        default_role_permissions.setdefault(admin, []).extend(week_permission_slugs)
+    if sub_admin:
+        default_role_permissions.setdefault(sub_admin, []).extend([
+            slug for slug in week_permission_slugs
+            if not slug.endswith(".manage_settings") and not slug.endswith(".force_logout")
+        ])
+    if supplier:
+        default_role_permissions.setdefault(supplier, []).extend(["bookings.view", "bookings.update_status", "bookings.view_history", "payments.view", "reports.supplier", "notifications.view"])
+    if agent_reseller:
+        default_role_permissions.setdefault(agent_reseller, []).extend(["bookings.view", "bookings.create", "bookings.view_history", "payments.view", "reports.agent", "notifications.view"])
+    if customer:
+        default_role_permissions.setdefault(customer, []).extend(["bookings.view", "bookings.create", "payments.view", "invoices.view", "invoices.download", "notifications.view"])
     for role, permission_slugs in default_role_permissions.items():
         if not role:
             continue
@@ -514,3 +546,5 @@ def seed_default_roles_and_permissions(db: Session):
                 assign_if_missing(db, role, permission)
 
     db.commit()
+
+
