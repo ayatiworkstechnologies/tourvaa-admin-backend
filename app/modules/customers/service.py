@@ -81,6 +81,21 @@ def serialize_customer(customer: Customer, db: Session | None = None):
     }
 
 
+def _paginate(items: list, page: int = 1, limit: int = 20) -> dict:
+    page = max(1, int(page or 1))
+    limit = max(1, int(limit or 20))
+    total = len(items)
+    start = (page - 1) * limit
+    end = start + limit
+    return {
+        "items": items[start:end],
+        "data": items[start:end],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, ceil(total / limit)) if total else 1,
+    }
+
 def serialize_communication(item: CustomerCommunication):
     return {
         "id": item.id,

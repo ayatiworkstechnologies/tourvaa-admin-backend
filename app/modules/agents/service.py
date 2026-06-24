@@ -102,3 +102,18 @@ def update_agent_discount(db: Session, agent_id: int, data: AgentDiscountRequest
     db.commit()
     db.refresh(item)
     return serialize_agent(item)
+
+
+def submit_agent_verification(db: Session, user: User, request: Request | None = None):
+    agent = db.query(Agent).filter(Agent.user_id == user.id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    old = serialize_agent(agent)
+    agent.approval_status = "admin_review_pending"
+    agent.status = "inactive"
+    agent.rejection_reason = None
+    agent.pending_requirements = None
+    log_audit(db, actor=user, action="submit_agent_verification", entity_type="agent", entity_id=agent.id, old_values=old, new_values=serialize_agent(agent), request=request)
+    db.commit()
+    db.refresh(agent)
+    return serialize_agent(agent)

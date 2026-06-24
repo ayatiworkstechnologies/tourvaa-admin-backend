@@ -128,3 +128,24 @@ def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRe
     db.commit()
     db.refresh(item)
     return serialize_supplier(item)
+
+
+def submit_supplier_verification(db: Session, user: User, request: Request | None = None):
+    supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    old = serialize_supplier(supplier)
+    supplier.approval_status = "admin_review_pending"
+    supplier.status = "inactive"
+    supplier.rejection_reason = None
+    supplier.pending_requirements = None
+    log_audit(db, actor=user, action="submit_supplier_verification", entity_type="supplier", entity_id=supplier.id, old_values=old, new_values=serialize_supplier(supplier), request=request)
+    db.commit()
+    db.refresh(supplier)
+    try:
+        from app.modules.common.notification_triggers import notify_supplier_submitted_verification
+        notify_supplier_submitted_verification(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, user_id=user.id)
+        db.commit()
+    except Exception:
+        pass
+    return serialize_supplier(supplier)

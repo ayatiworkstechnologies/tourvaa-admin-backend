@@ -43,12 +43,28 @@ def mark_read(db: Session, notification_id: int):
     return serialize_notification(n)
 
 
+MAX_NOTIFICATION_RETRIES = 5
+
+
 def retry_notification(db: Session, notification_id: int):
     n = db.query(Notification).filter(Notification.id == notification_id).first()
     if not n:
         raise HTTPException(status_code=404, detail="Notification not found")
+
+    retry_count = (
+        db.query(NotificationLog)
+        .filter(NotificationLog.notification_id == notification_id)
+        .count()
+    )
+    if retry_count >= MAX_NOTIFICATION_RETRIES:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Notification has already been retried {retry_count} times (max {MAX_NOTIFICATION_RETRIES}).",
+        )
+
     n.status = "sent"
     n.sent_at = utcnow()
+    db.add(NotificationLog(notification_id=n.id, channel=n.channel, status="sent", response="manual retry"))
     db.commit()
     db.refresh(n)
     return serialize_notification(n)

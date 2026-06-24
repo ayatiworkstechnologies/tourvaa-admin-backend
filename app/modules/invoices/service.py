@@ -57,14 +57,98 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
     db.add(InvoiceItem(invoice_id=inv.id, item_type="booking", description=f"Booking {booking.booking_code or booking.id}", quantity=1, unit_price=subtotal, tax_amount=gst, total_price=total))
     storage = get_storage_root().joinpath("invoices")
     storage.mkdir(parents=True, exist_ok=True)
-    pdf = storage.joinpath(f"{inv.invoice_number}.txt")
-    pdf.write_text(f"Invoice {inv.invoice_number}\nBooking: {booking.booking_code}\nTotal: {money_str(total)}\n", encoding="utf-8")
-    inv.pdf_path = f"/storage/invoices/{inv.invoice_number}.txt"
+    pdf_path = storage.joinpath(f"{inv.invoice_number}.pdf")
+    invoice_data = {
+        "invoice_number": inv.invoice_number,
+        "booking_code": booking.booking_code or str(booking.id),
+        "customer_name": (booking.customer.user.name if booking.customer and booking.customer.user else ""),
+        "invoice_date": utcnow().strftime("%Y-%m-%d"),
+        "status": inv.status or "pending",
+        "currency": inv.currency,
+        "subtotal_amount": money_str(inv.subtotal_amount),
+        "gst_amount": money_str(inv.gst_amount),
+        "total_amount": money_str(inv.total_amount),
+        "amount_paid": money_str(inv.amount_paid),
+        "amount_due": money_str(inv.amount_due),
+        "items": [{"description": f"Booking {booking.booking_code or booking.id}", "quantity": 1, "unit_price": money_str(subtotal), "tax_amount": money_str(gst), "total_price": money_str(total)}],
+    }
+    from app.modules.invoices.pdf_generator import generate_pdf
+    generate_pdf(pdf_path, invoice_data)
+    inv.pdf_path = f"/storage/invoices/{inv.invoice_number}.pdf"
     from app.modules.notifications.service import enqueue_notification, notify_admins
     notify_admins(db, notification_type="invoice_generated", title="Invoice generated", message=f"Invoice {inv.invoice_number} was generated", entity_type="invoice", entity_id=inv.id)
     if booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="invoice_generated", title="Invoice generated", message=f"Invoice {inv.invoice_number} is ready", entity_type="invoice", entity_id=inv.id)
     log_audit(db, actor=actor, action="generate_invoice", entity_type="invoice", entity_id=inv.id, request=request)
+    db.commit()
+    db.refresh(inv)
+    return serialize_invoice(inv, detail=True)
+
+
+def regenerate_invoice_pdf(db: Session, invoice_id: int, actor: User, request: Request | None = None):
+    inv = get_invoice(db, invoice_id)
+    booking = inv.booking
+    if not booking:
+        raise HTTPException(status_code=400, detail="Invoice has no associated booking")
+    storage = get_storage_root().joinpath("invoices")
+    storage.mkdir(parents=True, exist_ok=True)
+    pdf_path = storage.joinpath(f"{inv.invoice_number}.pdf")
+    invoice_data = {
+        "invoice_number": inv.invoice_number,
+        "booking_code": booking.booking_code or str(booking.id),
+        "customer_name": (booking.customer.user.name if booking.customer and booking.customer.user else ""),
+        "invoice_date": utcnow().strftime("%Y-%m-%d"),
+        "status": inv.status or "pending",
+        "currency": inv.currency,
+        "subtotal_amount": money_str(inv.subtotal_amount),
+        "gst_amount": money_str(inv.gst_amount),
+        "total_amount": money_str(inv.total_amount),
+        "amount_paid": money_str(inv.amount_paid),
+        "amount_due": money_str(inv.amount_due),
+        "items": [{"description": i.description, "quantity": i.quantity, "unit_price": money_str(i.unit_price), "tax_amount": money_str(i.tax_amount), "total_price": money_str(i.total_price)} for i in inv.items],
+    }
+    from app.modules.invoices.pdf_generator import generate_pdf
+    generate_pdf(pdf_path, invoice_data)
+    inv.pdf_path = f"/storage/invoices/{inv.invoice_number}.pdf"
+    log_audit(db, actor=actor, action="regenerate_invoice_pdf", entity_type="invoice", entity_id=inv.id, request=request)
+    db.commit()
+    db.refresh(inv)
+    return serialize_invoice(inv, detail=True)
+
+
+def download_invoice_pdf(db: Session, invoice_id: int) -> tuple[str, str]:
+    """Returns (file_system_path, filename) for FileResponse."""
+    from app.config import get_storage_root
+    inv = get_invoice(db, invoice_id)
+    if not inv.pdf_path:
+        raise HTTPException(status_code=404, detail="PDF not yet generated for this invoice")
+    fs_path = str(get_storage_root()) + inv.pdf_path.replace("/storage", "")
+    import os
+    if not os.path.exists(fs_path):
+        raise HTTPException(status_code=404, detail="PDF file not found on server — please regenerate")
+    return fs_path, f"{inv.invoice_number}.pdf"
+
+
+def email_invoice_to_customer(db: Session, invoice_id: int, email: str | None, actor: User, request: Request | None = None):
+    inv = get_invoice(db, invoice_id)
+    booking = inv.booking
+    recipient = email or (booking.customer.user.email if booking and booking.customer and booking.customer.user else None)
+    if not recipient:
+        raise HTTPException(status_code=400, detail="No recipient email address available")
+    from app.modules.common.mailer import try_send_email
+    subject = f"Your Invoice {inv.invoice_number} from Tourvaa"
+    body = f"""
+<p>Dear Customer,</p>
+<p>Please find attached your invoice <b>{inv.invoice_number}</b>.</p>
+<p>Total Amount: <b>{inv.currency} {money_str(inv.total_amount)}</b></p>
+<p>Amount Due: <b>{inv.currency} {money_str(inv.amount_due)}</b></p>
+<p>Thank you for booking with Tourvaa.</p>
+"""
+    try_send_email(recipient, subject, body)
+    inv.status = "emailed"
+    inv.emailed_at = utcnow()
+    db.add(EmailLog(recipient_email=recipient, subject=subject, template_key="invoice_emailed", entity_type="invoice", entity_id=inv.id, status="sent", sent_at=utcnow()))
+    log_audit(db, actor=actor, action="email_invoice", entity_type="invoice", entity_id=inv.id, request=request)
     db.commit()
     db.refresh(inv)
     return serialize_invoice(inv, detail=True)

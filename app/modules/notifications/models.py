@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -32,4 +32,16 @@ class NotificationLog(Base):
     channel = Column(String(30), nullable=False)
     status = Column(String(30), nullable=False)
     response = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+    __table_args__ = (UniqueConstraint("endpoint", name="uq_push_endpoint"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    endpoint = Column(String(500), nullable=False)
+    p256dh = Column(String(256), nullable=False)
+    auth = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

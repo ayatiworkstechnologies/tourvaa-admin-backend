@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.modules.cms.service import list_categories
 from app.modules.common.auth import require_any_permission
 from app.modules.tours.schemas import (
     AccommodationExtraPayload,
@@ -80,8 +81,33 @@ from app.modules.users.models import User
 
 router = APIRouter(prefix="/tours", tags=["Tour Detail"])
 
+
+def _assert_supplier_owns_tour(db: Session, tour_id: int, user: User) -> None:
+    """Raises 403 if the actor is a supplier and does not own this tour."""
+    role_slug = (user.role.slug if user.role else "") or ""
+    if "supplier" not in role_slug.lower():
+        return
+    from app.modules.cms.models import Tour
+    from app.modules.suppliers.models import Supplier
+    supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=403, detail="Supplier profile not found")
+    tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    if not tour or tour.supplier_id != supplier.id:
+        raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
+
 VIEW = "tours.view"
 EDIT = "tours.edit"
+
+
+@router.get("/categories")
+def tour_categories(
+    search: str = Query(default=""),
+    page: int = Query(default=1),
+    limit: int = Query(default=200),
+    db: Session = Depends(get_db),
+):
+    return {"status": "success", **list_categories(db, page, limit, search)}
 
 
 # ── Overview ──────────────────────────────────────────────────────────────────
@@ -93,11 +119,13 @@ def tour_overview(tour_id: int, db: Session = Depends(get_db), _: User = Depends
 
 @router.post("/{tour_id}/overview")
 def save_tour_overview(tour_id: int, data: TourOverviewPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": save_overview(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/overview")
 def update_tour_overview(tour_id: int, data: TourOverviewPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": save_overview(db, tour_id, data, current_user, request)}
 
 
@@ -110,6 +138,7 @@ def tour_itineraries(tour_id: int, db: Session = Depends(get_db), _: User = Depe
 
 @router.post("/{tour_id}/itineraries")
 def add_itinerary(tour_id: int, data: ItineraryPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_itinerary(db, tour_id, data, current_user, request)}
 
 
@@ -121,17 +150,20 @@ def get_itinerary(tour_id: int, itinerary_id: int, db: Session = Depends(get_db)
 
 @router.put("/{tour_id}/itineraries/{itinerary_id}")
 def edit_itinerary(tour_id: int, itinerary_id: int, data: ItineraryPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_itinerary(db, tour_id, itinerary_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/itineraries/{itinerary_id}")
 def remove_itinerary(tour_id: int, itinerary_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_itinerary(db, tour_id, itinerary_id, current_user, request)
     return {"status": "success", "message": "Itinerary day deleted"}
 
 
 @router.patch("/{tour_id}/itineraries/reorder")
 def reorder_tour_itineraries(tour_id: int, data: ReorderPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     reorder_itineraries(db, tour_id, data, current_user, request)
     return {"status": "success", "message": "Itineraries reordered"}
 
@@ -145,16 +177,19 @@ def tour_inclusions(tour_id: int, db: Session = Depends(get_db), _: User = Depen
 
 @router.post("/{tour_id}/inclusions")
 def add_inclusion(tour_id: int, data: InclusionPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_inclusion(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/inclusions/{inclusion_id}")
 def edit_inclusion(tour_id: int, inclusion_id: int, data: InclusionPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_inclusion(db, tour_id, inclusion_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/inclusions/{inclusion_id}")
 def remove_inclusion(tour_id: int, inclusion_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_inclusion(db, tour_id, inclusion_id, current_user, request)
     return {"status": "success", "message": "Inclusion deleted"}
 
@@ -168,16 +203,19 @@ def tour_exclusions(tour_id: int, db: Session = Depends(get_db), _: User = Depen
 
 @router.post("/{tour_id}/exclusions")
 def add_exclusion(tour_id: int, data: InclusionPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_exclusion(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/exclusions/{exclusion_id}")
 def edit_exclusion(tour_id: int, exclusion_id: int, data: InclusionPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_exclusion(db, tour_id, exclusion_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/exclusions/{exclusion_id}")
 def remove_exclusion(tour_id: int, exclusion_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_exclusion(db, tour_id, exclusion_id, current_user, request)
     return {"status": "success", "message": "Exclusion deleted"}
 
@@ -191,16 +229,19 @@ def tour_highlights(tour_id: int, db: Session = Depends(get_db), _: User = Depen
 
 @router.post("/{tour_id}/highlights")
 def add_highlight(tour_id: int, data: HighlightPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_highlight(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/highlights/{highlight_id}")
 def edit_highlight(tour_id: int, highlight_id: int, data: HighlightPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_highlight(db, tour_id, highlight_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/highlights/{highlight_id}")
 def remove_highlight(tour_id: int, highlight_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_highlight(db, tour_id, highlight_id, current_user, request)
     return {"status": "success", "message": "Highlight deleted"}
 
@@ -214,11 +255,13 @@ def tour_similar(tour_id: int, db: Session = Depends(get_db), _: User = Depends(
 
 @router.post("/{tour_id}/similar-tours")
 def add_tour_similar(tour_id: int, data: SimilarTourPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": add_similar_tour(db, tour_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/similar-tours/{similar_id}")
 def remove_similar(tour_id: int, similar_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_similar_tour(db, tour_id, similar_id, current_user, request)
     return {"status": "success", "message": "Similar tour removed"}
 
@@ -232,16 +275,19 @@ def tour_extensions(tour_id: int, db: Session = Depends(get_db), _: User = Depen
 
 @router.post("/{tour_id}/extensions")
 def add_extension(tour_id: int, data: ExtensionPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_extension(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/extensions/{extension_id}")
 def edit_extension(tour_id: int, extension_id: int, data: ExtensionPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_extension(db, tour_id, extension_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/extensions/{extension_id}")
 def remove_extension(tour_id: int, extension_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_extension(db, tour_id, extension_id, current_user, request)
     return {"status": "success", "message": "Extension deleted"}
 
@@ -255,16 +301,19 @@ def tour_gallery(tour_id: int, db: Session = Depends(get_db), _: User = Depends(
 
 @router.post("/{tour_id}/gallery")
 def add_gallery_image(tour_id: int, data: GalleryImagePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_gallery_image(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/gallery/{image_id}")
 def edit_gallery_image(tour_id: int, image_id: int, data: GalleryImagePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_gallery_image(db, tour_id, image_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/gallery/{image_id}")
 def remove_gallery_image(tour_id: int, image_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_gallery_image(db, tour_id, image_id, current_user, request)
     return {"status": "success", "message": "Image deleted"}
 
@@ -278,16 +327,19 @@ def tour_pricing(tour_id: int, db: Session = Depends(get_db), _: User = Depends(
 
 @router.post("/{tour_id}/pricing")
 def add_pricing(tour_id: int, data: PricingPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_pricing(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/pricing/{pricing_id}")
 def edit_pricing(tour_id: int, pricing_id: int, data: PricingPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_pricing(db, tour_id, pricing_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/pricing/{pricing_id}")
 def remove_pricing(tour_id: int, pricing_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_pricing(db, tour_id, pricing_id, current_user, request)
     return {"status": "success", "message": "Pricing slab deleted"}
 
@@ -301,16 +353,19 @@ def tour_activities(tour_id: int, db: Session = Depends(get_db), _: User = Depen
 
 @router.post("/{tour_id}/optional-activities")
 def add_activity(tour_id: int, data: OptionalActivityPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_activity(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/optional-activities/{activity_id}")
 def edit_activity(tour_id: int, activity_id: int, data: OptionalActivityPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_activity(db, tour_id, activity_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/optional-activities/{activity_id}")
 def remove_activity(tour_id: int, activity_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_activity(db, tour_id, activity_id, current_user, request)
     return {"status": "success", "message": "Activity deleted"}
 
@@ -324,16 +379,19 @@ def tour_accommodations(tour_id: int, db: Session = Depends(get_db), _: User = D
 
 @router.post("/{tour_id}/accommodation-extras")
 def add_accommodation(tour_id: int, data: AccommodationExtraPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_accommodation(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/accommodation-extras/{extra_id}")
 def edit_accommodation(tour_id: int, extra_id: int, data: AccommodationExtraPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_accommodation(db, tour_id, extra_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/accommodation-extras/{extra_id}")
 def remove_accommodation(tour_id: int, extra_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_accommodation(db, tour_id, extra_id, current_user, request)
     return {"status": "success", "message": "Accommodation extra deleted"}
 
@@ -347,16 +405,19 @@ def tour_calendar(tour_id: int, db: Session = Depends(get_db), _: User = Depends
 
 @router.post("/{tour_id}/calendar")
 def add_calendar(tour_id: int, data: CalendarPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_calendar_entry(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/calendar/{calendar_id}")
 def edit_calendar(tour_id: int, calendar_id: int, data: CalendarPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_calendar_entry(db, tour_id, calendar_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/calendar/{calendar_id}")
 def remove_calendar(tour_id: int, calendar_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_calendar_entry(db, tour_id, calendar_id, current_user, request)
     return {"status": "success", "message": "Calendar entry deleted"}
 
@@ -370,11 +431,13 @@ def tour_unavailable(tour_id: int, db: Session = Depends(get_db), _: User = Depe
 
 @router.post("/{tour_id}/unavailable-dates")
 def add_unavailable(tour_id: int, data: UnavailableDatePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_unavailable_date(db, tour_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/unavailable-dates/{date_id}")
 def remove_unavailable(tour_id: int, date_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_unavailable_date(db, tour_id, date_id, current_user, request)
     return {"status": "success", "message": "Unavailable date deleted"}
 
@@ -388,16 +451,19 @@ def tour_discounts(tour_id: int, db: Session = Depends(get_db), _: User = Depend
 
 @router.post("/{tour_id}/discounts")
 def add_discount(tour_id: int, data: DiscountPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_discount(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/discounts/{discount_id}")
 def edit_discount(tour_id: int, discount_id: int, data: DiscountPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_discount(db, tour_id, discount_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/discounts/{discount_id}")
 def remove_discount(tour_id: int, discount_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_discount(db, tour_id, discount_id, current_user, request)
     return {"status": "success", "message": "Discount deleted"}
 

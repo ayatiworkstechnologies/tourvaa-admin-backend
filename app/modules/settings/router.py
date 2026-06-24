@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.modules.cms.models import City, Country
+from app.modules.cms.service import list_cities, list_countries
 from app.modules.common.auth import require_permission
 from app.modules.users.models import User
 from app.modules.settings.schemas import (
@@ -29,6 +31,29 @@ from app.modules.settings.service import (
 )
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
+
+
+# ── Dropdown helpers used by portal forms ──────────────────────────────────────
+
+@router.get("/countries")
+def settings_countries(
+    search: str = Query(default=""),
+    page: int = Query(default=1),
+    limit: int = Query(default=300),
+    db: Session = Depends(get_db),
+):
+    return {"status": "success", **list_countries(db, page, limit, search)}
+
+
+@router.get("/cities")
+def settings_cities(
+    search: str = Query(default=""),
+    country_id: str = Query(default=""),
+    page: int = Query(default=1),
+    limit: int = Query(default=500),
+    db: Session = Depends(get_db),
+):
+    return {"status": "success", **list_cities(db, page, limit, search, country_id)}
 
 
 @router.get("/")

@@ -6,20 +6,40 @@ from sqlalchemy import engine_from_config, pool
 from app.config import settings
 from app.database import Base
 
+from app.modules.admin_modules.models import AdminModule
+from app.modules.affiliates.models import Affiliate, AffiliateDocument, AffiliateInvoicing, AffiliateMarketingInfo
+from app.modules.agents.models import Agent, AgentBusinessInfo, AgentContact, AgentDocument, AgentInvoicing
 from app.modules.audit.models import AuditLog
+from app.modules.bookings.models import Booking, BookingAccommodation, BookingCommunication, BookingExtension, BookingOptionalActivity, BookingStatusHistory, BookingTraveller, EmailLog, MessageReply
+from app.modules.chatbot.models import ChatFAQ, ChatMessage, ChatSession
+from app.modules.cms.models import City, Country, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
+from app.modules.customers.models import Customer, CustomerCommunication
 from app.modules.email_templates.models import EmailTemplate
+from app.modules.invoices.models import Invoice, InvoiceItem
+from app.modules.notifications.models import Notification, NotificationLog, PushSubscription
+from app.modules.payments.models import Payment, PaymentHold, PaymentTransaction
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.roles.models import Role
-from app.modules.settings.models import AppSetting
-from app.modules.users.models import User
-from app.modules.bookings.models import Booking
-from app.modules.payments.models import Payment
+from app.modules.sessions.models import LoginHistory, UserSession
+from app.modules.settings.models import ApiSetting, AppSetting, PaymentSetting
+from app.modules.suppliers.models import Supplier, SupplierBusinessInfo, SupplierContact, SupplierDocument, SupplierInvoicing, SupplierVehicle
 from app.modules.tours.models import (
-    TourOverview, TourItinerary, TourInclusion, TourExclusion, TourHighlight,
-    TourSimilar, TourExtension, TourGalleryImage,
-    TourPricing, TourOptionalActivity, TourAccommodationExtra,
-    TourCalendar, TourUnavailableDate, TourDiscount,
+    TourAccommodationExtra,
+    TourCalendar,
+    TourDiscount,
+    TourExclusion,
+    TourExtension,
+    TourGalleryImage,
+    TourHighlight,
+    TourInclusion,
+    TourItinerary,
+    TourOptionalActivity,
+    TourOverview,
+    TourPricing,
+    TourSimilar,
+    TourUnavailableDate,
 )
+from app.modules.users.models import User, UserRole
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
@@ -60,3 +80,5 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+
+

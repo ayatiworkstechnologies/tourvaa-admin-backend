@@ -19,8 +19,8 @@ router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
 def chat(payload: ChatMessageRequest, db: Session = Depends(get_db)):
     if not payload.message or not payload.message.strip():
         raise HTTPException(status_code=422, detail="Message cannot be empty")
-    reply, session_key = service.get_chat_reply(db, payload.session_key, payload.message.strip())
-    return ChatMessageResponse(reply=reply, session_key=session_key)
+    reply, session_key, action_type, action_data = service.get_chat_reply(db, payload.session_key, payload.message.strip())
+    return ChatMessageResponse(reply=reply, session_key=session_key, action_type=action_type, action_data=action_data)
 
 
 @router.get("/faqs", response_model=list[FAQResponse])

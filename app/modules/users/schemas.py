@@ -1,6 +1,7 @@
-import re
+﻿import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
+from app.modules.auth.schemas import validate_strong_password
 from typing import Optional
 from datetime import datetime
 
@@ -54,6 +55,11 @@ class UserCreate(BaseModel):
         if value and not PHONE_PATTERN.fullmatch(value):
             raise ValueError("Enter a valid mobile number")
         return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, value: str):
+        return validate_strong_password(value)
 
 
 class UserUpdate(BaseModel):
@@ -132,3 +138,4 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+

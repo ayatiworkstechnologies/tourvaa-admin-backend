@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from datetime import datetime, timezone
 from math import ceil
 from typing import Optional
@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.modules.audit.service import log_audit
 from app.modules.bookings.models import (
     Booking,
@@ -33,6 +34,16 @@ from app.modules.tours.models import TourAccommodationExtra, TourCalendar, TourE
 from app.modules.users.models import User
 
 logger = logging.getLogger(__name__)
+
+
+def _send_booking_email(db, key: str, values: dict, fallback_subject: str, fallback_html: str, to_email: str):
+    from app.modules.common.email_templates import render_database_email
+    from app.modules.common.mailer import try_send_email
+    try:
+        subject, html = render_database_email(db, key, values, fallback_subject, fallback_html)
+        try_send_email(to_email, subject, html)
+    except Exception as exc:
+        logger.warning("Booking email %s to %s failed: %s", key, to_email, exc)
 
 
 def _booking_code(booking_id: int) -> str:
@@ -172,7 +183,7 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
     }
     if detail:
         data.update({
-            "customer": {"id": booking.customer.id, "name": booking.customer.name, "email": booking.customer.email} if booking.customer else None,
+            "customer": {"id": booking.customer.id, "name": booking.customer.full_name, "email": booking.customer.email} if booking.customer else None,
             "supplier": {"id": booking.supplier.id, "supplier_name": booking.supplier.supplier_name} if booking.supplier else None,
             "travellers": [serialize_traveller(t) for t in booking.travellers],
             "optional_activities": [serialize_activity(a) for a in booking.optional_activities],
@@ -301,6 +312,34 @@ def _price_booking(db: Session, data: BookingCreate):
     return tour, calendar, adults, children, total_travellers, currency, base_amount, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activity_rows, accommodation_rows, extension_rows
 
 
+def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
+    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions = _price_booking(db, data)
+    return {
+        "tour_id": data.tour_id,
+        "tour_calendar_id": data.tour_calendar_id,
+        "currency": currency,
+        "adult_count": adults,
+        "child_count": children,
+        "total_passengers": total_travellers,
+        "base_amount": money_str(base),
+        "optional_activity_amount": money_str(activity_total),
+        "accommodation_amount": money_str(accommodation_total),
+        "extension_amount": money_str(extension_total),
+        "discount_amount": money_str(discount),
+        "tax_amount": money_str(tax),
+        "surcharge_amount": money_str(surcharge),
+        "final_amount": money_str(final),
+        "available": True,
+        "tour_name": tour.title if tour else data.tour_name,
+        "tour_date": calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else data.tour_date,
+        "line_items": {
+            "optional_activities": [{"id": row.id, "name": row.activity_name, "quantity": qty, "unit_price": money_str(unit), "total_price": money_str(total)} for row, qty, unit, total in activities],
+            "accommodations": [{"id": row.id, "name": row.accommodation_name, "quantity": qty, "unit_price": money_str(unit), "total_price": money_str(total)} for row, qty, unit, total in accommodations],
+            "extensions": [{"id": row.id, "name": row.extension_title, "quantity": qty, "unit_price": money_str(unit), "total_price": money_str(total)} for row, qty, unit, total in extensions],
+        },
+    }
+
+
 def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_status: str = "", payment_status: str = "", supplier_acceptance_status: str = "", country_id: Optional[int] = None, supplier_id: Optional[int] = None, agent_id: Optional[int] = None, tour_id: Optional[int] = None, start_date: str = "", end_date: str = "", sort_by: str = "newest", actor: Optional[User] = None) -> dict:
     query = db.query(Booking)
     role = _user_role(actor)
@@ -353,6 +392,8 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         raise HTTPException(status_code=404, detail="Customer not found")
     if data.booking_source == "customer" and not data.customer_id:
         raise HTTPException(status_code=400, detail="customer_id is required for customer bookings")
+    if data.booking_source == "customer" and actor and _user_role(actor) == "customer" and customer.user_id != actor.id:
+        raise HTTPException(status_code=403, detail="Customer booking access denied")
     if data.booking_source == "agent" and not data.agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required for agent bookings")
     tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions = _price_booking(db, data)
@@ -365,7 +406,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
         no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
         total_cost=final, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=final, amount_paid=money(0), amount_pending=final,
-        booking_status="pending_payment", supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status="unpaid", payment_type=data.payment_type, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
+        booking_status="pending_payment", supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status="pending", payment_type=data.payment_type, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
     )
     db.add(booking)
     db.flush()
@@ -394,6 +435,34 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New booking assigned", message=f"Booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
     db.commit()
     db.refresh(booking)
+
+    from app.modules.common.email_templates import booking_confirmation_email
+    login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+    _send_booking_email(
+        db, "booking_confirmation",
+        {"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+         "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
+         "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
+        f"Booking received - {booking.booking_code}",
+        booking_confirmation_email(customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
+        customer.email,
+    )
+
+    if booking.supplier_id and booking.supplier and booking.supplier.user and booking.supplier.user.email:
+        from app.modules.common.email_templates import supplier_booking_assigned_email
+        portal_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
+        _send_booking_email(
+            db, "supplier_booking_assigned",
+            {"supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code,
+             "tour_name": booking.tour_name, "tour_date": booking.tour_date or "",
+             "customer_name": customer.full_name, "adults": booking.adults_count,
+             "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url,
+             "button_text": "View booking", "button_url": portal_url},
+            f"New booking assigned - {booking.booking_code}",
+            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer.full_name, booking.adults_count, booking.currency, booking.final_amount, portal_url),
+            booking.supplier.user.email,
+        )
+
     return serialize_booking(booking, detail=True)
 
 
@@ -425,6 +494,21 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
     _set_status(db, booking, data.booking_status, actor, _user_role(actor), data.reason, data.metadata)
     log_audit(db, actor=actor, action="update_booking_status", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
     db.commit(); db.refresh(booking)
+
+    if booking.customer and booking.customer.email:
+        from app.modules.common.email_templates import booking_status_update_email
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        readable_status = data.booking_status.replace("_", " ").title()
+        _send_booking_email(
+            db, "booking_status_update",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "new_status": readable_status, "reason": data.reason or "", "login_url": login_url,
+             "button_text": "View booking", "button_url": login_url},
+            f"Booking update - {booking.booking_code}",
+            booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.booking_status, data.reason or "", login_url),
+            booking.customer.email,
+        )
+
     return serialize_booking(booking, detail=True)
 
 
@@ -442,6 +526,19 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
         booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - (booking.total_travellers or 0))
     log_audit(db, actor=actor, action="cancel_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
     db.commit(); db.refresh(booking)
+
+    if booking.customer and booking.customer.email:
+        from app.modules.common.email_templates import booking_cancelled_email
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings"
+        _send_booking_email(
+            db, "booking_cancelled",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "reason": data.reason or "Cancelled", "login_url": login_url, "button_text": "View bookings", "button_url": login_url},
+            f"Booking cancelled - {booking.booking_code}",
+            booking_cancelled_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.reason or "Cancelled", login_url),
+            booking.customer.email,
+        )
+
     return serialize_booking(booking, detail=True)
 
 
@@ -453,6 +550,23 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
     _set_status(db, booking, "pending_supplier_acceptance", actor, "admin", data.reason)
     log_audit(db, actor=actor, action="assign_supplier", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
     db.commit(); db.refresh(booking)
+
+    if booking.supplier and booking.supplier.user and booking.supplier.user.email:
+        from app.modules.common.email_templates import supplier_booking_assigned_email
+        customer_name = booking.customer.full_name if booking.customer else "Customer"
+        portal_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
+        _send_booking_email(
+            db, "supplier_booking_assigned",
+            {"supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code,
+             "tour_name": booking.tour_name, "tour_date": booking.tour_date or "",
+             "customer_name": customer_name, "adults": booking.adults_count,
+             "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url,
+             "button_text": "View booking", "button_url": portal_url},
+            f"New booking assigned - {booking.booking_code}",
+            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, booking.final_amount, portal_url),
+            booking.supplier.user.email,
+        )
+
     return serialize_booking(booking, detail=True)
 
 
@@ -484,6 +598,32 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_confirmed", title="Booking confirmed", message=f"Booking {booking.booking_code} is confirmed", entity_type="booking", entity_id=booking.id)
     log_audit(db, actor=actor, action="supplier_accept_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(booking)
+
+    if booking.customer and booking.customer.email:
+        from app.modules.common.email_templates import booking_confirmed_email
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        _send_booking_email(
+            db, "booking_confirmed",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
+             "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
+            f"Your booking is confirmed - {booking.booking_code}",
+            booking_confirmed_email(booking.customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
+            booking.customer.email,
+        )
+        if authorized_payments:
+            from app.modules.common.email_templates import payment_received_email
+            total_captured = sum(money(p.captured_amount) for p in authorized_payments)
+            _send_booking_email(
+                db, "payment_received",
+                {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+                 "currency": booking.currency, "amount": total_captured, "login_url": login_url,
+                 "button_text": "View booking", "button_url": login_url},
+                f"Payment received - {booking.booking_code}",
+                payment_received_email(booking.customer.full_name, booking.booking_code, booking.tour_name, booking.currency, total_captured, login_url),
+                booking.customer.email,
+            )
+
     return serialize_booking(booking, detail=True)
 
 
@@ -511,6 +651,20 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_declined", title="Booking declined", message=f"Booking {booking.booking_code} was declined by supplier", entity_type="booking", entity_id=booking.id)
     log_audit(db, actor=actor, action="supplier_decline_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(booking)
+
+    if booking.customer and booking.customer.email:
+        from app.modules.common.email_templates import booking_declined_email
+        login_url = f"{settings.FRONTEND_URL}/tours"
+        _send_booking_email(
+            db, "booking_declined",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "reason": data.reason or "Declined by supplier", "login_url": login_url,
+             "button_text": "Browse tours", "button_url": login_url},
+            f"Booking declined - {booking.booking_code}",
+            booking_declined_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.reason or "Declined by supplier", login_url),
+            booking.customer.email,
+        )
+
     return serialize_booking(booking, detail=True)
 
 
@@ -560,5 +714,6 @@ def add_communication_reply(db: Session, communication_id: int, message: str, ac
     log_audit(db, actor=actor, action="reply_booking_communication", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(reply)
     return {"id": reply.id, "communication_id": reply.communication_id, "sender_user_id": reply.sender_user_id, "sender_type": reply.sender_type, "message": reply.message, "created_at": reply.created_at}
+
 
 

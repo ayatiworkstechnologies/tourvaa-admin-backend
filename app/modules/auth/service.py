@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+﻿from datetime import datetime, timedelta
 import logging
 
 from fastapi import HTTPException
@@ -10,6 +10,7 @@ from app.modules.common.email_templates import (
     password_changed_email,
     password_reset_email,
     pending_approval_email,
+    email_verification_email,
 )
 from app.modules.common.mailer import send_email, try_send_email
 from app.modules.audit.models import AuditLog
@@ -27,6 +28,7 @@ from app.modules.common.media import existing_storage_path
 from app.security import (
     create_password_reset_token,
     create_token,
+    get_portal_for_role,
     hash_password,
     hash_reset_token,
     verify_password,
@@ -97,6 +99,13 @@ def get_auth_user_payload(db: Session, user: User):
         if user_role.role
     ]
 
+    customer_id = None
+    role_slug = user.role.slug if user.role else ""
+    if "customer" in role_slug:
+        customer = db.query(Customer).filter(Customer.user_id == user.id).first()
+        if customer:
+            customer_id = customer.id
+
     return {
         "id": user.id,
         "name": user.name,
@@ -110,6 +119,7 @@ def get_auth_user_payload(db: Session, user: User):
         },
         "roles": roles,
         "permissions": permissions,
+        "customer_id": customer_id,
     }
 
 
@@ -119,6 +129,27 @@ def build_password_reset_url(token: str, client_type: str | None = "web"):
         return f"{settings.MOBILE_DEEP_LINK_URL}{separator}token={token}"
 
     return f"{settings.FRONTEND_URL}/reset-password?token={token}"
+
+def build_email_verification_url(token: str):
+    return f"{settings.FRONTEND_URL}/verify-email?token={token}"
+
+def send_email_verification(db: Session, user: User, token: str):
+    verification_url = build_email_verification_url(token)
+    subject, html = render_database_email(
+        db,
+        "email_verification",
+        {
+            "name": user.name,
+            "email": user.email,
+            "verification_url": verification_url,
+            "button_text": "Verify Email",
+            "button_url": verification_url,
+        },
+        "Verify your Tourvaa email",
+        email_verification_email(user.name, verification_url),
+    )
+    try_send_email(user.email, subject, html)
+
 
 
 def register_user(db: Session, data):
@@ -164,6 +195,8 @@ def register_user(db: Session, data):
 
     is_customer = selected_role.slug == "customer" if selected_role else False
 
+    verification_token, verification_token_hash = create_password_reset_token()
+
     new_user = User(
         name=data.name.strip(),
         email=email,
@@ -177,7 +210,10 @@ def register_user(db: Session, data):
         password=hash_password(data.password),
         role_id=selected_role.id if selected_role else None,
         is_active=is_customer,
-        approval_status="approved" if is_customer else "pending"
+        approval_status="approved" if is_customer else "pending",
+        email_verified_at=None,
+        email_verification_token=verification_token_hash,
+        email_verification_expires_at=datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES),
     )
 
     db.add(new_user)
@@ -202,6 +238,7 @@ def register_user(db: Session, data):
                 email=email,
                 phone=new_user.phone,
                 status="active",
+                email_verified=False,
             ))
         else:
             existing_customer.user_id = new_user.id
@@ -213,7 +250,7 @@ def register_user(db: Session, data):
                 user_id=new_user.id,
                 supplier_name=new_user.name.strip(),
                 status="inactive",
-                approval_status="pending",
+                approval_status="email_verification_pending",
             ))
 
     elif role_slug == "agent-reseller":
@@ -223,11 +260,13 @@ def register_user(db: Session, data):
                 user_id=new_user.id,
                 agent_name=new_user.name.strip(),
                 status="inactive",
-                approval_status="pending",
+                approval_status="email_verification_pending",
             ))
 
     db.commit()
     db.refresh(new_user)
+
+    send_email_verification(db, new_user, verification_token)
 
     if not is_customer:
         subject, html = render_database_email(
@@ -283,6 +322,9 @@ def login_user(db: Session, data, request=None):
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
+        raise HTTPException(status_code=403, detail="Email verification is required before login")
+
     if user.approval_status == "pending":
         raise HTTPException(status_code=403, detail="Account is waiting for admin approval")
 
@@ -293,15 +335,18 @@ def login_user(db: Session, data, request=None):
         raise HTTPException(status_code=403, detail="User is inactive")
 
     auth_user = get_auth_user_payload(db, user)
+    role_slug = auth_user["role"]["slug"]
+    portal = get_portal_for_role(role_slug)
 
     token = create_token({
         "user_id": user.id,
         "email": user.email,
-        "role": auth_user["role"]["slug"],
+        "role": role_slug,
+        "portal": portal,
         "client_type": data.client_type or "web",
         "device_id": data.device_id,
         "token_version": user.token_version,
-    })
+    }, portal=portal)
 
     try:
         session = create_session(db, user, request=request)
@@ -345,14 +390,17 @@ def login_user(db: Session, data, request=None):
 
 def refresh_user_token(db: Session, user: User, client_type: str | None = "web", device_id: str | None = None):
     auth_user = get_auth_user_payload(db, user)
+    role_slug = auth_user["role"]["slug"]
+    portal = get_portal_for_role(role_slug)
     token = create_token({
         "user_id": user.id,
         "email": user.email,
-        "role": auth_user["role"]["slug"],
+        "role": role_slug,
+        "portal": portal,
         "client_type": client_type or "web",
         "device_id": device_id,
         "token_version": user.token_version,
-    })
+    }, portal=portal)
 
     return {
         "access_token": token,
@@ -367,7 +415,34 @@ def verify_email(db: Session, token: str | None = ""):
     if not token:
         raise HTTPException(status_code=400, detail="Verification token is required")
 
-    validate_reset_token(db, token)
+    token_hash = hash_reset_token(token)
+    user = db.query(User).filter(User.email_verification_token == token_hash).first()
+
+    if not user or not user.email_verification_expires_at:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+
+    if user.email_verification_expires_at.replace(tzinfo=None) < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+
+    user.email_verified_at = datetime.utcnow()
+    customer = db.query(Customer).filter(Customer.user_id == user.id).first()
+    if customer:
+        customer.email_verified = True
+    user.email_verification_token = None
+    user.email_verification_expires_at = None
+
+    user_role = getattr(user, "role", None)
+    role_slug = user_role.slug if user_role else ""
+    if role_slug == "supplier":
+        supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+        if supplier and supplier.approval_status in {"pending", "email_verification_pending"}:
+            supplier.approval_status = "profile_incomplete"
+    elif role_slug == "agent-reseller":
+        agent = db.query(Agent).filter(Agent.user_id == user.id).first()
+        if agent and agent.approval_status in {"pending", "email_verification_pending"}:
+            agent.approval_status = "profile_incomplete"
+
+    db.commit()
     return True
 
 
@@ -422,7 +497,10 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web"):
 
     if not user:
         logger.info("Password reset requested for unknown email: %s", normalized_email)
-        raise HTTPException(status_code=404, detail="No account found with this email address.")
+        return False
+
+    if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
+        raise HTTPException(status_code=403, detail="Email verification is required before password reset")
 
     if user.approval_status == "pending":
         logger.info("Password reset skipped for pending user id=%s", user.id)
@@ -536,3 +614,8 @@ def validate_reset_token(db: Session, token: str):
         raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
 
     return True
+
+
+
+
+

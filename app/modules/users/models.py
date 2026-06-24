@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+﻿from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -25,6 +25,9 @@ class User(Base):
     approval_status = Column(String(20), default="approved", nullable=False)
     reset_password_token = Column(String(255), nullable=True)
     reset_password_expires_at = Column(DateTime(timezone=True), nullable=True)
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
+    email_verification_token = Column(String(255), nullable=True)
+    email_verification_expires_at = Column(DateTime(timezone=True), nullable=True)
     token_version = Column(Integer, default=0, nullable=False)
     two_factor_enabled = Column(Boolean, default=False, nullable=False)
     two_factor_secret = Column(String(255), nullable=True)
@@ -45,4 +48,5 @@ class UserRole(Base):
 
     user = relationship("User", back_populates="user_roles")
     role = relationship("Role")
+
 

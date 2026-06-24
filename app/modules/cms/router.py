@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -8,6 +8,16 @@ from app.modules.cms.service import _category, _city, _country, _subcategory, _t
 from app.modules.common.auth import require_any_permission
 from app.modules.common.pagination import pagination_params
 from app.modules.users.models import User
+
+
+def _get_actor_supplier_id(db: Session, user: User) -> int | None:
+    """Returns the Supplier.id for the given user, or None if user is not a supplier."""
+    role_slug = (user.role.slug if user.role else "") or ""
+    if "supplier" not in role_slug.lower():
+        return None
+    from app.modules.suppliers.models import Supplier
+    supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    return supplier.id if supplier else None
 
 router = APIRouter(tags=["CMS"])
 
@@ -117,25 +127,47 @@ def subcategory_status(subcategory_id: int, data: StatusUpdate, request: Request
 
 
 @router.get("/tours")
-def tours(params: dict = Depends(pagination_params), country_id: str = Query(default=""), city_id: str = Query(default=""), category_id: str = Query(default=""), status: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("tours.view", "view-tours"))):
-    return {"status": "success", **list_tours(db, params["page"], params["limit"], params["search"], country_id, city_id, category_id, status)}
+def tours(params: dict = Depends(pagination_params), country_id: str = Query(default=""), city_id: str = Query(default=""), category_id: str = Query(default=""), status: str = Query(default=""), supplier_id: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.view", "view-tours"))):
+    # Suppliers only see their own tours; admins can filter by any supplier_id or see all
+    actor_supplier_id = _get_actor_supplier_id(db, current_user)
+    effective_supplier_id = str(actor_supplier_id) if actor_supplier_id else supplier_id
+    return {"status": "success", **list_tours(db, params["page"], params["limit"], params["search"], country_id, city_id, category_id, status, effective_supplier_id)}
 
 
 @router.post("/tours")
 def add_tour(data: TourPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.create", "create-tours"))):
+    actor_supplier_id = _get_actor_supplier_id(db, current_user)
+    if actor_supplier_id and not data.supplier_id:
+        # Auto-assign the supplier's own ID when creating from the supplier portal
+        data = data.model_copy(update={"supplier_id": actor_supplier_id})
     return {"status": "success", "data": save_tour(db, data, current_user, request)}
 
 
 @router.get("/tours/{tour_id}")
-def tour_detail(tour_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("tours.view", "view-tours"))):
-    return {"status": "success", "data": _tour(get_tour(db, tour_id))}
+def tour_detail(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.view", "view-tours"))):
+    tour = get_tour(db, tour_id)
+    actor_supplier_id = _get_actor_supplier_id(db, current_user)
+    if actor_supplier_id and tour.supplier_id != actor_supplier_id:
+        raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
+    return {"status": "success", "data": _tour(tour)}
 
 
 @router.put("/tours/{tour_id}")
 def edit_tour(tour_id: int, data: TourPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.edit", "update-tours"))):
+    tour = get_tour(db, tour_id)
+    actor_supplier_id = _get_actor_supplier_id(db, current_user)
+    if actor_supplier_id and tour.supplier_id != actor_supplier_id:
+        raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
+    # Prevent a supplier from reassigning a tour to a different supplier
+    if actor_supplier_id:
+        data = data.model_copy(update={"supplier_id": actor_supplier_id})
     return {"status": "success", "data": save_tour(db, data, current_user, request, tour_id)}
 
 
 @router.patch("/tours/{tour_id}/status")
 def tour_status(tour_id: int, data: StatusUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.publish", "tours.disable", "tours.edit", "update-tours"))):
+    tour = get_tour(db, tour_id)
+    actor_supplier_id = _get_actor_supplier_id(db, current_user)
+    if actor_supplier_id and tour.supplier_id != actor_supplier_id:
+        raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
     return {"status": "success", "data": update_status(db, Tour, _tour, tour_id, data, current_user, "tour", request)}

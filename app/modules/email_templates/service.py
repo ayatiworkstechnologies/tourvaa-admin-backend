@@ -43,6 +43,101 @@ DEFAULT_EMAIL_TEMPLATES = [
         "subject": "Your Tourvaa password was changed",
         "body": "Your password was changed successfully. You can now login here: {{login_url}}",
     },
+    {
+        "key": "email_verification",
+        "name": "Email Verification",
+        "subject": "Verify your Tourvaa email",
+        "body": (
+            "Hi {{name}}, please verify your email address to complete your account setup. "
+            "This link expires in 24 hours.\n\nVerification link: {{verification_url}}"
+        ),
+    },
+    {
+        "key": "booking_confirmation",
+        "name": "Booking Confirmation",
+        "subject": "Booking received — {{booking_code}}",
+        "body": (
+            "Thank you for booking with Tourvaa! Your booking is received and pending confirmation.\n\n"
+            "Booking ID: {{booking_code}}\n"
+            "Tour: {{tour_name}}\n"
+            "Date: {{tour_date}}\n"
+            "Adults: {{adults}}\n"
+            "Total: {{currency}} {{total}}\n\n"
+            "We will notify you as soon as your booking is confirmed by the supplier.\n\n"
+            "View your booking: {{login_url}}"
+        ),
+    },
+    {
+        "key": "booking_confirmed",
+        "name": "Booking Confirmed",
+        "subject": "Your booking is confirmed — {{booking_code}}",
+        "body": (
+            "Great news! Your Tourvaa booking has been confirmed by the supplier.\n\n"
+            "Booking ID: {{booking_code}}\n"
+            "Tour: {{tour_name}}\n"
+            "Date: {{tour_date}}\n"
+            "Adults: {{adults}}\n"
+            "Total: {{currency}} {{total}}\n\n"
+            "Get ready for your trip!\n\nView your booking: {{login_url}}"
+        ),
+    },
+    {
+        "key": "booking_cancelled",
+        "name": "Booking Cancelled",
+        "subject": "Booking cancelled — {{booking_code}}",
+        "body": (
+            "Your booking {{booking_code}} for {{tour_name}} has been cancelled.\n\n"
+            "Reason: {{reason}}\n\n"
+            "If you have any questions, please contact our support team.\n\nView your bookings: {{login_url}}"
+        ),
+    },
+    {
+        "key": "booking_declined",
+        "name": "Booking Declined by Supplier",
+        "subject": "Booking declined — {{booking_code}}",
+        "body": (
+            "Unfortunately your booking {{booking_code}} for {{tour_name}} was declined by the supplier.\n\n"
+            "Reason: {{reason}}\n\n"
+            "Any authorized payment has been released. Please browse other available tours or contact our support team.\n\nBrowse tours: {{login_url}}"
+        ),
+    },
+    {
+        "key": "booking_status_update",
+        "name": "Booking Status Update",
+        "subject": "Booking update — {{booking_code}}",
+        "body": (
+            "Your booking {{booking_code}} for {{tour_name}} status has been updated.\n\n"
+            "New status: {{new_status}}\n"
+            "Reason: {{reason}}\n\n"
+            "View your booking: {{login_url}}"
+        ),
+    },
+    {
+        "key": "supplier_booking_assigned",
+        "name": "Supplier Booking Assigned",
+        "subject": "New booking assigned — {{booking_code}}",
+        "body": (
+            "A new booking has been assigned to you on Tourvaa and is awaiting your acceptance.\n\n"
+            "Booking ID: {{booking_code}}\n"
+            "Tour: {{tour_name}}\n"
+            "Date: {{tour_date}}\n"
+            "Customer: {{customer_name}}\n"
+            "Adults: {{adults}}\n"
+            "Total: {{currency}} {{total}}\n\n"
+            "Please log in to your supplier portal to accept or decline this booking.\n\nView booking: {{portal_url}}"
+        ),
+    },
+    {
+        "key": "payment_received",
+        "name": "Payment Received",
+        "subject": "Payment received — {{booking_code}}",
+        "body": (
+            "We have received your payment for booking {{booking_code}}.\n\n"
+            "Tour: {{tour_name}}\n"
+            "Amount paid: {{currency}} {{amount}}\n\n"
+            "You can view your invoice in the customer portal.\n\nView booking: {{login_url}}"
+        ),
+    },
 ]
 
 

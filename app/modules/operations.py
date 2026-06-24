@@ -10,10 +10,24 @@ from sqlalchemy.orm import Session
 from app.modules.audit.service import log_audit
 from app.modules.users.models import User
 
-ACTIVE_STATUSES = {"active", "inactive", "blocked"}
-APPROVAL_STATUSES = {"pending", "approved", "partial_approved", "rejected"}
+ACTIVE_STATUSES = {"active", "inactive", "suspended", "blocked"}
+APPROVAL_STATUSES = {
+    "draft",
+    "email_verification_pending",
+    "profile_incomplete",
+    "documents_pending",
+    "admin_review_pending",
+    "pending",
+    "approved",
+    "approved_live",
+    "partial_approved",
+    "partially_approved",
+    "rejected",
+    "suspended",
+    "blocked",
+}
 VALUE_TYPES = {"percentage", "fixed"}
-DOCUMENT_STATUSES = {"pending", "approved", "rejected"}
+DOCUMENT_STATUSES = {"pending", "approved", "rejected", "expired", "reupload_required"}
 
 
 def _trim(value: str | None):
@@ -158,6 +172,19 @@ def get_or_404(db: Session, model, item_id: int, label: str):
     return item
 
 
+def _entity_user_id(item) -> int | None:
+    """Best-effort: extract the linked user ID from a supplier/agent/affiliate row."""
+    return getattr(item, "user_id", None)
+
+
+def _entity_name(item) -> str:
+    for field in ("supplier_name", "agent_name", "affiliate_name", "name"):
+        val = getattr(item, field, None)
+        if val:
+            return val
+    return f"#{item.id}"
+
+
 def approve_item(db: Session, item, actor: User, entity_type: str, serializer, request: Request | None = None):
     old = serializer(item)
     item.approval_status = "approved"
@@ -166,6 +193,17 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
     item.approved_by = actor.id
     item.rejection_reason = None
     log_audit(db, actor=actor, action=f"approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
+    # Notifications
+    try:
+        from app.modules.common.notification_triggers import notify_supplier_approved, notify_agent_approved
+        user_id = _entity_user_id(item)
+        name = _entity_name(item)
+        if entity_type == "supplier":
+            notify_supplier_approved(db, supplier_id=item.id, supplier_name=name, user_id=user_id)
+        elif entity_type == "agent":
+            notify_agent_approved(db, agent_id=item.id, agent_name=name, user_id=user_id)
+    except Exception:
+        pass
     db.commit()
     db.refresh(item)
     return serializer(item)
@@ -180,6 +218,18 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
     item.rejected_at = datetime.utcnow()
     item.rejected_by = actor.id
     log_audit(db, actor=actor, action=f"reject_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
+    # Notifications
+    try:
+        from app.modules.common.notification_triggers import notify_supplier_rejected, notify_agent_rejected
+        user_id = _entity_user_id(item)
+        name = _entity_name(item)
+        reason = getattr(data, "rejection_reason", "")
+        if entity_type == "supplier":
+            notify_supplier_rejected(db, supplier_id=item.id, supplier_name=name, rejection_reason=reason, user_id=user_id)
+        elif entity_type == "agent":
+            notify_agent_rejected(db, agent_id=item.id, agent_name=name, rejection_reason=reason, user_id=user_id)
+    except Exception:
+        pass
     db.commit()
     db.refresh(item)
     return serializer(item)
@@ -191,6 +241,16 @@ def partial_approve_item(db: Session, item, data: PartialApprovalRequest, actor:
     item.admin_comments = data.admin_comments
     item.pending_requirements = data.pending_requirements
     log_audit(db, actor=actor, action=f"partial_approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
+    # Notify supplier of partial approval with pending requirements
+    try:
+        from app.modules.common.notification_triggers import notify_supplier_reupload_requested
+        user_id = _entity_user_id(item)
+        name = _entity_name(item)
+        if entity_type == "supplier":
+            notify_supplier_reupload_requested(db, supplier_id=item.id, supplier_name=name, requirements=data.pending_requirements, user_id=user_id)
+    except Exception:
+        pass
     db.commit()
     db.refresh(item)
     return serializer(item)
+

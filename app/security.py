@@ -16,18 +16,36 @@ def verify_password(plain_password: str, hashed_password: str):
     return password_context.verify(plain_password, hashed_password)
 
 
-def create_token(data: dict):
+ROLE_SLUG_TO_PORTAL = {
+    "supplier": "supplier",
+    "agent-reseller": "agent",
+    "customer": "customer",
+    "super-admin": "admin",
+    "admin": "admin",
+}
+
+
+def get_portal_for_role(role_slug: str) -> str:
+    return ROLE_SLUG_TO_PORTAL.get((role_slug or "").lower(), "admin")
+
+
+def create_token(data: dict, portal: str | None = None):
     token_data = data.copy()
 
     expire_time = datetime.utcnow() + timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
 
+    if portal:
+        token_data["portal"] = portal
+
     token_data.update({"exp": expire_time})
+
+    secret = settings.get_portal_secret(portal) if portal else settings.JWT_SECRET_KEY
 
     token = jwt.encode(
         token_data,
-        settings.JWT_SECRET_KEY,
+        secret,
         algorithm=settings.JWT_ALGORITHM
     )
 
