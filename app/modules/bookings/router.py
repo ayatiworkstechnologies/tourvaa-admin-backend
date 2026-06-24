@@ -15,6 +15,7 @@ from app.modules.bookings.schemas import (
 from app.modules.bookings.service import (
     add_communication,
     add_communication_reply,
+    calculate_booking_price,
     export_bookings,
     get_payment_link,
     assign_supplier,
@@ -70,6 +71,12 @@ def upcoming_bookings(db: Session = Depends(get_db), current_user: User = Depend
     return {"status": "success", **get_upcoming_bookings(db, current_user)}
 
 
+@router.post("/calculate-price")
+def calculate_price(data: BookingCreate, db: Session = Depends(get_db)):
+    return {"status": "success", "data": calculate_booking_price(db, data)}
+
+
+@router.post("")
 @router.post("/")
 def add_booking(data: BookingCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.create", "create-bookings"))):
     return {"status": "success", "message": "Booking created successfully", "data": create_booking(db, data, actor=current_user, request=request)}
@@ -114,7 +121,7 @@ def cancel_booking_endpoint(booking_id: int, request: Request, data: BookingCanc
 
 @router.post("/{booking_id}/communications")
 def create_booking_communication(booking_id: int, data: BookingCommunicationCreate,
-    MessageReplyCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.edit", "bookings.view"))):
+    request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.edit", "bookings.view"))):
     return {"status": "success", "data": add_communication(db, booking_id, data, current_user, request)}
 
 
@@ -143,3 +150,6 @@ def supplier_accept(booking_id: int, data: SupplierDecisionRequest, request: Req
 @supplier_router.post("/{booking_id}/decline")
 def supplier_decline(booking_id: int, data: SupplierDecisionRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
     return {"status": "success", "data": supplier_decline_booking(db, booking_id, data, current_user, request)}
+
+
+

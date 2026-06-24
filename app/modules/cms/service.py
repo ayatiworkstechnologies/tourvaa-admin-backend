@@ -169,7 +169,7 @@ def save_subcategory(db: Session, data: SubcategoryPayload, actor: User, request
     return _subcategory(item)
 
 
-def list_tours(db: Session, page: int, limit: int, search: str = "", country_id: str = "", city_id: str = "", category_id: str = "", status: str = ""):
+def list_tours(db: Session, page: int, limit: int, search: str = "", country_id: str = "", city_id: str = "", category_id: str = "", status: str = "", supplier_id: str = ""):
     query = db.query(Tour)
     if search:
         pattern = f"%{search.strip()}%"
@@ -182,6 +182,8 @@ def list_tours(db: Session, page: int, limit: int, search: str = "", country_id:
         query = query.filter(Tour.category_id == int(category_id))
     if status:
         query = query.filter(Tour.status == status.strip().lower())
+    if supplier_id:
+        query = query.filter(Tour.supplier_id == int(supplier_id))
     return simple_paginate(query.order_by(Tour.id.desc()), page, limit, _tour)
 
 

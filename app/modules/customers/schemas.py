@@ -179,3 +179,127 @@ class SendCustomerMessageRequest(BaseModel):
         if value not in MESSAGE_TYPES:
             raise ValueError("Invalid message type")
         return value
+
+
+TRAVELLER_TYPES = {"adult", "child", "infant"}
+CANCELLATION_STATUSES = {
+    "no_request",
+    "requested",
+    "under_review",
+    "approved",
+    "rejected",
+    "refund_processing",
+    "refunded",
+    "cancelled",
+}
+
+
+class CustomerProfileUpdate(BaseModel):
+    first_name: Optional[str] = Field(default=None, max_length=75)
+    last_name: Optional[str] = Field(default=None, max_length=75)
+    full_name: Optional[str] = Field(default=None, max_length=150)
+    phone_country_code: Optional[str] = Field(default=None, max_length=10)
+    phone: Optional[str] = Field(default=None, max_length=30)
+    country_id: Optional[int] = None
+    city_id: Optional[int] = None
+    address_line_1: Optional[str] = Field(default=None, max_length=255)
+    address_line_2: Optional[str] = Field(default=None, max_length=255)
+    address: Optional[str] = Field(default=None, max_length=255)
+    country: Optional[str] = Field(default=None, max_length=100)
+    state: Optional[str] = Field(default=None, max_length=100)
+    city: Optional[str] = Field(default=None, max_length=100)
+    postal_code: Optional[str] = Field(default=None, max_length=20)
+    pincode: Optional[str] = Field(default=None, max_length=20)
+    profile_image: Optional[str] = Field(default=None, max_length=255)
+    gender: Optional[str] = Field(default=None, max_length=30)
+    date_of_birth: Optional[str] = None
+
+    @field_validator(
+        "first_name",
+        "last_name",
+        "full_name",
+        "phone_country_code",
+        "phone",
+        "address_line_1",
+        "address_line_2",
+        "address",
+        "country",
+        "state",
+        "city",
+        "postal_code",
+        "pincode",
+        "profile_image",
+        "gender",
+        "date_of_birth",
+    )
+    @classmethod
+    def trim_profile_text(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return value.strip()
+
+
+class SavedTravellerRequest(BaseModel):
+    traveller_name: str = Field(min_length=1, max_length=150)
+    email: str = Field(default="", max_length=150)
+    phone: str = Field(default="", max_length=50)
+    traveller_type: str = Field(default="adult", max_length=20)
+    age: Optional[int] = Field(default=None, ge=0)
+    gender: Optional[str] = Field(default=None, max_length=30)
+    passport_number: Optional[str] = Field(default=None, max_length=100)
+    allergies: Optional[str] = Field(default=None, max_length=1000)
+    special_notes: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("traveller_name", "email", "phone", "traveller_type", "gender", "passport_number", "allergies", "special_notes")
+    @classmethod
+    def trim_traveller_text(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return value.strip()
+
+    @field_validator("traveller_type")
+    @classmethod
+    def validate_traveller_type(cls, value: str):
+        value = value.strip().lower()
+        if value not in TRAVELLER_TYPES:
+            raise ValueError("Invalid traveller type")
+        return value
+
+
+class CustomerCancellationCreate(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def trim_cancellation_reason(cls, value: str):
+        value = value.strip()
+        if not value:
+            raise ValueError("Cancellation reason is required")
+        return value
+
+
+class CustomerMessageCreate(BaseModel):
+    subject: str = Field(min_length=1, max_length=150)
+    message: str = Field(min_length=1, max_length=5000)
+    booking_id: Optional[int] = None
+    attachment_url: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("subject", "message", "attachment_url")
+    @classmethod
+    def trim_message_text(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return value.strip()
+
+
+class CustomerManualPaymentRequest(BaseModel):
+    payment_method: str = Field(default="card", max_length=30)
+    gateway: str = Field(default="manual", max_length=50)
+    transaction_id: Optional[str] = Field(default=None, max_length=100)
+
+    @field_validator("payment_method", "gateway", "transaction_id")
+    @classmethod
+    def trim_payment_text(cls, value: Optional[str]):
+        if value is None:
+            return value
+        return value.strip().lower() if value else value

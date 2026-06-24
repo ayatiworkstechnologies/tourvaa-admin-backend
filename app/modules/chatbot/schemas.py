@@ -11,6 +11,8 @@ class ChatMessageRequest(BaseModel):
 class ChatMessageResponse(BaseModel):
     reply: str
     session_key: str
+    action_type: Optional[str] = None
+    action_data: Optional[dict] = None
 
 
 class FAQBase(BaseModel):

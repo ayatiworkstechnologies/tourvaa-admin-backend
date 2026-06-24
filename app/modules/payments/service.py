@@ -81,8 +81,8 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
     booking.amount_paid = net_paid
     booking.amount_pending = max(money(0), final - net_paid)
     booking.payment_status = _derive_booking_status(net_paid, final)
-    if booking.payment_status == "paid" and booking.booking_status in {"pending_payment", "draft"}:
-        booking.booking_status = "pending_supplier_acceptance" if booking.supplier_id else "confirmed"
+    if booking.payment_status == "paid" and booking.booking_status in {"pending_payment", "draft", "payment_authorized"}:
+        booking.booking_status = "confirmed"
 
 
 def _sync_customer_payment_fields(db: Session, customer: Customer) -> None:
@@ -302,5 +302,7 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
 
 def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "") -> dict:
     return get_payments(db, page=page, limit=limit, customer_id=customer_id, payment_status=payment_status, payment_method=payment_method)
+
+
 
 

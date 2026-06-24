@@ -1,13 +1,29 @@
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.modules.common.auth import require_any_permission
+from app.modules.common.auth import require_any_permission, get_current_user
 from app.modules.common.pagination import pagination_params
 from app.modules.notifications.schemas import NotificationCreate
 from app.modules.notifications.service import create_notification, list_notifications, mark_read, retry_notification
+from app.modules.notifications.push_service import save_subscription, delete_subscription, broadcast_push
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
+
+
+class PushSubscribeBody(BaseModel):
+    endpoint: str
+    p256dh: str
+    auth: str
+
+
+class PushBroadcastBody(BaseModel):
+    title: str
+    body: str
+    url: str = "/"
+    icon: str = "/icon.png"
+    user_ids: list[int] | None = None
 
 @router.get("")
 @router.get("/")
@@ -25,3 +41,22 @@ def read(notification_id: int, db: Session = Depends(get_db), _=Depends(require_
 @router.post("/{notification_id}/retry")
 def retry(notification_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("notifications.retry", "notifications.manage"))):
     return {"status": "success", "data": retry_notification(db, notification_id)}
+
+
+@router.post("/push/subscribe")
+def push_subscribe(body: PushSubscribeBody, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    user_id = current_user.id if current_user else None
+    save_subscription(db, endpoint=body.endpoint, p256dh=body.p256dh, auth=body.auth, user_id=user_id)
+    return {"status": "success"}
+
+
+@router.delete("/push/subscribe")
+def push_unsubscribe(body: PushSubscribeBody, db: Session = Depends(get_db)):
+    delete_subscription(db, body.endpoint)
+    return {"status": "success"}
+
+
+@router.post("/push/broadcast")
+def push_broadcast(body: PushBroadcastBody, db: Session = Depends(get_db), _=Depends(require_any_permission("notifications.manage"))):
+    result = broadcast_push(db, title=body.title, body=body.body, url=body.url, icon=body.icon, user_ids=body.user_ids)
+    return {"status": "success", "data": result}

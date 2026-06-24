@@ -291,6 +291,7 @@ def my_dashboard(
                 },
                 "profile_status": profile_status,
                 "approval_status": approval_status,
+                "customer_id": (lambda c: c.id if c else None)(db.query(Customer).filter(Customer.user_id == current_user.id).first()) if role_slug == "customer" else None,
             },
             "permissions": [
                 {
@@ -409,13 +410,13 @@ def dashboard_summary(
             return {"status": "success", "data": {**filters, **_empty_customer_summary()}}
 
         cid = customer.id
+        active_customer_statuses = ["pending_payment", "payment_authorized", "pending_supplier_acceptance", "confirmed", "upcoming", "ongoing"]
         total_bookings = _safe_count(db, Booking, Booking.customer_id == cid)
-        upcoming = _safe_count(db, Booking, Booking.customer_id == cid, Booking.booking_status == "upcoming")
+        upcoming = _safe_count(db, Booking, Booking.customer_id == cid, Booking.booking_status.in_(active_customer_statuses))
         completed = _safe_count(db, Booking, Booking.customer_id == cid, Booking.booking_status == "completed")
         cancelled = _safe_count(db, Booking, Booking.customer_id == cid, Booking.booking_status == "cancelled")
-        paid_amount = float(customer.total_amount_paid or 0)
-        pending_amount = float(customer.total_amount_pending or 0)
-
+        paid_amount = _safe_sum(db, Booking.amount_paid, Booking.customer_id == cid)
+        pending_amount = _safe_sum(db, Booking.amount_pending, Booking.customer_id == cid)
         return {
             "status": "success",
             "data": {
@@ -896,14 +897,14 @@ def dashboard_alerts(
         alerts = []
 
         if customer:
-            pending_amount = float(customer.total_amount_pending or 0)
+            active_customer_statuses = ["pending_payment", "payment_authorized", "pending_supplier_acceptance", "confirmed", "upcoming", "ongoing"]
+            pending_amount = _safe_sum(db, Booking.amount_pending, Booking.customer_id == customer.id)
             if pending_amount > 0:
-                alerts.append({"type": "warning", "message": f"You have ₹{pending_amount:,.0f} in pending payments", "action": "payments"})
+                alerts.append({"type": "warning", "message": f"You have AED {pending_amount:,.0f} in pending payments", "action": "payments"})
 
-            upcoming = _safe_count(db, Booking, Booking.customer_id == customer.id, Booking.booking_status == "upcoming")
+            upcoming = _safe_count(db, Booking, Booking.customer_id == customer.id, Booking.booking_status.in_(active_customer_statuses))
             if upcoming > 0:
-                alerts.append({"type": "info", "message": f"You have {upcoming} upcoming booking(s)", "action": "bookings"})
-
+                alerts.append({"type": "info", "message": f"You have {upcoming} active booking(s)", "action": "bookings"})
         return {"status": "success", "data": {"dashboard_type": "customer", "alerts": alerts}}
 
     # Affiliate alerts

@@ -1,9 +1,18 @@
-from typing import Optional
+﻿from typing import Optional
 import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,19}$")
+STRONG_PASSWORD_PATTERN = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$")
+
+
+def validate_strong_password(value: str) -> str:
+    if not STRONG_PASSWORD_PATTERN.fullmatch(value):
+        raise ValueError(
+            "Password must be at least 8 characters and include uppercase, lowercase, number, and special character"
+        )
+    return value
 
 
 class RegisterSchema(BaseModel):
@@ -54,6 +63,11 @@ class RegisterSchema(BaseModel):
             raise ValueError("Enter a valid mobile number")
         return value
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, value: str):
+        return validate_strong_password(value)
+
 
 class LoginSchema(BaseModel):
     email: EmailStr
@@ -82,6 +96,11 @@ class ResetPasswordSchema(BaseModel):
     token: str
     password: str = Field(min_length=8)
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, value: str):
+        return validate_strong_password(value)
+
 
 class RefreshTokenSchema(BaseModel):
     client_type: Optional[str] = "web"
@@ -94,3 +113,4 @@ class VerifyEmailSchema(BaseModel):
 
 class ForceLogoutSchema(BaseModel):
     user_id: Optional[int] = None
+

@@ -1,4 +1,4 @@
-def base_email(title: str, intro: str, body: str, button_text: str | None = None, button_url: str | None = None):
+﻿def base_email(title: str, intro: str, body: str, button_text: str | None = None, button_url: str | None = None):
     button = ""
 
     if button_text and button_url:
@@ -139,5 +139,144 @@ def password_changed_email(name: str, login_url: str):
         f"Hi {name},",
         "Your Tourvaa password was changed successfully. You can now sign in with your new password.",
         "Login to Tourvaa",
+        login_url,
+    )
+
+
+def email_verification_email(name: str, verification_url: str):
+    return base_email(
+        "Verify your email",
+        f"Hi {name},",
+        "Please verify your email address to complete your Tourvaa account setup. This link expires in 24 hours.",
+        "Verify Email",
+        verification_url,
+    )
+
+
+def _booking_summary_rows(booking_code: str, tour_name: str, tour_date: str, adults: int | str, currency: str, total: str | float) -> str:
+    rows = [
+        ("Booking ID", booking_code),
+        ("Tour", tour_name),
+        ("Date", tour_date or "—"),
+        ("Adults", str(adults)),
+        ("Total", f"{currency} {total}"),
+    ]
+    return "".join(
+        f'<tr><td style="padding:4px 12px 4px 0;color:#667085;">{label}</td>'
+        f'<td style="padding:4px 0;font-weight:700;color:#101828;">{value}</td></tr>'
+        for label, value in rows
+    )
+
+
+def booking_confirmation_email(name: str, booking_code: str, tour_name: str, tour_date: str, adults: int | str, currency: str, total: str | float, login_url: str):
+    summary = _booking_summary_rows(booking_code, tour_name, tour_date, adults, currency, total)
+    return base_email(
+        "Booking received",
+        f"Hi {name},",
+        (
+            "Thank you for booking with Tourvaa! Your booking is received and pending confirmation.<br /><br />"
+            f'<table role="presentation" cellspacing="0" cellpadding="0" style="width:100%;">{summary}</table><br />'
+            "We will notify you as soon as your booking is confirmed by the supplier."
+        ),
+        "View booking",
+        login_url,
+    )
+
+
+def booking_confirmed_email(name: str, booking_code: str, tour_name: str, tour_date: str, adults: int | str, currency: str, total: str | float, login_url: str):
+    summary = _booking_summary_rows(booking_code, tour_name, tour_date, adults, currency, total)
+    return base_email(
+        "Booking confirmed",
+        f"Hi {name},",
+        (
+            "Great news! Your Tourvaa booking has been confirmed by the supplier.<br /><br />"
+            f'<table role="presentation" cellspacing="0" cellpadding="0" style="width:100%;">{summary}</table><br />'
+            "Get ready for your trip! You can view your full booking details using the button below."
+        ),
+        "View booking",
+        login_url,
+    )
+
+
+def booking_cancelled_email(name: str, booking_code: str, tour_name: str, reason: str, login_url: str):
+    return base_email(
+        "Booking cancelled",
+        f"Hi {name},",
+        (
+            f"Your booking <strong>{booking_code}</strong> for <strong>{tour_name}</strong> has been cancelled.<br /><br />"
+            f"Reason: {reason or 'Cancelled'}<br /><br />"
+            "If you have any questions, please contact our support team."
+        ),
+        "View bookings",
+        login_url,
+    )
+
+
+def booking_declined_email(name: str, booking_code: str, tour_name: str, reason: str, login_url: str):
+    return base_email(
+        "Booking declined by supplier",
+        f"Hi {name},",
+        (
+            f"Unfortunately your booking <strong>{booking_code}</strong> for <strong>{tour_name}</strong> was declined by the supplier.<br /><br />"
+            f"Reason: {reason or 'Declined by supplier'}<br /><br />"
+            "Any authorized payment has been released. Please browse other available tours or contact our support team."
+        ),
+        "Browse tours",
+        login_url,
+    )
+
+
+def booking_status_update_email(name: str, booking_code: str, tour_name: str, new_status: str, reason: str, login_url: str):
+    return base_email(
+        f"Booking update: {new_status.replace('_', ' ').title()}",
+        f"Hi {name},",
+        (
+            f"Your booking <strong>{booking_code}</strong> for <strong>{tour_name}</strong> status has been updated.<br /><br />"
+            f"New status: <strong>{new_status.replace('_', ' ').title()}</strong><br />"
+            + (f"Reason: {reason}<br />" if reason else "")
+        ),
+        "View booking",
+        login_url,
+    )
+
+
+def supplier_booking_assigned_email(supplier_name: str, booking_code: str, tour_name: str, tour_date: str, customer_name: str, adults: int | str, currency: str, total: str | float, portal_url: str):
+    return base_email(
+        "New booking assigned to you",
+        f"Hi {supplier_name},",
+        (
+            f"A new booking has been assigned to you on Tourvaa and is awaiting your acceptance.<br /><br />"
+            f'<table role="presentation" cellspacing="0" cellpadding="0" style="width:100%;">'
+            + "".join(
+                f'<tr><td style="padding:4px 12px 4px 0;color:#667085;">{label}</td>'
+                f'<td style="padding:4px 0;font-weight:700;color:#101828;">{value}</td></tr>'
+                for label, value in [
+                    ("Booking ID", booking_code),
+                    ("Tour", tour_name),
+                    ("Date", tour_date or "—"),
+                    ("Customer", customer_name),
+                    ("Adults", str(adults)),
+                    ("Total", f"{currency} {total}"),
+                ]
+            )
+            + "</table><br />"
+            "Please log in to your supplier portal to accept or decline this booking."
+        ),
+        "View booking",
+        portal_url,
+    )
+
+
+def payment_received_email(name: str, booking_code: str, tour_name: str, currency: str, amount: str | float, login_url: str):
+    return base_email(
+        "Payment received",
+        f"Hi {name},",
+        (
+            f"We have received your payment for booking <strong>{booking_code}</strong>.<br /><br />"
+            f"Tour: <strong>{tour_name}</strong><br />"
+            f"Amount paid: <strong>{currency} {amount}</strong><br /><br />"
+            "Your payment has been captured. You can view your invoice in the customer portal."
+        ),
+        "View booking",
         login_url,
     )

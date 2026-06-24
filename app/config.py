@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+﻿from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
 
@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+
+    # Per-portal JWT secrets — fall back to JWT_SECRET_KEY if not set
+    SUPPLIER_JWT_SECRET_KEY: str = ""
+    AGENT_JWT_SECRET_KEY: str = ""
+    CUSTOMER_JWT_SECRET_KEY: str = ""
+    ADMIN_JWT_SECRET_KEY: str = ""
+    REQUIRE_EMAIL_VERIFICATION: bool = False
+    EMAIL_VERIFICATION_EXPIRE_MINUTES: int = 1440
 
     FRONTEND_URL: str = "http://127.0.0.1:3000"
     API_BASE_URL: str = "http://127.0.0.1:8000"
@@ -32,6 +40,20 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = "Tourvaa"
 
     ANTHROPIC_API_KEY: str = ""
+
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_PRIVATE_KEY_FILE: str = "vapid_private.pem"
+    VAPID_MAILTO: str = "mailto:admin@tourvaa.com"
+
+    def get_portal_secret(self, portal: str) -> str:
+        """Return the JWT secret for the given portal, falling back to the main key."""
+        mapping = {
+            "supplier": self.SUPPLIER_JWT_SECRET_KEY,
+            "agent": self.AGENT_JWT_SECRET_KEY,
+            "customer": self.CUSTOMER_JWT_SECRET_KEY,
+            "admin": self.ADMIN_JWT_SECRET_KEY,
+        }
+        return mapping.get(portal, "") or self.JWT_SECRET_KEY
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -60,3 +82,4 @@ def get_storage_root() -> Path:
         path = Path(__file__).resolve().parents[1] / path
 
     return path
+

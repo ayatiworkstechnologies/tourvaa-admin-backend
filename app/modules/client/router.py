@@ -4,6 +4,17 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.modules.cms.service import list_tours, get_tour, _tour
+from app.modules.tours.service import (
+    get_overview,
+    list_itineraries,
+    list_inclusions,
+    list_exclusions,
+    list_highlights,
+    list_similar_tours,
+    list_gallery,
+    list_activities,
+    list_calendar,
+)
 
 router = APIRouter(prefix="/client", tags=["Client"])
 
@@ -65,3 +76,39 @@ def public_tour_detail(tour_id: int, db: Session = Depends(get_db)):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Tour not found")
     return {"status": "success", "data": _tour(tour)}
+
+@router.get("/tours/{tour_id}/overview")
+def public_tour_overview(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": get_overview(db, tour_id)}
+
+@router.get("/tours/{tour_id}/itineraries")
+def public_tour_itineraries(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": list_itineraries(db, tour_id)}
+
+@router.get("/tours/{tour_id}/inclusions")
+def public_tour_inclusions(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": list_inclusions(db, tour_id)}
+
+@router.get("/tours/{tour_id}/exclusions")
+def public_tour_exclusions(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": list_exclusions(db, tour_id)}
+
+@router.get("/tours/{tour_id}/highlights")
+def public_tour_highlights(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": list_highlights(db, tour_id)}
+
+@router.get("/tours/{tour_id}/similar-tours")
+def public_tour_similar_tours(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": list_similar_tours(db, tour_id)}
+
+@router.get("/tours/{tour_id}/gallery")
+def public_tour_gallery(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": list_gallery(db, tour_id)}
+
+@router.get("/tours/{tour_id}/optional-activities")
+def public_tour_activities(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": list_activities(db, tour_id)}
+
+@router.get("/tours/{tour_id}/calendar")
+def public_tour_calendar(tour_id: int, db: Session = Depends(get_db)):
+    return {"status": "success", "data": list_calendar(db, tour_id)}

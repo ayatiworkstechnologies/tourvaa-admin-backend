@@ -3,13 +3,46 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.agents.schemas import AgentCreate, AgentDiscountRequest, AgentUpdate
-from app.modules.agents.service import approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, serialize_agent, update_agent, update_agent_discount
-from app.modules.common.auth import require_any_permission
+from app.modules.agents.service import approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
+from app.modules.auth.schemas import RegisterSchema, VerifyEmailSchema
+from app.modules.auth.service import register_user, verify_email
+from app.modules.common.auth import get_current_user, require_any_permission
 from app.modules.common.pagination import pagination_params
 from app.modules.operations import PartialApprovalRequest, RejectRequest
+from app.modules.roles.models import Role
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
+
+
+def _registration_with_role(db: Session, data: RegisterSchema, role_slug: str):
+    role = db.query(Role).filter(Role.slug == role_slug).filter(Role.is_active == True).first()
+    if not role:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Registration role is not available")
+    return register_user(db, data.model_copy(update={"role_id": role.id}))
+
+
+@router.post("/register")
+def register_agent(data: RegisterSchema, db: Session = Depends(get_db)):
+    user = _registration_with_role(db, data, "agent-reseller")
+    return {"status": "success", "message": "Agent registration received", "data": {"id": user.id, "email": user.email, "approval_status": user.approval_status}}
+
+
+@router.post("/verify-email")
+def verify_agent_email(data: VerifyEmailSchema, db: Session = Depends(get_db)):
+    verify_email(db, data.token)
+    return {"status": "success", "message": "Agent email verified successfully"}
+
+
+@router.post("/submit-verification")
+def submit_verification(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", "message": "Agent verification submitted", "data": submit_agent_verification(db, current_user, request)}
+
+
+@router.get("/pending")
+def pending_agents(params: dict = Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission("agents.view", "view-agents"))):
+    return {"status": "success", **list_agents(db, params["page"], params["limit"], params["search"], approval_status="admin_review_pending")}
 
 
 @router.get("")
@@ -33,21 +66,30 @@ def edit_agent(agent_id: int, data: AgentUpdate, request: Request, db: Session =
     return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent_id, data, current_user, request)}
 
 
+@router.post("/{agent_id}/approve")
 @router.patch("/{agent_id}/approve")
 def approve(agent_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.approve"))):
     return {"status": "success", "message": "Agent approved successfully", "data": approve_agent(db, agent_id, current_user, request)}
 
 
+@router.post("/{agent_id}/reject")
 @router.patch("/{agent_id}/reject")
 def reject(agent_id: int, data: RejectRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.reject"))):
     return {"status": "success", "message": "Agent rejected successfully", "data": reject_agent(db, agent_id, data, current_user, request)}
 
 
+@router.post("/{agent_id}/partial-approve")
 @router.patch("/{agent_id}/partial-approve")
 def partial_approve(agent_id: int, data: PartialApprovalRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.partial_approve", "agents.approve"))):
     return {"status": "success", "message": "Agent partially approved successfully", "data": partial_approve_agent(db, agent_id, data, current_user, request)}
 
 
+@router.post("/{agent_id}/request-correction")
+def request_correction(agent_id: int, data: PartialApprovalRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.reject", "agents.approve"))):
+    return {"status": "success", "message": "Agent correction requested", "data": partial_approve_agent(db, agent_id, data, current_user, request)}
+
+
+@router.post("/{agent_id}/discount")
 @router.patch("/{agent_id}/discount")
 def discount(agent_id: int, data: AgentDiscountRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.manage_discount"))):
     return {"status": "success", "message": "Agent discount updated successfully", "data": update_agent_discount(db, agent_id, data, current_user, request)}

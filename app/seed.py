@@ -5,6 +5,7 @@ from app.modules.admin_modules.models import AdminModule
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.roles.models import Role
 from app.modules.users.models import User, UserRole
+from app.modules.cms.models import City, Country, Tour, TourCategory
 from app.security import hash_password
 
 
@@ -215,6 +216,64 @@ def seed_super_admin_user(db: Session, role: Role | None):
         user.password = hash_password(settings.SUPER_ADMIN_PASSWORD)
 
 
+
+def seed_demo_tour_if_empty(db: Session):
+    if db.query(Tour).first():
+        return
+
+    country = db.query(Country).filter(Country.country_code == "AE").first()
+    if not country:
+        country = Country(
+            country_name="United Arab Emirates",
+            country_code="AE",
+            phone_code="+971",
+            currency_code="AED",
+            status="active",
+        )
+        db.add(country)
+        db.flush()
+
+    city = db.query(City).filter(City.country_id == country.id, City.city_name == "Dubai").first()
+    if not city:
+        city = City(country_id=country.id, city_name="Dubai", status="active")
+        db.add(city)
+        db.flush()
+
+    category = db.query(TourCategory).filter(TourCategory.slug == "city-tours").first()
+    if not category:
+        category = TourCategory(
+            category_name="City Tours",
+            slug="city-tours",
+            description="Curated city experiences",
+            image="",
+            status="active",
+        )
+        db.add(category)
+        db.flush()
+
+    tour = Tour(
+        tour_code="TRV-DEMO-001",
+        title="Dubai City Highlights",
+        slug="dubai-city-highlights",
+        subtitle="A compact guided Dubai experience",
+        price_start_per_person=99.0,
+        currency="AED",
+        country_id=country.id,
+        city_id=city.id,
+        category_id=category.id,
+        start_location="Dubai",
+        finish_location="Dubai",
+        number_of_days=1,
+        short_description="A seeded tour used for local smoke checks and demos.",
+        long_description="A seeded tour used for local smoke checks and demos.",
+        seo_title="Dubai City Highlights",
+        seo_description="A compact guided Dubai experience.",
+        seo_keywords="dubai,city,tour",
+        image_alt_text="Dubai skyline",
+        status="published",
+    )
+    db.add(tour)
+    db.commit()
 def seed_default_roles_and_permissions(db: Session):
     for slug, name in MODULES:
         admin_module = db.query(AdminModule).filter(AdminModule.slug == slug).first()
@@ -546,5 +605,6 @@ def seed_default_roles_and_permissions(db: Session):
                 assign_if_missing(db, role, permission)
 
     db.commit()
+    seed_demo_tour_if_empty(db)
 
 

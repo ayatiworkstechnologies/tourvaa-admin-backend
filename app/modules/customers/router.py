@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.modules.common.auth import require_any_permission
+from app.modules.common.auth import get_current_user, require_any_permission
 from app.modules.common.pagination import pagination_params
 from app.modules.customers.schemas import (
     CustomerBlockRequest,
@@ -11,6 +11,9 @@ from app.modules.customers.schemas import (
     CustomerUpdate,
     SendCustomerMessageRequest,
 )
+from app.modules.bookings.schemas import BookingCreate
+from app.modules.bookings.service import create_booking
+from app.modules.customers.models import Customer
 from app.modules.customers.service import (
     block_customer,
     create_customer,
@@ -265,3 +268,42 @@ def send_customer_communication(
         "message": "Customer message sent successfully",
         "data": send_customer_message(db, customer_id, data, actor=current_user, request=request),
     }
+
+
+# ── Self-service booking endpoint (any authenticated user) ────────────────────
+
+class SelfBookingCreate(BookingCreate):
+    customer_id: int = 0
+
+
+@router.post("/me/bookings")
+def self_create_booking(
+    data: SelfBookingCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Allows any authenticated user to create a booking for themselves."""
+    customer = db.query(Customer).filter(Customer.user_id == current_user.id).first()
+    if not customer:
+        # Auto-create a minimal customer profile so the booking can proceed
+        name_parts = (current_user.name or "").split(" ", 1)
+        customer = Customer(
+            user_id=current_user.id,
+            email=current_user.email,
+            full_name=current_user.name or current_user.email,
+            first_name=name_parts[0],
+            last_name=name_parts[1] if len(name_parts) > 1 else "",
+        )
+        db.add(customer)
+        db.flush()
+        customer.customer_code = f"CUST-{customer.id:06d}"
+        db.commit()
+        db.refresh(customer)
+
+    booking_data = data.model_copy(update={
+        "customer_id": customer.id,
+        "booking_source": "customer",
+    })
+    result = create_booking(db, booking_data, actor=current_user, request=request)
+    return {"status": "success", "message": "Booking created successfully", "data": result}

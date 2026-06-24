@@ -4,6 +4,7 @@ from app.database import get_db
 from app.modules.common.auth import get_current_user, require_permission
 from app.modules.common.ratelimit import check_rate_limit
 from app.modules.users.models import User
+from app.modules.roles.models import Role
 
 from app.modules.auth.schemas import (
     ForceLogoutSchema,
@@ -30,10 +31,19 @@ from app.modules.auth.service import (
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/register")
-def register(data: RegisterSchema, db: Session = Depends(get_db)):
-    user = register_user(db, data)
+def _register_with_role(role_slug: str, data: RegisterSchema, db: Session):
+    role = (
+        db.query(Role)
+        .filter(Role.slug == role_slug)
+        .filter(Role.is_active == True)
+        .first()
+    )
+    if not role:
+        raise HTTPException(status_code=400, detail="Registration role is not available")
+    return register_user(db, data.model_copy(update={"role_id": role.id}))
 
+
+def _registration_response(user: User):
     return {
         "status": "success",
         "message": "User registered successfully",
@@ -46,9 +56,30 @@ def register(data: RegisterSchema, db: Session = Depends(get_db)):
                 "name": user.role.name if user.role else None,
                 "slug": user.role.slug if user.role else None,
             },
-            "approval_status": user.approval_status
-        }
+            "approval_status": user.approval_status,
+        },
     }
+
+@router.post("/register")
+def register(data: RegisterSchema, db: Session = Depends(get_db)):
+    user = register_user(db, data)
+
+    return _registration_response(user)
+
+
+@router.post("/register/customer")
+def register_customer(data: RegisterSchema, db: Session = Depends(get_db)):
+    return _registration_response(_register_with_role("customer", data, db))
+
+
+@router.post("/register/supplier")
+def register_supplier(data: RegisterSchema, db: Session = Depends(get_db)):
+    return _registration_response(_register_with_role("supplier", data, db))
+
+
+@router.post("/register/agent")
+def register_agent(data: RegisterSchema, db: Session = Depends(get_db)):
+    return _registration_response(_register_with_role("agent-reseller", data, db))
 
 
 @router.post("/login")
@@ -127,10 +158,18 @@ def refresh_token(
 
     token = parts[1]
     try:
+        # Read portal claim without full verification to pick the correct secret
+        try:
+            unverified = jose_jwt.get_unverified_claims(token)
+            portal = unverified.get("portal")
+        except JWTError:
+            portal = None
+        secret = _settings.get_portal_secret(portal) if portal else _settings.JWT_SECRET_KEY
+
         # Decode without expiry check so an expired token can still be refreshed
         payload = jose_jwt.decode(
             token,
-            _settings.JWT_SECRET_KEY,
+            secret,
             algorithms=[_settings.JWT_ALGORITHM],
             options={"verify_exp": False},
         )
@@ -160,6 +199,26 @@ def refresh_token(
         ),
     }
 
+@router.post("/refresh")
+def refresh(
+    request: Request,
+    data: RefreshTokenSchema | None = None,
+    db: Session = Depends(get_db),
+):
+    return refresh_token(request, data, db)
+
+
+@router.post("/logout")
+def logout(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    force_logout_user(db, current_user, actor=current_user, request=request)
+    return {
+        "status": "success",
+        "message": "Logged out successfully",
+    }
 
 @router.post("/verify-email")
 def verify_email_request(request: Request, data: VerifyEmailSchema, db: Session = Depends(get_db)):
@@ -201,3 +260,5 @@ def force_logout(
         "message": "User sessions invalidated successfully",
         "data": force_logout_user(db, target_user, actor=current_user, request=request),
     }
+
+

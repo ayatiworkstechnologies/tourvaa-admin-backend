@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+﻿from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
@@ -14,7 +14,7 @@ from app.modules.users.models import User
 from app.modules.settings.models import ApiSetting, AppSetting, PaymentSetting
 from app.modules.email_templates.models import EmailTemplate
 from app.modules.audit.models import AuditLog
-from app.modules.customers.models import Customer, CustomerCommunication
+from app.modules.customers.models import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerCancellationRequest
 from app.modules.cms.models import Country, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
 from app.modules.bookings.models import Booking, BookingTraveller, BookingOptionalActivity, BookingAccommodation, BookingExtension, BookingStatusHistory, BookingCommunication, MessageReply, EmailLog
 from app.modules.payments.models import Payment, PaymentTransaction, PaymentHold
@@ -42,6 +42,7 @@ from app.modules.email_templates.router import router as email_templates_router
 from app.modules.uploads.router import router as uploads_router
 from app.modules.client.router import router as client_router
 from app.modules.customers.router import router as customers_router
+from app.modules.customers.customer_router import router as customer_portal_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.modules.agents.router import router as agents_router
 from app.modules.affiliates.router import router as affiliates_router
@@ -59,6 +60,28 @@ from app.modules.sessions.router import router as sessions_router
 from app.modules.audit.router import router as activity_logs_router
 from app.modules.chatbot.models import ChatFAQ, ChatSession, ChatMessage
 from app.modules.chatbot.router import router as chatbot_router
+from app.modules.public.router import router as public_router
+
+# New modules
+from app.modules.tour_versions.models import TourVersion
+from app.modules.tour_versions.router import router as tour_versions_router
+from app.modules.payments.gateway_router import router as payments_gateway_router
+from app.modules.supplier_ledger.models import SupplierLedger, SupplierPayout, SupplierPayoutItem
+from app.modules.supplier_ledger.router import router as supplier_ledger_router
+from app.modules.checkout.models import CheckoutSession
+from app.modules.checkout.router import router as checkout_router
+from app.modules.website_cms.models import (
+    HomepageBanner, PopularDestination, PopularTour, TourOnDeal,
+    Blog, CustomerReview, HelpCentreArticle, CmsPolicy,
+    PromotionalPopup, ExternalLink, SitemapEntry,
+)
+from app.modules.website_cms.router import router as website_cms_router
+from app.modules.cancellations.models import CancellationRequest, RefundRule
+from app.modules.cancellations.router import router as cancellations_router
+from app.modules.booking_calendar.models import BookingCalendarEvent
+from app.modules.booking_calendar.router import router as booking_calendar_router
+from app.modules.affiliate_tracking.models import AffiliateLink, AffiliateClick, AffiliateConversion, AffiliatePayout
+from app.modules.affiliate_tracking.router import router as affiliate_tracking_router
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +103,8 @@ def schema_is_ready():
         "user_roles",
         "customers",
         "customer_communications",
+        "customer_saved_travellers",
+        "customer_cancellation_requests",
         "countries",
         "cities",
         "tour_categories",
@@ -130,11 +155,15 @@ def schema_is_ready():
     required_columns = {
         "roles": {"is_system"},
         "permissions": {"action", "is_system"},
+        "customers": {"phone_country_code", "date_of_birth", "gender", "email_verified", "phone_verified"},
         "users": {
             "approval_status",
             "reset_password_token",
             "reset_password_expires_at",
             "token_version",
+            "email_verified_at",
+            "email_verification_token",
+            "email_verification_expires_at",
             "two_factor_enabled",
             "force_password_reset",
         },
@@ -190,7 +219,9 @@ app.mount("/storage", StaticFiles(directory=str(storage_root)), name="storage")
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(roles_router, prefix="/api")
+app.include_router(roles_router, prefix="/api/admin")
 app.include_router(permissions_router, prefix="/api")
+app.include_router(permissions_router, prefix="/api/admin")
 app.include_router(admin_modules_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(profile_router, prefix="/api")
@@ -199,6 +230,7 @@ app.include_router(email_templates_router, prefix="/api")
 app.include_router(uploads_router, prefix="/api")
 app.include_router(client_router, prefix="/api")
 app.include_router(customers_router, prefix="/api")
+app.include_router(customer_portal_router, prefix="/api")
 app.include_router(suppliers_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
 app.include_router(affiliates_router, prefix="/api")
@@ -213,6 +245,17 @@ app.include_router(activity_logs_router, prefix="/api")
 app.include_router(bookings_supplier_router, prefix="/api")
 app.include_router(tour_detail_router, prefix="/api")
 app.include_router(chatbot_router, prefix="/api")
+app.include_router(public_router, prefix="/api/public")
+
+# New module routers
+app.include_router(tour_versions_router, prefix="/api")
+app.include_router(payments_gateway_router, prefix="/api")
+app.include_router(supplier_ledger_router, prefix="/api")
+app.include_router(checkout_router, prefix="/api")
+app.include_router(website_cms_router, prefix="/api")
+app.include_router(cancellations_router, prefix="/api")
+app.include_router(booking_calendar_router, prefix="/api")
+app.include_router(affiliate_tracking_router, prefix="/api")
 
 @app.get("/")
 def home():
@@ -228,6 +271,9 @@ def health():
         "status": "success",
         "message": "API working fine"
     }
+
+
+
 
 
 

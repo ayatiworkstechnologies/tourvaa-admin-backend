@@ -12,6 +12,8 @@ from fastapi import HTTPException, Request
 
 _lock = threading.Lock()
 _windows: dict[str, deque] = defaultdict(deque)
+_CLEANUP_INTERVAL = 300  # seconds between stale-bucket sweeps
+_last_cleanup = time.monotonic()
 
 
 def _client_ip(request: Request) -> str:
@@ -19,6 +21,18 @@ def _client_ip(request: Request) -> str:
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _cleanup_stale_buckets(now: float) -> None:
+    """Remove buckets that have had no activity in the longest window (10 min)."""
+    global _last_cleanup
+    if now - _last_cleanup < _CLEANUP_INTERVAL:
+        return
+    _last_cleanup = now
+    stale_cutoff = now - 600
+    empty_keys = [k for k, dq in _windows.items() if not dq or dq[-1] < stale_cutoff]
+    for k in empty_keys:
+        del _windows[k]
 
 
 def check_rate_limit(request: Request, key: str, max_calls: int, window_seconds: int):
@@ -32,6 +46,7 @@ def check_rate_limit(request: Request, key: str, max_calls: int, window_seconds:
     cutoff = now - window_seconds
 
     with _lock:
+        _cleanup_stale_buckets(now)
         dq = _windows[bucket]
         while dq and dq[0] < cutoff:
             dq.popleft()

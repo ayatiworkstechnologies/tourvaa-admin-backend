@@ -12,3 +12,5 @@ email-validator
 alembic
 requests
 anthropic
+pywebpush
+reportlab
