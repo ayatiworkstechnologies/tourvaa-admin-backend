@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
@@ -15,7 +15,7 @@ from app.modules.settings.models import ApiSetting, AppSetting, PaymentSetting
 from app.modules.email_templates.models import EmailTemplate
 from app.modules.audit.models import AuditLog
 from app.modules.customers.models import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerCancellationRequest
-from app.modules.cms.models import Country, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
+from app.modules.cms.models import Country, State, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
 from app.modules.bookings.models import Booking, BookingTraveller, BookingOptionalActivity, BookingAccommodation, BookingExtension, BookingStatusHistory, BookingCommunication, MessageReply, EmailLog
 from app.modules.payments.models import Payment, PaymentTransaction, PaymentHold
 from app.modules.tours.models import (
@@ -47,7 +47,9 @@ from app.modules.suppliers.router import router as suppliers_router
 from app.modules.agents.router import router as agents_router
 from app.modules.affiliates.router import router as affiliates_router
 from app.modules.cms.router import router as cms_router
-from app.modules.bookings.router import router as bookings_router, supplier_router as bookings_supplier_router
+from app.modules.cms.geo_seed_router import router as geo_seed_router
+from app.modules.cms.geo_router import router as geo_router
+from app.modules.bookings.router import router as bookings_router, supplier_router as bookings_supplier_router, supplier_portal_router as bookings_supplier_portal_router, agent_portal_router as bookings_agent_portal_router
 from app.modules.payments.router import router as payments_router
 from app.modules.tours.router import router as tour_detail_router
 from app.modules.invoices.models import Invoice, InvoiceItem
@@ -234,7 +236,10 @@ app.include_router(customer_portal_router, prefix="/api")
 app.include_router(suppliers_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
 app.include_router(affiliates_router, prefix="/api")
+app.include_router(tour_detail_router, prefix="/api")
 app.include_router(cms_router, prefix="/api")
+app.include_router(geo_seed_router, prefix="/api")
+app.include_router(geo_router, prefix="/api")
 app.include_router(bookings_router, prefix="/api")
 app.include_router(payments_router, prefix="/api")
 app.include_router(invoices_router, prefix="/api")
@@ -243,7 +248,8 @@ app.include_router(reports_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(activity_logs_router, prefix="/api")
 app.include_router(bookings_supplier_router, prefix="/api")
-app.include_router(tour_detail_router, prefix="/api")
+app.include_router(bookings_supplier_portal_router, prefix="/api")
+app.include_router(bookings_agent_portal_router, prefix="/api")
 app.include_router(chatbot_router, prefix="/api")
 app.include_router(public_router, prefix="/api/public")
 

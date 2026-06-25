@@ -71,12 +71,12 @@ class CustomerCommunication(Base):
     __tablename__ = "customer_communications"
 
     id = Column(Integer, primary_key=True, index=True)
-    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
     booking_id = Column(Integer, nullable=True, index=True)
     subject = Column(String(150), nullable=False)
     message = Column(Text, nullable=False)
     sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    sent_to_email = Column(String(150), nullable=False)
+    sent_to_email = Column(String(150), nullable=False, default="admin")
     message_type = Column(String(30), default="admin_message", nullable=False)
     email_status = Column(String(20), default="pending", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -46,9 +46,21 @@ def list_customers(
     end_date: str = Query(default=""),
     sort_by: str = Query(default="newest"),
     sort_order: str = Query(default="desc"),
+    agent_id: str = Query(default=""),
     db: Session = Depends(get_db),
-    _=Depends(require_any_permission("customers.view", "view-customers")),
+    current_user: User = Depends(require_any_permission("customers.view", "view-customers")),
 ):
+    # If the caller is an agent, auto-scope to their customers only
+    effective_agent_id: int | None = None
+    role_slug = (current_user.role.slug if current_user.role else "") or ""
+    if "agent" in role_slug.lower():
+        from app.modules.agents.models import Agent
+        agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
+        if agent:
+            effective_agent_id = agent.id
+    elif agent_id:
+        effective_agent_id = int(agent_id)
+
     paginated = get_customers(
         db,
         page=params["page"],
@@ -62,6 +74,7 @@ def list_customers(
         end_date=end_date,
         sort_by=sort_by,
         sort_order=sort_order,
+        agent_id=effective_agent_id,
     )
     return {"status": "success", "data": paginated["items"], **paginated}
 

@@ -668,6 +668,133 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
     return serialize_booking(booking, detail=True)
 
 
+def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
+    from app.modules.notifications.service import enqueue_notification, notify_admins
+    from app.modules.bookings.schemas import SupplierDecisionRequest
+    booking = get_booking_by_id(db, booking_id)
+    _ensure_booking_access(booking, actor)
+    if booking.booking_status not in ("confirmed", "ongoing"):
+        raise HTTPException(status_code=400, detail="Only confirmed or ongoing bookings can be marked as completed")
+    old_values = serialize_booking(booking)
+    _set_status(db, booking, "completed", actor, "supplier", reason or "Tour completed by supplier")
+    log_audit(db, actor=actor, action="supplier_complete_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
+    notify_admins(db, notification_type="booking_completed", title="Tour completed", message=f"Supplier marked {booking.booking_code} as completed", entity_type="booking", entity_id=booking.id)
+    if booking.customer and booking.customer.user_id:
+        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_completed", title="Tour completed", message=f"Your tour {booking.booking_code} has been completed", entity_type="booking", entity_id=booking.id)
+    db.commit(); db.refresh(booking)
+    if booking.customer and booking.customer.email:
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        _send_booking_email(
+            db, "booking_status_update",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "new_status": "Completed", "reason": reason or "Tour completed", "login_url": login_url,
+             "button_text": "View booking", "button_url": login_url},
+            f"Tour completed - {booking.booking_code}",
+            booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, "completed", reason or "Tour completed", login_url),
+            booking.customer.email,
+        )
+    return serialize_booking(booking, detail=True)
+
+
+def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: User, request: Request | None = None) -> dict:
+    from app.modules.notifications.service import enqueue_notification, notify_admins
+    booking = get_booking_by_id(db, booking_id)
+    _ensure_booking_access(booking, actor)
+    if booking.booking_status == "cancelled":
+        raise HTTPException(status_code=400, detail="Booking is already cancelled")
+    if booking.booking_status == "completed":
+        raise HTTPException(status_code=400, detail="Completed bookings cannot be cancelled")
+    old_values = serialize_booking(booking)
+    _set_status(db, booking, "cancelled", actor, "supplier", reason)
+    booking.cancellation_reason = reason
+    booking.cancelled_at = utcnow()
+    booking.cancelled_by = actor.id if actor else None
+    if booking.calendar:
+        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - (booking.total_travellers or 0))
+    log_audit(db, actor=actor, action="supplier_cancel_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
+    notify_admins(db, notification_type="supplier_cancelled_booking", title="Supplier cancelled booking", message=f"Supplier cancelled {booking.booking_code}: {reason}", entity_type="booking", entity_id=booking.id)
+    if booking.customer and booking.customer.user_id:
+        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_cancelled", title="Booking cancelled", message=f"Your booking {booking.booking_code} was cancelled by supplier", entity_type="booking", entity_id=booking.id)
+    db.commit(); db.refresh(booking)
+    if booking.customer and booking.customer.email:
+        from app.modules.common.email_templates import booking_cancelled_email
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings"
+        _send_booking_email(
+            db, "booking_cancelled",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "reason": reason, "login_url": login_url, "button_text": "View bookings", "button_url": login_url},
+            f"Booking cancelled - {booking.booking_code}",
+            booking_cancelled_email(booking.customer.full_name, booking.booking_code, booking.tour_name, reason, login_url),
+            booking.customer.email,
+        )
+    return serialize_booking(booking, detail=True)
+
+
+def supplier_postpone_booking(db: Session, booking_id: int, reason: str, new_tour_date: str | None, actor: User, request: Request | None = None) -> dict:
+    from app.modules.notifications.service import enqueue_notification, notify_admins
+    booking = get_booking_by_id(db, booking_id)
+    _ensure_booking_access(booking, actor)
+    if booking.booking_status in ("cancelled", "completed", "declined"):
+        raise HTTPException(status_code=400, detail=f"Cannot postpone a {booking.booking_status} booking")
+    old_values = serialize_booking(booking)
+    if new_tour_date:
+        booking.tour_date = new_tour_date
+    _set_status(db, booking, "postponed", actor, "supplier", reason)
+    log_audit(db, actor=actor, action="supplier_postpone_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
+    notify_admins(db, notification_type="booking_postponed", title="Booking postponed", message=f"Supplier postponed {booking.booking_code}: {reason}", entity_type="booking", entity_id=booking.id)
+    if booking.customer and booking.customer.user_id:
+        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_postponed", title="Booking postponed", message=f"Your booking {booking.booking_code} has been postponed. Reason: {reason}", entity_type="booking", entity_id=booking.id)
+    if booking.agent and booking.agent.user_id:
+        enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_postponed", title="Booking postponed", message=f"Booking {booking.booking_code} has been postponed by supplier", entity_type="booking", entity_id=booking.id)
+    db.commit(); db.refresh(booking)
+    if booking.customer and booking.customer.email:
+        date_info = f" New date: {new_tour_date}." if new_tour_date else ""
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        _send_booking_email(
+            db, "booking_status_update",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "new_status": "Postponed", "reason": reason + date_info, "login_url": login_url,
+             "button_text": "View booking", "button_url": login_url},
+            f"Booking postponed - {booking.booking_code}",
+            booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, "postponed", reason + date_info, login_url),
+            booking.customer.email,
+        )
+    return serialize_booking(booking, detail=True)
+
+
+def supplier_notify_parties(db: Session, booking_id: int, message: str, notify_customer: bool, notify_agent: bool, actor: User, request: Request | None = None) -> dict:
+    from app.modules.notifications.service import enqueue_notification
+    booking = get_booking_by_id(db, booking_id)
+    _ensure_booking_access(booking, actor)
+    row = BookingCommunication(
+        booking_id=booking.id, sender_user_id=actor.id, sender_type="supplier",
+        message_type="supplier_update", subject=f"Update on booking {booking.booking_code}",
+        message=message, visibility="customer",
+    )
+    db.add(row)
+    log_audit(db, actor=actor, action="supplier_notify_parties", entity_type="booking", entity_id=booking.id, request=request)
+    db.commit(); db.refresh(row)
+    notified = []
+    if notify_customer and booking.customer and booking.customer.email:
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        _send_booking_email(
+            db, "booking_status_update",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "new_status": booking.booking_status.replace("_", " ").title(), "reason": message, "login_url": login_url,
+             "button_text": "View booking", "button_url": login_url},
+            f"Update on your booking - {booking.booking_code}",
+            booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, booking.booking_status, message, login_url),
+            booking.customer.email,
+        )
+        if booking.customer.user_id:
+            enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_update", title=f"Update: {booking.booking_code}", message=message, entity_type="booking", entity_id=booking.id)
+        notified.append("customer")
+    if notify_agent and booking.agent and booking.agent.user_id:
+        enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_update", title=f"Supplier update: {booking.booking_code}", message=message, entity_type="booking", entity_id=booking.id)
+        notified.append("agent")
+    return {"message": "Notification sent", "notified": notified, "communication_id": row.id}
+
+
 def get_status_history(db: Session, booking_id: int, actor: User | None = None) -> list[dict]:
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)

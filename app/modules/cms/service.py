@@ -3,8 +3,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import log_audit
-from app.modules.cms.models import City, Country, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
-from app.modules.cms.schemas import CategoryPayload, CityPayload, CountryPayload, StatusUpdate, SubcategoryPayload, TourPayload, slugify
+from app.modules.cms.models import City, Country, State, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
+from app.modules.cms.schemas import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourPayload, slugify
 from app.modules.operations import code_for, get_or_404, simple_paginate
 from app.modules.users.models import User
 
@@ -13,8 +13,12 @@ def _country(item: Country):
     return {"id": item.id, "country_name": item.country_name, "country_code": item.country_code, "phone_code": item.phone_code, "currency_code": item.currency_code, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
 
 
+def _state(item: State):
+    return {"id": item.id, "country_id": item.country_id, "country_name": item.country.country_name if item.country else "", "state_name": item.state_name, "state_code": item.state_code, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
+
+
 def _city(item: City):
-    return {"id": item.id, "country_id": item.country_id, "country_name": item.country.country_name if item.country else "", "city_name": item.city_name, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
+    return {"id": item.id, "country_id": item.country_id, "country_name": item.country.country_name if item.country else "", "state_id": item.state_id, "state_name": item.state.state_name if item.state else "", "city_name": item.city_name, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
 
 
 def _category(item: TourCategory):
@@ -99,17 +103,45 @@ def save_country(db: Session, data: CountryPayload, actor: User, request: Reques
     return _country(item)
 
 
-def list_cities(db: Session, page: int, limit: int, search: str = "", country_id: str = ""):
+def list_states(db: Session, page: int, limit: int, search: str = "", country_id: str = ""):
+    query = db.query(State)
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.filter(or_(State.state_name.ilike(pattern), State.state_code.ilike(pattern)))
+    if country_id:
+        query = query.filter(State.country_id == int(country_id))
+    return simple_paginate(query.order_by(State.state_name.asc()), page, limit, _state)
+
+
+def save_state(db: Session, data: StatePayload, actor: User, request: Request | None = None, state_id: int | None = None):
+    get_or_404(db, Country, data.country_id, "Country")
+    item = get_or_404(db, State, state_id, "State") if state_id else State()
+    old = _state(item) if state_id else None
+    for key, value in data.model_dump().items():
+        setattr(item, key, value)
+    db.add(item)
+    db.flush()
+    log_audit(db, actor=actor, action="update_state" if state_id else "create_state", entity_type="state", entity_id=item.id, old_values=old, new_values=_state(item), request=request)
+    db.commit()
+    db.refresh(item)
+    return _state(item)
+
+
+def list_cities(db: Session, page: int, limit: int, search: str = "", country_id: str = "", state_id: str = ""):
     query = db.query(City)
     if search:
         query = query.filter(City.city_name.ilike(f"%{search.strip()}%"))
     if country_id:
         query = query.filter(City.country_id == int(country_id))
+    if state_id:
+        query = query.filter(City.state_id == int(state_id))
     return simple_paginate(query.order_by(City.city_name.asc()), page, limit, _city)
 
 
 def save_city(db: Session, data: CityPayload, actor: User, request: Request | None = None, city_id: int | None = None):
     get_or_404(db, Country, data.country_id, "Country")
+    if data.state_id:
+        get_or_404(db, State, data.state_id, "State")
     item = get_or_404(db, City, city_id, "City") if city_id else City()
     old = _city(item) if city_id else None
     for key, value in data.model_dump().items():
