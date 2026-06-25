@@ -180,6 +180,19 @@ def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRe
     old = serialize_supplier(item)
     item.markup_type = data.markup_type
     item.markup_value = data.markup_value
+    commission_request_pending = bool(item.pending_requirements and "commission request" in item.pending_requirements.lower())
+    if commission_request_pending:
+        item.pending_requirements = None
+        item.approval_status = "approved"
+        item.status = "active"
+        if item.user:
+            item.user.approval_status = "approved"
+            item.user.is_active = True
+        try:
+            from app.modules.common.notification_triggers import notify_supplier_commission_approved
+            notify_supplier_commission_approved(db, supplier_id=item.id, supplier_name=item.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=item.user_id)
+        except Exception:
+            pass
     log_audit(db, actor=actor, action="update_supplier_markup", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
     db.commit()
     db.refresh(item)

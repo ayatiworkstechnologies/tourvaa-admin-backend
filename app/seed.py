@@ -5,7 +5,6 @@ from app.modules.admin_modules.models import AdminModule
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.roles.models import Role
 from app.modules.users.models import User, UserRole
-from app.modules.cms.models import City, Country, Tour, TourCategory
 from app.security import hash_password
 
 
@@ -34,7 +33,9 @@ MODULES = [
     ("categories", "Tour Categories"),
     ("subcategories", "Tour Sub-Categories"),
     ("bookings", "Bookings"),
+    ("cancellations", "Cancellations"),
     ("payments", "Payments"),
+    ("supplier_ledger", "Supplier Ledger"),
     ("reports", "Reports"),
     ("invoices", "Invoices"),
     ("notifications", "Notifications"),
@@ -42,6 +43,7 @@ MODULES = [
     ("sessions", "Sessions"),
     ("email", "Email Templates"),
     ("settings", "Settings"),
+    ("website_cms", "Website CMS"),
     ("profile", "Profile"),
 ]
 
@@ -56,16 +58,14 @@ ACTION_LABELS = {
 def permission_slug(action: str, module: str):
     if action == "get":
         return f"view-{module}"
-
     if action == "post":
         return f"create-{module}"
-
     if action == "put":
         return f"update-{module}"
-
     return f"delete-{module}"
 
 
+# 27 modules × 4 HTTP actions = 108 base permissions
 DEFAULT_PERMISSIONS = [
     {
         "name": f"{label} {module_label}",
@@ -93,40 +93,62 @@ CUSTOMER_GRANULAR_PERMISSIONS = [
 
 DEFAULT_PERMISSIONS.extend(CUSTOMER_GRANULAR_PERMISSIONS)
 
+EMAIL_TEMPLATE_GRANULAR_PERMISSIONS = [
+    {"name": "View Email Templates", "slug": "email_templates.view", "module": "email", "action": "get"},
+    {"name": "Create Email Templates", "slug": "email_templates.create", "module": "email", "action": "post"},
+    {"name": "Edit Email Templates", "slug": "email_templates.edit", "module": "email", "action": "put"},
+    {"name": "Delete Email Templates", "slug": "email_templates.delete", "module": "email", "action": "delete"},
+]
+
+DEFAULT_PERMISSIONS.extend(EMAIL_TEMPLATE_GRANULAR_PERMISSIONS)
+
+# Dashboard-only granular permissions — no overlap with WEEK_11_15_PERMISSIONS slugs
 DASHBOARD_PERMISSIONS = [
     {"name": "View Dashboard", "slug": "dashboard.view", "module": "dashboard", "action": "get"},
     {"name": "View Dashboard Summary", "slug": "dashboard.summary", "module": "dashboard", "action": "get"},
     {"name": "View Dashboard Charts", "slug": "dashboard.charts", "module": "dashboard", "action": "get"},
     {"name": "View Dashboard Activities", "slug": "dashboard.activities", "module": "dashboard", "action": "get"},
     {"name": "View Dashboard Alerts", "slug": "dashboard.alerts", "module": "dashboard", "action": "get"},
-    {"name": "View Payments", "slug": "payments.view", "module": "payments", "action": "get"},
     {"name": "View Payment Summary", "slug": "payments.summary", "module": "payments", "action": "get"},
-    {"name": "View Reports", "slug": "reports.view", "module": "reports", "action": "get"},
-    {"name": "Export Reports", "slug": "reports.export", "module": "reports", "action": "get"},
-    {"name": "View Invoices", "slug": "invoices.view", "module": "invoices", "action": "get"},
-    {"name": "View Activity Logs", "slug": "activity_logs.view", "module": "activity_logs", "action": "get"},
-    {"name": "View Bookings", "slug": "bookings.view", "module": "bookings", "action": "get"},
     {"name": "View Settings", "slug": "settings.view", "module": "settings", "action": "get"},
     {"name": "View Profile", "slug": "profile.view", "module": "profile", "action": "get"},
 ]
 
 DEFAULT_PERMISSIONS.extend(DASHBOARD_PERMISSIONS)
 
+# Operational / CMS / Geo module granular permissions
 OPERATIONAL_PERMISSIONS = [
-    ("suppliers", "Suppliers", ["view", "create", "edit", "approve", "reject", "partial_approve", "manage_markup", "view_documents", "reset_password", "communicate", "export"]),
-    ("agents", "Agents", ["view", "create", "edit", "approve", "reject", "partial_approve", "manage_discount", "view_documents", "reset_password", "communicate", "export"]),
-    ("affiliates", "Affiliates", ["view", "create", "approve", "reject", "manage_api_link", "view_documents", "export"]),
+    ("suppliers", "Suppliers", [
+        "view", "create", "edit", "approve", "reject", "partial_approve",
+        "manage_markup", "request_commission", "approve_commission", "view_documents", "reset_password", "communicate", "export",
+    ]),
+    ("agents", "Agents", [
+        "view", "create", "edit", "approve", "reject", "partial_approve",
+        "manage_discount", "approve_discount", "view_documents", "reset_password", "communicate", "export",
+    ]),
+    ("affiliates", "Affiliates", [
+        "view", "create", "approve", "reject", "manage_api_link", "view_documents", "export",
+    ]),
     ("countries", "Countries", ["view", "create", "edit", "disable"]),
     ("cities", "Cities", ["view", "create", "edit", "disable"]),
     ("categories", "Categories", ["view", "create", "edit", "disable"]),
     ("subcategories", "Sub-Categories", ["view", "create", "edit", "disable"]),
     ("tours", "Tours", ["view", "create", "edit", "publish", "disable"]),
+    ("supplier_ledger", "Supplier Ledger", ["view", "create_payout", "mark_paid", "export"]),
+    ("website_cms", "Website CMS", ["view", "create", "edit", "delete"]),
 ]
 
-
+# Booking lifecycle, financial, and system module granular permissions
 WEEK_11_15_PERMISSIONS = [
-    ("bookings", "Bookings", ["view", "create", "edit", "update_status", "assign_supplier", "cancel", "view_travellers", "view_payments", "view_history", "export"]),
-    ("payments", "Payments", ["view", "create", "edit", "capture", "void", "refund", "view_transactions", "export", "manage_settings"]),
+    ("bookings", "Bookings", [
+        "view", "create", "edit", "update_status", "assign_supplier",
+        "cancel", "view_travellers", "view_payments", "view_history", "export",
+    ]),
+    ("cancellations", "Cancellations", ["view", "approve", "reject", "process_refund"]),
+    ("payments", "Payments", [
+        "view", "create", "edit", "capture", "void", "refund",
+        "view_transactions", "export", "manage_settings",
+    ]),
     ("invoices", "Invoices", ["view", "generate", "email", "download", "export"]),
     ("notifications", "Notifications", ["view", "manage", "retry"]),
     ("reports", "Reports", ["view", "admin", "supplier", "agent", "export"]),
@@ -136,17 +158,21 @@ WEEK_11_15_PERMISSIONS = [
 
 for module, label, actions in WEEK_11_15_PERMISSIONS:
     for action in actions:
-        DEFAULT_PERMISSIONS.append({"name": f"{action.replace('_', ' ').title()} {label}", "slug": f"{module}.{action}", "module": module, "action": action})
+        DEFAULT_PERMISSIONS.append({
+            "name": f"{action.replace('_', ' ').title()} {label}",
+            "slug": f"{module}.{action}",
+            "module": module,
+            "action": action,
+        })
+
 for module, label, actions in OPERATIONAL_PERMISSIONS:
     for action in actions:
-        DEFAULT_PERMISSIONS.append(
-            {
-                "name": f"{action.replace('_', ' ').title()} {label}",
-                "slug": f"{module}.{action}",
-                "module": module,
-                "action": action,
-            }
-        )
+        DEFAULT_PERMISSIONS.append({
+            "name": f"{action.replace('_', ' ').title()} {label}",
+            "slug": f"{module}.{action}",
+            "module": module,
+            "action": action,
+        })
 
 
 def assign_if_missing(db: Session, role: Role, permission: Permission):
@@ -156,14 +182,8 @@ def assign_if_missing(db: Session, role: Role, permission: Permission):
         .filter(RolePermission.permission_id == permission.id)
         .first()
     )
-
     if not exists:
-        db.add(
-            RolePermission(
-                role_id=role.id,
-                permission_id=permission.id,
-            )
-        )
+        db.add(RolePermission(role_id=role.id, permission_id=permission.id))
 
 
 def assign_user_role_if_missing(db: Session, user: User, role: Role):
@@ -173,7 +193,6 @@ def assign_user_role_if_missing(db: Session, user: User, role: Role):
         .filter(UserRole.role_id == role.id)
         .first()
     )
-
     if not exists:
         db.add(UserRole(user_id=user.id, role_id=role.id))
 
@@ -217,77 +236,17 @@ def seed_super_admin_user(db: Session, role: Role | None):
 
 
 
-def seed_demo_tour_if_empty(db: Session):
-    if db.query(Tour).first():
-        return
-
-    country = db.query(Country).filter(Country.country_code == "AE").first()
-    if not country:
-        country = Country(
-            country_name="United Arab Emirates",
-            country_code="AE",
-            phone_code="+971",
-            currency_code="AED",
-            status="active",
-        )
-        db.add(country)
-        db.flush()
-
-    city = db.query(City).filter(City.country_id == country.id, City.city_name == "Dubai").first()
-    if not city:
-        city = City(country_id=country.id, city_name="Dubai", status="active")
-        db.add(city)
-        db.flush()
-
-    category = db.query(TourCategory).filter(TourCategory.slug == "city-tours").first()
-    if not category:
-        category = TourCategory(
-            category_name="City Tours",
-            slug="city-tours",
-            description="Curated city experiences",
-            image="",
-            status="active",
-        )
-        db.add(category)
-        db.flush()
-
-    tour = Tour(
-        tour_code="TRV-DEMO-001",
-        title="Dubai City Highlights",
-        slug="dubai-city-highlights",
-        subtitle="A compact guided Dubai experience",
-        price_start_per_person=99.0,
-        currency="AED",
-        country_id=country.id,
-        city_id=city.id,
-        category_id=category.id,
-        start_location="Dubai",
-        finish_location="Dubai",
-        number_of_days=1,
-        short_description="A seeded tour used for local smoke checks and demos.",
-        long_description="A seeded tour used for local smoke checks and demos.",
-        seo_title="Dubai City Highlights",
-        seo_description="A compact guided Dubai experience.",
-        seo_keywords="dubai,city,tour",
-        image_alt_text="Dubai skyline",
-        status="published",
-    )
-    db.add(tour)
-    db.commit()
 def seed_default_roles_and_permissions(db: Session):
     for slug, name in MODULES:
         admin_module = db.query(AdminModule).filter(AdminModule.slug == slug).first()
-
         if not admin_module:
-            db.add(
-                AdminModule(
-                    name=name,
-                    slug=slug,
-                    description=f"{name} admin module",
-                    is_active=True,
-                    is_system=True,
-                )
-            )
+            db.add(AdminModule(
+                name=name,
+                slug=slug,
+                description=f"{name} admin module",
+                is_active=True,
+                is_system=True,
+            ))
         else:
             admin_module.name = name
             admin_module.is_system = True
@@ -295,28 +254,23 @@ def seed_default_roles_and_permissions(db: Session):
     db.flush()
 
     roles_by_slug = {}
-
     for role_data in DEFAULT_ROLES:
         role = db.query(Role).filter(Role.slug == role_data["slug"]).first()
-
         if not role:
             role = Role(**role_data, is_active=True, is_system=True)
             db.add(role)
             db.flush()
         else:
             role.is_system = True
-
         roles_by_slug[role.slug] = role
 
     permissions = []
-
     for permission_data in DEFAULT_PERMISSIONS:
         permission = (
             db.query(Permission)
             .filter(Permission.slug == permission_data["slug"])
             .first()
         )
-
         if not permission:
             permission = Permission(**permission_data, is_active=True, is_system=True)
             db.add(permission)
@@ -326,10 +280,9 @@ def seed_default_roles_and_permissions(db: Session):
             permission.module = permission_data["module"]
             permission.action = permission_data["action"]
             permission.is_system = True
-
         permissions.append(permission)
 
-    permissions_by_slug = {permission.slug: permission for permission in permissions}
+    permissions_by_slug = {p.slug: p for p in permissions}
 
     super_admin = roles_by_slug.get("super-admin")
     admin = roles_by_slug.get("admin")
@@ -338,273 +291,251 @@ def seed_default_roles_and_permissions(db: Session):
     agent_reseller = roles_by_slug.get("agent-reseller")
     customer = roles_by_slug.get("customer")
 
+    # Super admin gets every permission
     if super_admin:
         for permission in permissions:
             assign_if_missing(db, super_admin, permission)
-
         seed_super_admin_user(db, super_admin)
 
+    # Pre-compute slug lists used across multiple roles
+    _customer_granular = [p["slug"] for p in CUSTOMER_GRANULAR_PERMISSIONS]
+    _email_template_granular = [p["slug"] for p in EMAIL_TEMPLATE_GRANULAR_PERMISSIONS]
+    _all_operational = [
+        f"{module}.{action}"
+        for module, _label, actions in OPERATIONAL_PERMISSIONS
+        for action in actions
+    ]
+    _all_week = [
+        f"{module}.{action}"
+        for module, _label, actions in WEEK_11_15_PERMISSIONS
+        for action in actions
+    ]
+    _week_no_system = [
+        s for s in _all_week
+        if not s.endswith(".manage_settings") and not s.endswith(".force_logout")
+    ]
+
     default_role_permissions = {
+        # ------------------------------------------------------------------
+        # Admin — full operational control; manages users, roles, permissions
+        # ------------------------------------------------------------------
         admin: [
-            "view-dashboard",
-            "dashboard.view",
-            "dashboard.summary",
-            "dashboard.charts",
-            "dashboard.activities",
-            "dashboard.alerts",
-            "view-users",
-            "create-users",
-            "update-users",
-            "delete-users",
-            "view-roles",
-            "create-roles",
-            "update-roles",
-            "delete-roles",
-            "view-permissions",
-            "create-permissions",
-            "update-permissions",
-            "delete-permissions",
-            "view-customers",
-            "create-customers",
-            "update-customers",
-            "customers.view",
-            "customers.create",
-            "customers.edit",
-            "customers.block",
-            "customers.unblock",
-            "customers.reset_password",
-            "customers.view_bookings",
-            "customers.view_payments",
-            "customers.view_communications",
-            "customers.communicate",
-            "customers.export",
-            "view-tours",
-            "create-tours",
-            "update-tours",
-            "view-bookings",
-            "create-bookings",
-            "update-bookings",
-            "view-payments",
-            "payments.view",
+            # Dashboard
+            "view-dashboard", "dashboard.view", "dashboard.summary",
+            "dashboard.charts", "dashboard.activities", "dashboard.alerts",
+            # Users
+            "view-users", "create-users", "update-users", "delete-users",
+            # Roles & Permissions
+            "view-roles", "create-roles", "update-roles", "delete-roles",
+            "view-permissions", "create-permissions", "update-permissions", "delete-permissions",
+            # Customers (base + granular)
+            "view-customers", "create-customers", "update-customers", "delete-customers",
+            *_customer_granular,
+            # Suppliers / Agents / Affiliates / Resellers (base)
+            "view-suppliers", "create-suppliers", "update-suppliers", "delete-suppliers",
+            "view-agents", "create-agents", "update-agents", "delete-agents",
+            "view-affiliates", "create-affiliates", "update-affiliates", "delete-affiliates",
+            "view-resellers", "create-resellers", "update-resellers",
+            # Geo / CMS (base)
+            "view-countries", "create-countries", "update-countries", "delete-countries",
+            "view-cities", "create-cities", "update-cities", "delete-cities",
+            "view-categories", "create-categories", "update-categories", "delete-categories",
+            "view-subcategories", "create-subcategories", "update-subcategories", "delete-subcategories",
+            # Tours (base)
+            "view-tours", "create-tours", "update-tours", "delete-tours",
+            # Bookings / Cancellations (base)
+            "view-bookings", "create-bookings", "update-bookings", "delete-bookings",
+            "view-cancellations", "update-cancellations",
+            # Payments (base)
+            "view-payments", "create-payments", "update-payments",
             "payments.summary",
-            "view-reports",
-            "reports.view",
-            "reports.export",
-            "invoices.view",
-            "activity_logs.view",
-            "bookings.view",
-            "settings.view",
-            "profile.view",
-            "view-email",
-            "create-email",
-            "update-email",
-            "view-settings",
-            "update-settings",
-            "view-profile",
-            "update-profile",
-            *[f"{module}.{action}" for module, _label, actions in OPERATIONAL_PERMISSIONS for action in actions],
+            # Supplier Ledger (base)
+            "view-supplier_ledger", "create-supplier_ledger", "update-supplier_ledger",
+            # Reports / Invoices (base)
+            "view-reports", "view-invoices",
+            # Notifications (base)
+            "view-notifications", "create-notifications", "update-notifications",
+            # Activity Logs / Sessions (base)
+            "view-activity_logs", "view-sessions",
+            # Email / Settings / Website CMS (base)
+            "view-email", "create-email", "update-email", "delete-email", *_email_template_granular,
+            "view-settings", "update-settings", "settings.view",
+            "view-website_cms", "create-website_cms", "update-website_cms", "delete-website_cms",
+            # Profile
+            "view-profile", "update-profile", "profile.view",
+            # All operational granular permissions
+            *_all_operational,
+            # All booking-lifecycle / financial / system granular permissions
+            *_all_week,
         ],
+
+        # ------------------------------------------------------------------
+        # Sub Admin — operations without system-level role/permission CRUD
+        # ------------------------------------------------------------------
         sub_admin: [
-            "view-dashboard",
-            "dashboard.view",
-            "dashboard.summary",
-            "dashboard.charts",
-            "dashboard.activities",
-            "dashboard.alerts",
-            "view-users",
-            "create-users",
-            "update-users",
-            "view-suppliers",
-            "create-suppliers",
-            "update-suppliers",
-            "view-agents",
-            "create-agents",
-            "update-agents",
-            "view-resellers",
-            "create-resellers",
-            "update-resellers",
-            "view-customers",
-            "create-customers",
-            "update-customers",
-            "customers.view",
-            "customers.create",
-            "customers.edit",
-            "customers.block",
-            "customers.unblock",
-            "customers.reset_password",
-            "customers.view_bookings",
-            "customers.view_payments",
-            "customers.view_communications",
-            "customers.communicate",
-            "view-tours",
-            "create-tours",
-            "update-tours",
-            "view-bookings",
-            "create-bookings",
-            "update-bookings",
-            "view-payments",
-            "payments.view",
-            "view-reports",
-            "reports.view",
-            "bookings.view",
-            "profile.view",
-            "view-email",
-            "create-email",
-            "update-email",
-            "view-settings",
-            "view-profile",
-            "update-profile",
-            "suppliers.view",
-            "suppliers.create",
-            "suppliers.edit",
-            "suppliers.approve",
-            "suppliers.reject",
-            "suppliers.partial_approve",
-            "suppliers.manage_markup",
-            "suppliers.view_documents",
-            "agents.view",
-            "agents.create",
-            "agents.edit",
-            "agents.approve",
-            "agents.reject",
-            "agents.partial_approve",
-            "agents.manage_discount",
-            "agents.view_documents",
-            "affiliates.view",
-            "affiliates.approve",
-            "affiliates.reject",
-            "affiliates.manage_api_link",
-            "countries.view",
-            "countries.create",
-            "countries.edit",
-            "countries.disable",
-            "cities.view",
-            "cities.create",
-            "cities.edit",
-            "cities.disable",
-            "categories.view",
-            "categories.create",
-            "categories.edit",
-            "categories.disable",
-            "subcategories.view",
-            "subcategories.create",
-            "subcategories.edit",
-            "subcategories.disable",
-            "tours.view",
-            "tours.create",
-            "tours.edit",
-            "tours.publish",
-            "tours.disable",
+            # Dashboard
+            "view-dashboard", "dashboard.view", "dashboard.summary",
+            "dashboard.charts", "dashboard.activities", "dashboard.alerts",
+            # Users (no delete)
+            "view-users", "create-users", "update-users",
+            # Customers (base + granular, no delete)
+            "view-customers", "create-customers", "update-customers",
+            *[s for s in _customer_granular if s != "customers.export"],
+            # Suppliers / Agents / Affiliates / Resellers (base, no delete)
+            "view-suppliers", "create-suppliers", "update-suppliers",
+            "view-agents", "create-agents", "update-agents",
+            "view-affiliates", "create-affiliates", "update-affiliates",
+            "view-resellers", "create-resellers", "update-resellers",
+            # Geo / CMS (base, no delete)
+            "view-countries", "create-countries", "update-countries",
+            "view-cities", "create-cities", "update-cities",
+            "view-categories", "create-categories", "update-categories",
+            "view-subcategories", "create-subcategories", "update-subcategories",
+            # Tours (base, no delete)
+            "view-tours", "create-tours", "update-tours",
+            # Bookings / Cancellations (base, no delete)
+            "view-bookings", "create-bookings", "update-bookings",
+            "view-cancellations", "update-cancellations",
+            # Payments (view only, base)
+            "view-payments", "payments.summary",
+            # Supplier Ledger (view only)
+            "view-supplier_ledger",
+            # Reports / Invoices (base)
+            "view-reports", "view-invoices",
+            # Notifications (base)
+            "view-notifications", "create-notifications", "update-notifications",
+            # Activity Logs (view only)
+            "view-activity_logs",
+            # Sessions (view only)
+            "view-sessions",
+            # Email (no delete)
+            "view-email", "create-email", "update-email", "email_templates.view", "email_templates.create", "email_templates.edit",
+            # Settings (view only)
+            "view-settings", "settings.view",
+            # Website CMS (no delete)
+            "view-website_cms", "create-website_cms", "update-website_cms",
+            # Profile
+            "view-profile", "update-profile", "profile.view",
+            # All operational granular permissions
+            *_all_operational,
+            # Week granular — exclude system-only actions
+            *_week_no_system,
         ],
+
+        # ------------------------------------------------------------------
+        # Supplier — own data: tours, bookings on their tours, financials
+        # ------------------------------------------------------------------
         supplier: [
-            "view-dashboard",
-            "dashboard.view",
-            "dashboard.summary",
-            "dashboard.charts",
-            "dashboard.activities",
-            "dashboard.alerts",
-            "view-suppliers",
-            "update-suppliers",
-            "view-tours",
-            "create-tours",
-            "update-tours",
+            # Dashboard (limited)
+            "view-dashboard", "dashboard.view", "dashboard.summary",
+            # Supplier own profile
+            "view-suppliers", "update-suppliers",
+            "suppliers.view", "suppliers.edit", "suppliers.view_documents", "suppliers.request_commission",
+            # Tours (create & manage own tours)
+            "view-tours", "create-tours", "update-tours",
+            "tours.view", "tours.create", "tours.edit", "tours.publish",
+            # Bookings (view & status updates for their tours)
             "view-bookings",
-            "update-bookings",
+            "bookings.view", "bookings.update_status", "bookings.view_history", "bookings.view_payments",
+            # Cancellations (view only)
+            "view-cancellations",
+            "cancellations.view",
+            # Payments (view only)
             "view-payments",
+            "payments.view",
+            # Reports (supplier-scoped)
             "view-reports",
-            "view-profile",
-            "profile.view",
-            "update-profile",
-            "suppliers.view",
-            "suppliers.edit",
-            "suppliers.view_documents",
-            "tours.view",
-            "tours.create",
-            "tours.edit",
+            "reports.view", "reports.supplier",
+            # Invoices (view + download)
+            "view-invoices",
+            "invoices.view", "invoices.download",
+            # Notifications
+            "view-notifications",
+            "notifications.view",
+            # Supplier Ledger (view own payouts)
+            "view-supplier_ledger",
+            "supplier_ledger.view",
+            # Profile
+            "view-profile", "update-profile", "profile.view",
         ],
+
+        # ------------------------------------------------------------------
+        # Agent / Reseller — customer bookings and their own account
+        # ------------------------------------------------------------------
         agent_reseller: [
-            "view-dashboard",
-            "dashboard.view",
-            "dashboard.summary",
-            "dashboard.charts",
-            "dashboard.activities",
-            "dashboard.alerts",
-            "view-agents",
-            "update-agents",
-            "view-resellers",
-            "update-resellers",
-            "view-customers",
-            "create-customers",
-            "update-customers",
-            "customers.view",
-            "customers.create",
-            "customers.edit",
-            "customers.block",
-            "customers.unblock",
-            "customers.reset_password",
-            "customers.view_bookings",
-            "customers.view_payments",
-            "customers.view_communications",
-            "customers.communicate",
+            # Dashboard (limited)
+            "view-dashboard", "dashboard.view", "dashboard.summary",
+            # Agent own profile
+            "view-agents", "update-agents",
+            "agents.view", "agents.edit",
+            # Resellers
+            "view-resellers", "update-resellers",
+            # Customer management
+            "view-customers", "create-customers", "update-customers",
+            "customers.view", "customers.create", "customers.edit",
+            "customers.block", "customers.unblock", "customers.reset_password",
+            "customers.view_bookings", "customers.view_payments",
+            "customers.view_communications", "customers.communicate",
+            # Tours (view only)
             "view-tours",
-            "view-bookings",
-            "create-bookings",
-            "update-bookings",
-            "view-payments",
-            "payments.view",
-            "view-reports",
-            "reports.view",
-            "view-profile",
-            "profile.view",
-            "update-profile",
-            "agents.view",
-            "agents.edit",
             "tours.view",
-        ],
-        customer: [
-            "view-dashboard",
-            "dashboard.view",
-            "dashboard.summary",
-            "dashboard.charts",
-            "dashboard.activities",
-            "dashboard.alerts",
-            "view-tours",
-            "view-bookings",
-            "bookings.view",
-            "create-bookings",
+            # Bookings (create + manage)
+            "view-bookings", "create-bookings", "update-bookings",
+            "bookings.view", "bookings.create", "bookings.view_history", "bookings.view_payments",
+            # Cancellations (view only)
+            "view-cancellations",
+            "cancellations.view",
+            # Payments (view only)
             "view-payments",
             "payments.view",
-            "view-profile",
-            "profile.view",
-            "update-profile",
+            # Reports (agent-scoped)
+            "view-reports",
+            "reports.view", "reports.agent",
+            # Invoices (view + download)
+            "view-invoices",
+            "invoices.view", "invoices.download",
+            # Notifications
+            "view-notifications",
+            "notifications.view",
+            # Profile
+            "view-profile", "update-profile", "profile.view",
+        ],
+
+        # ------------------------------------------------------------------
+        # Customer — self-service: browse, book, pay, view own data
+        # ------------------------------------------------------------------
+        customer: [
+            # Dashboard (minimal)
+            "view-dashboard", "dashboard.view",
+            # Tours (browse only)
+            "view-tours",
+            "tours.view",
+            # Bookings (create + view own)
+            "view-bookings", "create-bookings",
+            "bookings.view", "bookings.create",
+            # Cancellations (submit request, view own)
+            "view-cancellations",
+            "cancellations.view",
+            # Payments (view own)
+            "view-payments",
+            "payments.view",
+            # Invoices (view + download own)
+            "view-invoices",
+            "invoices.view", "invoices.download",
+            # Notifications
+            "view-notifications",
+            "notifications.view",
+            # Profile
+            "view-profile", "update-profile", "profile.view",
         ],
     }
 
-    week_permission_slugs = [f"{module}.{action}" for module, _label, actions in WEEK_11_15_PERMISSIONS for action in actions]
-    if admin:
-        default_role_permissions.setdefault(admin, []).extend(week_permission_slugs)
-    if sub_admin:
-        default_role_permissions.setdefault(sub_admin, []).extend([
-            slug for slug in week_permission_slugs
-            if not slug.endswith(".manage_settings") and not slug.endswith(".force_logout")
-        ])
-    if supplier:
-        default_role_permissions.setdefault(supplier, []).extend(["bookings.view", "bookings.update_status", "bookings.view_history", "payments.view", "reports.supplier", "notifications.view"])
-    if agent_reseller:
-        default_role_permissions.setdefault(agent_reseller, []).extend(["bookings.view", "bookings.create", "bookings.view_history", "payments.view", "reports.agent", "notifications.view"])
-    if customer:
-        default_role_permissions.setdefault(customer, []).extend(["bookings.view", "bookings.create", "payments.view", "invoices.view", "invoices.download", "notifications.view"])
     for role, permission_slugs in default_role_permissions.items():
         if not role:
             continue
-
         for slug in permission_slugs:
             permission = permissions_by_slug.get(slug)
-
             if permission:
                 assign_if_missing(db, role, permission)
 
     db.commit()
-    seed_demo_tour_if_empty(db)
-
-

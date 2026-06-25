@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, Request, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.modules.agents.models import Agent
 from app.modules.agents.schemas import AgentCreate, AgentDiscountRequest, AgentUpdate
 from app.modules.agents.service import approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
 from app.modules.auth.schemas import RegisterSchema, VerifyEmailSchema
@@ -27,6 +28,12 @@ def _registration_with_role(db: Session, data: RegisterSchema, role_slug: str):
 @router.post("/register")
 def register_agent(data: RegisterSchema, db: Session = Depends(get_db)):
     user = _registration_with_role(db, data, "agent-reseller")
+    try:
+        from app.modules.common.notification_triggers import notify_agent_registered
+        notify_agent_registered(db, agent_id=0, agent_name=user.name or user.email, user_id=user.id)
+        db.commit()
+    except Exception:
+        pass
     return {"status": "success", "message": "Agent registration received", "data": {"id": user.id, "email": user.email, "approval_status": user.approval_status}}
 
 
@@ -55,6 +62,23 @@ def agents(params: dict = Depends(pagination_params), country_id: str = Query(de
 @router.post("/")
 def add_agent(data: AgentCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.create", "create-agents"))):
     return {"status": "success", "message": "Agent created successfully", "data": create_agent(db, data, current_user, request)}
+
+
+@router.get("/me")
+def my_agent(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    return {"status": "success", "data": serialize_agent(agent)}
+
+
+@router.put("/me")
+@router.patch("/me")
+def edit_my_agent(data: AgentUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent.id, data, current_user, request)}
 
 
 @router.get("/{agent_id}")

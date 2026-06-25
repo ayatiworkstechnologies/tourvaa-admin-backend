@@ -256,15 +256,20 @@ def my_dashboard(
     # Approval status for supplier/agent/affiliate
     profile_status = None
     approval_status = None
+    supplier_id = None
+    agent_id = None
+    affiliate_id = None
 
     if role_slug == "supplier":
         supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
         if supplier:
+            supplier_id = supplier.id
             profile_status = supplier.status
             approval_status = supplier.approval_status
     elif role_slug == "agent-reseller":
         agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
         if agent:
+            agent_id = agent.id
             profile_status = agent.status
             approval_status = agent.approval_status
     elif role_slug == "affiliate":
@@ -272,6 +277,7 @@ def my_dashboard(
             (Affiliate.user_id == current_user.id) | (Affiliate.email == current_user.email)
         ).first()
         if affiliate:
+            affiliate_id = affiliate.id
             profile_status = affiliate.status
             approval_status = affiliate.approval_status
 
@@ -292,6 +298,9 @@ def my_dashboard(
                 "profile_status": profile_status,
                 "approval_status": approval_status,
                 "customer_id": (lambda c: c.id if c else None)(db.query(Customer).filter(Customer.user_id == current_user.id).first()) if role_slug == "customer" else None,
+                "supplier_id": supplier_id,
+                "agent_id": agent_id,
+                "affiliate_id": affiliate_id,
             },
             "permissions": [
                 {

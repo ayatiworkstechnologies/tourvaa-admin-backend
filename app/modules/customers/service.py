@@ -44,6 +44,9 @@ def serialize_customer(customer: Customer, db: Session | None = None):
         "amount_paid": float(customer.total_amount_paid or 0),
         "amount_pending": float(customer.total_amount_pending or 0),
     }
+    country_name = customer.country_ref.country_name if customer.country_ref else customer.country
+    city_name = customer.city_ref.city_name if customer.city_ref else customer.city
+    state_name = customer.city_ref.state.state_name if customer.city_ref and customer.city_ref.state else customer.state
     return {
         "id": customer.id,
         "user_id": customer.user_id,
@@ -63,6 +66,9 @@ def serialize_customer(customer: Customer, db: Session | None = None):
         "country": customer.country,
         "state": customer.state,
         "city": customer.city,
+        "country_name": country_name,
+        "state_name": state_name,
+        "city_name": city_name,
         "pincode": customer.pincode,
         "status": customer.status,
         "is_blocked": customer.is_blocked,
@@ -147,7 +153,11 @@ def get_customers(
         )
 
     if country:
-        query = query.filter(Customer.country.ilike(f"%{country.strip()}%"))
+        country_value = country.strip()
+        if country_value.isdigit():
+            query = query.filter(Customer.country_id == int(country_value))
+        else:
+            query = query.filter(Customer.country.ilike(f"%{country_value}%"))
 
     if status:
         query = query.filter(Customer.status == status.strip().lower())
@@ -350,6 +360,13 @@ def update_customer(
         if existing:
             raise HTTPException(status_code=400, detail="Customer email already exists")
         customer.email = email
+
+    if data.full_name is not None and (data.first_name is None or data.last_name is None):
+        first_name, last_name = _split_name(data.full_name)
+        if data.first_name is None:
+            customer.first_name = first_name
+        if data.last_name is None:
+            customer.last_name = last_name
 
     for field in [
         "first_name",

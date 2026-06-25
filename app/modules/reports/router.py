@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.agents.models import Agent
+from app.modules.audit.models import AuditLog
 from app.modules.bookings.models import Booking
 from app.modules.cms.models import Country
 from app.modules.common.auth import require_any_permission
@@ -89,3 +90,105 @@ def customer_report(db: Session = Depends(get_db), _=Depends(require_any_permiss
 @router.get("/exports")
 def exports(format: str = Query(default="json"), db: Session = Depends(get_db), _=Depends(require_any_permission("reports.export"))):
     return summary(db)
+
+
+@router.get("/snapshot")
+def snapshot(db: Session = Depends(get_db), _=Depends(require_any_permission("reports.view"))):
+    now = utcnow()
+    curr_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if now.month == 1:
+        last_start = curr_start.replace(year=now.year - 1, month=12)
+    else:
+        last_start = curr_start.replace(month=now.month - 1)
+
+    # Booking Performance
+    total_bookings = db.query(func.count(Booking.id)).scalar() or 0
+    curr_bookings = db.query(func.count(Booking.id)).filter(Booking.created_at >= curr_start).scalar() or 0
+    last_bookings = db.query(func.count(Booking.id)).filter(Booking.created_at >= last_start, Booking.created_at < curr_start).scalar() or 0
+    booking_change = round(((curr_bookings - last_bookings) / last_bookings * 100) if last_bookings > 0 else 0, 1)
+
+    # Revenue Summary
+    total_revenue = db.query(func.coalesce(func.sum(Payment.captured_amount), 0)).filter(Payment.payment_status.notin_(["voided", "failed"])).scalar() or 0
+    curr_revenue = db.query(func.coalesce(func.sum(Payment.captured_amount), 0)).filter(Payment.payment_status.notin_(["voided", "failed"]), Payment.created_at >= curr_start).scalar() or 0
+    last_revenue = db.query(func.coalesce(func.sum(Payment.captured_amount), 0)).filter(Payment.payment_status.notin_(["voided", "failed"]), Payment.created_at >= last_start, Payment.created_at < curr_start).scalar() or 0
+    revenue_change = round(((float(curr_revenue) - float(last_revenue)) / float(last_revenue) * 100) if float(last_revenue) > 0 else 0, 1)
+
+    # Supplier Approval
+    total_suppliers = db.query(func.count(Supplier.id)).scalar() or 0
+    pending_suppliers = db.query(func.count(Supplier.id)).filter(Supplier.approval_status == "pending").scalar() or 0
+
+    # Agent Sales
+    agent_total = db.query(func.count(Booking.id)).filter(Booking.agent_id.isnot(None)).scalar() or 0
+    agent_curr = db.query(func.count(Booking.id)).filter(Booking.agent_id.isnot(None), Booking.created_at >= curr_start).scalar() or 0
+    agent_last = db.query(func.count(Booking.id)).filter(Booking.agent_id.isnot(None), Booking.created_at >= last_start, Booking.created_at < curr_start).scalar() or 0
+    agent_change = round(((agent_curr - agent_last) / agent_last * 100) if agent_last > 0 else 0, 1)
+
+    # Payment Collection
+    total_final = float(db.query(func.coalesce(func.sum(Booking.final_amount), 0)).scalar() or 0)
+    total_paid = float(db.query(func.coalesce(func.sum(Booking.amount_paid), 0)).scalar() or 0)
+    total_pending_amt = float(db.query(func.coalesce(func.sum(Booking.amount_pending), 0)).scalar() or 0)
+    collected_pct = round((total_paid / total_final * 100) if total_final > 0 else 0, 1)
+    pending_pct = round(100 - collected_pct, 1)
+
+    # Country-wise
+    country_count = db.query(func.count(func.distinct(Booking.country_id))).filter(Booking.country_id.isnot(None)).scalar() or 0
+
+    # Recent exports from audit log
+    export_logs = (
+        db.query(AuditLog)
+        .filter(AuditLog.entity_type == "report", AuditLog.action == "export_report")
+        .order_by(AuditLog.id.desc())
+        .limit(5)
+        .all()
+    )
+    recent_exports = [
+        {
+            "id": log.id,
+            "label": (log.new_values or {}).get("label", "Report Export"),
+            "format": (log.new_values or {}).get("format", "CSV").upper(),
+            "exported_at": log.created_at,
+        }
+        for log in export_logs
+    ]
+
+    return {
+        "status": "success",
+        "data": {
+            "booking_performance": {
+                "total": total_bookings,
+                "current_month": curr_bookings,
+                "change_pct": booking_change,
+            },
+            "revenue_summary": {
+                "total": _money(total_revenue),
+                "total_raw": float(total_revenue),
+                "current_month": _money(curr_revenue),
+                "change_pct": revenue_change,
+            },
+            "supplier_approval": {
+                "total": total_suppliers,
+                "pending": pending_suppliers,
+            },
+            "agent_sales": {
+                "total": agent_total,
+                "current_month": agent_curr,
+                "change_pct": agent_change,
+            },
+            "payment_collection": {
+                "collected_pct": collected_pct,
+                "pending_pct": pending_pct,
+                "total_amount": _money(total_final),
+                "collected_amount": _money(total_paid),
+                "pending_amount": _money(total_pending_amt),
+            },
+            "country_wise": {
+                "country_count": country_count,
+            },
+            "meta": {
+                "report_types": 6,
+                "scheduled": 0,
+                "total_exports": db.query(func.count(AuditLog.id)).filter(AuditLog.entity_type == "report", AuditLog.action == "export_report").scalar() or 0,
+            },
+            "recent_exports": recent_exports,
+        },
+    }

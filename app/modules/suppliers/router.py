@@ -74,6 +74,45 @@ def add_supplier(data: SupplierCreate, request: Request, db: Session = Depends(g
     return {"status": "success", "message": "Supplier created successfully", "data": create_supplier(db, data, current_user, request)}
 
 
+@router.get("/me")
+def my_supplier(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.suppliers.models import Supplier
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    return {"status": "success", "data": serialize_supplier(supplier)}
+
+
+@router.patch("/me")
+@router.put("/me")
+def edit_my_supplier(data: SupplierUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.suppliers.models import Supplier
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    return {"status": "success", "message": "Supplier updated successfully", "data": update_supplier(db, supplier.id, data, current_user, request)}
+
+
+@router.post("/me/commission-request")
+def request_my_commission(data: SupplierMarkupRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.suppliers.models import Supplier
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    supplier.markup_type = data.markup_type
+    supplier.markup_value = data.markup_value
+    supplier.approval_status = "admin_review_pending"
+    supplier.pending_requirements = "Commission request pending admin approval"
+    try:
+        from app.modules.common.notification_triggers import notify_supplier_commission_requested
+        notify_supplier_commission_requested(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=current_user.id)
+    except Exception:
+        pass
+    db.commit()
+    db.refresh(supplier)
+    return {"status": "success", "message": "Commission request submitted", "data": serialize_supplier(supplier)}
+
+
 @router.get("/{supplier_id}")
 def supplier_detail(supplier_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     supplier = get_supplier(db, supplier_id)

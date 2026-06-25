@@ -265,11 +265,13 @@ def partial_approve_item(db: Session, item, data: PartialApprovalRequest, actor:
     log_audit(db, actor=actor, action=f"partial_approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
     # Notify supplier of partial approval with pending requirements
     try:
-        from app.modules.common.notification_triggers import notify_supplier_reupload_requested
+        from app.modules.common.notification_triggers import notify_supplier_reupload_requested, notify_agent_changes_requested
         user_id = _entity_user_id(item)
         name = _entity_name(item)
         if entity_type == "supplier":
             notify_supplier_reupload_requested(db, supplier_id=item.id, supplier_name=name, requirements=data.pending_requirements, user_id=user_id)
+        elif entity_type == "agent":
+            notify_agent_changes_requested(db, agent_id=item.id, agent_name=name, requirements=data.pending_requirements, user_id=user_id)
     except Exception:
         pass
     db.commit()

@@ -43,6 +43,50 @@ def notify_supplier_reupload_requested(db: Session, *, supplier_id: int, supplie
     db.flush()
 
 
+def notify_supplier_commission_requested(db: Session, *, supplier_id: int, supplier_name: str, markup_type: str, markup_value: float, user_id: int | None = None):
+    notify_admins(
+        db,
+        notification_type="supplier_commission_requested",
+        title="Supplier Commission Request",
+        message=f"Supplier '{supplier_name}' requested {markup_value} {markup_type} commission/markup approval.",
+        entity_type="supplier",
+        entity_id=supplier_id,
+    )
+    if user_id:
+        enqueue_notification(
+            db,
+            user_id=user_id,
+            notification_type="supplier_commission_requested",
+            title="Commission request submitted",
+            message="Your commission request was sent to admin for approval.",
+            entity_type="supplier",
+            entity_id=supplier_id,
+        )
+    db.flush()
+
+
+def notify_supplier_commission_approved(db: Session, *, supplier_id: int, supplier_name: str, markup_type: str, markup_value: float, user_id: int | None = None):
+    notify_admins(
+        db,
+        notification_type="supplier_commission_approved",
+        title="Supplier Commission Approved",
+        message=f"Commission for supplier '{supplier_name}' approved as {markup_value} {markup_type}.",
+        entity_type="supplier",
+        entity_id=supplier_id,
+    )
+    if user_id:
+        enqueue_notification(
+            db,
+            user_id=user_id,
+            notification_type="supplier_commission_approved",
+            title="Commission request approved",
+            message=f"Your commission request was approved as {markup_value} {markup_type}.",
+            entity_type="supplier",
+            entity_id=supplier_id,
+        )
+    db.flush()
+
+
 # ---------------------------------------------------------------------------
 # Agent events
 # ---------------------------------------------------------------------------
@@ -50,6 +94,17 @@ def notify_supplier_reupload_requested(db: Session, *, supplier_id: int, supplie
 
 def notify_agent_registered(db: Session, *, agent_id: int, agent_name: str, user_id: int | None = None):
     notify_admins(db, notification_type="agent_registered", title="New Agent Registered", message=f"Agent/reseller '{agent_name}' has registered and is awaiting approval.", entity_type="agent", entity_id=agent_id)
+    db.flush()
+
+
+def notify_agent_submitted_verification(db: Session, *, agent_id: int, agent_name: str, user_id: int | None = None):
+    notify_admins(db, notification_type="agent_submitted_verification", title="Agent Submitted for Review", message=f"Agent '{agent_name}' has submitted their profile for admin review.", entity_type="agent", entity_id=agent_id)
+    db.flush()
+
+
+def notify_agent_changes_requested(db: Session, *, agent_id: int, agent_name: str, requirements: str = "", user_id: int | None = None):
+    if user_id:
+        enqueue_notification(db, user_id=user_id, notification_type="agent_changes_requested", title="Agent Profile Changes Required", message=f"Please update your agent profile '{agent_name}'. Required: {requirements}", entity_type="agent", entity_id=agent_id)
     db.flush()
 
 
