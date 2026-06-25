@@ -9,6 +9,7 @@ from app.modules.customers.schemas import (
     CustomerCreate,
     CustomerStatusUpdate,
     CustomerUpdate,
+    CustomerProfileUpdate,
     SendCustomerMessageRequest,
 )
 from app.modules.bookings.schemas import BookingCreate
@@ -24,6 +25,7 @@ from app.modules.customers.service import (
     get_customers,
     reset_customer_password,
     send_customer_message,
+    serialize_customer,
     unblock_customer,
     update_customer,
     update_customer_status,
@@ -91,6 +93,46 @@ def add_customer(
         "message": "Customer created successfully",
         "data": create_customer(db, data, actor=current_user, request=request),
     }
+
+
+@router.get("/me")
+def my_customer(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    customer = db.query(Customer).filter(Customer.user_id == current_user.id).first()
+    if not customer:
+        customer = db.query(Customer).filter(Customer.email == current_user.email).first()
+        if customer:
+            customer.user_id = current_user.id
+            db.commit()
+            db.refresh(customer)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer profile not found")
+    return {"status": "success", "data": serialize_customer(customer)}
+
+
+@router.put("/me")
+@router.patch("/me")
+def edit_my_customer(data: CustomerProfileUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    customer = db.query(Customer).filter(Customer.user_id == current_user.id).first()
+    if not customer:
+        customer = db.query(Customer).filter(Customer.email == current_user.email).first()
+        if customer:
+            customer.user_id = current_user.id
+            db.commit()
+            db.refresh(customer)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer profile not found")
+    update_data = CustomerUpdate(**data.model_dump(exclude_unset=True))
+    updated = update_customer(db, customer.id, update_data, actor=current_user, request=request)
+    current_user.name = updated.get("full_name") or current_user.name
+    current_user.phone = updated.get("phone") or current_user.phone
+    current_user.profile_image = updated.get("profile_image") or current_user.profile_image
+    current_user.address = updated.get("address") or updated.get("address_line_1") or current_user.address
+    current_user.country = updated.get("country_name") or updated.get("country") or current_user.country
+    current_user.state = updated.get("state_name") or updated.get("state") or current_user.state
+    current_user.city = updated.get("city_name") or updated.get("city") or current_user.city
+    current_user.pincode = updated.get("pincode") or updated.get("postal_code") or current_user.pincode
+    db.commit()
+    return {"status": "success", "message": "Customer updated successfully", "data": updated}
 
 
 @router.get("/{customer_id}")

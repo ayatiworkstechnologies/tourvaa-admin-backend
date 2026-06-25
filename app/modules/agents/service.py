@@ -1,8 +1,8 @@
-from fastapi import Request
+from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import log_audit
-from app.modules.agents.models import Agent
+from app.modules.agents.models import Agent, AgentBusinessInfo, AgentContact, AgentInvoicing
 from app.modules.agents.schemas import AgentCreate, AgentDiscountRequest, AgentUpdate
 from app.modules.operations import PartialApprovalRequest, RejectRequest, approve_item, code_for, filter_review_query, get_or_404, partial_approve_item, reject_item, relationship_list, serialize_common_review, simple_paginate
 from app.modules.users.models import User
@@ -13,7 +13,25 @@ def _contact(item):
 
 
 def _document(item):
-    return {key: getattr(item, key) for key in ["id", "document_type", "document_name", "file_path", "file_size", "mime_type", "status", "rejection_reason", "uploaded_at", "reviewed_at", "reviewed_by"]}
+    file_path = item.file_path or ""
+    file_url = file_path
+    if file_path and not file_path.startswith("http"):
+        file_url = file_path if file_path.startswith("/") else "/storage/" + file_path
+    return {
+        "id": item.id,
+        "document_type": item.document_type,
+        "document_name": item.document_name,
+        "file_path": item.file_path,
+        "file_url": file_url,
+        "file_size": item.file_size,
+        "mime_type": item.mime_type,
+        "status": item.status,
+        "rejection_reason": item.rejection_reason,
+        "notes": item.rejection_reason,
+        "uploaded_at": item.uploaded_at,
+        "reviewed_at": item.reviewed_at,
+        "reviewed_by": item.reviewed_by,
+    }
 
 
 def serialize_agent(item: Agent):
@@ -73,8 +91,40 @@ def create_agent(db: Session, data: AgentCreate, actor: User, request: Request |
 def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, request: Request | None = None):
     item = get_agent(db, agent_id)
     old = serialize_agent(item)
-    for key, value in data.model_dump(exclude_unset=True).items():
+    update_data = data.model_dump(exclude_unset=True)
+    contact_data = update_data.pop("contact", None)
+    business_data = update_data.pop("business_info", None)
+    invoicing_data = update_data.pop("invoicing", None)
+
+    for key, value in update_data.items():
         setattr(item, key, value)
+
+    if contact_data:
+        primary = item.contacts[0] if item.contacts else None
+        if not primary:
+            primary = AgentContact(agent_id=item.id, is_primary=True)
+            db.add(primary)
+            item.contacts.append(primary)
+        for key, value in contact_data.items():
+            if value is not None:
+                setattr(primary, key, value)
+
+    if business_data:
+        if not item.business_info:
+            item.business_info = AgentBusinessInfo(agent_id=item.id)
+            db.add(item.business_info)
+        for key, value in business_data.items():
+            if value is not None:
+                setattr(item.business_info, key, value)
+
+    if invoicing_data:
+        if not item.invoicing:
+            item.invoicing = AgentInvoicing(agent_id=item.id)
+            db.add(item.invoicing)
+        for key, value in invoicing_data.items():
+            if value is not None:
+                setattr(item.invoicing, key, value)
+
     log_audit(db, actor=actor, action="update_agent", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)
@@ -114,6 +164,11 @@ def submit_agent_verification(db: Session, user: User, request: Request | None =
     agent.rejection_reason = None
     agent.pending_requirements = None
     log_audit(db, actor=user, action="submit_agent_verification", entity_type="agent", entity_id=agent.id, old_values=old, new_values=serialize_agent(agent), request=request)
+    try:
+        from app.modules.common.notification_triggers import notify_agent_submitted_verification
+        notify_agent_submitted_verification(db, agent_id=agent.id, agent_name=agent.agent_name, user_id=user.id)
+    except Exception:
+        pass
     db.commit()
     db.refresh(agent)
     return serialize_agent(agent)

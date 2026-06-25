@@ -39,6 +39,8 @@ _job: dict = {
     "running": False,
     "done": False,
     "error": None,
+    "phase": 0,          # 1=countries, 2=states, 3=cities
+    "phase_name": "",
     "total": 0,
     "processed": 0,
     "current": "",
@@ -65,25 +67,26 @@ def _api_get(url: str) -> list:
 def _upsert_country(conn, name: str, iso2: str, phone: str, currency: str) -> int | None:
     if not name or not iso2:
         return None
-    row = conn.execute(text("SELECT id FROM countries WHERE country_code=:c"), {"c": iso2}).fetchone()
-    if row:
-        conn.execute(
-            text("UPDATE countries SET country_name=:n, phone_code=:p, currency_code=:cu WHERE country_code=:c"),
-            {"n": name, "p": phone, "cu": currency, "c": iso2},
-        )
-        return row[0]
-    conn.execute(
-        text("INSERT INTO countries (country_name, country_code, phone_code, currency_code, status) "
-             "VALUES (:n, :c, :p, :cu, 'active')"),
+    # Single atomic statement — no SELECT+UPDATE race, no lock contention
+    result = conn.execute(
+        text(
+            "INSERT INTO countries (country_name, country_code, phone_code, currency_code, status) "
+            "VALUES (:n, :c, :p, :cu, 'active') "
+            "ON DUPLICATE KEY UPDATE country_name=VALUES(country_name), "
+            "phone_code=VALUES(phone_code), currency_code=VALUES(currency_code)"
+        ),
         {"n": name, "c": iso2, "p": phone, "cu": currency},
     )
-    with _lock:
-        _job["countries_added"] += 1
+    if result.rowcount == 1:
+        with _lock:
+            _job["countries_added"] += 1
     row = conn.execute(text("SELECT id FROM countries WHERE country_code=:c"), {"c": iso2}).fetchone()
     return row[0] if row else None
 
 
 def _upsert_state(conn, country_id: int, name: str, code: str) -> int | None:
+    # No unique constraint on states — SELECT first (read-only, no lock), INSERT only if absent.
+    # Deliberately skip UPDATE on existing rows to avoid write-lock contention.
     if not name:
         return None
     row = conn.execute(
@@ -91,7 +94,6 @@ def _upsert_state(conn, country_id: int, name: str, code: str) -> int | None:
         {"cid": country_id, "n": name},
     ).fetchone()
     if row:
-        conn.execute(text("UPDATE states SET state_code=:sc WHERE id=:id"), {"sc": code, "id": row[0]})
         return row[0]
     conn.execute(
         text("INSERT INTO states (country_id, state_name, state_code, status) VALUES (:cid, :n, :sc, 'active')"),
@@ -107,6 +109,7 @@ def _upsert_state(conn, country_id: int, name: str, code: str) -> int | None:
 
 
 def _upsert_city(conn, country_id: int, state_id: int, name: str) -> None:
+    # No unique constraint on cities — SELECT first, INSERT only if absent.
     if not name:
         return
     exists = conn.execute(
@@ -232,6 +235,120 @@ def _run_import(country_codes: list[str], include_cities: bool) -> None:
 
     except Exception as e:
         logger.exception("Geo seed failed: %s", e)
+        with _lock:
+            _job.update({"running": False, "done": True, "error": str(e), "current": "Failed"})
+
+
+def _run_phased(country_codes: list[str]) -> None:
+    """
+    Three-pass import: downloads GitHub JSON ONCE, then:
+      Phase 1 — upsert all countries
+      Phase 2 — upsert all states
+      Phase 3 — upsert all cities
+    Exposes _job["phase"] (1/2/3) so callers can render per-phase progress.
+    """
+    codes = {c.upper() for c in country_codes}
+
+    with _lock:
+        _job.update({
+            "running": True, "done": False, "error": None,
+            "phase": 0, "phase_name": "Downloading",
+            "total": 0, "processed": 0, "current": "Downloading from GitHub...",
+            "countries_added": 0, "states_added": 0, "cities_added": 0,
+        })
+
+    try:
+        # ── Download once ────────────────────────────────────────────────────
+        try:
+            resp = requests.get(GITHUB_URL, timeout=120)
+            resp.raise_for_status()
+            dataset: list[dict] = resp.json()
+        except Exception as gh_err:
+            logger.warning("GitHub failed (%s) — falling back to _run_import", gh_err)
+            _run_import(country_codes, include_cities=True)
+            return
+
+        if codes:
+            dataset = [c for c in dataset if (c.get("iso2") or "").upper() in codes]
+
+        with engine.connect() as conn:
+
+            # ── Phase 1: Countries ───────────────────────────────────────────
+            with _lock:
+                _job.update({
+                    "phase": 1, "phase_name": "Countries",
+                    "total": len(dataset), "processed": 0, "current": "Starting...",
+                })
+
+            # country_map: iso2 → (db_id, raw_record)
+            country_map: dict[str, tuple[int, dict]] = {}
+            for i, c in enumerate(dataset, 1):
+                name = (c.get("name") or "").strip()
+                iso2 = (c.get("iso2") or "").strip()
+                with _lock:
+                    _job["current"] = f"{name} ({iso2})"
+                    _job["processed"] = i
+                cid = _upsert_country(
+                    conn, name, iso2,
+                    str(c.get("phone_code") or ""),
+                    c.get("currency") or "",
+                )
+                if cid:
+                    country_map[iso2] = (cid, c)
+            conn.commit()
+
+            # ── Phase 2: States ──────────────────────────────────────────────
+            states_flat = [
+                (iso2, data[0], s)
+                for iso2, data in country_map.items()
+                for s in (data[1].get("states") or [])
+            ]
+            with _lock:
+                _job.update({
+                    "phase": 2, "phase_name": "States",
+                    "total": len(states_flat), "processed": 0, "current": "Starting...",
+                })
+
+            # state_map: (iso2, state_name) → (db_id, raw_state_record)
+            state_map: dict[tuple, tuple[int, dict]] = {}
+            for i, (iso2, country_id, s) in enumerate(states_flat, 1):
+                s_name = (s.get("name") or "").strip()
+                s_code = (s.get("state_code") or "").strip()
+                with _lock:
+                    _job["current"] = f"{s_name} ({iso2})"
+                    _job["processed"] = i
+                sid = _upsert_state(conn, country_id, s_name, s_code)
+                if sid:
+                    state_map[(iso2, s_name)] = (sid, s)
+            conn.commit()
+
+            # ── Phase 3: Cities ──────────────────────────────────────────────
+            cities_flat = [
+                (iso2, country_map[iso2][0], sid_data[0], city)
+                for (iso2, _s_name), sid_data in state_map.items()
+                for city in (sid_data[1].get("cities") or [])
+            ]
+            with _lock:
+                _job.update({
+                    "phase": 3, "phase_name": "Cities",
+                    "total": len(cities_flat), "processed": 0, "current": "Starting...",
+                })
+
+            for i, (iso2, country_id, state_id, city) in enumerate(cities_flat, 1):
+                city_name = (city.get("name") or "").strip()
+                with _lock:
+                    _job["current"] = city_name
+                    _job["processed"] = i
+                _upsert_city(conn, country_id, state_id, city_name)
+                if i % 5000 == 0:
+                    conn.commit()
+            conn.commit()
+
+        with _lock:
+            _job.update({"running": False, "done": True, "current": "Completed"})
+
+    except Exception as e:
+        logger.exception("Geo phased seed failed: %s", e)
         with _lock:
             _job.update({"running": False, "done": True, "error": str(e), "current": "Failed"})
 
