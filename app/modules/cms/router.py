@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.modules.cms.models import City, Country, Tour, TourCategory, TourSubcategory
-from app.modules.cms.schemas import CategoryPayload, CityPayload, CountryPayload, StatusUpdate, SubcategoryPayload, TourPayload
-from app.modules.cms.service import _category, _city, _country, _subcategory, _tour, get_tour, list_categories, list_cities, list_countries, list_subcategories, list_tours, save_category, save_city, save_country, save_subcategory, save_tour, update_status
-from app.modules.common.auth import require_any_permission
+from app.modules.cms.models import City, Country, State, Tour, TourCategory, TourSubcategory
+from app.modules.cms.schemas import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourPayload
+from app.modules.cms.service import _category, _city, _country, _state, _subcategory, _tour, get_tour, list_categories, list_cities, list_countries, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_state, save_subcategory, save_tour, update_status
+from app.modules.common.auth import get_current_user, require_any_permission
 from app.modules.common.pagination import pagination_params
 from app.modules.users.models import User
 
@@ -23,7 +23,7 @@ router = APIRouter(tags=["CMS"])
 
 
 @router.get("/countries")
-def countries(params: dict = Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission("countries.view"))):
+def countries(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return {"status": "success", **list_countries(db, params["page"], params["limit"], params["search"])}
 
 
@@ -33,7 +33,7 @@ def add_country(data: CountryPayload, request: Request, db: Session = Depends(ge
 
 
 @router.get("/countries/{country_id}")
-def country_detail(country_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("countries.view"))):
+def country_detail(country_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.modules.operations import get_or_404
     return {"status": "success", "data": _country(get_or_404(db, Country, country_id, "Country"))}
 
@@ -48,9 +48,35 @@ def country_status(country_id: int, data: StatusUpdate, request: Request, db: Se
     return {"status": "success", "data": update_status(db, Country, _country, country_id, data, current_user, "country", request)}
 
 
+@router.get("/states")
+def states(params: dict = Depends(pagination_params), country_id: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", **list_states(db, params["page"], params["limit"], params["search"], country_id)}
+
+
+@router.post("/states")
+def add_state(data: StatePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("countries.create"))):
+    return {"status": "success", "data": save_state(db, data, current_user, request)}
+
+
+@router.get("/states/{state_id}")
+def state_detail(state_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.operations import get_or_404
+    return {"status": "success", "data": _state(get_or_404(db, State, state_id, "State"))}
+
+
+@router.put("/states/{state_id}")
+def edit_state(state_id: int, data: StatePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("countries.edit"))):
+    return {"status": "success", "data": save_state(db, data, current_user, request, state_id)}
+
+
+@router.patch("/states/{state_id}/status")
+def state_status(state_id: int, data: StatusUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("countries.edit"))):
+    return {"status": "success", "data": update_status(db, State, _state, state_id, data, current_user, "state", request)}
+
+
 @router.get("/cities")
-def cities(params: dict = Depends(pagination_params), country_id: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("cities.view"))):
-    return {"status": "success", **list_cities(db, params["page"], params["limit"], params["search"], country_id)}
+def cities(params: dict = Depends(pagination_params), country_id: str = Query(default=""), state_id: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", **list_cities(db, params["page"], params["limit"], params["search"], country_id, state_id)}
 
 
 @router.post("/cities")
@@ -59,7 +85,7 @@ def add_city(data: CityPayload, request: Request, db: Session = Depends(get_db),
 
 
 @router.get("/cities/{city_id}")
-def city_detail(city_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("cities.view"))):
+def city_detail(city_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.modules.operations import get_or_404
     return {"status": "success", "data": _city(get_or_404(db, City, city_id, "City"))}
 
@@ -141,6 +167,16 @@ def add_tour(data: TourPayload, request: Request, db: Session = Depends(get_db),
         # Auto-assign the supplier's own ID when creating from the supplier portal
         data = data.model_copy(update={"supplier_id": actor_supplier_id})
     return {"status": "success", "data": save_tour(db, data, current_user, request)}
+
+
+@router.get("/tours/categories")
+def tour_categories(
+    search: str = Query(default=""),
+    page: int = Query(default=1),
+    limit: int = Query(default=200),
+    db: Session = Depends(get_db),
+):
+    return {"status": "success", **list_categories(db, page, limit, search)}
 
 
 @router.get("/tours/{tour_id}")

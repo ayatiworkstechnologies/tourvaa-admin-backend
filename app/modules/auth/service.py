@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timedelta
+from datetime import datetime, timedelta
 import logging
 
 from fastapi import HTTPException
@@ -100,11 +100,23 @@ def get_auth_user_payload(db: Session, user: User):
     ]
 
     customer_id = None
+    supplier_id = None
+    agent_id = None
     role_slug = user.role.slug if user.role else ""
     if "customer" in role_slug:
         customer = db.query(Customer).filter(Customer.user_id == user.id).first()
         if customer:
             customer_id = customer.id
+    elif "supplier" in role_slug.lower():
+        from app.modules.suppliers.models import Supplier
+        supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+        if supplier:
+            supplier_id = supplier.id
+    elif "agent" in role_slug.lower():
+        from app.modules.agents.models import Agent
+        agent = db.query(Agent).filter(Agent.user_id == user.id).first()
+        if agent:
+            agent_id = agent.id
 
     return {
         "id": user.id,
@@ -120,6 +132,8 @@ def get_auth_user_payload(db: Session, user: User):
         "roles": roles,
         "permissions": permissions,
         "customer_id": customer_id,
+        "supplier_id": supplier_id,
+        "agent_id": agent_id,
     }
 
 
@@ -425,7 +439,8 @@ def verify_email(db: Session, token: str | None = ""):
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
     user.email_verified_at = datetime.utcnow()
-    customer = db.query(Customer).filter(Customer.user_id == user.id).first()
+    user_id_val = getattr(user, "id", None)
+    customer = db.query(Customer).filter(Customer.user_id == user_id_val).first() if user_id_val else None
     if customer:
         customer.email_verified = True
     user.email_verification_token = None
@@ -433,14 +448,20 @@ def verify_email(db: Session, token: str | None = ""):
 
     user_role = getattr(user, "role", None)
     role_slug = user_role.slug if user_role else ""
-    if role_slug == "supplier":
-        supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
-        if supplier and supplier.approval_status in {"pending", "email_verification_pending"}:
-            supplier.approval_status = "profile_incomplete"
-    elif role_slug == "agent-reseller":
-        agent = db.query(Agent).filter(Agent.user_id == user.id).first()
-        if agent and agent.approval_status in {"pending", "email_verification_pending"}:
-            agent.approval_status = "profile_incomplete"
+    user_id = getattr(user, "id", None)
+    if user_id:
+        if role_slug == "supplier":
+            supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+            if supplier and supplier.approval_status in {"pending", "email_verification_pending"}:
+                supplier.approval_status = "profile_incomplete"
+                user.approval_status = "profile_incomplete"
+                user.is_active = True
+        elif role_slug == "agent-reseller":
+            agent = db.query(Agent).filter(Agent.user_id == user.id).first()
+            if agent and agent.approval_status in {"pending", "email_verification_pending"}:
+                agent.approval_status = "profile_incomplete"
+                user.approval_status = "profile_incomplete"
+                user.is_active = True
 
     db.commit()
     return True

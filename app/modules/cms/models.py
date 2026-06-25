@@ -17,7 +17,23 @@ class Country(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    states = relationship("State", back_populates="country")
     cities = relationship("City", back_populates="country")
+
+
+class State(Base):
+    __tablename__ = "states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    country_id = Column(Integer, ForeignKey("countries.id"), nullable=False, index=True)
+    state_name = Column(String(150), nullable=False)
+    state_code = Column(String(10), default="", nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    country = relationship("Country", back_populates="states")
+    cities = relationship("City", back_populates="state")
 
 
 class City(Base):
@@ -25,12 +41,14 @@ class City(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=False, index=True)
+    state_id = Column(Integer, ForeignKey("states.id"), nullable=True, index=True)
     city_name = Column(String(120), nullable=False)
     status = Column(String(20), default="active", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     country = relationship("Country", back_populates="cities")
+    state = relationship("State", back_populates="cities")
 
 
 class TourCategory(Base):

@@ -108,7 +108,7 @@ def get_current_user(
     if token_version is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Token has expired")
 
-    if user.approval_status != "approved" or not user.is_active:
+    if user.approval_status not in {"approved", "profile_incomplete", "admin_review_pending", "partial_approved"} or not user.is_active:
         raise HTTPException(status_code=403, detail="User is not approved")
 
     if user.role and not user.role.is_active:
@@ -147,7 +147,7 @@ def require_portal(expected_portal: str):
             raise HTTPException(status_code=401, detail="Invalid user")
         if token_version is None or token_version != user.token_version:
             raise HTTPException(status_code=401, detail="Token has expired")
-        if user.approval_status != "approved" or not user.is_active:
+        if user.approval_status not in {"approved", "profile_incomplete", "admin_review_pending", "partial_approved"} or not user.is_active:
             raise HTTPException(status_code=403, detail="User is not approved")
         if user.role and not user.role.is_active:
             raise HTTPException(status_code=403, detail="Role is inactive")

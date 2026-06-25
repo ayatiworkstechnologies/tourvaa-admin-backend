@@ -66,7 +66,7 @@ def test_update_itinerary(headers, first_tour_id):
     if not _ITINERARY_ID:
         pytest.skip("No itinerary created")
     resp = requests.put(f"{BASE_URL}/tours/{first_tour_id}/itineraries/{_ITINERARY_ID}",
-                        headers=headers, json={"day_title": unique("Updated Day")}, timeout=10)
+                        headers=headers, json={"day_number": 1, "day_title": unique("Updated Day"), "location_name": "Dubai"}, timeout=10)
     assert resp.status_code in (200, 201, 204)
 
 
@@ -191,7 +191,7 @@ def test_update_gallery_image(headers, first_tour_id):
     if not _GALLERY_ID:
         pytest.skip("No gallery image created")
     resp = requests.put(f"{BASE_URL}/tours/{first_tour_id}/gallery/{_GALLERY_ID}",
-                        headers=headers, json={"image_title": unique("Updated Gallery")}, timeout=10)
+                        headers=headers, json={"image_path": "https://example.com/updated.jpg", "image_title": unique("Updated Gallery"), "image_type": "gallery"}, timeout=10)
     assert resp.status_code in (200, 201, 204)
 
 

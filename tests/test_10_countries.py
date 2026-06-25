@@ -37,10 +37,11 @@ def test_country_detail(headers):
 @skip_if_readonly()
 def test_create_country(headers):
     global _CREATED_ID
-    code = unique("TC")[:10]
+    import uuid
+    suffix = uuid.uuid4().hex[:4].upper()
     payload = {
         "country_name": unique("TestCountry"),
-        "country_code": code[:3].upper(),
+        "country_code": suffix,
         "phone_code": "+999",
         "currency_code": "TST",
     }
@@ -56,8 +57,10 @@ def test_create_country(headers):
 def test_update_country(headers):
     if not _CREATED_ID:
         pytest.skip("No country created to update")
+    import uuid
+    upd_code = uuid.uuid4().hex[:4].upper()
     resp = requests.put(f"{BASE_URL}/countries/{_CREATED_ID}", headers=headers,
-                        json={"country_name": unique("Updated")}, timeout=10)
+                        json={"country_name": unique("Updated"), "country_code": upd_code}, timeout=10)
     assert resp.status_code in (200, 201, 204)
 
 

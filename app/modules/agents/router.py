@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -6,10 +6,11 @@ from app.modules.agents.schemas import AgentCreate, AgentDiscountRequest, AgentU
 from app.modules.agents.service import approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
 from app.modules.auth.schemas import RegisterSchema, VerifyEmailSchema
 from app.modules.auth.service import register_user, verify_email
-from app.modules.common.auth import get_current_user, require_any_permission
+from app.modules.common.auth import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs
 from app.modules.common.pagination import pagination_params
 from app.modules.operations import PartialApprovalRequest, RejectRequest
 from app.modules.roles.models import Role
+from app.modules.permissions.models import Permission, RolePermission
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
@@ -57,12 +58,41 @@ def add_agent(data: AgentCreate, request: Request, db: Session = Depends(get_db)
 
 
 @router.get("/{agent_id}")
-def agent_detail(agent_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("agents.view", "view-agents"))):
-    return {"status": "success", "data": serialize_agent(get_agent(db, agent_id))}
+def agent_detail(agent_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    agent = get_agent(db, agent_id)
+    if agent.user_id != current_user.id:
+        role_ids = get_user_role_ids(current_user)
+        allowed_slugs = expand_permission_slugs(("agents.view", "view-agents"))
+        allowed = (
+            db.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id.in_(role_ids))
+            .filter(Permission.slug.in_(allowed_slugs))
+            .filter(Permission.is_active == True)
+            .first()
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Permission denied")
+    return {"status": "success", "data": serialize_agent(agent)}
 
 
 @router.put("/{agent_id}")
-def edit_agent(agent_id: int, data: AgentUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.edit", "update-agents"))):
+@router.patch("/{agent_id}")
+def edit_agent(agent_id: int, data: AgentUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    agent = get_agent(db, agent_id)
+    if agent.user_id != current_user.id:
+        role_ids = get_user_role_ids(current_user)
+        allowed_slugs = expand_permission_slugs(("agents.edit", "update-agents"))
+        allowed = (
+            db.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id.in_(role_ids))
+            .filter(Permission.slug.in_(allowed_slugs))
+            .filter(Permission.is_active == True)
+            .first()
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Permission denied")
     return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent_id, data, current_user, request)}
 
 

@@ -11,6 +11,8 @@ from app.modules.bookings.schemas import (
     BookingStatusUpdate,
     BookingUpdate,
     SupplierDecisionRequest,
+    SupplierPostponeRequest,
+    SupplierNotifyRequest,
 )
 from app.modules.bookings.service import (
     add_communication,
@@ -26,16 +28,23 @@ from app.modules.bookings.service import (
     get_status_history,
     get_upcoming_bookings,
     supplier_accept_booking,
+    supplier_cancel_booking,
+    supplier_complete_booking,
     supplier_decline_booking,
+    supplier_notify_parties,
+    supplier_postpone_booking,
     update_booking,
     update_booking_status,
 )
-from app.modules.common.auth import require_any_permission
+from app.modules.common.auth import require_any_permission, get_current_user
 from app.modules.common.pagination import pagination_params
+from app.modules.customers.models import CustomerCommunication
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 supplier_router = APIRouter(prefix="/supplier/bookings", tags=["Supplier Bookings"])
+supplier_portal_router = APIRouter(prefix="/supplier", tags=["Supplier Portal"])
+agent_portal_router = APIRouter(prefix="/agent", tags=["Agent Portal"])
 
 
 @router.get("")
@@ -151,5 +160,102 @@ def supplier_accept(booking_id: int, data: SupplierDecisionRequest, request: Req
 def supplier_decline(booking_id: int, data: SupplierDecisionRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
     return {"status": "success", "data": supplier_decline_booking(db, booking_id, data, current_user, request)}
 
+
+@supplier_router.patch("/{booking_id}/complete")
+def supplier_complete(booking_id: int, request: Request, data: SupplierDecisionRequest | None = None, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
+    reason = (data.reason if data else None) or "Tour completed by supplier"
+    return {"status": "success", "message": "Booking marked as completed", "data": supplier_complete_booking(db, booking_id, reason, current_user, request)}
+
+
+@supplier_router.patch("/{booking_id}/cancel")
+def supplier_cancel(booking_id: int, data: BookingCancelRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
+    return {"status": "success", "message": "Booking cancelled", "data": supplier_cancel_booking(db, booking_id, data.reason or "Cancelled by supplier", current_user, request)}
+
+
+@supplier_router.patch("/{booking_id}/postpone")
+def supplier_postpone(booking_id: int, data: SupplierPostponeRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
+    return {"status": "success", "message": "Booking postponed", "data": supplier_postpone_booking(db, booking_id, data.reason, data.new_tour_date, current_user, request)}
+
+
+@supplier_router.post("/{booking_id}/notify")
+def supplier_notify(booking_id: int, data: SupplierNotifyRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
+    return {"status": "success", "data": supplier_notify_parties(db, booking_id, data.message, data.notify_customer, data.notify_agent, current_user, request)}
+
+
+@supplier_router.get("/{booking_id}/status-history")
+def supplier_booking_history(booking_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
+    return {"status": "success", "data": get_status_history(db, booking_id, current_user)}
+
+
+def _serialize_portal_message(row: CustomerCommunication) -> dict:
+    return {
+        "id": row.id,
+        "subject": row.subject,
+        "message": row.message,
+        "message_type": row.message_type,
+        "email_status": row.email_status,
+        "sender_name": row.sender.name if row.sender else None,
+        "sender_role": row.message_type,
+        "direction": "outbound",
+        "created_at": row.created_at,
+    }
+
+
+@supplier_portal_router.get("/messages")
+def supplier_messages(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    q = db.query(CustomerCommunication).filter(
+        CustomerCommunication.sent_by_user_id == current_user.id,
+        CustomerCommunication.message_type == "supplier_message",
+    ).order_by(CustomerCommunication.id.desc())
+    total = q.count()
+    rows = q.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()
+    items = [_serialize_portal_message(r) for r in rows]
+    return {"status": "success", "items": items, "data": items, "total": total, "page": params["page"], "limit": params["limit"]}
+
+
+@supplier_portal_router.post("/messages")
+def send_supplier_message(data: BookingCommunicationCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    row = CustomerCommunication(
+        customer_id=None,
+        subject=data.subject or "Supplier Support Request",
+        message=data.message,
+        sent_by_user_id=current_user.id,
+        sent_to_email="admin",
+        message_type="supplier_message",
+        email_status="pending",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"status": "success", "message": "Message sent successfully", "data": _serialize_portal_message(row)}
+
+
+@agent_portal_router.get("/messages")
+def agent_messages(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    q = db.query(CustomerCommunication).filter(
+        CustomerCommunication.sent_by_user_id == current_user.id,
+        CustomerCommunication.message_type == "agent_message",
+    ).order_by(CustomerCommunication.id.desc())
+    total = q.count()
+    rows = q.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()
+    items = [_serialize_portal_message(r) for r in rows]
+    return {"status": "success", "items": items, "data": items, "total": total, "page": params["page"], "limit": params["limit"]}
+
+
+@agent_portal_router.post("/messages")
+def send_agent_message(data: BookingCommunicationCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    row = CustomerCommunication(
+        customer_id=None,
+        subject=data.subject or "Agent Support Request",
+        message=data.message,
+        sent_by_user_id=current_user.id,
+        sent_to_email="admin",
+        message_type="agent_message",
+        email_status="pending",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"status": "success", "message": "Message sent successfully", "data": _serialize_portal_message(row)}
 
 

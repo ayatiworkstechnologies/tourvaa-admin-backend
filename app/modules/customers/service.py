@@ -124,8 +124,16 @@ def get_customers(
     end_date: str = "",
     sort_by: str = "newest",
     sort_order: str = "desc",
+    agent_id: int | None = None,
 ):
     query = db.query(Customer)
+
+    if agent_id:
+        query = query.filter(
+            Customer.id.in_(
+                db.query(Booking.customer_id).filter(Booking.agent_id == agent_id).distinct()
+            )
+        )
 
     if search:
         pattern = f"%{search.strip().lower()}%"

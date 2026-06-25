@@ -192,6 +192,14 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
     item.approved_at = datetime.utcnow()
     item.approved_by = actor.id
     item.rejection_reason = None
+    
+    user_id = _entity_user_id(item)
+    if user_id:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.approval_status = "approved"
+            user.is_active = True
+            
     log_audit(db, actor=actor, action=f"approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
     # Notifications
     try:
@@ -217,6 +225,13 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
     item.admin_comments = data.admin_comments
     item.rejected_at = datetime.utcnow()
     item.rejected_by = actor.id
+    
+    user_id = _entity_user_id(item)
+    if user_id:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.approval_status = "rejected"
+            
     log_audit(db, actor=actor, action=f"reject_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
     # Notifications
     try:
@@ -240,6 +255,13 @@ def partial_approve_item(db: Session, item, data: PartialApprovalRequest, actor:
     item.approval_status = "partial_approved"
     item.admin_comments = data.admin_comments
     item.pending_requirements = data.pending_requirements
+    
+    user_id = _entity_user_id(item)
+    if user_id:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.approval_status = "partial_approved"
+            
     log_audit(db, actor=actor, action=f"partial_approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
     # Notify supplier of partial approval with pending requirements
     try:

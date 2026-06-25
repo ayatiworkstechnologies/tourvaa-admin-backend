@@ -2,7 +2,7 @@ from decimal import Decimal
 from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator
 
-BOOKING_STATUSES = {"draft", "pending_payment", "payment_authorized", "pending_supplier_acceptance", "confirmed", "ongoing", "completed", "cancelled", "declined", "refunded", "upcoming"}
+BOOKING_STATUSES = {"draft", "pending_payment", "payment_authorized", "pending_supplier_acceptance", "confirmed", "ongoing", "completed", "cancelled", "declined", "refunded", "upcoming", "postponed"}
 SUPPLIER_ACCEPTANCE_STATUSES = {"not_assigned", "pending", "accepted", "declined", "expired"}
 PAYMENT_STATUSES = {"unpaid", "pending", "authorized", "partially_paid", "paid", "failed", "refunded", "partially_refunded", "voided", "partial"}
 PAYMENT_TYPES = {"partial", "full"}
@@ -133,6 +133,17 @@ class AssignSupplierRequest(BaseModel):
 
 class SupplierDecisionRequest(BaseModel):
     reason: Optional[str] = None
+
+
+class SupplierPostponeRequest(BaseModel):
+    reason: str = Field(min_length=1)
+    new_tour_date: Optional[str] = None
+
+
+class SupplierNotifyRequest(BaseModel):
+    message: str = Field(min_length=1)
+    notify_customer: bool = True
+    notify_agent: bool = True
 
 
 class BookingCommunicationCreate(BaseModel):

@@ -41,6 +41,9 @@ class Settings(BaseSettings):
 
     ANTHROPIC_API_KEY: str = ""
 
+    # Countries / States / Cities fallback API (countrystatecity.in)
+    COUNTRY_STATE_CITY_API_KEY: str = ""
+
     VAPID_PUBLIC_KEY: str = ""
     VAPID_PRIVATE_KEY_FILE: str = "vapid_private.pem"
     VAPID_MAILTO: str = "mailto:admin@tourvaa.com"

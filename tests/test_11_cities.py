@@ -57,7 +57,7 @@ def test_update_city(headers):
     if not _CREATED_ID:
         pytest.skip("No city created to update")
     resp = requests.put(f"{BASE_URL}/cities/{_CREATED_ID}", headers=headers,
-                        json={"city_name": unique("Updated")}, timeout=10)
+                        json={"city_name": unique("Updated"), "country_id": 1}, timeout=10)
     assert resp.status_code in (200, 201, 204)
 
 

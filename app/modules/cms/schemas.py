@@ -36,8 +36,21 @@ class CountryPayload(BaseModel):
         return value.strip()
 
 
+class StatePayload(BaseModel):
+    country_id: int
+    state_name: str = Field(min_length=1, max_length=150)
+    state_code: str = Field(default="", max_length=10)
+    status: str = Field(default="active", max_length=20)
+
+    @field_validator("state_name", "state_code", "status")
+    @classmethod
+    def trim_text(cls, value: str):
+        return value.strip()
+
+
 class CityPayload(BaseModel):
     country_id: int
+    state_id: int | None = None
     city_name: str = Field(min_length=1, max_length=120)
     status: str = Field(default="active", max_length=20)
 

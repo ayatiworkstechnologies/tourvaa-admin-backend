@@ -56,6 +56,14 @@ def settings_cities(
     return {"status": "success", **list_cities(db, page, limit, search, country_id)}
 
 
+@router.get("/public")
+def public_settings(db: Session = Depends(get_db)):
+    """Returns only is_public settings — safe to call without auth."""
+    from app.modules.settings.models import AppSetting
+    rows = db.query(AppSetting).filter(AppSetting.is_public == True).all()  # noqa: E712
+    return {"data": {row.key: row.value for row in rows}}
+
+
 @router.get("/")
 def list_settings(
     db: Session = Depends(get_db),

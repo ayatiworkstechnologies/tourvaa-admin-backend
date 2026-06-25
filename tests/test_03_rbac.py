@@ -68,11 +68,13 @@ def test_roles_public_options():
 
 @skip_if_readonly()
 def test_create_role(headers):
-    name = unique("TestRole")
+    import uuid
+    suffix = uuid.uuid4().hex[:8]
+    slug = f"test-role-{suffix}"
     resp = requests.post(f"{BASE_URL}/roles/", headers=headers, json={
-        "name": name, "slug": name.lower(), "description": "Test role"
+        "name": f"Test Role {suffix}", "slug": slug, "description": "Test role"
     }, timeout=10)
-    assert resp.status_code in (200, 201)
+    assert resp.status_code in (200, 201), resp.text
     body = resp.json()
     role = body.get("data", body)
     role_id = role.get("id")
@@ -83,11 +85,13 @@ def test_create_role(headers):
 
 @skip_if_readonly()
 def test_create_permission(headers):
-    name = unique("test.permission")
+    import uuid
+    suffix = uuid.uuid4().hex[:8]
+    slug = f"test-perm-{suffix}"
     resp = requests.post(f"{BASE_URL}/permissions/", headers=headers, json={
-        "name": name, "slug": name, "module": "test", "action": "view"
+        "name": f"test.permission.{suffix}", "slug": slug, "module": "test"
     }, timeout=10)
-    assert resp.status_code in (200, 201)
+    assert resp.status_code in (200, 201), resp.text
     body = resp.json()
     perm = body.get("data", body)
     perm_id = perm.get("id")

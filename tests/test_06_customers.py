@@ -106,6 +106,6 @@ def test_send_customer_message(headers):
         pytest.skip("No customers in DB")
     cid = items[0].get("id") or items[0].get("customer_id")
     resp2 = requests.post(f"{BASE_URL}/customers/{cid}/communications", headers=headers, json={
-        "subject": "Test message", "message": "Hello from test", "message_type": "info"
+        "subject": "Test message", "message": "Hello from test", "message_type": "admin_message"
     }, timeout=10)
     assert resp2.status_code in (200, 201)
