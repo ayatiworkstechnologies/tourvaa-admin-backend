@@ -23,7 +23,7 @@ router = APIRouter(tags=["CMS"])
 
 
 @router.get("/countries")
-def countries(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def countries(params: dict = Depends(pagination_params), db: Session = Depends(get_db)):
     return {"status": "success", **list_countries(db, params["page"], params["limit"], params["search"])}
 
 
@@ -49,7 +49,7 @@ def country_status(country_id: int, data: StatusUpdate, request: Request, db: Se
 
 
 @router.get("/states")
-def states(params: dict = Depends(pagination_params), country_id: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def states(params: dict = Depends(pagination_params), country_id: str = Query(default=""), db: Session = Depends(get_db)):
     return {"status": "success", **list_states(db, params["page"], params["limit"], params["search"], country_id)}
 
 
@@ -75,7 +75,7 @@ def state_status(state_id: int, data: StatusUpdate, request: Request, db: Sessio
 
 
 @router.get("/cities")
-def cities(params: dict = Depends(pagination_params), country_id: str = Query(default=""), state_id: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def cities(params: dict = Depends(pagination_params), country_id: str = Query(default=""), state_id: str = Query(default=""), db: Session = Depends(get_db)):
     return {"status": "success", **list_cities(db, params["page"], params["limit"], params["search"], country_id, state_id)}
 
 
