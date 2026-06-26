@@ -24,8 +24,15 @@ DOTTED_TO_ACTION = {
 }
 
 MODULE_ALIASES = {
+    # email module is seeded as "email" in MODULES but granular permissions use "email_templates"
     "email": "email_templates",
     "email_templates": "email",
+    # resellers is an alias for agents (legacy MODULES entry)
+    "resellers": "agents",
+    "agents": "resellers",
+    # activity_logs in legacy slugs vs audit naming
+    "audit_logs": "activity_logs",
+    "activity_logs": "audit_logs",
 }
 
 

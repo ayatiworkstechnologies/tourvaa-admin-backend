@@ -83,6 +83,8 @@ class SupplierVehicle(Base):
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False, index=True)
     make = Column(String(100), default="", nullable=False)
     model = Column(String(100), default="", nullable=False)
+    vehicle_type = Column(String(75), default="", nullable=False)
+    registration_number = Column(String(100), default="", nullable=False)
     year = Column(Integer, nullable=True)
     capacity = Column(Integer, nullable=True)
     fitness_certificate = Column(String(255), default="", nullable=False)

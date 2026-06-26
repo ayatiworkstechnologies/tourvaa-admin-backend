@@ -5,16 +5,17 @@ Gateway-specific payment routes:
   POST /payments/paypal/create-order
   POST /payments/paypal/capture
   POST /payments/paypal/webhook
+  POST /payments/test/simulate   (non-production only)
+  GET  /payments/gateways/status (reports which gateways are configured)
 """
 
 import json
 import logging
+import uuid
 from decimal import Decimal
 from typing import Optional
 
-from typing import Optional
-
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -140,28 +141,36 @@ def stripe_create_session(body: StripeSessionRequest, db: Session = Depends(get_
 
 @router.post("/stripe/webhook")
 async def stripe_webhook(request: Request, stripe_signature: str = Header(default="", alias="stripe-signature"), db: Session = Depends(get_db)):
-    from app.modules.settings.models import PaymentSetting
-
-    setting = db.query(PaymentSetting).filter(PaymentSetting.provider_name == "stripe").first()
-    webhook_secret = getattr(setting, "webhook_secret", None) if setting else None
+    from app.config import settings as app_settings
+    from fastapi import HTTPException as _HTTPException
 
     payload = await request.body()
+    webhook_secret = app_settings.STRIPE_WEBHOOK_SECRET.strip()
 
     if webhook_secret:
-        stripe = get_stripe(db)
-        event = stripe.construct_event(payload, stripe_signature, webhook_secret)
+        stripe_gw = get_stripe(db)
+        event = stripe_gw.construct_event(payload, stripe_signature, webhook_secret)
+    elif app_settings.APP_ENV == "production":
+        logger.critical("Stripe webhook received without STRIPE_WEBHOOK_SECRET — rejecting in production")
+        raise _HTTPException(status_code=400, detail="Webhook signature verification not configured")
     else:
+        logger.warning("Stripe webhook received without signature verification (dev mode)")
         event = json.loads(payload)
 
+    event_id = event.get("id", "")
     event_type = event.get("type", "")
-    logger.info("Stripe webhook received: %s", event_type)
+    logger.info("Stripe webhook received: %s id=%s", event_type, event_id)
+
+    # Idempotency: skip events already recorded via their Stripe event ID
+    if event_id and db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first():
+        logger.info("Stripe event %s already processed — skipping", event_id)
+        return {"status": "success", "received": True}
 
     if event_type == "checkout.session.completed":
         session_obj = event["data"]["object"]
         order_id = session_obj.get("id")
         payment_intent = session_obj.get("payment_intent")
         amount_total = session_obj.get("amount_total", 0)
-        booking_id = int(session_obj.get("metadata", {}).get("booking_id", 0))
 
         payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).first()
         if payment and payment.payment_status == "pending":
@@ -171,7 +180,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
             payment.pending_amount = Decimal("0")
             payment.payment_status = "paid"
             payment.gateway_payment_id = payment_intent
-            db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=payment_intent, metadata_json={"event": event_type}))
+            db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=event_id or payment_intent, metadata_json={"event": event_type}))
             _sync_booking_payment_fields(db, payment.booking)
             db.commit()
 
@@ -270,15 +279,22 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
 
 @router.post("/paypal/webhook")
 async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
+    from fastapi import HTTPException as _HTTPException
+
     payload = await request.body()
     try:
         event = json.loads(payload)
     except Exception:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        raise _HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    event_id = event.get("id", "")
     event_type = event.get("event_type", "")
-    logger.info("PayPal webhook received: %s", event_type)
+    logger.info("PayPal webhook received: %s id=%s", event_type, event_id)
+
+    # Idempotency: skip events already recorded via PayPal event ID
+    if event_id and db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first():
+        logger.info("PayPal event %s already processed — skipping", event_id)
+        return {"status": "success", "received": True}
 
     if event_type == "PAYMENT.CAPTURE.COMPLETED":
         resource = event.get("resource", {})
@@ -296,7 +312,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
             payment.pending_amount = Decimal("0")
             payment.payment_status = "paid"
             payment.gateway_payment_id = capture_id
-            db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=capture_id, metadata_json={"event_type": event_type}))
+            db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=event_id or capture_id, metadata_json={"event_type": event_type, "capture_id": capture_id}))
             _sync_booking_payment_fields(db, payment.booking)
             db.commit()
 
@@ -316,3 +332,103 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
                 db.commit()
 
     return {"status": "success", "received": True}
+
+
+# ---------------------------------------------------------------------------
+# Gateway status probe  (GET /payments/gateways/status)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/gateways/status")
+def gateways_status(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Returns which gateways are configured so the frontend can adapt the payment modal."""
+    from app.modules.payments.gateway import _load_setting
+    stripe_ok = False
+    paypal_ok = False
+    try:
+        s = _load_setting(db, "stripe")
+        stripe_ok = bool(s and s.secret_key)
+    except Exception:
+        pass
+    try:
+        p = _load_setting(db, "paypal")
+        paypal_ok = bool(p and p.public_key and p.secret_key)
+    except Exception:
+        pass
+    return {
+        "status": "success",
+        "data": {
+            "stripe": stripe_ok,
+            "paypal": paypal_ok,
+            "test_mode_available": settings.APP_ENV != "production",
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Test / simulate payment  (POST /payments/test/simulate)
+# ---------------------------------------------------------------------------
+
+
+class TestPaymentRequest(BaseModel):
+    booking_id: int
+    amount: Decimal
+    note: Optional[str] = "Test payment"
+
+
+@router.post("/test/simulate")
+def test_simulate_payment(
+    body: TestPaymentRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Simulate a successful payment without calling any real gateway. Non-production only."""
+    if settings.APP_ENV == "production":
+        raise HTTPException(status_code=403, detail="Test payments are not available in production.")
+
+    booking = _booking_or_404(db, body.booking_id)
+    amount = money(body.amount)
+    fake_ref = f"TEST-{uuid.uuid4().hex[:10].upper()}"
+
+    payment = Payment(
+        booking_id=booking.id,
+        customer_id=booking.customer_id,
+        created_by=current_user.id if current_user else None,
+        payment_method="test",
+        payment_type="full",
+        gateway="test",
+        gateway_order_id=fake_ref,
+        idempotency_key=fake_ref,
+        total_amount=amount,
+        authorized_amount=amount,
+        captured_amount=amount,
+        paid_amount=amount,
+        pending_amount=Decimal("0"),
+        payment_status="paid",
+    )
+    db.add(payment)
+    db.flush()
+    payment.payment_code = _payment_code(payment.id)
+    db.add(
+        PaymentTransaction(
+            payment_id=payment.id,
+            booking_id=payment.booking_id,
+            transaction_type="capture",
+            amount=amount,
+            status="success",
+            gateway_reference=fake_ref,
+            metadata_json={"test_mode": True, "note": body.note},
+        )
+    )
+    _sync_booking_payment_fields(db, payment.booking)
+    db.commit()
+    db.refresh(payment)
+
+    return {
+        "status": "success",
+        "data": {
+            "payment_id": payment.id,
+            "payment_code": payment.payment_code,
+            "gateway_reference": fake_ref,
+        },
+    }

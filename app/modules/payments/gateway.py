@@ -179,15 +179,17 @@ class PayPalGateway:
 
 
 def get_stripe(db: Session) -> StripeGateway:
+    from app.crypto import decrypt_secret
     setting = _load_setting(db, "stripe")
     if not setting or not setting.secret_key:
         raise HTTPException(status_code=400, detail="Stripe is not configured or not enabled")
-    return StripeGateway(secret_key=setting.secret_key)
+    return StripeGateway(secret_key=decrypt_secret(setting.secret_key))
 
 
 def get_paypal(db: Session) -> PayPalGateway:
+    from app.crypto import decrypt_secret
     setting = _load_setting(db, "paypal")
     if not setting or not setting.public_key or not setting.secret_key:
         raise HTTPException(status_code=400, detail="PayPal is not configured or not enabled")
     mode = getattr(setting, "mode", "sandbox") or "sandbox"
-    return PayPalGateway(client_id=setting.public_key, client_secret=setting.secret_key, mode=mode)
+    return PayPalGateway(client_id=setting.public_key, client_secret=decrypt_secret(setting.secret_key), mode=mode)

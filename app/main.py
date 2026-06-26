@@ -1,7 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 
 from app.database import SessionLocal, engine
@@ -59,7 +62,7 @@ from app.modules.invoices.router import router as invoices_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.reports.router import router as reports_router
 from app.modules.sessions.router import router as sessions_router
-from app.modules.audit.router import router as activity_logs_router
+from app.modules.audit.router import router as activity_logs_router, alias_router as audit_logs_alias_router
 from app.modules.chatbot.models import ChatFAQ, ChatSession, ChatMessage
 from app.modules.chatbot.router import router as chatbot_router
 from app.modules.public.router import router as public_router
@@ -84,6 +87,7 @@ from app.modules.booking_calendar.models import BookingCalendarEvent
 from app.modules.booking_calendar.router import router as booking_calendar_router
 from app.modules.affiliate_tracking.models import AffiliateLink, AffiliateClick, AffiliateConversion, AffiliatePayout
 from app.modules.affiliate_tracking.router import router as affiliate_tracking_router
+from app.modules.private_documents.router import router as private_documents_router
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +191,35 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "error", "message": exc.detail or "An error occurred"},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    first = errors[0] if errors else {}
+    field = ".".join(str(p) for p in first.get("loc", [])[1:]) if first.get("loc") else "unknown"
+    message = f"{field}: {first.get('msg', 'Validation error')}" if field and field != "unknown" else first.get("msg", "Validation error")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"status": "error", "message": message, "detail": errors},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"status": "error", "message": "An unexpected error occurred. Please try again later."},
+    )
+
+
 @app.on_event("startup")
 def run_seed():
     if schema_is_ready():
@@ -218,6 +251,11 @@ storage_root.joinpath("uploads", "profile-images").mkdir(parents=True, exist_ok=
 storage_root.joinpath("uploads", "admin-assets").mkdir(parents=True, exist_ok=True)
 app.mount("/storage", StaticFiles(directory=str(storage_root)), name="storage")
 
+# Private document storage — lives outside the public /storage mount
+private_docs_root = storage_root.parent / "private-docs"
+private_docs_root.joinpath("supplier-documents").mkdir(parents=True, exist_ok=True)
+private_docs_root.joinpath("agent-documents").mkdir(parents=True, exist_ok=True)
+
 app.include_router(auth_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(roles_router, prefix="/api")
@@ -247,6 +285,7 @@ app.include_router(notifications_router, prefix="/api")
 app.include_router(reports_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api")
 app.include_router(activity_logs_router, prefix="/api")
+app.include_router(audit_logs_alias_router, prefix="/api")
 app.include_router(bookings_supplier_router, prefix="/api")
 app.include_router(bookings_supplier_portal_router, prefix="/api")
 app.include_router(bookings_agent_portal_router, prefix="/api")
@@ -262,6 +301,7 @@ app.include_router(website_cms_router, prefix="/api")
 app.include_router(cancellations_router, prefix="/api")
 app.include_router(booking_calendar_router, prefix="/api")
 app.include_router(affiliate_tracking_router, prefix="/api")
+app.include_router(private_documents_router, prefix="/api")
 
 @app.get("/")
 def home():
