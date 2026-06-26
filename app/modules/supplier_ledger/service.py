@@ -186,12 +186,29 @@ def create_payout(db: Session, data: SupplierPayoutCreate, actor: User, request=
     return _serialize_payout(payout)
 
 
+def approve_payout(db: Session, payout_id: int, actor: User, request=None) -> dict:
+    payout = db.query(SupplierPayout).filter(SupplierPayout.id == payout_id).first()
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    if payout.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Payout cannot be approved from status '{payout.status}'")
+
+    payout.status = "approved"
+    payout.approved_by = actor.id
+    db.commit()
+    db.refresh(payout)
+    log_audit(db, actor=actor, action="approve_supplier_payout", entity_type="supplier_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "approved"}, request=request)
+    return _serialize_payout(payout)
+
+
 def mark_payout_paid(db: Session, payout_id: int, data: SupplierPayoutMarkPaid, actor: User, request=None) -> dict:
     payout = db.query(SupplierPayout).filter(SupplierPayout.id == payout_id).first()
     if not payout:
         raise HTTPException(status_code=404, detail="Payout not found")
     if payout.status == "paid":
         raise HTTPException(status_code=400, detail="Payout is already marked as paid")
+    if payout.status != "approved":
+        raise HTTPException(status_code=400, detail=f"Payout must be approved before marking as paid (current status: '{payout.status}')")
 
     payout.status = "paid"
     payout.approved_by = actor.id

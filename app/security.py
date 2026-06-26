@@ -8,12 +8,29 @@ from app.config import settings
 password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def hash_password(password: str):
-    return password_context.hash(password)
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def verify_password(plain_password: str, hashed_password: str):
-    return password_context.verify(plain_password, hashed_password)
+def hash_password(received: str) -> str:
+    """Store bcrypt of the SHA-256 hex that the frontend sends."""
+    return password_context.hash(received)
+
+
+def hash_password_plain(plain: str) -> str:
+    """Hash a plaintext password (e.g. from seed scripts) the same way the frontend would."""
+    return password_context.hash(_sha256_hex(plain))
+
+
+def verify_password(received: str, stored_hash: str) -> bool:
+    """
+    Verify the value received from the frontend against the stored bcrypt hash.
+    Frontend always sends sha256(plaintext); stored hash is bcrypt(sha256(plaintext)).
+    """
+    try:
+        return password_context.verify(received, stored_hash)
+    except Exception:
+        return False
 
 
 ROLE_SLUG_TO_PORTAL = {

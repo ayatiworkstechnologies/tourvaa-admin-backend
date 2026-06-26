@@ -5,7 +5,7 @@ from app.modules.admin_modules.models import AdminModule
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.roles.models import Role
 from app.modules.users.models import User, UserRole
-from app.security import hash_password
+from app.security import hash_password_plain as hash_password
 
 
 DEFAULT_ROLES = [
@@ -134,7 +134,7 @@ OPERATIONAL_PERMISSIONS = [
     ("categories", "Categories", ["view", "create", "edit", "disable"]),
     ("subcategories", "Sub-Categories", ["view", "create", "edit", "disable"]),
     ("tours", "Tours", ["view", "create", "edit", "publish", "disable"]),
-    ("supplier_ledger", "Supplier Ledger", ["view", "create_payout", "mark_paid", "export"]),
+    ("supplier_ledger", "Supplier Ledger", ["view", "create_payout", "approve", "mark_paid", "export"]),
     ("website_cms", "Website CMS", ["view", "create", "edit", "delete"]),
 ]
 
@@ -349,8 +349,9 @@ def seed_default_roles_and_permissions(db: Session):
             # Payments (base)
             "view-payments", "create-payments", "update-payments",
             "payments.summary",
-            # Supplier Ledger (base)
+            # Supplier Ledger (base + granular)
             "view-supplier_ledger", "create-supplier_ledger", "update-supplier_ledger",
+            "supplier_ledger.approve",
             # Reports / Invoices (base)
             "view-reports", "view-invoices",
             # Notifications (base)

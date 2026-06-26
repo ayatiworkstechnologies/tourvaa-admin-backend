@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str | None = None
     SMTP_FROM_NAME: str = "Tourvaa"
 
+    REDIS_URL: str = ""
+    SETTINGS_ENCRYPTION_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    PAYPAL_WEBHOOK_ID: str = ""
+
     ANTHROPIC_API_KEY: str = ""
 
     # Countries / States / Cities fallback API (countrystatecity.in)
@@ -85,4 +90,9 @@ def get_storage_root() -> Path:
         path = Path(__file__).resolve().parents[1] / path
 
     return path
+
+
+def get_private_docs_root() -> Path:
+    """Private document storage — outside the public /storage static-files mount."""
+    return get_storage_root().parent / "private-docs"
 

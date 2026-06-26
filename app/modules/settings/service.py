@@ -1,8 +1,12 @@
 from sqlalchemy.orm import Session
 
+from app.crypto import decrypt_secret, encrypt_secret
 from app.modules.audit.service import log_audit
 from app.modules.settings.models import ApiSetting, AppSetting, PaymentSetting
 from app.modules.users.models import User
+
+_PAYMENT_SECRET_FIELDS = {"secret_key"}
+_API_SECRET_FIELDS = {"api_key", "api_secret"}
 
 
 DEFAULT_SETTINGS = [
@@ -123,7 +127,8 @@ def update_payment_setting(
 
     for key, value in values.items():
         if value is not None and hasattr(setting, key):
-            setattr(setting, key, value.strip() if isinstance(value, str) else value)
+            v = value.strip() if isinstance(value, str) else value
+            setattr(setting, key, encrypt_secret(v) if key in _PAYMENT_SECRET_FIELDS and isinstance(v, str) else v)
 
     log_audit(
         db,
@@ -162,7 +167,8 @@ def update_api_setting(
 
     for key, value in values.items():
         if value is not None and hasattr(setting, key):
-            setattr(setting, key, value.strip() if isinstance(value, str) else value)
+            v = value.strip() if isinstance(value, str) else value
+            setattr(setting, key, encrypt_secret(v) if key in _API_SECRET_FIELDS and isinstance(v, str) else v)
 
     log_audit(
         db,
@@ -274,16 +280,18 @@ def get_payment_settings_payload(db: Session):
     elif paypal:
         surcharge = paypal.surcharge_percentage
 
+    stripe_secret = decrypt_secret(stripe.secret_key if stripe else "")
+    paypal_secret = decrypt_secret(paypal.secret_key if paypal else "")
     return {
         "stripe_enabled": stripe.is_enabled if stripe else False,
         "stripe_public_key": stripe.public_key if stripe else "",
-        "stripe_secret_key": mask_secret(stripe.secret_key if stripe else ""),
-        "stripe_secret_placeholder": mask_secret(stripe.secret_key if stripe else ""),
+        "stripe_secret_key": mask_secret(stripe_secret),
+        "stripe_secret_placeholder": mask_secret(stripe_secret),
         "paypal_enabled": paypal.is_enabled if paypal else False,
         "paypal_client_id": paypal.public_key if paypal else "",
         "paypal_client_id_placeholder": paypal.public_key if paypal else "",
-        "paypal_secret": mask_secret(paypal.secret_key if paypal else ""),
-        "paypal_secret_placeholder": mask_secret(paypal.secret_key if paypal else ""),
+        "paypal_secret": mask_secret(paypal_secret),
+        "paypal_secret_placeholder": mask_secret(paypal_secret),
         "payment_surcharge_percentage": surcharge,
         "default_payment_mode": stripe.mode if stripe else (paypal.mode if paypal else "test"),
     }
@@ -341,13 +349,16 @@ def get_api_settings_payload(db: Session):
     sms_service = rows.get("sms_service")
     brightlane = rows.get("brightlane")
 
+    gm_key = decrypt_secret(google_maps.api_key if google_maps else "")
+    em_key = decrypt_secret(email_service.api_key if email_service else "")
+    sms_key = decrypt_secret(sms_service.api_key if sms_service else "")
     return {
-        "google_map_api_key": mask_secret(google_maps.api_key if google_maps else ""),
-        "google_maps_api_placeholder": mask_secret(google_maps.api_key if google_maps else ""),
-        "email_api_key": mask_secret(email_service.api_key if email_service else ""),
-        "email_api_placeholder": mask_secret(email_service.api_key if email_service else ""),
-        "sms_api_key": mask_secret(sms_service.api_key if sms_service else ""),
-        "sms_api_placeholder": mask_secret(sms_service.api_key if sms_service else ""),
+        "google_map_api_key": mask_secret(gm_key),
+        "google_maps_api_placeholder": mask_secret(gm_key),
+        "email_api_key": mask_secret(em_key),
+        "email_api_placeholder": mask_secret(em_key),
+        "sms_api_key": mask_secret(sms_key),
+        "sms_api_placeholder": mask_secret(sms_key),
         "brightlane_external_link": brightlane.api_url if brightlane else "",
         "brightlane_external_link_placeholder": brightlane.api_url if brightlane else "",
     }

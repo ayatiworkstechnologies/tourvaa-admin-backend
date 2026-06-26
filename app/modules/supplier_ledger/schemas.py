@@ -14,3 +14,7 @@ class SupplierPayoutCreate(BaseModel):
 class SupplierPayoutMarkPaid(BaseModel):
     reference_number: Optional[str] = None
     notes: Optional[str] = None
+
+
+class SupplierPayoutApprove(BaseModel):
+    notes: Optional[str] = None

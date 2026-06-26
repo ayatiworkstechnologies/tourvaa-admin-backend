@@ -14,3 +14,4 @@ requests
 anthropic
 pywebpush
 reportlab
+redis

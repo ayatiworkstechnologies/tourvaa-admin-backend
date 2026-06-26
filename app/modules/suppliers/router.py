@@ -9,7 +9,7 @@ from app.modules.common.pagination import pagination_params
 from app.modules.operations import PartialApprovalRequest, RejectRequest
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
-from app.modules.suppliers.schemas import SupplierCreate, SupplierMarkupRequest, SupplierUpdate
+from app.modules.suppliers.schemas import SupplierCreate, SupplierMarkupRequest, SupplierUpdate, VehicleCreate, VehicleUpdate
 from app.modules.suppliers.service import (
     approve_supplier,
     create_supplier,
@@ -111,6 +111,190 @@ def request_my_commission(data: SupplierMarkupRequest, request: Request, db: Ses
     db.commit()
     db.refresh(supplier)
     return {"status": "success", "message": "Commission request submitted", "data": serialize_supplier(supplier)}
+
+
+@router.get("/me/vehicles")
+def get_my_vehicles(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.suppliers.models import Supplier, SupplierVehicle
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    vehicles = db.query(SupplierVehicle).filter(SupplierVehicle.supplier_id == supplier.id).order_by(SupplierVehicle.created_at.desc()).all()
+    return {"status": "success", "data": [_serialize_vehicle(v) for v in vehicles]}
+
+
+@router.post("/me/vehicles")
+def add_my_vehicle(data: VehicleCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.suppliers.models import Supplier, SupplierVehicle
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    v = SupplierVehicle(
+        supplier_id=supplier.id,
+        make=data.make,
+        model=data.model,
+        vehicle_type=data.vehicle_type,
+        registration_number=data.registration_number,
+        year=data.year,
+        capacity=data.capacity,
+    )
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    return {"status": "success", "message": "Vehicle added", "data": _serialize_vehicle(v)}
+
+
+@router.patch("/me/vehicles/{vehicle_id}")
+@router.put("/me/vehicles/{vehicle_id}")
+def update_my_vehicle(vehicle_id: int, data: VehicleUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.suppliers.models import Supplier, SupplierVehicle
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    v = db.query(SupplierVehicle).filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier.id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    for field, value in data.model_dump(exclude_none=True).items():
+        setattr(v, field, value)
+    db.commit()
+    db.refresh(v)
+    return {"status": "success", "message": "Vehicle updated", "data": _serialize_vehicle(v)}
+
+
+@router.delete("/me/vehicles/{vehicle_id}")
+def delete_my_vehicle(vehicle_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.suppliers.models import Supplier, SupplierVehicle
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    v = db.query(SupplierVehicle).filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier.id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    db.delete(v)
+    db.commit()
+    return {"status": "success", "message": "Vehicle deleted"}
+
+
+@router.post("/me/vehicles/{vehicle_id}/upload/{field}")
+async def upload_vehicle_file(
+    vehicle_id: int,
+    field: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if field not in ("fitness_certificate", "insurance_document"):
+        raise HTTPException(status_code=400, detail="field must be fitness_certificate or insurance_document")
+    from app.modules.suppliers.models import Supplier, SupplierVehicle
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    v = db.query(SupplierVehicle).filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier.id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    path = await _save_vehicle_file(file, "vehicle-docs")
+    setattr(v, field, path)
+    db.commit()
+    db.refresh(v)
+    return {"status": "success", "message": "File uploaded", "data": _serialize_vehicle(v)}
+
+
+@router.post("/me/vehicles/{vehicle_id}/photos")
+async def upload_vehicle_photos(
+    vehicle_id: int,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.modules.suppliers.models import Supplier, SupplierVehicle
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    v = db.query(SupplierVehicle).filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier.id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    import json
+    existing: list[str] = json.loads(v.vehicle_photos) if v.vehicle_photos else []
+    for f in files:
+        path = await _save_vehicle_file(f, "vehicle-photos")
+        if path:
+            existing.append(path)
+    v.vehicle_photos = json.dumps(existing)
+    db.commit()
+    db.refresh(v)
+    return {"status": "success", "message": "Photos uploaded", "data": _serialize_vehicle(v)}
+
+
+@router.delete("/me/vehicles/{vehicle_id}/photos")
+def delete_vehicle_photo(vehicle_id: int, photo_url: str = Query(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.modules.suppliers.models import Supplier, SupplierVehicle
+    import json
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    v = db.query(SupplierVehicle).filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier.id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    photos: list[str] = json.loads(v.vehicle_photos) if v.vehicle_photos else []
+    photos = [p for p in photos if p != photo_url]
+    v.vehicle_photos = json.dumps(photos)
+    db.commit()
+    db.refresh(v)
+    return {"status": "success", "message": "Photo removed", "data": _serialize_vehicle(v)}
+
+
+def _serialize_vehicle(v) -> dict:
+    import json
+    photos_raw = v.vehicle_photos or ""
+    try:
+        photos = json.loads(photos_raw) if photos_raw else []
+    except Exception:
+        photos = [p for p in photos_raw.split(",") if p.strip()]
+    return {
+        "id": v.id,
+        "make": v.make or "",
+        "model": v.model or "",
+        "vehicle_type": getattr(v, "vehicle_type", "") or "",
+        "registration_number": getattr(v, "registration_number", "") or "",
+        "year": v.year,
+        "capacity": v.capacity,
+        "fitness_certificate": v.fitness_certificate or "",
+        "insurance_document": v.insurance_document or "",
+        "vehicle_photos": photos,
+        "approval_status": v.approval_status,
+        "created_at": str(v.created_at) if v.created_at else "",
+    }
+
+
+async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
+    from uuid import uuid4
+    from app.config import get_storage_root
+    ALLOWED = {
+        "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
+        "image/webp": "webp", "application/pdf": "pdf",
+    }
+    content = await upload.read()
+    if not content:
+        return ""
+    ext = ALLOWED.get(upload.content_type or "")
+    if not ext:
+        fname = (upload.filename or "").lower()
+        for s, e in [(".pdf", "pdf"), (".jpg", "jpg"), (".jpeg", "jpg"), (".png", "png"), (".webp", "webp")]:
+            if fname.endswith(s):
+                ext = e
+                break
+    if not ext:
+        return ""
+    dest = get_storage_root() / subfolder
+    dest.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}.{ext}"
+    (dest / filename).write_bytes(content)
+    return f"/storage/{subfolder}/{filename}"
+
+
+@router.post("/{supplier_id}/submit-verification")
+def submit_verification_by_id(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", "message": "Supplier verification submitted", "data": submit_supplier_verification(db, current_user, request)}
 
 
 @router.get("/{supplier_id}")
@@ -238,15 +422,15 @@ async def upload_supplier_document(
     from app.modules.suppliers.models import SupplierDocument
     from app.modules.suppliers.service import _document
 
-    storage_root = get_storage_root()
-    doc_dir = storage_root / "uploads" / "supplier-documents"
+    from app.config import get_private_docs_root
+    doc_dir = get_private_docs_root() / "supplier-documents"
     doc_dir.mkdir(parents=True, exist_ok=True)
 
     filename = f"{uuid4().hex}.{extension}"
     file_path = doc_dir / filename
     file_path.write_bytes(content)
 
-    relative_path = f"/storage/uploads/supplier-documents/{filename}"
+    relative_path = f"/private-documents/supplier-documents/{filename}"
 
     existing_doc = db.query(SupplierDocument).filter(
         SupplierDocument.supplier_id == supplier_id,

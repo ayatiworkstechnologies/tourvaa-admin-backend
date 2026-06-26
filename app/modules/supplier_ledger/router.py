@@ -36,7 +36,19 @@ def create_payout(data: SupplierPayoutCreate, request: Request, db: Session = De
     return {"status": "success", "message": "Payout created", "data": result}
 
 
+@router.post("/supplier-payouts/{payout_id}/approve")
+def approve_payout(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("suppliers.approve", "update-suppliers"))):
+    result = service.approve_payout(db, payout_id=payout_id, actor=current_user, request=request)
+    return {"status": "success", "message": "Payout approved", "data": result}
+
+
 @router.patch("/supplier-payouts/{payout_id}/mark-paid")
 def mark_paid(payout_id: int, data: SupplierPayoutMarkPaid, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("suppliers.approve", "update-suppliers"))):
     result = service.mark_payout_paid(db, payout_id=payout_id, data=data, actor=current_user, request=request)
+    return {"status": "success", "message": "Payout marked as paid", "data": result}
+
+
+@router.post("/supplier-payouts/{payout_id}/mark-paid")
+def mark_paid_post(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("suppliers.approve", "update-suppliers"))):
+    result = service.mark_payout_paid(db, payout_id=payout_id, data=SupplierPayoutMarkPaid(), actor=current_user, request=request)
     return {"status": "success", "message": "Payout marked as paid", "data": result}

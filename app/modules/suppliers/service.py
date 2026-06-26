@@ -26,12 +26,12 @@ def _contact(item):
 
 def _document(item):
     file_path = item.file_path or ""
-    file_url = file_path
-    if file_path and not file_path.startswith("http"):
-        if not file_path.startswith("/"):
-            file_url = "/storage/" + file_path
-        else:
-            file_url = file_path
+    if file_path.startswith("/private-documents/"):
+        file_url = f"/api/private-documents/supplier/{item.id}"
+    elif file_path and not file_path.startswith("http"):
+        file_url = file_path if file_path.startswith("/") else "/storage/" + file_path
+    else:
+        file_url = file_path
     return {
         "id": item.id,
         "document_type": item.document_type,

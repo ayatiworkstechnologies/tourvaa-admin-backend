@@ -8,6 +8,7 @@ from app.modules.common.auth import require_any_permission
 from app.modules.common.pagination import pagination_params
 
 router = APIRouter(prefix="/activity-logs", tags=["Activity Logs"])
+alias_router = APIRouter(prefix="/audit-logs", tags=["Activity Logs"])
 
 
 def serialize_log(row: AuditLog) -> dict:
@@ -26,3 +27,8 @@ def activity_logs(params: dict = Depends(pagination_params), entity_type: str = 
 @router.get("/export")
 def export_logs(db: Session = Depends(get_db), _=Depends(require_any_permission("activity_logs.export", "activity_logs.view"))):
     return {"status": "success", "data": [serialize_log(row) for row in db.query(AuditLog).order_by(AuditLog.id.desc()).limit(500).all()]}
+
+
+alias_router.add_api_route("", activity_logs, methods=["GET"])
+alias_router.add_api_route("/", activity_logs, methods=["GET"])
+alias_router.add_api_route("/export", export_logs, methods=["GET"])

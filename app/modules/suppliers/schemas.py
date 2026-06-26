@@ -91,6 +91,34 @@ class SupplierUpdate(BaseModel):
         return value
 
 
+class VehicleCreate(BaseModel):
+    make: str = Field(min_length=1, max_length=100)
+    model: str = Field(default="", max_length=100)
+    vehicle_type: str = Field(default="", max_length=75)
+    registration_number: str = Field(default="", max_length=100)
+    year: int | None = Field(default=None, ge=1900, le=2100)
+    capacity: int | None = Field(default=None, ge=1)
+
+    @field_validator("make", "model", "vehicle_type", "registration_number")
+    @classmethod
+    def trim_text(cls, value: str):
+        return value.strip()
+
+
+class VehicleUpdate(BaseModel):
+    make: str | None = Field(default=None, max_length=100)
+    model: str | None = Field(default=None, max_length=100)
+    vehicle_type: str | None = Field(default=None, max_length=75)
+    registration_number: str | None = Field(default=None, max_length=100)
+    year: int | None = Field(default=None, ge=1900, le=2100)
+    capacity: int | None = Field(default=None, ge=1)
+
+    @field_validator("make", "model", "vehicle_type", "registration_number")
+    @classmethod
+    def trim_optional_text(cls, value: str | None):
+        return value.strip() if isinstance(value, str) else value
+
+
 class SupplierMarkupRequest(BaseModel):
     markup_type: str = Field(max_length=20)
     markup_value: float = Field(ge=0)
