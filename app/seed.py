@@ -5,7 +5,7 @@ from app.modules.admin_modules.models import AdminModule
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.roles.models import Role
 from app.modules.users.models import User, UserRole
-from app.security import hash_password_plain as hash_password
+from app.security import hash_password
 
 
 DEFAULT_ROLES = [
