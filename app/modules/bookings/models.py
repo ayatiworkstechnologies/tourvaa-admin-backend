@@ -66,6 +66,7 @@ class Booking(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     customer = relationship("Customer", foreign_keys=[customer_id])
+    agent = relationship("Agent", foreign_keys=[agent_id])
     tour = relationship("Tour", foreign_keys=[tour_id])
     calendar = relationship("TourCalendar", foreign_keys=[tour_calendar_id])
     supplier = relationship("Supplier", foreign_keys=[supplier_id])
