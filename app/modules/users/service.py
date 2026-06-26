@@ -14,7 +14,7 @@ from app.modules.common.mailer import send_email, try_send_email
 from app.modules.audit.service import log_audit
 from app.modules.users.models import User, UserRole
 from app.modules.users.schemas import UserCreate, UserUpdate
-from app.security import create_password_reset_token, hash_password_plain as hash_password
+from app.security import create_password_reset_token, hash_password
 from app.modules.auth.service import build_password_reset_url
 from app.modules.common.media import existing_storage_path
 
