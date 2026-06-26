@@ -595,25 +595,23 @@ def reset_password(db: Session, token: str, password: str):
     db.commit()
 
     login_url = f"{settings.FRONTEND_URL}/login"
-    subject, html = render_database_email(
-        db,
-        "password_changed",
-        {
-            "name": user.name,
-            "email": user.email,
-            "login_url": login_url,
-            "button_text": "Login to Tourvaa",
-            "button_url": login_url,
-        },
-        "Your Tourvaa password was changed",
-        password_changed_email(user.name, login_url),
-    )
-
-    send_email(
-        user.email,
-        subject,
-        html,
-    )
+    try:
+        subject, html = render_database_email(
+            db,
+            "password_changed",
+            {
+                "name": user.name,
+                "email": user.email,
+                "login_url": login_url,
+                "button_text": "Login to Tourvaa",
+                "button_url": login_url,
+            },
+            "Your Tourvaa password was changed",
+            password_changed_email(user.name, login_url),
+        )
+        try_send_email(user.email, subject, html)
+    except Exception as exc:
+        logger.warning("Password changed email failed for user id=%s: %s", user.id, exc)
 
     return True
 
