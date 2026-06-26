@@ -9,7 +9,7 @@ from app.database import SessionLocal
 from app.modules.settings.models import PaymentSetting
 from app.crypto import encrypt_secret
 
-STRIPE_PUBLIC  = os.environ["STRIPE_PUBLIC_KEY"]
+STRIPE_PUBLIC  = os.environ["STRIPE_PUBLISHABLE_KEY"]
 STRIPE_SECRET  = os.environ["STRIPE_SECRET_KEY"]
 
 db = SessionLocal()
