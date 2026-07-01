@@ -5,6 +5,14 @@ from sqlalchemy.orm import Session
 from app.modules.common.money import utcnow
 from app.modules.notifications.models import Notification, NotificationLog
 from app.modules.notifications.schemas import NotificationCreate
+from app.modules.users.models import User
+
+
+def _is_admin(actor: "User | None") -> bool:
+    if not actor or not actor.role:
+        return True
+    slug = actor.role.slug or ""
+    return not any(marker in slug for marker in ("supplier", "agent", "customer"))
 
 
 def serialize_notification(n: Notification) -> dict:
@@ -19,10 +27,28 @@ def create_notification(db: Session, data: NotificationCreate):
     return serialize_notification(n)
 
 
-def list_notifications(db: Session, page: int = 1, limit: int = 20, user_id: int | None = None, is_read: str = ""):
+def list_notifications(
+    db: Session,
+    page: int = 1,
+    limit: int = 20,
+    user_id: int | None = None,
+    is_read: str = "",
+    entity_type: str = "",
+    entity_id: int | None = None,
+    notification_type: str = "",
+    actor: "User | None" = None,
+):
     query = db.query(Notification)
+    if not _is_admin(actor):
+        user_id = actor.id
     if user_id:
         query = query.filter(Notification.user_id == user_id)
+    if entity_type:
+        query = query.filter(Notification.entity_type == entity_type.strip().lower())
+    if entity_id:
+        query = query.filter(Notification.entity_id == entity_id)
+    if notification_type:
+        query = query.filter(Notification.notification_type == notification_type.strip().lower())
     if is_read != "":
         expected_read_state = 1 if is_read in {"1", "true", "yes"} else 0
         query = query.filter(Notification.is_read == expected_read_state)
@@ -32,10 +58,24 @@ def list_notifications(db: Session, page: int = 1, limit: int = 20, user_id: int
     return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
-def mark_read(db: Session, notification_id: int):
+def mark_all_read(db: Session, user_id: int, actor: "User | None" = None) -> int:
+    if not _is_admin(actor):
+        user_id = actor.id
+    updated = (
+        db.query(Notification)
+        .filter(Notification.user_id == user_id, Notification.is_read == 0)
+        .update({"is_read": 1, "read_at": utcnow()}, synchronize_session=False)
+    )
+    db.commit()
+    return updated
+
+
+def mark_read(db: Session, notification_id: int, actor: "User | None" = None):
     n = db.query(Notification).filter(Notification.id == notification_id).first()
     if not n:
         raise HTTPException(status_code=404, detail="Notification not found")
+    if not _is_admin(actor) and n.user_id != actor.id:
+        raise HTTPException(status_code=403, detail="Notification access denied")
     n.is_read = 1
     n.read_at = utcnow()
     db.commit()

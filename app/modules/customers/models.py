@@ -30,7 +30,7 @@ class Customer(Base):
     state = Column(String(100), default="", nullable=False)
     city = Column(String(100), default="", nullable=False)
     pincode = Column(String(20), default="", nullable=False)
-    status = Column(String(20), default="active", nullable=False)
+    status = Column(String(20), default="active", nullable=False, index=True)
     email_verified = Column(Boolean, default=False, nullable=False)
     phone_verified = Column(Boolean, default=False, nullable=False)
     is_blocked = Column(Boolean, default=False, nullable=False)
@@ -43,7 +43,7 @@ class Customer(Base):
     upcoming_bookings = Column(Integer, default=0, nullable=False)
     total_amount_paid = Column(Numeric(12, 2), default=0, nullable=False)
     total_amount_pending = Column(Numeric(12, 2), default=0, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", foreign_keys=[user_id])

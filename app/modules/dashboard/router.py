@@ -25,6 +25,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
+# Any approval_status that means "still waiting on an admin decision" — matches
+# the broader definition already used by the approval-queue lists, so the
+# "X pending" stat/alert counts don't disagree with what's actually listed.
+PENDING_REVIEW_STATUSES = [
+    "pending",
+    "email_verification_pending",
+    "profile_incomplete",
+    "documents_pending",
+    "admin_review_pending",
+    "partial_approved",
+    "partially_approved",
+]
+
 # Maps role slug → dashboard type key used by the frontend
 ROLE_TO_DASHBOARD_TYPE = {
     "super-admin": "super_admin",
@@ -484,15 +497,15 @@ def dashboard_summary(
     can_payments = _can("payments.view", "view-payments")
 
     total_suppliers = _safe_count(db, Supplier) if can_suppliers else 0
-    pending_suppliers = _safe_count(db, Supplier, Supplier.approval_status == "pending") if can_suppliers else 0
+    pending_suppliers = _safe_count(db, Supplier, Supplier.approval_status.in_(PENDING_REVIEW_STATUSES)) if can_suppliers else 0
     approved_suppliers = total_suppliers - pending_suppliers
 
     total_agents = _safe_count(db, Agent) if can_agents else 0
-    pending_agents = _safe_count(db, Agent, Agent.approval_status == "pending") if can_agents else 0
+    pending_agents = _safe_count(db, Agent, Agent.approval_status.in_(PENDING_REVIEW_STATUSES)) if can_agents else 0
     approved_agents = total_agents - pending_agents
 
     total_affiliates = _safe_count(db, Affiliate) if can_affiliates else 0
-    pending_affiliates = _safe_count(db, Affiliate, Affiliate.approval_status == "pending") if can_affiliates else 0
+    pending_affiliates = _safe_count(db, Affiliate, Affiliate.approval_status.in_(PENDING_REVIEW_STATUSES)) if can_affiliates else 0
 
     total_tours = _safe_count(db, Tour) if can_tours else 0
     published_tours = _safe_count(db, Tour, Tour.status == "published") if can_tours else 0
@@ -956,17 +969,17 @@ def dashboard_alerts(
         alerts.append({"type": "warning", "message": f"{pending_users} user(s) pending approval", "action": "users"})
 
     if _can("suppliers.view", "view-suppliers"):
-        pending_suppliers = _safe_count(db, Supplier, Supplier.approval_status == "pending")
+        pending_suppliers = _safe_count(db, Supplier, Supplier.approval_status.in_(PENDING_REVIEW_STATUSES))
         if pending_suppliers > 0:
             alerts.append({"type": "warning", "message": f"{pending_suppliers} supplier approval(s) pending", "action": "suppliers"})
 
     if _can("agents.view", "view-agents"):
-        pending_agents = _safe_count(db, Agent, Agent.approval_status == "pending")
+        pending_agents = _safe_count(db, Agent, Agent.approval_status.in_(PENDING_REVIEW_STATUSES))
         if pending_agents > 0:
             alerts.append({"type": "warning", "message": f"{pending_agents} agent approval(s) pending", "action": "agents"})
 
     if _can("affiliates.view", "view-affiliates"):
-        pending_affiliates = _safe_count(db, Affiliate, Affiliate.approval_status == "pending")
+        pending_affiliates = _safe_count(db, Affiliate, Affiliate.approval_status.in_(PENDING_REVIEW_STATUSES))
         if pending_affiliates > 0:
             alerts.append({"type": "info", "message": f"{pending_affiliates} affiliate request(s) pending", "action": "affiliates"})
 

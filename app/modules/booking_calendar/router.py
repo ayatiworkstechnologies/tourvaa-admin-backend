@@ -16,11 +16,11 @@ def sync_calendar(booking_id: int, db: Session = Depends(get_db), current_user=D
 
 
 @router.get("/bookings/{booking_id}/calendar-event")
-def get_calendar_event(booking_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("bookings.view"))):
-    return {"status": "success", "data": service.get_calendar_event(db, booking_id=booking_id)}
+def get_calendar_event(booking_id: int, db: Session = Depends(get_db), current_user=Depends(require_any_permission("bookings.view"))):
+    return {"status": "success", "data": service.get_calendar_event(db, booking_id=booking_id, actor=current_user)}
 
 
 @router.get("/bookings/{booking_id}/calendar-event/download")
-def download_ics(booking_id: int, db: Session = Depends(get_db)):
-    fs_path, filename = service.get_ics_path(db, booking_id=booking_id)
+def download_ics(booking_id: int, db: Session = Depends(get_db), current_user=Depends(require_any_permission("bookings.view"))):
+    fs_path, filename = service.get_ics_path(db, booking_id=booking_id, actor=current_user)
     return FileResponse(path=fs_path, filename=filename, media_type="text/calendar")

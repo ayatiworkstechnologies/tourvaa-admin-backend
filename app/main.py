@@ -54,7 +54,7 @@ from app.modules.cms.geo_seed_router import router as geo_seed_router
 from app.modules.cms.geo_router import router as geo_router
 from app.modules.bookings.router import router as bookings_router, supplier_router as bookings_supplier_router, supplier_portal_router as bookings_supplier_portal_router, agent_portal_router as bookings_agent_portal_router
 from app.modules.payments.router import router as payments_router
-from app.modules.tours.router import router as tour_detail_router
+from app.modules.tours.router import discounts_router, router as tour_detail_router
 from app.modules.invoices.models import Invoice, InvoiceItem
 from app.modules.notifications.models import Notification, NotificationLog
 from app.modules.sessions.models import UserSession, LoginHistory
@@ -275,6 +275,7 @@ app.include_router(suppliers_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
 app.include_router(affiliates_router, prefix="/api")
 app.include_router(tour_detail_router, prefix="/api")
+app.include_router(discounts_router, prefix="/api")
 app.include_router(cms_router, prefix="/api")
 app.include_router(geo_seed_router, prefix="/api")
 app.include_router(geo_router, prefix="/api")

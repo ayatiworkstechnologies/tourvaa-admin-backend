@@ -272,6 +272,10 @@ class DiscountPayload(BaseModel):
             raise ValueError(f"discount_scope must be one of {DISCOUNT_SCOPES}")
         return v
 
+
+class GlobalDiscountPayload(DiscountPayload):
+    tour_id: int | None = None
+
     @field_validator("status")
     @classmethod
     def validate_status(cls, v: str):

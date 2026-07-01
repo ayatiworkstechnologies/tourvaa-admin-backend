@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.modules.audit.service import log_audit
@@ -30,7 +30,7 @@ from app.modules.bookings.schemas import (
 from app.modules.cms.models import City, Country, Tour
 from app.modules.common.money import money, money_str, utcnow
 from app.modules.customers.models import Customer
-from app.modules.tours.models import TourAccommodationExtra, TourCalendar, TourExtension, TourOptionalActivity, TourPricing, TourUnavailableDate
+from app.modules.tours.models import TourAccommodationExtra, TourCalendar, TourDiscount, TourExtension, TourOptionalActivity, TourPricing, TourUnavailableDate
 from app.modules.users.models import User
 
 logger = logging.getLogger(__name__)
@@ -136,6 +136,8 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
         "id": booking.id,
         "booking_code": booking.booking_code or _booking_code(booking.id),
         "customer_id": booking.customer_id,
+        "customer_name": booking.customer.full_name if booking.customer else None,
+        "customer_email": booking.customer.email if booking.customer else None,
         "tour_id": booking.tour_id,
         "tour_calendar_id": booking.tour_calendar_id,
         "supplier_id": booking.supplier_id,
@@ -235,7 +237,41 @@ def get_booking_by_id(db: Session, booking_id: int) -> Booking:
     return booking
 
 
-def _price_booking(db: Session, data: BookingCreate):
+def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consume: bool = False):
+    """Look up and validate a promo code against tour_discounts. Raises 400 if the
+    code doesn't exist or doesn't apply; returns 0 if no code was supplied."""
+    if not promo_code or not promo_code.strip():
+        return money(0)
+    code = promo_code.strip()
+    discount = db.query(TourDiscount).filter(TourDiscount.discount_code == code, TourDiscount.status == "active").first()
+    if not discount:
+        raise HTTPException(status_code=400, detail="Invalid or inactive promo code")
+    now = utcnow()
+    if discount.start_date and now < discount.start_date:
+        raise HTTPException(status_code=400, detail="Promo code is not yet active")
+    if discount.end_date and now > discount.end_date:
+        raise HTTPException(status_code=400, detail="Promo code has expired")
+    if discount.usage_limit is not None and (discount.used_count or 0) >= discount.usage_limit:
+        raise HTTPException(status_code=400, detail="Promo code usage limit has been reached")
+    if money(subtotal) < money(discount.minimum_booking_amount or 0):
+        raise HTTPException(status_code=400, detail=f"Promo code requires a minimum booking amount of {discount.minimum_booking_amount}")
+    if discount.discount_scope == "tour" and (not tour or discount.tour_id != tour.id):
+        raise HTTPException(status_code=400, detail="Promo code is not valid for this tour")
+    if discount.discount_scope == "category" and (not tour or discount.category_id != tour.category_id):
+        raise HTTPException(status_code=400, detail="Promo code is not valid for this tour category")
+    if discount.discount_scope == "country" and (not tour or discount.country_id != tour.country_id):
+        raise HTTPException(status_code=400, detail="Promo code is not valid for this country")
+    if discount.discount_type == "percentage":
+        amount = money(subtotal) * money(discount.discount_value) / money(100)
+    else:
+        amount = money(discount.discount_value)
+    amount = min(money(amount), money(subtotal))
+    if consume:
+        discount.used_count = (discount.used_count or 0) + 1
+    return money(amount)
+
+
+def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False):
     adults = data.adults_count if data.adults_count is not None else data.no_of_adults
     children = data.children_count if data.children_count is not None else data.no_of_children
     total_travellers = adults + children
@@ -243,7 +279,10 @@ def _price_booking(db: Session, data: BookingCreate):
         raise HTTPException(status_code=400, detail="At least one traveller is required")
 
     tour = db.query(Tour).filter(Tour.id == data.tour_id).first() if data.tour_id else None
-    calendar = db.query(TourCalendar).filter(TourCalendar.id == data.tour_calendar_id).first() if data.tour_calendar_id else None
+    calendar_query = db.query(TourCalendar).filter(TourCalendar.id == data.tour_calendar_id)
+    if lock_calendar:
+        calendar_query = calendar_query.with_for_update()
+    calendar = calendar_query.first() if data.tour_calendar_id else None
     if data.tour_id and not tour:
         raise HTTPException(status_code=404, detail="Tour not found")
     if tour and tour.status != "published":
@@ -303,7 +342,8 @@ def _price_booking(db: Session, data: BookingCreate):
         extension_total += total
         extension_rows.append((row, item.quantity, unit, total))
 
-    discount = money(0)
+    subtotal = money(base_amount + activity_total + accommodation_total + extension_total)
+    discount = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount)
     tax = money(0)
     surcharge = money(0)
     final = money(base_amount + activity_total + accommodation_total + extension_total - discount + tax + surcharge)
@@ -341,7 +381,7 @@ def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
 
 
 def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_status: str = "", payment_status: str = "", supplier_acceptance_status: str = "", country_id: Optional[int] = None, supplier_id: Optional[int] = None, agent_id: Optional[int] = None, tour_id: Optional[int] = None, start_date: str = "", end_date: str = "", sort_by: str = "newest", actor: Optional[User] = None) -> dict:
-    query = db.query(Booking)
+    query = db.query(Booking).options(joinedload(Booking.customer))
     role = _user_role(actor)
     if role == "supplier":
         query = query.join(Booking.supplier).filter_by(user_id=actor.id)
@@ -396,7 +436,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         raise HTTPException(status_code=403, detail="Customer booking access denied")
     if data.booking_source == "agent" and not data.agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required for agent bookings")
-    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions = _price_booking(db, data)
+    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions = _price_booking(db, data, lock_calendar=True, consume_discount=True)
     country = db.query(Country).filter(Country.id == (data.country_id or (tour.country_id if tour else None))).first() if (data.country_id or tour) else None
     city = db.query(City).filter(City.id == (data.city_id or (tour.city_id if tour else None))).first() if (data.city_id or tour) else None
     supplier = tour.supplier if tour and tour.supplier else None
@@ -592,6 +632,18 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
                 generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id, payment_id=payment.id), actor, request)
             except Exception as error:
                 logger.warning("Invoice generation after supplier acceptance failed for booking %s and payment %s: %s", booking.id, payment.id, error)
+
+    if booking.supplier_id:
+        from app.modules.supplier_ledger.models import SupplierLedger
+        from app.modules.supplier_ledger.service import create_ledger_entry
+        existing_ledger = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking.id).first()
+        if not existing_ledger:
+            markup_type = (booking.supplier.markup_type or "").strip().lower() if booking.supplier else ""
+            commission_percentage = money(booking.supplier.markup_value) if booking.supplier and markup_type == "percentage" else money(0)
+            try:
+                create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=money(booking.final_amount or booking.total_cost or 0), commission_percentage=commission_percentage)
+            except Exception as error:
+                logger.warning("Supplier ledger entry creation failed for booking %s: %s", booking.id, error)
 
     notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
     if booking.customer and booking.customer.user_id:

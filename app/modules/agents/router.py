@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request, HTTPException
+from fastapi import APIRouter, Depends, Query, Request, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -118,6 +118,132 @@ def edit_agent(agent_id: int, data: AgentUpdate, request: Request, db: Session =
         if not allowed:
             raise HTTPException(status_code=403, detail="Permission denied")
     return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent_id, data, current_user, request)}
+
+
+@router.get("/{agent_id}/documents")
+def get_agent_documents(agent_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    agent = get_agent(db, agent_id)
+    if agent.user_id != current_user.id:
+        role_ids = get_user_role_ids(current_user)
+        allowed_slugs = expand_permission_slugs(("agents.view", "view-agents"))
+        allowed = (
+            db.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id.in_(role_ids))
+            .filter(Permission.slug.in_(allowed_slugs))
+            .filter(Permission.is_active == True)
+            .first()
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    from app.modules.agents.models import AgentDocument
+    from app.modules.agents.service import _document
+    docs = db.query(AgentDocument).filter(AgentDocument.agent_id == agent_id).all()
+    return {"status": "success", "data": [_document(doc) for doc in docs]}
+
+
+@router.post("/{agent_id}/documents")
+async def upload_agent_document(
+    agent_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    document_type: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    agent = get_agent(db, agent_id)
+    if agent.user_id != current_user.id:
+        role_ids = get_user_role_ids(current_user)
+        allowed_slugs = expand_permission_slugs(("agents.edit", "update-agents"))
+        allowed = (
+            db.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id.in_(role_ids))
+            .filter(Permission.slug.in_(allowed_slugs))
+            .filter(Permission.is_active == True)
+            .first()
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="File is required")
+
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File must be 10MB or smaller")
+
+    allowed_types = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "application/pdf": "pdf",
+        "application/msword": "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    }
+    extension = allowed_types.get(file.content_type or "")
+    if not extension:
+        filename_lower = file.filename.lower()
+        if filename_lower.endswith(".pdf"):
+            extension = "pdf"
+        elif filename_lower.endswith(".jpg") or filename_lower.endswith(".jpeg"):
+            extension = "jpg"
+        elif filename_lower.endswith(".png"):
+            extension = "png"
+        elif filename_lower.endswith(".webp"):
+            extension = "webp"
+        elif filename_lower.endswith(".doc"):
+            extension = "doc"
+        elif filename_lower.endswith(".docx"):
+            extension = "docx"
+        else:
+            raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, PDF, DOC, and DOCX files are allowed")
+
+    from uuid import uuid4
+    from app.modules.common.imagekit_client import upload_to_imagekit
+    from app.modules.agents.models import AgentDocument
+    from app.modules.agents.service import _document
+
+    filename = f"{uuid4().hex}.{extension}"
+    uploaded = upload_to_imagekit(content, filename, folder="/tourvaa/agent-documents", is_private=True)
+    relative_path = f"imagekit:{uploaded['file_path']}"
+
+    existing_doc = db.query(AgentDocument).filter(
+        AgentDocument.agent_id == agent_id,
+        AgentDocument.document_type == document_type
+    ).first()
+
+    if existing_doc:
+        existing_doc.file_path = relative_path
+        existing_doc.document_name = file.filename
+        existing_doc.file_size = len(content)
+        existing_doc.mime_type = file.content_type or "application/octet-stream"
+        existing_doc.status = "pending"
+        existing_doc.rejection_reason = None
+        db.commit()
+        db.refresh(existing_doc)
+        doc_obj = existing_doc
+    else:
+        new_doc = AgentDocument(
+            agent_id=agent_id,
+            document_type=document_type,
+            document_name=file.filename,
+            file_path=relative_path,
+            file_size=len(content),
+            mime_type=file.content_type or "application/octet-stream",
+            status="pending",
+        )
+        db.add(new_doc)
+        db.commit()
+        db.refresh(new_doc)
+        doc_obj = new_doc
+
+    return {
+        "status": "success",
+        "message": "Document uploaded successfully",
+        "data": _document(doc_obj)
+    }
 
 
 @router.post("/{agent_id}/approve")

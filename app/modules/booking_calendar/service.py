@@ -127,15 +127,25 @@ def sync_booking_to_calendar(db: Session, booking_id: int, actor: Optional[User]
         return _serialize(event)
 
 
-def get_calendar_event(db: Session, booking_id: int) -> dict:
+def get_calendar_event(db: Session, booking_id: int, actor: Optional[User] = None) -> dict:
+    from app.modules.bookings.service import _ensure_booking_access
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    _ensure_booking_access(booking, actor)
     event = db.query(BookingCalendarEvent).filter(BookingCalendarEvent.booking_id == booking_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="No calendar event found for this booking")
     return _serialize(event)
 
 
-def get_ics_path(db: Session, booking_id: int) -> tuple[str, str]:
+def get_ics_path(db: Session, booking_id: int, actor: Optional[User] = None) -> tuple[str, str]:
     """Returns (filesystem_path, filename) for FileResponse."""
+    from app.modules.bookings.service import _ensure_booking_access
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    _ensure_booking_access(booking, actor)
     event = db.query(BookingCalendarEvent).filter(BookingCalendarEvent.booking_id == booking_id).first()
     if not event or not event.ics_file_path:
         raise HTTPException(status_code=404, detail="Calendar file not found — please sync first")

@@ -24,8 +24,42 @@ def serialize_invoice(inv: Invoice, detail: bool = False) -> dict:
     return data
 
 
-def list_invoices(db: Session, page: int = 1, limit: int = 20, booking_id: int | None = None, customer_id: int | None = None):
+def _user_role(user: User | None) -> str:
+    if not user or not user.role:
+        return "admin"
+    slug = user.role.slug or ""
+    if "supplier" in slug:
+        return "supplier"
+    if "agent" in slug:
+        return "agent"
+    if "customer" in slug:
+        return "customer"
+    return "admin"
+
+
+def _ensure_invoice_access(inv: Invoice, actor: User | None) -> None:
+    role = _user_role(actor)
+    if role == "admin" or actor is None:
+        return
+    if role == "customer" and inv.customer and inv.customer.user_id == actor.id:
+        return
+    booking = inv.booking
+    if role == "supplier" and booking and booking.supplier and booking.supplier.user_id == actor.id:
+        return
+    if role == "agent" and booking and booking.agent and booking.agent.user_id == actor.id:
+        return
+    raise HTTPException(status_code=403, detail="Invoice access denied")
+
+
+def list_invoices(db: Session, page: int = 1, limit: int = 20, booking_id: int | None = None, customer_id: int | None = None, actor: User | None = None):
     query = db.query(Invoice)
+    role = _user_role(actor)
+    if role == "supplier":
+        query = query.join(Invoice.booking).join(Booking.supplier).filter_by(user_id=actor.id)
+    elif role == "agent":
+        query = query.join(Invoice.booking).join(Booking.agent).filter_by(user_id=actor.id)
+    elif role == "customer":
+        query = query.join(Invoice.customer).filter_by(user_id=actor.id)
     if booking_id: query = query.filter(Invoice.booking_id == booking_id)
     if customer_id: query = query.filter(Invoice.customer_id == customer_id)
     query = query.order_by(Invoice.id.desc())
@@ -34,10 +68,11 @@ def list_invoices(db: Session, page: int = 1, limit: int = 20, booking_id: int |
     return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
-def get_invoice(db: Session, invoice_id: int) -> Invoice:
+def get_invoice(db: Session, invoice_id: int, actor: User | None = None) -> Invoice:
     inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    _ensure_invoice_access(inv, actor)
     return inv
 
 
@@ -46,6 +81,11 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
     payment = db.query(Payment).filter(Payment.id == data.payment_id).first() if data.payment_id else None
+    if payment and payment.booking_id != booking.id:
+        raise HTTPException(status_code=400, detail="Payment does not belong to the specified booking")
+    existing = db.query(Invoice).filter(Invoice.booking_id == booking.id, Invoice.payment_id == (payment.id if payment else None)).first()
+    if existing:
+        return serialize_invoice(existing, detail=True)
     subtotal = money(payment.captured_amount if payment else booking.final_amount)
     gst = money(subtotal * data.gst_rate)
     total = money(subtotal + gst)
@@ -86,7 +126,7 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
 
 
 def regenerate_invoice_pdf(db: Session, invoice_id: int, actor: User, request: Request | None = None):
-    inv = get_invoice(db, invoice_id)
+    inv = get_invoice(db, invoice_id, actor)
     booking = inv.booking
     if not booking:
         raise HTTPException(status_code=400, detail="Invoice has no associated booking")
@@ -116,10 +156,10 @@ def regenerate_invoice_pdf(db: Session, invoice_id: int, actor: User, request: R
     return serialize_invoice(inv, detail=True)
 
 
-def download_invoice_pdf(db: Session, invoice_id: int) -> tuple[str, str]:
+def download_invoice_pdf(db: Session, invoice_id: int, actor: User | None = None) -> tuple[str, str]:
     """Returns (file_system_path, filename) for FileResponse."""
     from app.config import get_storage_root
-    inv = get_invoice(db, invoice_id)
+    inv = get_invoice(db, invoice_id, actor)
     if not inv.pdf_path:
         raise HTTPException(status_code=404, detail="PDF not yet generated for this invoice")
     fs_path = str(get_storage_root()) + inv.pdf_path.replace("/storage", "")
@@ -130,7 +170,7 @@ def download_invoice_pdf(db: Session, invoice_id: int) -> tuple[str, str]:
 
 
 def email_invoice_to_customer(db: Session, invoice_id: int, email: str | None, actor: User, request: Request | None = None):
-    inv = get_invoice(db, invoice_id)
+    inv = get_invoice(db, invoice_id, actor)
     booking = inv.booking
     recipient = email or (booking.customer.user.email if booking and booking.customer and booking.customer.user else None)
     if not recipient:

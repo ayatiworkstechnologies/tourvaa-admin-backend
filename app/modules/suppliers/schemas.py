@@ -119,6 +119,42 @@ class VehicleUpdate(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class DocumentReviewRequest(BaseModel):
+    status: str = Field(max_length=20)
+    rejection_reason: str | None = Field(default=None, max_length=255)
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str):
+        value = value.strip().lower()
+        if value not in {"approved", "rejected"}:
+            raise ValueError("Status must be 'approved' or 'rejected'")
+        return value
+
+    @field_validator("rejection_reason")
+    @classmethod
+    def trim_reason(cls, value: str | None):
+        return value.strip() if isinstance(value, str) else value
+
+
+class VehicleReviewRequest(BaseModel):
+    approval_status: str = Field(max_length=20)
+    rejection_reason: str | None = Field(default=None, max_length=255)
+
+    @field_validator("approval_status")
+    @classmethod
+    def validate_approval_status(cls, value: str):
+        value = value.strip().lower()
+        if value not in {"approved", "rejected"}:
+            raise ValueError("Approval status must be 'approved' or 'rejected'")
+        return value
+
+    @field_validator("rejection_reason")
+    @classmethod
+    def trim_reason(cls, value: str | None):
+        return value.strip() if isinstance(value, str) else value
+
+
 class SupplierMarkupRequest(BaseModel):
     markup_type: str = Field(max_length=20)
     markup_value: float = Field(ge=0)

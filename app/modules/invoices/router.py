@@ -29,8 +29,8 @@ class InvoiceEmailBody(BaseModel):
 
 @router.get("")
 @router.get("/")
-def invoices(params: dict = Depends(pagination_params), booking_id: int = Query(default=0), customer_id: int = Query(default=0), db: Session = Depends(get_db), _=Depends(require_any_permission("invoices.view"))):
-    return {"status": "success", **list_invoices(db, params["page"], params["limit"], booking_id or None, customer_id or None)}
+def invoices(params: dict = Depends(pagination_params), booking_id: int = Query(default=0), customer_id: int = Query(default=0), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("invoices.view"))):
+    return {"status": "success", **list_invoices(db, params["page"], params["limit"], booking_id or None, customer_id or None, actor=current_user)}
 
 
 @router.post("/generate")
@@ -39,8 +39,8 @@ def generate(data: InvoiceGenerateRequest, request: Request, db: Session = Depen
 
 
 @router.get("/{invoice_id}")
-def detail(invoice_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("invoices.view"))):
-    return {"status": "success", "data": serialize_invoice(get_invoice(db, invoice_id), detail=True)}
+def detail(invoice_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("invoices.view"))):
+    return {"status": "success", "data": serialize_invoice(get_invoice(db, invoice_id, current_user), detail=True)}
 
 
 @router.post("/{invoice_id}/generate-pdf")
@@ -50,8 +50,8 @@ def generate_pdf(invoice_id: int, request: Request, db: Session = Depends(get_db
 
 
 @router.get("/{invoice_id}/download")
-def download(invoice_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("invoices.download", "invoices.view"))):
-    fs_path, filename = download_invoice_pdf(db, invoice_id)
+def download(invoice_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("invoices.download", "invoices.view"))):
+    fs_path, filename = download_invoice_pdf(db, invoice_id, current_user)
     return FileResponse(path=fs_path, filename=filename, media_type="application/pdf")
 
 

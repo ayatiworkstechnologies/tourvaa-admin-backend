@@ -3,12 +3,13 @@ from math import ceil
 
 from fastapi import HTTPException, Request
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.modules.audit.service import log_audit
 from app.modules.auth.service import build_password_reset_url
 from app.modules.common.email_templates import password_reset_email
 from app.modules.common.mailer import send_email
+from app.modules.cms.models import City
 from app.modules.customers.models import Customer, CustomerCommunication
 from app.modules.bookings.models import Booking
 from app.modules.payments.models import Payment
@@ -132,7 +133,10 @@ def get_customers(
     sort_order: str = "desc",
     agent_id: int | None = None,
 ):
-    query = db.query(Customer)
+    query = db.query(Customer).options(
+        joinedload(Customer.country_ref),
+        joinedload(Customer.city_ref).joinedload(City.state),
+    )
 
     if agent_id:
         query = query.filter(
@@ -245,8 +249,6 @@ def get_customer_detail(db: Session, customer_id: int, actor: User | None = None
             .limit(3)
             .all()
         )
-        live = _history_summary_from_db(db, customer_id)
-        data.update(live)
         serialized_bookings = [serialize_booking(b) for b in recent_bookings]
         serialized_payments = [serialize_payment(p) for p in recent_payments]
     except Exception:

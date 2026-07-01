@@ -10,6 +10,7 @@ from app.modules.tours.schemas import (
     DiscountPayload,
     ExtensionPayload,
     GalleryImagePayload,
+    GlobalDiscountPayload,
     HighlightPayload,
     InclusionPayload,
     ItineraryPayload,
@@ -31,6 +32,7 @@ from app.modules.tours.service import (
     create_exclusion,
     create_extension,
     create_gallery_image,
+    create_global_discount,
     create_highlight,
     create_inclusion,
     create_itinerary,
@@ -43,6 +45,7 @@ from app.modules.tours.service import (
     delete_exclusion,
     delete_extension,
     delete_gallery_image,
+    delete_global_discount,
     delete_highlight,
     delete_inclusion,
     delete_itinerary,
@@ -52,6 +55,7 @@ from app.modules.tours.service import (
     get_overview,
     list_accommodations,
     list_activities,
+    list_all_discounts,
     list_calendar,
     list_discounts,
     list_exclusions,
@@ -72,6 +76,7 @@ from app.modules.tours.service import (
     update_exclusion,
     update_extension,
     update_gallery_image,
+    update_global_discount,
     update_highlight,
     update_inclusion,
     update_itinerary,
@@ -473,3 +478,54 @@ def remove_discount(tour_id: int, discount_id: int, request: Request, db: Sessio
 @router.post("/{tour_id}/calculate-price")
 def tour_calculate_price(tour_id: int, req: PriceCalculationRequest, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": calculate_price(db, tour_id, req)}
+
+
+# ── Global Discounts (any scope: tour / category / country / all_tours) ───────
+# Standalone from the tour-scoped /{tour_id}/discounts endpoints above — this
+# powers a top-level Discounts admin page that can manage discounts of any scope.
+
+discounts_router = APIRouter(prefix="/discounts", tags=["Discounts"])
+
+
+@discounts_router.get("")
+@discounts_router.get("/")
+def all_discounts(
+    scope: str = Query(default=""),
+    search: str = Query(default=""),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_any_permission(VIEW)),
+):
+    return {"status": "success", "data": list_all_discounts(db, scope, search)}
+
+
+@discounts_router.post("")
+@discounts_router.post("/")
+def add_global_discount(
+    data: GlobalDiscountPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission(EDIT)),
+):
+    return {"status": "success", "data": create_global_discount(db, data, current_user, request)}
+
+
+@discounts_router.put("/{discount_id}")
+def edit_global_discount(
+    discount_id: int,
+    data: GlobalDiscountPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission(EDIT)),
+):
+    return {"status": "success", "data": update_global_discount(db, discount_id, data, current_user, request)}
+
+
+@discounts_router.delete("/{discount_id}")
+def remove_global_discount(
+    discount_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission(EDIT)),
+):
+    delete_global_discount(db, discount_id, current_user, request)
+    return {"status": "success", "message": "Discount deleted"}

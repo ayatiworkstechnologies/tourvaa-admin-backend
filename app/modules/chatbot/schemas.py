@@ -1,10 +1,10 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
 
 class ChatMessageRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=2000)
     session_key: Optional[str] = None
 
 

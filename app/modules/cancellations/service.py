@@ -79,10 +79,37 @@ def _calculate_refund_percentage(db: Session, booking: Booking) -> Decimal:
     return Decimal("0")
 
 
+def _user_role(user: User | None) -> str:
+    if not user or not user.role:
+        return "admin"
+    slug = user.role.slug or ""
+    if "supplier" in slug:
+        return "supplier"
+    if "agent" in slug:
+        return "agent"
+    if "customer" in slug:
+        return "customer"
+    return "admin"
+
+
+def _ensure_booking_owner(booking: Booking, actor: User | None) -> None:
+    role = _user_role(actor)
+    if role == "admin" or actor is None:
+        return
+    if role == "customer" and booking.customer and booking.customer.user_id == actor.id:
+        return
+    if role == "supplier" and booking.supplier and booking.supplier.user_id == actor.id:
+        return
+    if role == "agent" and booking.agent and booking.agent.user_id == actor.id:
+        return
+    raise HTTPException(status_code=403, detail="Booking access denied")
+
+
 def create_request(db: Session, data: CancellationRequestCreate, actor: User, request=None) -> dict:
     booking = db.query(Booking).filter(Booking.id == data.booking_id).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
+    _ensure_booking_owner(booking, actor)
     if booking.booking_status == "cancelled":
         raise HTTPException(status_code=400, detail="Booking is already cancelled")
 
@@ -151,9 +178,23 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
 
     # Cancel the booking
     booking = req.booking
+    old_status = booking.booking_status
     booking.booking_status = "cancelled"
     booking.cancellation_reason = req.reason
     booking.cancelled_at = utcnow()
+    booking.cancelled_by = actor.id
+    if booking.calendar:
+        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - (booking.total_travellers or 0))
+
+    from app.modules.bookings.models import BookingStatusHistory
+    db.add(BookingStatusHistory(
+        booking_id=booking.id,
+        old_status=old_status,
+        new_status="cancelled",
+        changed_by_user_id=actor.id,
+        change_source="cancellation_request",
+        reason=req.reason,
+    ))
 
     db.commit()
     db.refresh(req)
@@ -198,18 +239,42 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
 
     booking = req.booking
 
-    if data.gateway != "manual" and data.gateway_refund_id:
-        pass  # In a real integration, call gateway here
+    # Actually move the money: refund real Payment rows up to the approved refund_amount,
+    # instead of just flipping status flags (previously a no-op that never touched Payment).
+    from app.modules.payments.models import Payment
+    from app.modules.payments.schemas import RefundRequest as PaymentRefundRequest
+    from app.modules.payments.service import process_refund as process_payment_refund
+
+    remaining = money(req.refund_amount)
+    if remaining > 0:
+        payments = (
+            db.query(Payment)
+            .filter(Payment.booking_id == booking.id)
+            .filter(Payment.payment_status.in_(["paid", "partially_paid", "partially_refunded"]))
+            .order_by(Payment.id.asc())
+            .all()
+        )
+        for payment in payments:
+            if remaining <= 0:
+                break
+            refundable = money(payment.captured_amount or payment.paid_amount) - money(payment.refunded_amount)
+            if refundable <= 0:
+                continue
+            amount = min(refundable, remaining)
+            process_payment_refund(
+                db, payment.id,
+                PaymentRefundRequest(amount=amount, reason=f"Cancellation request #{req.id}: {req.reason or 'Customer cancellation'}"),
+                actor=actor, request=request,
+            )
+            remaining -= amount
 
     req.status = "refund_processed"
     req.gateway_refund_id = data.gateway_refund_id
     req.refund_processed_at = utcnow()
 
-    # Update booking payment status
-    booking.payment_status = "refunded"
-
     db.commit()
     db.refresh(req)
+    db.refresh(booking)
 
     if booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="refund_processed", title="Refund Processed", message=f"Refund of {req.refund_amount} {req.currency} has been processed for booking {booking.booking_code}.", entity_type="cancellation_request", entity_id=req.id)

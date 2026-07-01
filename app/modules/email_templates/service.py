@@ -1,3 +1,5 @@
+import re
+
 from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -29,7 +31,7 @@ DEFAULT_EMAIL_TEMPLATES = [
         "key": "user_created",
         "name": "User Created",
         "subject": "Your Tourvaa account is ready",
-        "body": "Hi {{name}}, your account was created. Email: {{email}} Password: {{password}}",
+        "body": "Hi {{name}}, an administrator created your Tourvaa account (Email: {{email}}). For security, set your own password using this link before you sign in: {{set_password_url}}",
     },
     {
         "key": "password_reset",
@@ -128,6 +130,18 @@ DEFAULT_EMAIL_TEMPLATES = [
         ),
     },
 
+    {
+        "key": "supplier_submitted_verification",
+        "name": "Supplier Submitted Verification",
+        "subject": "Supplier profile submitted for review",
+        "body": "Supplier {{supplier_name}} has submitted their profile for admin review.",
+    },
+    {
+        "key": "supplier_rejected",
+        "name": "Supplier Rejected",
+        "subject": "Your Tourvaa supplier profile was rejected",
+        "body": "Hi {{supplier_name}}, your supplier profile was rejected. Reason: {{rejection_reason}}",
+    },
     {
         "key": "supplier_commission_requested",
         "name": "Supplier Commission Requested",
@@ -272,3 +286,54 @@ def delete_template(db: Session, template_id: int):
     db.delete(template)
     db.commit()
     return True
+
+
+SAMPLE_VALUES = {
+    "name": "Jordan Smith",
+    "email": "jordan.smith@example.com",
+    "phone": "+1 555 0100",
+    "role_name": "Customer",
+    "login_url": "https://app.tourvaa.com/login",
+    "reset_url": "https://app.tourvaa.com/reset-password?token=sample",
+    "set_password_url": "https://app.tourvaa.com/reset-password?token=sample",
+    "verification_url": "https://app.tourvaa.com/verify-email?token=sample",
+    "booking_code": "TVA-BKG-000123",
+    "tour_name": "Kerala Backwater Escape",
+    "tour_date": "2026-08-14",
+    "adults": "2",
+    "currency": "USD",
+    "total": "1,249.00",
+    "amount": "1,249.00",
+    "reason": "Requested by customer",
+    "new_status": "Confirmed",
+    "customer_name": "Jordan Smith",
+    "supplier_name": "Ayatiworks Technologies",
+    "agent_name": "Riverside Travel Partners",
+    "portal_url": "https://app.tourvaa.com/admin/bookings/123",
+    "markup_type": "percentage",
+    "markup_value": "12",
+    "pending_requirements": "Updated business license document",
+    "rejection_reason": "Incomplete documentation",
+}
+
+
+def preview_template(db: Session, template_id: int) -> dict:
+    """Render a template with sample data so admins can preview the outgoing design."""
+    from app.modules.common.email_templates import apply_template_values, base_email
+
+    template = get_template(db, template_id)
+    variables = sorted(set(re.findall(r"{{\s*(\w+)\s*}}", f"{template.subject}\n{template.body}")))
+    values = {var: SAMPLE_VALUES.get(var, f"Sample {var.replace('_', ' ')}") for var in variables}
+
+    subject = apply_template_values(template.subject, values)
+    body = apply_template_values(template.body, values)
+
+    html = base_email(
+        subject,
+        f"Hi {values.get('name', 'there')},",
+        body.replace("\n", "<br />"),
+        "View in Tourvaa",
+        values.get("login_url", "https://app.tourvaa.com"),
+    )
+
+    return {"subject": subject, "html": html, "variables": variables}

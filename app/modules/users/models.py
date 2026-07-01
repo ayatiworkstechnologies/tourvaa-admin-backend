@@ -19,10 +19,10 @@ class User(Base):
     pincode = Column(String(20), default="", nullable=False)
     password = Column(String(255), nullable=False)
 
-    role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=True, index=True)
 
-    is_active = Column(Boolean, default=True)
-    approval_status = Column(String(20), default="approved", nullable=False)
+    is_active = Column(Boolean, default=True, index=True)
+    approval_status = Column(String(20), default="approved", nullable=False, index=True)
     reset_password_token = Column(String(255), nullable=True)
     reset_password_expires_at = Column(DateTime(timezone=True), nullable=True)
     email_verified_at = Column(DateTime(timezone=True), nullable=True)

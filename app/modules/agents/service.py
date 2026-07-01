@@ -1,5 +1,5 @@
 from fastapi import HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.modules.audit.service import log_audit
 from app.modules.agents.models import Agent, AgentBusinessInfo, AgentContact, AgentInvoicing
@@ -14,7 +14,7 @@ def _contact(item):
 
 def _document(item):
     file_path = item.file_path or ""
-    if file_path.startswith("/private-documents/"):
+    if file_path.startswith("/private-documents/") or file_path.startswith("imagekit:"):
         file_url = f"/api/private-documents/agent/{item.id}"
     elif file_path and not file_path.startswith("http"):
         file_url = file_path if file_path.startswith("/") else "/storage/" + file_path
@@ -73,7 +73,15 @@ def serialize_agent(item: Agent):
 
 
 def list_agents(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = ""):
-    return simple_paginate(filter_review_query(db.query(Agent), Agent, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, name_field="agent_name"), page, limit, serialize_agent)
+    query = db.query(Agent).options(
+        joinedload(Agent.country),
+        joinedload(Agent.city),
+        joinedload(Agent.business_info),
+        joinedload(Agent.invoicing),
+        selectinload(Agent.contacts),
+        selectinload(Agent.documents),
+    )
+    return simple_paginate(filter_review_query(query, Agent, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, name_field="agent_name"), page, limit, serialize_agent)
 
 
 def get_agent(db: Session, agent_id: int):

@@ -10,6 +10,7 @@ from app.modules.email_templates.service import (
     delete_template,
     get_template,
     get_templates,
+    preview_template,
     update_template,
 )
 
@@ -38,6 +39,15 @@ def detail_template(
     _=Depends(require_permission("view-email")),
 ):
     return {"status": "success", "data": get_template(db, template_id)}
+
+
+@router.get("/{template_id}/preview")
+def preview(
+    template_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-email")),
+):
+    return {"status": "success", "data": preview_template(db, template_id)}
 
 
 @router.post("/")

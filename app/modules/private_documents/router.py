@@ -8,18 +8,20 @@ users who own the document or hold an admin/supplier-view permission.
 import mimetypes
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.config import get_private_docs_root
 from app.database import get_db
 from app.modules.common.auth import get_current_user, get_user_role_ids, expand_permission_slugs
+from app.modules.common.imagekit_client import get_private_file_url
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/private-documents", tags=["Private Documents"])
 
 _PRIVATE_PREFIX = "/private-documents/"
+_IMAGEKIT_PREFIX = "imagekit:"
 
 
 def _resolve_path(file_path: str):
@@ -27,6 +29,23 @@ def _resolve_path(file_path: str):
     # Strip the /private-documents/ prefix, then resolve under private_docs_root
     relative = file_path.removeprefix("/private-documents/")
     return get_private_docs_root() / relative
+
+
+def _serve_document(doc):
+    """Return a response for a document's file_path, whichever backend stored it."""
+    if doc.file_path.startswith(_IMAGEKIT_PREFIX):
+        imagekit_path = doc.file_path.removeprefix(_IMAGEKIT_PREFIX)
+        return RedirectResponse(get_private_file_url(imagekit_path))
+
+    if not doc.file_path.startswith(_PRIVATE_PREFIX):
+        raise HTTPException(status_code=404, detail="Document not available via this endpoint")
+
+    abs_path = _resolve_path(doc.file_path)
+    if not abs_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    media_type = doc.mime_type or mimetypes.guess_type(str(abs_path))[0] or "application/octet-stream"
+    return FileResponse(str(abs_path), media_type=media_type, filename=doc.document_name or abs_path.name)
 
 
 def _has_admin_permission(db: Session, user: User, *slugs: str) -> bool:
@@ -61,15 +80,7 @@ def get_supplier_document(
     if not is_owner and not _has_admin_permission(db, current_user, "suppliers.view_documents", "suppliers.view", "view-suppliers"):
         raise HTTPException(status_code=403, detail="Permission denied")
 
-    if not doc.file_path.startswith(_PRIVATE_PREFIX):
-        raise HTTPException(status_code=404, detail="Document not available via this endpoint")
-
-    abs_path = _resolve_path(doc.file_path)
-    if not abs_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk")
-
-    media_type = doc.mime_type or mimetypes.guess_type(str(abs_path))[0] or "application/octet-stream"
-    return FileResponse(str(abs_path), media_type=media_type, filename=doc.document_name or abs_path.name)
+    return _serve_document(doc)
 
 
 @router.get("/agent/{doc_id}")
@@ -89,12 +100,4 @@ def get_agent_document(
     if not is_owner and not _has_admin_permission(db, current_user, "agents.view_documents", "agents.view", "view-agents"):
         raise HTTPException(status_code=403, detail="Permission denied")
 
-    if not doc.file_path.startswith(_PRIVATE_PREFIX):
-        raise HTTPException(status_code=404, detail="Document not available via this endpoint")
-
-    abs_path = _resolve_path(doc.file_path)
-    if not abs_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk")
-
-    media_type = doc.mime_type or mimetypes.guess_type(str(abs_path))[0] or "application/octet-stream"
-    return FileResponse(str(abs_path), media_type=media_type, filename=doc.document_name or abs_path.name)
+    return _serve_document(doc)

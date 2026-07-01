@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.common.auth import require_any_permission
+from app.modules.common.ratelimit import check_rate_limit
 from app.modules.chatbot.schemas import (
     ChatMessageRequest,
     ChatMessageResponse,
@@ -16,7 +17,8 @@ router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
 
 
 @router.post("/chat", response_model=ChatMessageResponse)
-def chat(payload: ChatMessageRequest, db: Session = Depends(get_db)):
+def chat(payload: ChatMessageRequest, request: Request, db: Session = Depends(get_db)):
+    check_rate_limit(request, "chatbot-chat", max_calls=20, window_seconds=60)
     if not payload.message or not payload.message.strip():
         raise HTTPException(status_code=422, detail="Message cannot be empty")
     reply, session_key, action_type, action_data = service.get_chat_reply(db, payload.session_key, payload.message.strip())

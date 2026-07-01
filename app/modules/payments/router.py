@@ -13,8 +13,8 @@ router = APIRouter(prefix="/payments", tags=["Payments"])
 
 @router.get("")
 @router.get("/")
-def list_payments(params: dict = Depends(pagination_params), customer_id: int = Query(default=0), booking_id: int = Query(default=0), payment_status: str = Query(default=""), payment_method: str = Query(default=""), start_date: str = Query(default=""), end_date: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("payments.view", "view-payments"))):
-    return {"status": "success", **get_payments(db, page=params["page"], limit=params["limit"], search=params["search"], customer_id=customer_id or None, booking_id=booking_id or None, payment_status=payment_status, payment_method=payment_method, start_date=start_date, end_date=end_date)}
+def list_payments(params: dict = Depends(pagination_params), customer_id: int = Query(default=0), booking_id: int = Query(default=0), payment_status: str = Query(default=""), payment_method: str = Query(default=""), start_date: str = Query(default=""), end_date: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.view", "view-payments"))):
+    return {"status": "success", **get_payments(db, page=params["page"], limit=params["limit"], search=params["search"], customer_id=customer_id or None, booking_id=booking_id or None, payment_status=payment_status, payment_method=payment_method, start_date=start_date, end_date=end_date, actor=current_user)}
 
 
 @router.post("/")
@@ -28,8 +28,8 @@ def authorize(data: PaymentAuthorize, request: Request, db: Session = Depends(ge
 
 
 @router.get("/customer/{customer_id}")
-def customer_payment_list(customer_id: int, params: dict = Depends(pagination_params), payment_status: str = Query(default=""), payment_method: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("payments.view", "view-payments"))):
-    return {"status": "success", **get_customer_payments(db, customer_id=customer_id, page=params["page"], limit=params["limit"], payment_status=payment_status, payment_method=payment_method)}
+def customer_payment_list(customer_id: int, params: dict = Depends(pagination_params), payment_status: str = Query(default=""), payment_method: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.view", "view-payments"))):
+    return {"status": "success", **get_customer_payments(db, customer_id=customer_id, page=params["page"], limit=params["limit"], payment_status=payment_status, payment_method=payment_method, actor=current_user)}
 
 
 @router.get("/{payment_id}")

@@ -1,5 +1,5 @@
 from fastapi import HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.modules.audit.service import log_audit
 from app.modules.operations import (
@@ -15,8 +15,16 @@ from app.modules.operations import (
     serialize_common_review,
     simple_paginate,
 )
-from app.modules.suppliers.models import Supplier
-from app.modules.suppliers.schemas import SupplierCreate, SupplierMarkupRequest, SupplierUpdate
+from datetime import datetime
+
+from app.modules.suppliers.models import Supplier, SupplierDocument, SupplierVehicle
+from app.modules.suppliers.schemas import (
+    DocumentReviewRequest,
+    SupplierCreate,
+    SupplierMarkupRequest,
+    SupplierUpdate,
+    VehicleReviewRequest,
+)
 from app.modules.users.models import User
 
 
@@ -26,7 +34,7 @@ def _contact(item):
 
 def _document(item):
     file_path = item.file_path or ""
-    if file_path.startswith("/private-documents/"):
+    if file_path.startswith("/private-documents/") or file_path.startswith("imagekit:"):
         file_url = f"/api/private-documents/supplier/{item.id}"
     elif file_path and not file_path.startswith("http"):
         file_url = file_path if file_path.startswith("/") else "/storage/" + file_path
@@ -98,7 +106,16 @@ def serialize_supplier(item: Supplier):
 
 
 def list_suppliers(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = ""):
-    query = filter_review_query(db.query(Supplier), Supplier, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, name_field="supplier_name")
+    base_query = db.query(Supplier).options(
+        joinedload(Supplier.country),
+        joinedload(Supplier.city),
+        joinedload(Supplier.business_info),
+        joinedload(Supplier.invoicing),
+        selectinload(Supplier.contacts),
+        selectinload(Supplier.vehicles),
+        selectinload(Supplier.documents),
+    )
+    query = filter_review_query(base_query, Supplier, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, name_field="supplier_name")
     return simple_paginate(query, page, limit, serialize_supplier)
 
 
@@ -218,3 +235,69 @@ def submit_supplier_verification(db: Session, user: User, request: Request | Non
     except Exception:
         pass
     return serialize_supplier(supplier)
+
+
+def review_supplier_document(db: Session, supplier_id: int, document_id: int, data: DocumentReviewRequest, actor: User, request: Request | None = None):
+    document = (
+        db.query(SupplierDocument)
+        .filter(SupplierDocument.id == document_id, SupplierDocument.supplier_id == supplier_id)
+        .first()
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    old = _document(document)
+    document.status = data.status
+    document.rejection_reason = data.rejection_reason if data.status == "rejected" else None
+    document.reviewed_at = datetime.utcnow()
+    document.reviewed_by = actor.id
+
+    log_audit(
+        db,
+        actor=actor,
+        action=f"{data.status}_supplier_document",
+        entity_type="supplier_document",
+        entity_id=document.id,
+        old_values=old,
+        new_values=_document(document),
+        request=request,
+    )
+    db.commit()
+    db.refresh(document)
+    return _document(document)
+
+
+def review_supplier_vehicle(db: Session, supplier_id: int, vehicle_id: int, data: VehicleReviewRequest, actor: User, request: Request | None = None):
+    vehicle = (
+        db.query(SupplierVehicle)
+        .filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier_id)
+        .first()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    old = {"id": vehicle.id, "approval_status": vehicle.approval_status, "rejection_reason": vehicle.rejection_reason}
+    vehicle.approval_status = data.approval_status
+    vehicle.rejection_reason = data.rejection_reason if data.approval_status == "rejected" else None
+    vehicle.reviewed_at = datetime.utcnow()
+    vehicle.reviewed_by = actor.id
+
+    log_audit(
+        db,
+        actor=actor,
+        action=f"{data.approval_status}_supplier_vehicle",
+        entity_type="supplier_vehicle",
+        entity_id=vehicle.id,
+        old_values=old,
+        new_values={"id": vehicle.id, "approval_status": vehicle.approval_status, "rejection_reason": vehicle.rejection_reason},
+        request=request,
+    )
+    db.commit()
+    db.refresh(vehicle)
+    return {
+        "id": vehicle.id,
+        "approval_status": vehicle.approval_status,
+        "rejection_reason": vehicle.rejection_reason,
+        "reviewed_at": str(vehicle.reviewed_at) if vehicle.reviewed_at else "",
+        "reviewed_by": vehicle.reviewed_by,
+    }

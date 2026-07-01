@@ -1,10 +1,10 @@
 import imghdr
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 
-from app.config import get_storage_root
 from app.modules.common.auth import get_current_user
+from app.modules.common.imagekit_client import upload_to_imagekit
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
@@ -21,13 +21,10 @@ ALLOWED_IMAGE_TYPES = {
     "png": "png",
     "webp": "webp",
 }
-PROFILE_IMAGE_DIR = get_storage_root() / "uploads" / "profile-images"
-ADMIN_ASSET_DIR = get_storage_root() / "uploads" / "admin-assets"
 
 
 @router.post("/profile-image")
 async def upload_profile_image(
-    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
@@ -48,21 +45,15 @@ async def upload_profile_image(
         raise HTTPException(status_code=400, detail="Invalid image file")
 
     extension = ALLOWED_IMAGE_TYPES[detected_type]
-    PROFILE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
-
     filename = f"{uuid4().hex}.{extension}"
-    file_path = PROFILE_IMAGE_DIR / filename
-    file_path.write_bytes(content)
-
-    image_path = f"/storage/uploads/profile-images/{filename}"
-    image_url = str(request.base_url).rstrip("/") + image_path
+    uploaded = upload_to_imagekit(content, filename, folder="/tourvaa/profile-images")
 
     return {
         "status": "success",
         "message": "Profile image uploaded successfully",
         "data": {
-            "path": image_path,
-            "url": image_url,
+            "path": uploaded["url"],
+            "url": uploaded["url"],
             "filename": filename,
             "uploaded_by": current_user.id,
         },
@@ -71,7 +62,6 @@ async def upload_profile_image(
 
 @router.post("/admin-asset")
 async def upload_admin_asset(
-    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
@@ -102,20 +92,15 @@ async def upload_admin_asset(
     elif not content.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="Invalid PDF file")
 
-    ADMIN_ASSET_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid4().hex}.{extension}"
-    file_path = ADMIN_ASSET_DIR / filename
-    file_path.write_bytes(content)
-
-    asset_path = f"/storage/uploads/admin-assets/{filename}"
-    asset_url = str(request.base_url).rstrip("/") + asset_path
+    uploaded = upload_to_imagekit(content, filename, folder="/tourvaa/admin-assets")
 
     return {
         "status": "success",
         "message": "File uploaded successfully",
         "data": {
-            "path": asset_path,
-            "url": asset_url,
+            "path": uploaded["url"],
+            "url": uploaded["url"],
             "filename": filename,
             "file_size": len(content),
             "mime_type": file.content_type,
