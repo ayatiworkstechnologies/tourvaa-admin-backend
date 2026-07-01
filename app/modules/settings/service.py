@@ -130,14 +130,16 @@ def update_payment_setting(
             v = value.strip() if isinstance(value, str) else value
             setattr(setting, key, encrypt_secret(v) if key in _PAYMENT_SECRET_FIELDS and isinstance(v, str) else v)
 
+    safe_old_values = {k: (mask_secret(v) if k in _PAYMENT_SECRET_FIELDS else v) for k, v in old_values.items()}
+    safe_new_values = {k: (mask_secret(v) if k in _PAYMENT_SECRET_FIELDS and isinstance(v, str) else v) for k, v in values.items()}
     log_audit(
         db,
         actor=actor,
         action="update_payment_setting",
         entity_type="payment_setting",
         entity_id=setting.id,
-        old_values=old_values,
-        new_values=values,
+        old_values=safe_old_values,
+        new_values=safe_new_values,
         request=request,
     )
     db.commit()
@@ -170,14 +172,16 @@ def update_api_setting(
             v = value.strip() if isinstance(value, str) else value
             setattr(setting, key, encrypt_secret(v) if key in _API_SECRET_FIELDS and isinstance(v, str) else v)
 
+    safe_old_values = {k: (mask_secret(v) if k in _API_SECRET_FIELDS else v) for k, v in old_values.items()}
+    safe_new_values = {k: (mask_secret(v) if k in _API_SECRET_FIELDS and isinstance(v, str) else v) for k, v in values.items()}
     log_audit(
         db,
         actor=actor,
         action="update_api_setting",
         entity_type="api_setting",
         entity_id=setting.id,
-        old_values=old_values,
-        new_values=values,
+        old_values=safe_old_values,
+        new_values=safe_new_values,
         request=request,
     )
     db.commit()

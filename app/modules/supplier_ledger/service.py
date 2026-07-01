@@ -150,16 +150,20 @@ def list_payouts(db: Session, page: int = 1, limit: int = 20, supplier_id: Optio
 
 
 def create_payout(db: Session, data: SupplierPayoutCreate, actor: User, request=None) -> dict:
+    # Lock the ledger rows for the duration of this transaction so a concurrent
+    # create_payout call can't select the same rows before either commits (double-payout).
     ledger_rows = db.query(SupplierLedger).filter(
         SupplierLedger.id.in_(data.ledger_ids),
         SupplierLedger.supplier_id == data.supplier_id,
-    ).all()
+    ).with_for_update().all()
     if not ledger_rows:
         raise HTTPException(status_code=404, detail="No matching ledger entries found for this supplier")
 
     for row in ledger_rows:
         if row.status == "paid":
             raise HTTPException(status_code=400, detail=f"Ledger entry {row.id} is already fully paid")
+        if row.status == "reserved":
+            raise HTTPException(status_code=400, detail=f"Ledger entry {row.id} is already included in another pending payout")
 
     total = money(sum(r.amount_pending for r in ledger_rows))
 
@@ -179,6 +183,7 @@ def create_payout(db: Session, data: SupplierPayoutCreate, actor: User, request=
 
     for row in ledger_rows:
         db.add(SupplierPayoutItem(payout_id=payout.id, ledger_id=row.id, amount=row.amount_pending))
+        row.status = "reserved"
 
     db.commit()
     db.refresh(payout)
@@ -202,7 +207,7 @@ def approve_payout(db: Session, payout_id: int, actor: User, request=None) -> di
 
 
 def mark_payout_paid(db: Session, payout_id: int, data: SupplierPayoutMarkPaid, actor: User, request=None) -> dict:
-    payout = db.query(SupplierPayout).filter(SupplierPayout.id == payout_id).first()
+    payout = db.query(SupplierPayout).filter(SupplierPayout.id == payout_id).with_for_update().first()
     if not payout:
         raise HTTPException(status_code=404, detail="Payout not found")
     if payout.status == "paid":
@@ -218,9 +223,16 @@ def mark_payout_paid(db: Session, payout_id: int, data: SupplierPayoutMarkPaid, 
     if data.notes:
         payout.notes = data.notes
 
-    # Update ledger entries
+    # Lock and update ledger entries
+    ledger_ids = [item.ledger_id for item in payout.items]
+    locked_ledgers = {
+        row.id: row
+        for row in db.query(SupplierLedger).filter(SupplierLedger.id.in_(ledger_ids)).with_for_update().all()
+    } if ledger_ids else {}
     for item in payout.items:
-        ledger = item.ledger
+        ledger = locked_ledgers.get(item.ledger_id)
+        if not ledger:
+            continue
         ledger.amount_paid = money(money(ledger.amount_paid) + money(item.amount))
         ledger.amount_pending = money(max(Decimal("0"), money(ledger.net_payable) - money(ledger.amount_paid)))
         ledger.status = "paid" if ledger.amount_pending == 0 else "partial"

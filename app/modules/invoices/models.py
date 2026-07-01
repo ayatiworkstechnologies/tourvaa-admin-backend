@@ -9,7 +9,7 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     id = Column(Integer, primary_key=True, index=True)
-    invoice_number = Column(String(40), nullable=False, unique=True, index=True)
+    invoice_number = Column(String(40), nullable=True, unique=True, index=True)
     booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
     payment_id = Column(Integer, ForeignKey("payments.id"), nullable=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)

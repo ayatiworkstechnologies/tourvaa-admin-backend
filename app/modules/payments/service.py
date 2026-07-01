@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.modules.audit.service import log_audit
 from app.modules.bookings.models import Booking
@@ -34,7 +34,10 @@ def serialize_payment(payment: Payment, detail: bool = False) -> dict:
         "id": payment.id,
         "payment_code": payment.payment_code or _payment_code(payment.id),
         "booking_id": payment.booking_id,
+        "booking_code": payment.booking.booking_code if payment.booking else None,
         "customer_id": payment.customer_id,
+        "customer_name": payment.customer.full_name if payment.customer else None,
+        "customer_email": payment.customer.email if payment.customer else None,
         "payment_method": payment.payment_method,
         "payment_type": payment.payment_type,
         "gateway": payment.gateway,
@@ -97,18 +100,64 @@ def _transaction(db: Session, payment: Payment, transaction_type: str, amount, a
     db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type=transaction_type, amount=money(amount), status=status, gateway_reference=payment.gateway_payment_id or payment.transaction_id, metadata_json=metadata, created_by=actor.id if actor else None))
 
 
-def get_payment_by_id(db: Session, payment_id: int) -> Payment:
-    payment = db.query(Payment).filter(Payment.id == payment_id).first()
+def get_payment_by_id(db: Session, payment_id: int, for_update: bool = False) -> Payment:
+    query = db.query(Payment).filter(Payment.id == payment_id)
+    if for_update:
+        query = query.with_for_update()
+    payment = query.first()
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
     return payment
 
 
-def get_payments(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_id: Optional[int] = None, payment_status: str = "", payment_method: str = "", start_date: str = "", end_date: str = "") -> dict:
-    query = db.query(Payment)
+def _user_role(user: User | None) -> str:
+    if not user or not user.role:
+        return "admin"
+    slug = user.role.slug or ""
+    if "supplier" in slug:
+        return "supplier"
+    if "agent" in slug:
+        return "agent"
+    if "customer" in slug:
+        return "customer"
+    return "admin"
+
+
+def _ensure_payment_access(payment: Payment, actor: User | None) -> None:
+    role = _user_role(actor)
+    if role == "admin" or actor is None:
+        return
+    if role == "customer" and payment.customer and payment.customer.user_id == actor.id:
+        return
+    booking = payment.booking
+    if role == "supplier" and booking and booking.supplier and booking.supplier.user_id == actor.id:
+        return
+    if role == "agent" and booking and booking.agent and booking.agent.user_id == actor.id:
+        return
+    raise HTTPException(status_code=403, detail="Payment access denied")
+
+
+def get_payments(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_id: Optional[int] = None, payment_status: str = "", payment_method: str = "", start_date: str = "", end_date: str = "", actor: Optional[User] = None) -> dict:
+    query = db.query(Payment).options(joinedload(Payment.booking), joinedload(Payment.customer))
+    role = _user_role(actor)
+    if role == "supplier":
+        query = query.join(Payment.booking).join(Booking.supplier).filter_by(user_id=actor.id)
+    elif role == "agent":
+        query = query.join(Payment.booking).join(Booking.agent).filter_by(user_id=actor.id)
+    elif role == "customer":
+        query = query.join(Payment.customer).filter_by(user_id=actor.id)
     if search:
         pattern = f"%{search.strip().lower()}%"
-        query = query.filter(or_(Payment.payment_code.ilike(pattern), Payment.transaction_id.ilike(pattern), Payment.gateway_payment_id.ilike(pattern)))
+        query = query.outerjoin(Booking, Booking.id == Payment.booking_id).outerjoin(Customer, Customer.id == Payment.customer_id).filter(
+            or_(
+                Payment.payment_code.ilike(pattern),
+                Payment.transaction_id.ilike(pattern),
+                Payment.gateway_payment_id.ilike(pattern),
+                Booking.booking_code.ilike(pattern),
+                Customer.full_name.ilike(pattern),
+                Customer.email.ilike(pattern),
+            )
+        )
     if customer_id:
         query = query.filter(Payment.customer_id == customer_id)
     if booking_id:
@@ -129,6 +178,7 @@ def get_payments(db: Session, page: int = 1, limit: int = 20, search: str = "", 
 
 def get_payment_detail(db: Session, payment_id: int, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     payment = get_payment_by_id(db, payment_id)
+    _ensure_payment_access(payment, actor)
     log_audit(db, actor=actor, action="view_payment", entity_type="payment", entity_id=payment.id, request=request)
     db.commit()
     return serialize_payment(payment, detail=True)
@@ -187,7 +237,7 @@ def authorize_payment(db: Session, data: PaymentAuthorize, actor: Optional[User]
 
 
 def capture_payment(db: Session, payment_id: int, data: PaymentCapture, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
-    payment = get_payment_by_id(db, payment_id)
+    payment = get_payment_by_id(db, payment_id, for_update=True)
     amount = money(data.amount)
     available = money(payment.authorized_amount or payment.total_amount) - money(payment.captured_amount)
     if amount > available:
@@ -223,7 +273,7 @@ def capture_payment(db: Session, payment_id: int, data: PaymentCapture, actor: O
 
 
 def void_payment(db: Session, payment_id: int, data: PaymentVoid, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
-    payment = get_payment_by_id(db, payment_id)
+    payment = get_payment_by_id(db, payment_id, for_update=True)
     if money(payment.captured_amount) > 0:
         raise HTTPException(status_code=400, detail="Captured payments cannot be voided; refund instead")
     payment.payment_status = "voided"
@@ -277,7 +327,7 @@ def update_payment_status(db: Session, payment_id: int, data: PaymentStatusUpdat
 
 
 def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
-    payment = get_payment_by_id(db, payment_id)
+    payment = get_payment_by_id(db, payment_id, for_update=True)
     max_refundable = money(payment.captured_amount or payment.paid_amount) - money(payment.refunded_amount)
     amount = money(data.amount)
     if amount > max_refundable:
@@ -300,8 +350,8 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
     return serialize_payment(payment, detail=True)
 
 
-def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "") -> dict:
-    return get_payments(db, page=page, limit=limit, customer_id=customer_id, payment_status=payment_status, payment_method=payment_method)
+def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "", actor: Optional[User] = None) -> dict:
+    return get_payments(db, page=page, limit=limit, customer_id=customer_id, payment_status=payment_status, payment_method=payment_method, actor=actor)
 
 
 

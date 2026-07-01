@@ -16,7 +16,7 @@ class Agent(Base):
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True, index=True)
     city_id = Column(Integer, ForeignKey("cities.id"), nullable=True, index=True)
     years_in_operation = Column(Integer, default=0, nullable=False)
-    status = Column(String(20), default="inactive", nullable=False)
+    status = Column(String(20), default="inactive", nullable=False, index=True)
     approval_status = Column(String(30), default="pending", nullable=False, index=True)
     rejection_reason = Column(String(255), nullable=True)
     admin_comments = Column(Text, nullable=True)
@@ -27,7 +27,7 @@ class Agent(Base):
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     rejected_at = Column(DateTime(timezone=True), nullable=True)
     rejected_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     user = relationship("User", foreign_keys=[user_id])

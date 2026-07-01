@@ -9,7 +9,15 @@ from app.modules.common.pagination import pagination_params
 from app.modules.operations import PartialApprovalRequest, RejectRequest
 from app.modules.roles.models import Role
 from app.modules.permissions.models import Permission, RolePermission
-from app.modules.suppliers.schemas import SupplierCreate, SupplierMarkupRequest, SupplierUpdate, VehicleCreate, VehicleUpdate
+from app.modules.suppliers.schemas import (
+    DocumentReviewRequest,
+    SupplierCreate,
+    SupplierMarkupRequest,
+    SupplierUpdate,
+    VehicleCreate,
+    VehicleReviewRequest,
+    VehicleUpdate,
+)
 from app.modules.suppliers.service import (
     approve_supplier,
     create_supplier,
@@ -17,6 +25,8 @@ from app.modules.suppliers.service import (
     list_suppliers,
     partial_approve_supplier,
     reject_supplier,
+    review_supplier_document,
+    review_supplier_vehicle,
     serialize_supplier,
     submit_supplier_verification,
     update_supplier,
@@ -262,13 +272,16 @@ def _serialize_vehicle(v) -> dict:
         "insurance_document": v.insurance_document or "",
         "vehicle_photos": photos,
         "approval_status": v.approval_status,
+        "rejection_reason": v.rejection_reason,
+        "reviewed_at": str(v.reviewed_at) if v.reviewed_at else "",
+        "reviewed_by": v.reviewed_by,
         "created_at": str(v.created_at) if v.created_at else "",
     }
 
 
 async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     from uuid import uuid4
-    from app.config import get_storage_root
+    from app.modules.common.imagekit_client import upload_to_imagekit
     ALLOWED = {
         "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
         "image/webp": "webp", "application/pdf": "pdf",
@@ -285,11 +298,9 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
                 break
     if not ext:
         return ""
-    dest = get_storage_root() / subfolder
-    dest.mkdir(parents=True, exist_ok=True)
     filename = f"{uuid4().hex}.{ext}"
-    (dest / filename).write_bytes(content)
-    return f"/storage/{subfolder}/{filename}"
+    uploaded = upload_to_imagekit(content, filename, folder=f"/tourvaa/{subfolder}")
+    return uploaded["url"]
 
 
 @router.post("/{supplier_id}/submit-verification")
@@ -416,21 +427,14 @@ async def upload_supplier_document(
         else:
             raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, PDF, DOC, and DOCX files are allowed")
 
-    import imghdr
     from uuid import uuid4
-    from app.config import get_storage_root
+    from app.modules.common.imagekit_client import upload_to_imagekit
     from app.modules.suppliers.models import SupplierDocument
     from app.modules.suppliers.service import _document
 
-    from app.config import get_private_docs_root
-    doc_dir = get_private_docs_root() / "supplier-documents"
-    doc_dir.mkdir(parents=True, exist_ok=True)
-
     filename = f"{uuid4().hex}.{extension}"
-    file_path = doc_dir / filename
-    file_path.write_bytes(content)
-
-    relative_path = f"/private-documents/supplier-documents/{filename}"
+    uploaded = upload_to_imagekit(content, filename, folder="/tourvaa/supplier-documents", is_private=True)
+    relative_path = f"imagekit:{uploaded['file_path']}"
 
     existing_doc = db.query(SupplierDocument).filter(
         SupplierDocument.supplier_id == supplier_id,
@@ -466,6 +470,38 @@ async def upload_supplier_document(
         "status": "success",
         "message": "Document uploaded successfully",
         "data": _document(doc_obj)
+    }
+
+
+@router.patch("/{supplier_id}/documents/{document_id}/review")
+def review_document(
+    supplier_id: int,
+    document_id: int,
+    data: DocumentReviewRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("suppliers.approve", "suppliers.reject")),
+):
+    return {
+        "status": "success",
+        "message": f"Document {data.status} successfully",
+        "data": review_supplier_document(db, supplier_id, document_id, data, current_user, request),
+    }
+
+
+@router.patch("/{supplier_id}/vehicles/{vehicle_id}/review")
+def review_vehicle(
+    supplier_id: int,
+    vehicle_id: int,
+    data: VehicleReviewRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("suppliers.approve", "suppliers.reject")),
+):
+    return {
+        "status": "success",
+        "message": f"Vehicle {data.approval_status} successfully",
+        "data": review_supplier_vehicle(db, supplier_id, vehicle_id, data, current_user, request),
     }
 
 

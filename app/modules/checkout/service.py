@@ -17,6 +17,12 @@ def _key() -> str:
     return secrets.token_urlsafe(40)
 
 
+def _ensure_session_owner(s: CheckoutSession, current_user: Optional[User]) -> None:
+    """Once a checkout session is claimed by a user, only that same user may view/mutate/confirm it."""
+    if s.user_id and (not current_user or current_user.id != s.user_id):
+        raise HTTPException(status_code=403, detail="Checkout session access denied")
+
+
 def _serialize(s: CheckoutSession) -> dict:
     return {
         "id": s.id,
@@ -78,6 +84,7 @@ def get_session(db: Session, session_key: str, current_user: Optional[User]) -> 
         raise HTTPException(status_code=404, detail="Checkout session not found")
     if s.status == "abandoned":
         raise HTTPException(status_code=410, detail="Checkout session has been abandoned")
+    _ensure_session_owner(s, current_user)
     # Attach user to session if they just logged in
     if current_user and not s.user_id:
         s.user_id = current_user.id
@@ -94,6 +101,7 @@ def update_session(db: Session, session_key: str, body: CheckoutUpdate, current_
     s = db.query(CheckoutSession).filter(CheckoutSession.session_key == session_key).first()
     if not s or s.status != "active":
         raise HTTPException(status_code=404, detail="Active checkout session not found")
+    _ensure_session_owner(s, current_user)
 
     if body.step:
         s.step = body.step
@@ -113,6 +121,7 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
     s = db.query(CheckoutSession).filter(CheckoutSession.session_key == session_key).first()
     if not s or s.status != "active":
         raise HTTPException(status_code=404, detail="Active checkout session not found")
+    _ensure_session_owner(s, current_user)
     if not s.tour_id:
         raise HTTPException(status_code=400, detail="No tour selected in this checkout session")
     if not s.customer_id:

@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from sqlalchemy.orm import Session, joinedload
 
 from app.modules.audit.service import log_audit
 from app.modules.cms.models import Tour
@@ -461,6 +462,9 @@ def delete_unavailable_date(db: Session, tour_id: int, date_id: int, actor: User
 def _ser_discount(o: TourDiscount) -> dict:
     return {
         "id": o.id, "tour_id": o.tour_id, "category_id": o.category_id, "country_id": o.country_id,
+        "tour_title": o.tour.title if o.tour else None,
+        "category_name": o.category.category_name if o.category else None,
+        "country_name": o.country.country_name if o.country else None,
         "discount_name": o.discount_name, "discount_code": o.discount_code,
         "discount_type": o.discount_type, "discount_value": o.discount_value,
         "discount_scope": o.discount_scope, "start_date": o.start_date, "end_date": o.end_date,
@@ -507,6 +511,79 @@ def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPaylo
 def delete_discount(db: Session, tour_id: int, disc_id: int, actor: User, request: Request | None = None):
     o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
     log_audit(db, actor=actor, action="delete_discount", entity_type="tour", entity_id=tour_id, request=request)
+    db.delete(o)
+    db.commit()
+
+
+# ── Global discounts (all scopes: tour / category / country / all_tours) ──────
+
+def _validate_discount_scope(data) -> None:
+    if data.discount_scope == "tour" and not data.tour_id:
+        raise HTTPException(status_code=400, detail="tour_id is required for a tour-scoped discount")
+    if data.discount_scope == "category" and not data.category_id:
+        raise HTTPException(status_code=400, detail="category_id is required for a category-scoped discount")
+    if data.discount_scope == "country" and not data.country_id:
+        raise HTTPException(status_code=400, detail="country_id is required for a country-scoped discount")
+
+
+def list_all_discounts(db: Session, scope: str = "", search: str = "") -> list[dict]:
+    query = db.query(TourDiscount).options(
+        joinedload(TourDiscount.tour),
+        joinedload(TourDiscount.category),
+        joinedload(TourDiscount.country),
+    )
+    if scope:
+        query = query.filter(TourDiscount.discount_scope == scope)
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.filter(
+            or_(TourDiscount.discount_name.ilike(pattern), TourDiscount.discount_code.ilike(pattern))
+        )
+    return [_ser_discount(o) for o in query.order_by(TourDiscount.id.desc()).all()]
+
+
+def create_global_discount(db: Session, data, actor: User, request: Request | None = None) -> dict:
+    _validate_discount_scope(data)
+    if data.tour_id:
+        _require_tour(db, data.tour_id)
+    if data.discount_code:
+        existing = db.query(TourDiscount).filter(TourDiscount.discount_code == data.discount_code).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Discount code already exists")
+    o = TourDiscount(**data.model_dump())
+    db.add(o)
+    log_audit(db, actor=actor, action="create_discount", entity_type="discount", entity_id=0, request=request)
+    db.commit()
+    db.refresh(o)
+    return _ser_discount(o)
+
+
+def update_global_discount(db: Session, discount_id: int, data, actor: User, request: Request | None = None) -> dict:
+    o = db.query(TourDiscount).filter(TourDiscount.id == discount_id).first()
+    if not o:
+        raise HTTPException(status_code=404, detail="Discount not found")
+    _validate_discount_scope(data)
+    if data.tour_id:
+        _require_tour(db, data.tour_id)
+    if data.discount_code and data.discount_code != o.discount_code:
+        existing = db.query(TourDiscount).filter(
+            TourDiscount.discount_code == data.discount_code, TourDiscount.id != discount_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Discount code already exists")
+    for key, value in data.model_dump().items():
+        setattr(o, key, value)
+    log_audit(db, actor=actor, action="update_discount", entity_type="discount", entity_id=discount_id, request=request)
+    db.commit()
+    db.refresh(o)
+    return _ser_discount(o)
+
+
+def delete_global_discount(db: Session, discount_id: int, actor: User, request: Request | None = None):
+    o = db.query(TourDiscount).filter(TourDiscount.id == discount_id).first()
+    if not o:
+        raise HTTPException(status_code=404, detail="Discount not found")
+    log_audit(db, actor=actor, action="delete_discount", entity_type="discount", entity_id=discount_id, request=request)
     db.delete(o)
     db.commit()
 

@@ -2,13 +2,15 @@ from datetime import datetime, timedelta
 
 from fastapi import HTTPException, Request
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.modules.roles.models import Role
 from app.config import settings
 from app.modules.common.email_templates import (
     approved_email,
     password_reset_email,
+    render_database_email,
+    user_created_email,
 )
 from app.modules.common.mailer import send_email, try_send_email
 from app.modules.audit.service import log_audit
@@ -61,7 +63,10 @@ def serialize_user(user: User):
 
 
 def get_all_users(db: Session, page: int | None = None, limit: int | None = None, search: str = ""):
-    query = db.query(User)
+    query = db.query(User).options(
+        joinedload(User.role),
+        selectinload(User.user_roles).joinedload(UserRole.role),
+    )
 
     if search:
         pattern = f"%{search.strip().lower()}%"
@@ -91,7 +96,15 @@ def get_all_users(db: Session, page: int | None = None, limit: int | None = None
 
 
 def get_user_by_id(db: Session, user_id: int):
-    user = db.query(User).filter(User.id == user_id).first()
+    user = (
+        db.query(User)
+        .options(
+            joinedload(User.role),
+            selectinload(User.user_roles).joinedload(UserRole.role),
+        )
+        .filter(User.id == user_id)
+        .first()
+    )
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -232,11 +245,13 @@ def create_user(
     db.refresh(user)
 
     reset_url = build_password_reset_url(token)
-    try_send_email(
-        user.email,
-        "Set up your Tourvaa password",
-        password_reset_email(user.name, reset_url),
+    subject, html = render_database_email(
+        db, "user_created",
+        {"name": user.name, "email": user.email, "set_password_url": reset_url},
+        "Your Tourvaa account is ready",
+        user_created_email(user.name, user.email, reset_url),
     )
+    try_send_email(user.email, subject, html)
 
     return serialize_user(user)
 
@@ -332,11 +347,14 @@ def update_user(
     db.refresh(user)
 
     if data.approval_status == "approved" and not was_approved:
-        try_send_email(
-            user.email,
+        login_url = f"{settings.FRONTEND_URL}/login"
+        subject, html = render_database_email(
+            db, "account_approved",
+            {"name": user.name, "login_url": login_url},
             "Your Tourvaa account is approved",
-            approved_email(user.name, f"{settings.FRONTEND_URL}/login"),
+            approved_email(user.name, login_url),
         )
+        try_send_email(user.email, subject, html)
 
     return serialize_user(user)
 
@@ -378,11 +396,14 @@ def approve_user(
     db.refresh(user)
 
     if not was_approved:
-        try_send_email(
-            user.email,
+        login_url = f"{settings.FRONTEND_URL}/login"
+        subject, html = render_database_email(
+            db, "account_approved",
+            {"name": user.name, "login_url": login_url},
             "Your Tourvaa account is approved",
-            approved_email(user.name, f"{settings.FRONTEND_URL}/login"),
+            approved_email(user.name, login_url),
         )
+        try_send_email(user.email, subject, html)
 
     return serialize_user(user)
 

@@ -32,8 +32,11 @@ def save_subscription(db: Session, *, endpoint: str, p256dh: str, auth: str, use
     return sub
 
 
-def delete_subscription(db: Session, endpoint: str) -> None:
-    db.query(PushSubscription).filter(PushSubscription.endpoint == endpoint).delete()
+def delete_subscription(db: Session, endpoint: str, user_id: int | None = None) -> None:
+    query = db.query(PushSubscription).filter(PushSubscription.endpoint == endpoint)
+    if user_id is not None:
+        query = query.filter(PushSubscription.user_id == user_id)
+    query.delete()
     db.commit()
 
 
