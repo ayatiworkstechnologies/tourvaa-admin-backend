@@ -1,4 +1,4 @@
-from decimal import Decimal
+﻿from decimal import Decimal
 from math import ceil
 from typing import Optional
 
@@ -149,15 +149,63 @@ def list_payouts(db: Session, page: int = 1, limit: int = 20, supplier_id: Optio
     return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
+def _actor_supplier_id(db: Session, actor: User) -> int | None:
+    supplier = db.query(Supplier).filter(Supplier.user_id == actor.id).first() if actor else None
+    return supplier.id if supplier else None
+
+
+def _is_supplier_actor(actor: User) -> bool:
+    if not actor:
+        return False
+    role_slugs = set()
+    if actor.role and actor.role.slug:
+        role_slugs.add(actor.role.slug)
+    for user_role in actor.user_roles or []:
+        if user_role.role and user_role.role.slug:
+            role_slugs.add(user_role.role.slug)
+    return "supplier" in role_slugs and not ({"admin", "super-admin"} & role_slugs)
+
+
+def _resolve_payout_supplier_id(db: Session, data: SupplierPayoutCreate, actor: User) -> int:
+    actor_supplier_id = _actor_supplier_id(db, actor)
+    if data.supplier_id:
+        if _is_supplier_actor(actor) and actor_supplier_id and data.supplier_id != actor_supplier_id:
+            raise HTTPException(status_code=403, detail="You can only request payouts for your own supplier account")
+        return data.supplier_id
+    if _is_supplier_actor(actor) and actor_supplier_id:
+        return actor_supplier_id
+    raise HTTPException(status_code=422, detail="supplier_id is required")
+
+
+def _select_payout_ledgers(db: Session, supplier_id: int, data: SupplierPayoutCreate) -> list[SupplierLedger]:
+    query = db.query(SupplierLedger).filter(SupplierLedger.supplier_id == supplier_id)
+    if data.ledger_ids:
+        ledger_rows = query.filter(SupplierLedger.id.in_(data.ledger_ids)).with_for_update().all()
+    else:
+        ledger_rows = query.filter(
+            SupplierLedger.status.in_(("pending", "partial")),
+            SupplierLedger.amount_pending > 0,
+        ).order_by(SupplierLedger.id.asc()).with_for_update().all()
+        if data.amount is not None:
+            requested = money(data.amount)
+            selected: list[SupplierLedger] = []
+            running = Decimal("0")
+            for row in ledger_rows:
+                selected.append(row)
+                running = money(running + money(row.amount_pending))
+                if running >= requested:
+                    break
+            ledger_rows = selected
+    if not ledger_rows:
+        raise HTTPException(status_code=404, detail="No payable ledger entries found for this supplier")
+    return ledger_rows
+
+
 def create_payout(db: Session, data: SupplierPayoutCreate, actor: User, request=None) -> dict:
+    supplier_id = _resolve_payout_supplier_id(db, data, actor)
     # Lock the ledger rows for the duration of this transaction so a concurrent
     # create_payout call can't select the same rows before either commits (double-payout).
-    ledger_rows = db.query(SupplierLedger).filter(
-        SupplierLedger.id.in_(data.ledger_ids),
-        SupplierLedger.supplier_id == data.supplier_id,
-    ).with_for_update().all()
-    if not ledger_rows:
-        raise HTTPException(status_code=404, detail="No matching ledger entries found for this supplier")
+    ledger_rows = _select_payout_ledgers(db, supplier_id, data)
 
     for row in ledger_rows:
         if row.status == "paid":
@@ -165,12 +213,28 @@ def create_payout(db: Session, data: SupplierPayoutCreate, actor: User, request=
         if row.status == "reserved":
             raise HTTPException(status_code=400, detail=f"Ledger entry {row.id} is already included in another pending payout")
 
-    total = money(sum(r.amount_pending for r in ledger_rows))
+    available_total = money(sum(r.amount_pending for r in ledger_rows))
+    if data.amount is not None and available_total < money(data.amount):
+        raise HTTPException(status_code=400, detail="Requested payout amount exceeds available payable balance")
+
+    remaining = money(data.amount) if data.amount is not None else None
+    payout_amounts: dict[int, Decimal] = {}
+    for row in ledger_rows:
+        row_pending = money(row.amount_pending)
+        if remaining is None:
+            payout_amount = row_pending
+        else:
+            payout_amount = money(min(row_pending, remaining))
+            remaining = money(remaining - payout_amount)
+        if payout_amount > 0:
+            payout_amounts[row.id] = payout_amount
+
+    total = money(sum(payout_amounts.values()))
 
     payout = SupplierPayout(
-        supplier_id=data.supplier_id,
+        supplier_id=supplier_id,
         total_amount=total,
-        currency=ledger_rows[0].currency,
+        currency=data.currency or ledger_rows[0].currency,
         payment_method=data.payment_method,
         reference_number=data.reference_number,
         status="pending",
@@ -182,12 +246,12 @@ def create_payout(db: Session, data: SupplierPayoutCreate, actor: User, request=
     payout.payout_code = _payout_code(payout.id)
 
     for row in ledger_rows:
-        db.add(SupplierPayoutItem(payout_id=payout.id, ledger_id=row.id, amount=row.amount_pending))
+        db.add(SupplierPayoutItem(payout_id=payout.id, ledger_id=row.id, amount=payout_amounts[row.id]))
         row.status = "reserved"
 
     db.commit()
     db.refresh(payout)
-    log_audit(db, actor=actor, action="create_supplier_payout", entity_type="supplier_payout", entity_id=payout.id, old_values={}, new_values={"supplier_id": data.supplier_id, "amount": str(total)}, request=request)
+    log_audit(db, actor=actor, action="create_supplier_payout", entity_type="supplier_payout", entity_id=payout.id, old_values={}, new_values={"supplier_id": supplier_id, "amount": str(total)}, request=request)
     return _serialize_payout(payout)
 
 
@@ -247,3 +311,7 @@ def mark_payout_paid(db: Session, payout_id: int, data: SupplierPayoutMarkPaid, 
 
     log_audit(db, actor=actor, action="mark_payout_paid", entity_type="supplier_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "paid"}, request=request)
     return _serialize_payout(payout)
+
+
+
+

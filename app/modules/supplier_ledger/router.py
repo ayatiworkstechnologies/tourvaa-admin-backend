@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request
+﻿from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -11,44 +11,51 @@ router = APIRouter(tags=["Supplier Ledger"])
 
 
 @router.get("/supplier-ledgers")
-def list_ledgers(pagination=Depends(pagination_params), supplier_id: int = Query(default=0), status: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
-    return {"status": "success", **service.list_all_ledgers(db, page=pagination["page"], limit=pagination["limit"], supplier_id=supplier_id or None, status=status)}
-
+def list_ledgers(pagination=Depends(pagination_params), supplier_id: int = Query(default=0), status: str = Query(default=""), db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
+    own_supplier_id = service._actor_supplier_id(db, current_user) if service._is_supplier_actor(current_user) else None
+    scoped_supplier_id = supplier_id or own_supplier_id
+    return {"status": "success", **service.list_all_ledgers(db, page=pagination["page"], limit=pagination["limit"], supplier_id=scoped_supplier_id or None, status=status)}
 
 @router.get("/suppliers/{supplier_id}/ledger")
-def supplier_ledger(supplier_id: int, pagination=Depends(pagination_params), status: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
+def supplier_ledger(supplier_id: int, pagination=Depends(pagination_params), status: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
     return {"status": "success", **service.get_supplier_ledger(db, supplier_id=supplier_id, page=pagination["page"], limit=pagination["limit"], status=status)}
 
 
 @router.get("/supplier-statements/{supplier_id}")
-def supplier_statement(supplier_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
+def supplier_statement(supplier_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
     return {"status": "success", "data": service.get_supplier_statement(db, supplier_id=supplier_id)}
 
 
 @router.get("/supplier-payouts")
-def list_payouts(pagination=Depends(pagination_params), supplier_id: int = Query(default=0), status: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
-    return {"status": "success", **service.list_payouts(db, page=pagination["page"], limit=pagination["limit"], supplier_id=supplier_id or None, status=status)}
+def list_payouts(pagination=Depends(pagination_params), supplier_id: int = Query(default=0), status: str = Query(default=""), db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
+    own_supplier_id = service._actor_supplier_id(db, current_user) if service._is_supplier_actor(current_user) else None
+    scoped_supplier_id = supplier_id or own_supplier_id
+    return {"status": "success", **service.list_payouts(db, page=pagination["page"], limit=pagination["limit"], supplier_id=scoped_supplier_id or None, status=status)}
 
 
 @router.post("/supplier-payouts")
-def create_payout(data: SupplierPayoutCreate, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("suppliers.approve", "update-suppliers"))):
+def create_payout(data: SupplierPayoutCreate, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.create_payout", "create-supplier_ledger"))):
     result = service.create_payout(db, data=data, actor=current_user, request=request)
     return {"status": "success", "message": "Payout created", "data": result}
 
 
 @router.post("/supplier-payouts/{payout_id}/approve")
-def approve_payout(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("suppliers.approve", "update-suppliers"))):
+def approve_payout(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.approve", "update-supplier_ledger"))):
     result = service.approve_payout(db, payout_id=payout_id, actor=current_user, request=request)
     return {"status": "success", "message": "Payout approved", "data": result}
 
 
 @router.patch("/supplier-payouts/{payout_id}/mark-paid")
-def mark_paid(payout_id: int, data: SupplierPayoutMarkPaid, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("suppliers.approve", "update-suppliers"))):
+def mark_paid(payout_id: int, data: SupplierPayoutMarkPaid, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.mark_paid", "update-supplier_ledger"))):
     result = service.mark_payout_paid(db, payout_id=payout_id, data=data, actor=current_user, request=request)
     return {"status": "success", "message": "Payout marked as paid", "data": result}
 
 
 @router.post("/supplier-payouts/{payout_id}/mark-paid")
-def mark_paid_post(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("suppliers.approve", "update-suppliers"))):
+def mark_paid_post(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.mark_paid", "update-supplier_ledger"))):
     result = service.mark_payout_paid(db, payout_id=payout_id, data=SupplierPayoutMarkPaid(), actor=current_user, request=request)
     return {"status": "success", "message": "Payout marked as paid", "data": result}
+
+
+
+

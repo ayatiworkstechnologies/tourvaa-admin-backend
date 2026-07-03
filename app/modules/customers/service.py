@@ -11,6 +11,7 @@ from app.modules.common.email_templates import password_reset_email
 from app.modules.common.mailer import send_email
 from app.modules.cms.models import City
 from app.modules.customers.models import Customer, CustomerCommunication
+from app.modules.sessions.models import LoginHistory
 from app.modules.bookings.models import Booking
 from app.modules.payments.models import Payment
 from app.modules.customers.schemas import (
@@ -255,6 +256,15 @@ def get_customer_detail(db: Session, customer_id: int, actor: User | None = None
         serialized_bookings = []
         serialized_payments = []
 
+    latest_login = None
+    if customer.user_id:
+        latest_login = (
+            db.query(LoginHistory)
+            .filter(LoginHistory.user_id == customer.user_id)
+            .filter(LoginHistory.status == "success")
+            .order_by(LoginHistory.created_at.desc(), LoginHistory.id.desc())
+            .first()
+        )
     data.update(
         {
             "booking_summary": {
@@ -269,7 +279,8 @@ def get_customer_detail(db: Session, customer_id: int, actor: User | None = None
             },
             "recent_bookings": serialized_bookings,
             "recent_payments": serialized_payments,
-            "last_login_at": None,
+            "last_login_at": latest_login.created_at if latest_login else None,
+            "last_login_ip": latest_login.ip_address if latest_login else None,
         }
     )
     log_audit(
@@ -649,3 +660,6 @@ def send_customer_message(
     db.commit()
     db.refresh(message)
     return serialize_communication(message)
+
+
+

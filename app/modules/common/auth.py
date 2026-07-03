@@ -1,4 +1,5 @@
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -6,6 +7,8 @@ from app.config import settings
 from app.database import get_db
 from app.modules.permissions.models import Permission, RolePermission
 from app.modules.users.models import User, UserRole
+
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 ACTION_TO_DOTTED = {
@@ -91,18 +94,13 @@ def _decode_token(token: str) -> dict:
 
 
 def get_current_user(
-    authorization: str = Header(None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ):
-    if not authorization:
+    if not credentials or credentials.scheme.lower() != "bearer" or not credentials.credentials:
         raise HTTPException(status_code=401, detail="Authorization token missing")
 
-    parts = authorization.split()
-
-    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1]:
-        raise HTTPException(status_code=401, detail="Invalid authorization header")
-
-    token = parts[1]
+    token = credentials.credentials
     payload = _decode_token(token)
 
     user_id = payload.get("user_id")
@@ -123,20 +121,16 @@ def get_current_user(
 
     return user
 
-
 def require_portal(expected_portal: str):
     """Dependency that additionally enforces the token's portal claim matches the expected portal."""
     def dependency(
-        authorization: str = Header(None),
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
         db: Session = Depends(get_db),
     ):
-        if not authorization:
+        if not credentials or credentials.scheme.lower() != "bearer" or not credentials.credentials:
             raise HTTPException(status_code=401, detail="Authorization token missing")
-        parts = authorization.split()
-        if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1]:
-            raise HTTPException(status_code=401, detail="Invalid authorization header")
 
-        token = parts[1]
+        token = credentials.credentials
         payload = _decode_token(token)
         portal = payload.get("portal", "")
 
@@ -162,7 +156,6 @@ def require_portal(expected_portal: str):
         return user
 
     return dependency
-
 
 def require_permission(permission_slug: str):
     return require_any_permission(permission_slug)

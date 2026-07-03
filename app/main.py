@@ -33,61 +33,24 @@ from app.modules.affiliates.models import Affiliate, AffiliateMarketingInfo, Aff
 from app.seed import seed_default_roles_and_permissions
 from app.modules.email_templates.service import seed_email_templates
 
-from app.modules.auth.router import router as auth_router
-from app.modules.users.router import router as users_router
-from app.modules.roles.router import router as roles_router
-from app.modules.permissions.router import router as permissions_router
-from app.modules.admin_modules.router import router as admin_modules_router
-from app.modules.dashboard.router import router as dashboard_router
-from app.modules.profile.router import router as profile_router
-from app.modules.settings.router import router as settings_router
-from app.modules.email_templates.router import router as email_templates_router
-from app.modules.uploads.router import router as uploads_router
-from app.modules.client.router import router as client_router
-from app.modules.customers.router import router as customers_router
-from app.modules.customers.customer_router import router as customer_portal_router
-from app.modules.suppliers.router import router as suppliers_router
-from app.modules.agents.router import router as agents_router
-from app.modules.affiliates.router import router as affiliates_router
-from app.modules.cms.router import router as cms_router
-from app.modules.cms.geo_seed_router import router as geo_seed_router
-from app.modules.cms.geo_router import router as geo_router
-from app.modules.bookings.router import router as bookings_router, supplier_router as bookings_supplier_router, supplier_portal_router as bookings_supplier_portal_router, agent_portal_router as bookings_agent_portal_router
-from app.modules.payments.router import router as payments_router
-from app.modules.tours.router import discounts_router, router as tour_detail_router
+from app.api.router import register_api_routes
 from app.modules.invoices.models import Invoice, InvoiceItem
 from app.modules.notifications.models import Notification, NotificationLog
 from app.modules.sessions.models import UserSession, LoginHistory
-from app.modules.invoices.router import router as invoices_router
-from app.modules.notifications.router import router as notifications_router
-from app.modules.reports.router import router as reports_router
-from app.modules.sessions.router import router as sessions_router
-from app.modules.audit.router import router as activity_logs_router, alias_router as audit_logs_alias_router
 from app.modules.chatbot.models import ChatFAQ, ChatSession, ChatMessage
-from app.modules.chatbot.router import router as chatbot_router
-from app.modules.public.router import router as public_router
 
 # New modules
 from app.modules.tour_versions.models import TourVersion
-from app.modules.tour_versions.router import router as tour_versions_router
-from app.modules.payments.gateway_router import router as payments_gateway_router
 from app.modules.supplier_ledger.models import SupplierLedger, SupplierPayout, SupplierPayoutItem
-from app.modules.supplier_ledger.router import router as supplier_ledger_router
 from app.modules.checkout.models import CheckoutSession
-from app.modules.checkout.router import router as checkout_router
 from app.modules.website_cms.models import (
     HomepageBanner, PopularDestination, PopularTour, TourOnDeal,
     Blog, CustomerReview, HelpCentreArticle, CmsPolicy,
     PromotionalPopup, ExternalLink, SitemapEntry,
 )
-from app.modules.website_cms.router import router as website_cms_router
 from app.modules.cancellations.models import CancellationRequest, RefundRule
-from app.modules.cancellations.router import router as cancellations_router
 from app.modules.booking_calendar.models import BookingCalendarEvent
-from app.modules.booking_calendar.router import router as booking_calendar_router
 from app.modules.affiliate_tracking.models import AffiliateLink, AffiliateClick, AffiliateConversion, AffiliatePayout
-from app.modules.affiliate_tracking.router import router as affiliate_tracking_router
-from app.modules.private_documents.router import router as private_documents_router
 
 logger = logging.getLogger(__name__)
 
@@ -251,58 +214,12 @@ storage_root.joinpath("uploads", "profile-images").mkdir(parents=True, exist_ok=
 storage_root.joinpath("uploads", "admin-assets").mkdir(parents=True, exist_ok=True)
 app.mount("/storage", StaticFiles(directory=str(storage_root)), name="storage")
 
-# Private document storage — lives outside the public /storage mount
+# Private document storage Ã¢â‚¬â€ lives outside the public /storage mount
 private_docs_root = storage_root.parent / "private-docs"
 private_docs_root.joinpath("supplier-documents").mkdir(parents=True, exist_ok=True)
 private_docs_root.joinpath("agent-documents").mkdir(parents=True, exist_ok=True)
 
-app.include_router(auth_router, prefix="/api")
-app.include_router(users_router, prefix="/api")
-app.include_router(roles_router, prefix="/api")
-app.include_router(roles_router, prefix="/api/admin")
-app.include_router(permissions_router, prefix="/api")
-app.include_router(permissions_router, prefix="/api/admin")
-app.include_router(admin_modules_router, prefix="/api")
-app.include_router(dashboard_router, prefix="/api")
-app.include_router(profile_router, prefix="/api")
-app.include_router(settings_router, prefix="/api")
-app.include_router(email_templates_router, prefix="/api")
-app.include_router(uploads_router, prefix="/api")
-app.include_router(client_router, prefix="/api")
-app.include_router(customers_router, prefix="/api")
-app.include_router(customer_portal_router, prefix="/api")
-app.include_router(suppliers_router, prefix="/api")
-app.include_router(agents_router, prefix="/api")
-app.include_router(affiliates_router, prefix="/api")
-app.include_router(tour_detail_router, prefix="/api")
-app.include_router(discounts_router, prefix="/api")
-app.include_router(cms_router, prefix="/api")
-app.include_router(geo_seed_router, prefix="/api")
-app.include_router(geo_router, prefix="/api")
-app.include_router(bookings_router, prefix="/api")
-app.include_router(payments_router, prefix="/api")
-app.include_router(invoices_router, prefix="/api")
-app.include_router(notifications_router, prefix="/api")
-app.include_router(reports_router, prefix="/api")
-app.include_router(sessions_router, prefix="/api")
-app.include_router(activity_logs_router, prefix="/api")
-app.include_router(audit_logs_alias_router, prefix="/api")
-app.include_router(bookings_supplier_router, prefix="/api")
-app.include_router(bookings_supplier_portal_router, prefix="/api")
-app.include_router(bookings_agent_portal_router, prefix="/api")
-app.include_router(chatbot_router, prefix="/api")
-app.include_router(public_router, prefix="/api/public")
-
-# New module routers
-app.include_router(tour_versions_router, prefix="/api")
-app.include_router(payments_gateway_router, prefix="/api")
-app.include_router(supplier_ledger_router, prefix="/api")
-app.include_router(checkout_router, prefix="/api")
-app.include_router(website_cms_router, prefix="/api")
-app.include_router(cancellations_router, prefix="/api")
-app.include_router(booking_calendar_router, prefix="/api")
-app.include_router(affiliate_tracking_router, prefix="/api")
-app.include_router(private_documents_router, prefix="/api")
+register_api_routes(app)
 
 @app.get("/")
 def home():
