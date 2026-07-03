@@ -46,6 +46,11 @@ class StripeSessionRequest(BaseModel):
     idempotency_key: Optional[str] = None
 
 
+class StripeReturnConfirmRequest(BaseModel):
+    booking_id: int
+    session_id: Optional[str] = None
+
+
 class PayPalOrderRequest(BaseModel):
     booking_id: int
     amount: Decimal
@@ -63,6 +68,15 @@ class PayPalCaptureRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _ensure_booking_payment_access(booking: Booking, current_user) -> None:
+    role_slug = getattr(getattr(current_user, "role", None), "slug", "") or ""
+    if role_slug in {"super-admin", "admin"} or "admin" in role_slug:
+        return
+    if booking.customer and booking.customer.user_id == current_user.id:
+        return
+    raise HTTPException(status_code=403, detail="Booking access denied")
 
 
 def _booking_or_404(db: Session, booking_id: int) -> Booking:
@@ -151,7 +165,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
         stripe_gw = get_stripe(db)
         event = stripe_gw.construct_event(payload, stripe_signature, webhook_secret)
     elif app_settings.APP_ENV == "production":
-        logger.critical("Stripe webhook received without STRIPE_WEBHOOK_SECRET — rejecting in production")
+        logger.critical("Stripe webhook received without STRIPE_WEBHOOK_SECRET ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rejecting in production")
         raise _HTTPException(status_code=400, detail="Webhook signature verification not configured")
     else:
         logger.warning("Stripe webhook received without signature verification (dev mode)")
@@ -163,7 +177,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
 
     # Idempotency: skip events already recorded via their Stripe event ID
     if event_id and db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first():
-        logger.info("Stripe event %s already processed — skipping", event_id)
+        logger.info("Stripe event %s already processed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â skipping", event_id)
         return {"status": "success", "received": True}
 
     if event_type == "checkout.session.completed":
@@ -210,6 +224,71 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
 # PayPal endpoints
 # ---------------------------------------------------------------------------
 
+
+
+@router.post("/stripe/confirm-return")
+def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    booking = _booking_or_404(db, body.booking_id)
+    _ensure_booking_payment_access(booking, current_user)
+
+    payment = None
+    session_obj = None
+
+    if body.session_id:
+        stripe = get_stripe(db)
+        session_obj = stripe.retrieve_session(body.session_id)
+        if session_obj.get("payment_status") != "paid" and session_obj.get("status") != "complete":
+            raise HTTPException(status_code=400, detail="Stripe session is not paid yet")
+        payment = db.query(Payment).filter(
+            Payment.gateway == "stripe",
+            Payment.gateway_order_id == body.session_id,
+            Payment.booking_id == booking.id,
+        ).order_by(Payment.id.desc()).first()
+    elif settings.APP_ENV != "production":
+        payment = db.query(Payment).filter(
+            Payment.gateway == "stripe",
+            Payment.booking_id == booking.id,
+            Payment.payment_status == "pending",
+        ).order_by(Payment.id.desc()).first()
+    else:
+        raise HTTPException(status_code=400, detail="Stripe session_id is required")
+
+    if not payment:
+        raise HTTPException(status_code=404, detail="Pending Stripe payment not found")
+
+    if payment.payment_status != "paid":
+        captured_amt = money(payment.total_amount or booking.amount_pending or booking.final_amount or 0)
+        payment.captured_amount = captured_amt
+        payment.paid_amount = captured_amt
+        payment.pending_amount = Decimal("0")
+        payment.payment_status = "paid"
+        if session_obj:
+            payment.gateway_payment_id = session_obj.get("payment_intent") or payment.gateway_payment_id
+        ref = body.session_id or f"STRIPE-RETURN-{payment.id}"
+        existing_txn = db.query(PaymentTransaction).filter(
+            PaymentTransaction.payment_id == payment.id,
+            PaymentTransaction.gateway_reference == ref,
+        ).first()
+        if not existing_txn:
+            db.add(PaymentTransaction(
+                payment_id=payment.id,
+                booking_id=payment.booking_id,
+                transaction_type="capture",
+                amount=captured_amt,
+                status="success",
+                gateway_reference=ref,
+                metadata_json={"source": "stripe_return", "verified": bool(body.session_id)},
+                created_by=current_user.id if current_user else None,
+            ))
+        _sync_booking_payment_fields(db, payment.booking)
+        db.commit()
+        db.refresh(payment)
+
+    return {
+        "status": "success",
+        "message": "Stripe payment confirmed",
+        "data": {"payment_id": payment.id, "booking_id": booking.id, "payment_status": payment.payment_status},
+    }
 
 @router.post("/paypal/create-order")
 def paypal_create_order(body: PayPalOrderRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
@@ -293,7 +372,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
 
     # Idempotency: skip events already recorded via PayPal event ID
     if event_id and db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first():
-        logger.info("PayPal event %s already processed — skipping", event_id)
+        logger.info("PayPal event %s already processed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â skipping", event_id)
         return {"status": "success", "received": True}
 
     if event_type == "PAYMENT.CAPTURE.COMPLETED":

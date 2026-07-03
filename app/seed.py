@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+﻿from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.modules.admin_modules.models import AdminModule
@@ -65,7 +65,7 @@ def permission_slug(action: str, module: str):
     return f"delete-{module}"
 
 
-# 27 modules × 4 HTTP actions = 108 base permissions
+# 27 modules Ã— 4 HTTP actions = 108 base permissions
 DEFAULT_PERMISSIONS = [
     {
         "name": f"{label} {module_label}",
@@ -102,7 +102,7 @@ EMAIL_TEMPLATE_GRANULAR_PERMISSIONS = [
 
 DEFAULT_PERMISSIONS.extend(EMAIL_TEMPLATE_GRANULAR_PERMISSIONS)
 
-# Dashboard-only granular permissions — no overlap with WEEK_11_15_PERMISSIONS slugs
+# Dashboard-only granular permissions â€” no overlap with WEEK_11_15_PERMISSIONS slugs
 DASHBOARD_PERMISSIONS = [
     {"name": "View Dashboard", "slug": "dashboard.view", "module": "dashboard", "action": "get"},
     {"name": "View Dashboard Summary", "slug": "dashboard.summary", "module": "dashboard", "action": "get"},
@@ -317,7 +317,7 @@ def seed_default_roles_and_permissions(db: Session):
 
     default_role_permissions = {
         # ------------------------------------------------------------------
-        # Admin — full operational control; manages users, roles, permissions
+        # Admin â€” full operational control; manages users, roles, permissions
         # ------------------------------------------------------------------
         admin: [
             # Dashboard
@@ -351,7 +351,7 @@ def seed_default_roles_and_permissions(db: Session):
             "payments.summary",
             # Supplier Ledger (base + granular)
             "view-supplier_ledger", "create-supplier_ledger", "update-supplier_ledger",
-            "supplier_ledger.approve",
+            "supplier_ledger.view", "supplier_ledger.create_payout", "supplier_ledger.approve", "supplier_ledger.mark_paid",
             # Reports / Invoices (base)
             "view-reports", "view-invoices",
             # Notifications (base)
@@ -371,7 +371,7 @@ def seed_default_roles_and_permissions(db: Session):
         ],
 
         # ------------------------------------------------------------------
-        # Sub Admin — operations without system-level role/permission CRUD
+        # Sub Admin â€” operations without system-level role/permission CRUD
         # ------------------------------------------------------------------
         sub_admin: [
             # Dashboard
@@ -400,7 +400,7 @@ def seed_default_roles_and_permissions(db: Session):
             # Payments (view only, base)
             "view-payments", "payments.summary",
             # Supplier Ledger (view only)
-            "view-supplier_ledger",
+            "view-supplier_ledger", "supplier_ledger.view",
             # Reports / Invoices (base)
             "view-reports", "view-invoices",
             # Notifications (base)
@@ -419,12 +419,12 @@ def seed_default_roles_and_permissions(db: Session):
             "view-profile", "update-profile", "profile.view",
             # All operational granular permissions
             *_all_operational,
-            # Week granular — exclude system-only actions
+            # Week granular â€” exclude system-only actions
             *_week_no_system,
         ],
 
         # ------------------------------------------------------------------
-        # Supplier — own data: tours, bookings on their tours, financials
+        # Supplier â€” own data: tours, bookings on their tours, financials
         # ------------------------------------------------------------------
         supplier: [
             # Dashboard (limited)
@@ -455,13 +455,13 @@ def seed_default_roles_and_permissions(db: Session):
             "notifications.view",
             # Supplier Ledger (view own payouts)
             "view-supplier_ledger",
-            "supplier_ledger.view",
+            "supplier_ledger.view", "supplier_ledger.create_payout",
             # Profile
             "view-profile", "update-profile", "profile.view",
         ],
 
         # ------------------------------------------------------------------
-        # Agent / Reseller — customer bookings and their own account
+        # Agent / Reseller â€” customer bookings and their own account
         # ------------------------------------------------------------------
         agent_reseller: [
             # Dashboard (limited)
@@ -503,7 +503,7 @@ def seed_default_roles_and_permissions(db: Session):
         ],
 
         # ------------------------------------------------------------------
-        # Customer — self-service: browse, book, pay, view own data
+        # Customer â€” self-service: browse, book, pay, view own data
         # ------------------------------------------------------------------
         customer: [
             # Dashboard (minimal)
@@ -540,3 +540,4 @@ def seed_default_roles_and_permissions(db: Session):
                 assign_if_missing(db, role, permission)
 
     db.commit()
+

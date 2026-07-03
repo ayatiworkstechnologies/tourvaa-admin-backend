@@ -725,6 +725,8 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
     from app.modules.bookings.schemas import SupplierDecisionRequest
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
+    if booking.booking_status == "completed":
+        return serialize_booking(booking, detail=True)
     if booking.booking_status not in ("confirmed", "ongoing"):
         raise HTTPException(status_code=400, detail="Only confirmed or ongoing bookings can be marked as completed")
     old_values = serialize_booking(booking)

@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
-# Any approval_status that means "still waiting on an admin decision" — matches
+# Any approval_status that means "still waiting on an admin decision" â€” matches
 # the broader definition already used by the approval-queue lists, so the
 # "X pending" stat/alert counts don't disagree with what's actually listed.
 PENDING_REVIEW_STATUSES = [
@@ -38,7 +38,7 @@ PENDING_REVIEW_STATUSES = [
     "partially_approved",
 ]
 
-# Maps role slug → dashboard type key used by the frontend
+# Maps role slug â†’ dashboard type key used by the frontend
 ROLE_TO_DASHBOARD_TYPE = {
     "super-admin": "super_admin",
     "admin": "admin",
@@ -93,7 +93,7 @@ ROLE_SIDEBAR = {
     ],
 }
 
-# Permission slug → sidebar menu mapping for admin/sub-admin roles
+# Permission slug â†’ sidebar menu mapping for admin/sub-admin roles
 PERMISSION_MENU_MAP = {
     "view-dashboard": {"label": "Dashboard", "module": "dashboard"},
     "dashboard.view": {"label": "Dashboard", "module": "dashboard"},
@@ -120,6 +120,8 @@ PERMISSION_MENU_MAP = {
     "bookings.view": {"label": "Bookings", "module": "bookings"},
     "view-payments": {"label": "Payments", "module": "payments"},
     "payments.view": {"label": "Payments", "module": "payments"},
+    "view-supplier_ledger": {"label": "Supplier Payouts", "module": "supplier_ledger"},
+    "supplier_ledger.view": {"label": "Supplier Payouts", "module": "supplier_ledger"},
     "view-reports": {"label": "Reports", "module": "reports"},
     "reports.view": {"label": "Reports", "module": "reports"},
     "invoices.view": {"label": "Invoices", "module": "invoices"},
@@ -134,7 +136,7 @@ PERMISSION_MENU_MAP = {
 ADMIN_MENU_ORDER = [
     "dashboard", "users", "roles", "permissions", "customers", "suppliers",
     "agents", "affiliates", "countries", "cities", "tours", "categories",
-    "subcategories", "bookings", "payments", "invoices", "reports", "email",
+    "subcategories", "bookings", "payments", "invoices", "supplier_ledger", "reports", "email",
     "settings", "activity_logs", "profile",
 ]
 
@@ -474,7 +476,7 @@ def dashboard_summary(
             },
         }
 
-    # Admin / Sub-Admin / Super-Admin — permission-scoped
+    # Admin / Sub-Admin / Super-Admin â€” permission-scoped
     role_ids = _role_ids_for_user(current_user)
     slugs: set[str] = set()
     if role_ids:
@@ -740,7 +742,7 @@ def recent_activities(
 ):
     role_slug = _get_role_slug(current_user)
 
-    # Supplier — their booking activities
+    # Supplier â€” their booking activities
     if role_slug == "supplier":
         supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
         sid = supplier.id if supplier else -1
@@ -769,7 +771,7 @@ def recent_activities(
             },
         }
 
-    # Agent — their booking activities
+    # Agent â€” their booking activities
     if role_slug == "agent-reseller":
         agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
         aid = agent.id if agent else -1
@@ -798,7 +800,7 @@ def recent_activities(
             },
         }
 
-    # Customer — their own bookings
+    # Customer â€” their own bookings
     if role_slug == "customer":
         customer = db.query(Customer).filter(Customer.user_id == current_user.id).first()
         cid = customer.id if customer else -1
@@ -837,7 +839,7 @@ def recent_activities(
             },
         }
 
-    # Admin / Sub-Admin / Super-Admin — audit log
+    # Admin / Sub-Admin / Super-Admin â€” audit log
     admin_actions = (
         db.query(AuditLog)
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
@@ -1001,7 +1003,7 @@ def dashboard_alerts(
 
 
 # ---------------------------------------------------------------------------
-# Existing analytics endpoints — unchanged
+# Existing analytics endpoints â€” unchanged
 # ---------------------------------------------------------------------------
 
 @router.get("/bookings")
@@ -1111,3 +1113,5 @@ def reports_summary(
             "recent_exports": [],
         },
     }
+
+
