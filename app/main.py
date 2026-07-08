@@ -1,56 +1,54 @@
-from fastapi import FastAPI, Request, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
-from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 
 from app.database import SessionLocal, engine
 from app.config import get_storage_root, settings
+from app.middleware.cors import setup_cors
+from app.middleware.error_handlers import register_error_handlers
 
-from app.modules.roles.models import Role
-from app.modules.admin_modules.models import AdminModule
-from app.modules.permissions.models import Permission, RolePermission
-from app.modules.users.models import User
-from app.modules.settings.models import ApiSetting, AppSetting, PaymentSetting
-from app.modules.email_templates.models import EmailTemplate
-from app.modules.audit.models import AuditLog
-from app.modules.customers.models import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerCancellationRequest
-from app.modules.cms.models import Country, State, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
-from app.modules.bookings.models import Booking, BookingTraveller, BookingOptionalActivity, BookingAccommodation, BookingExtension, BookingStatusHistory, BookingCommunication, MessageReply, EmailLog
-from app.modules.payments.models import Payment, PaymentTransaction, PaymentHold
-from app.modules.tours.models import (
+from app.models.roles import Role
+from app.models.admin_modules import AdminModule
+from app.models.permissions import Permission, RolePermission
+from app.models.users import User
+from app.models.settings import ApiSetting, AppSetting, PaymentSetting
+from app.models.email_templates import EmailTemplate
+from app.models.audit import AuditLog
+from app.models.customers import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerCancellationRequest
+from app.models.cms import Country, State, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
+from app.models.bookings import Booking, BookingTraveller, BookingOptionalActivity, BookingAccommodation, BookingExtension, BookingStatusHistory, BookingCommunication, MessageReply, EmailLog
+from app.models.payments import Payment, PaymentTransaction, PaymentHold
+from app.models.tours import (
     TourOverview, TourItinerary, TourInclusion, TourExclusion, TourHighlight,
     TourSimilar, TourExtension, TourGalleryImage,
     TourPricing, TourOptionalActivity, TourAccommodationExtra,
     TourCalendar, TourUnavailableDate, TourDiscount,
 )
-from app.modules.suppliers.models import Supplier, SupplierContact, SupplierBusinessInfo, SupplierVehicle, SupplierInvoicing, SupplierDocument
-from app.modules.agents.models import Agent, AgentContact, AgentBusinessInfo, AgentInvoicing, AgentDocument
-from app.modules.affiliates.models import Affiliate, AffiliateMarketingInfo, AffiliateInvoicing, AffiliateDocument
+from app.models.suppliers import Supplier, SupplierContact, SupplierBusinessInfo, SupplierVehicle, SupplierInvoicing, SupplierDocument
+from app.models.agents import Agent, AgentContact, AgentBusinessInfo, AgentInvoicing, AgentDocument
+from app.models.affiliates import Affiliate, AffiliateMarketingInfo, AffiliateInvoicing, AffiliateDocument
 from app.seed import seed_default_roles_and_permissions
-from app.modules.email_templates.service import seed_email_templates
+from app.services.email_templates import seed_email_templates
 
 from app.api.router import register_api_routes
-from app.modules.invoices.models import Invoice, InvoiceItem
-from app.modules.notifications.models import Notification, NotificationLog
-from app.modules.sessions.models import UserSession, LoginHistory
-from app.modules.chatbot.models import ChatFAQ, ChatSession, ChatMessage
+from app.models.invoices import Invoice, InvoiceItem
+from app.models.notifications import Notification, NotificationLog
+from app.models.sessions import UserSession, LoginHistory
+from app.models.chatbot import ChatFAQ, ChatSession, ChatMessage
 
 # New modules
-from app.modules.tour_versions.models import TourVersion
-from app.modules.supplier_ledger.models import SupplierLedger, SupplierPayout, SupplierPayoutItem
-from app.modules.checkout.models import CheckoutSession
-from app.modules.website_cms.models import (
+from app.models.tour_versions import TourVersion
+from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierPayoutItem
+from app.models.checkout import CheckoutSession
+from app.models.website_cms import (
     HomepageBanner, PopularDestination, PopularTour, TourOnDeal,
     Blog, CustomerReview, HelpCentreArticle, CmsPolicy,
     PromotionalPopup, ExternalLink, SitemapEntry,
 )
-from app.modules.cancellations.models import CancellationRequest, RefundRule
-from app.modules.booking_calendar.models import BookingCalendarEvent
-from app.modules.affiliate_tracking.models import AffiliateLink, AffiliateClick, AffiliateConversion, AffiliatePayout
+from app.models.cancellations import CancellationRequest, RefundRule
+from app.models.booking_calendar import BookingCalendarEvent
+from app.models.affiliate_tracking import AffiliateLink, AffiliateClick, AffiliateConversion, AffiliatePayout
 
 logger = logging.getLogger(__name__)
 
@@ -178,33 +176,7 @@ app = FastAPI(
 )
 
 
-@app.exception_handler(StarletteHTTPException)
-async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"status": "error", "message": exc.detail or "An error occurred"},
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    errors = exc.errors()
-    first = errors[0] if errors else {}
-    field = ".".join(str(p) for p in first.get("loc", [])[1:]) if first.get("loc") else "unknown"
-    message = f"{field}: {first.get('msg', 'Validation error')}" if field and field != "unknown" else first.get("msg", "Validation error")
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"status": "error", "message": message, "detail": errors},
-    )
-
-
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"status": "error", "message": "An unexpected error occurred. Please try again later."},
-    )
+register_error_handlers(app)
 
 
 @app.on_event("startup")
@@ -221,17 +193,7 @@ def run_seed():
             "Database schema is not ready; skipping seed. Run `python -m alembic upgrade head` before starting the API."
         )
 
-_cors_origins = settings.cors_origins
-_allow_credentials = _cors_origins != ["*"]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=_allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["X-Client-Type", "X-Client-Version", "X-Device-Id"],
-)
+setup_cors(app)
 
 storage_root = get_storage_root()
 storage_root.joinpath("uploads", "profile-images").mkdir(parents=True, exist_ok=True)

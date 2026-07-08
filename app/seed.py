@@ -1,11 +1,11 @@
 ﻿from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.modules.admin_modules.models import AdminModule
-from app.modules.permissions.models import Permission, RolePermission
-from app.modules.roles.models import Role
-from app.modules.users.models import User, UserRole
-from app.security import hash_password
+from app.models.admin_modules import AdminModule
+from app.models.permissions import Permission, RolePermission
+from app.models.roles import Role
+from app.models.users import User, UserRole
+from app.auth.security import hash_password
 
 
 DEFAULT_ROLES = [

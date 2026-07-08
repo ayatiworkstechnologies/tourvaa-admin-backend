@@ -1,0 +1,303 @@
+from fastapi import HTTPException, Request
+from sqlalchemy.orm import Session, joinedload, selectinload
+
+from app.services.audit import log_audit
+from app.utils.operations import (
+    PartialApprovalRequest,
+    RejectRequest,
+    approve_item,
+    code_for,
+    filter_review_query,
+    get_or_404,
+    partial_approve_item,
+    reject_item,
+    relationship_list,
+    serialize_common_review,
+    simple_paginate,
+)
+from datetime import datetime
+
+from app.models.suppliers import Supplier, SupplierDocument, SupplierVehicle
+from app.schemas.suppliers import (
+    DocumentReviewRequest,
+    SupplierCreate,
+    SupplierMarkupRequest,
+    SupplierUpdate,
+    VehicleReviewRequest,
+)
+from app.models.users import User
+
+
+def _contact(item):
+    return {key: getattr(item, key) for key in ["id", "contact_name", "designation", "phone", "email", "alternate_phone", "is_primary", "created_at", "updated_at"]}
+
+
+def _document(item):
+    file_path = item.file_path or ""
+    if file_path.startswith("/private-documents/") or file_path.startswith("imagekit:"):
+        file_url = f"/api/private-documents/supplier/{item.id}"
+    elif file_path and not file_path.startswith("http"):
+        file_url = file_path if file_path.startswith("/") else "/storage/" + file_path
+    else:
+        file_url = file_path
+    return {
+        "id": item.id,
+        "document_type": item.document_type,
+        "document_name": item.document_name,
+        "file_path": item.file_path,
+        "file_url": file_url,
+        "file_size": item.file_size,
+        "mime_type": item.mime_type,
+        "status": item.status,
+        "rejection_reason": item.rejection_reason,
+        "notes": item.rejection_reason,
+        "uploaded_at": item.uploaded_at,
+        "reviewed_at": item.reviewed_at,
+        "reviewed_by": item.reviewed_by,
+    }
+
+
+def serialize_supplier(item: Supplier):
+    data = serialize_common_review(item, "supplier_name", "supplier_code")
+    data.update(
+        {
+            "supplier_type": item.supplier_type,
+            "markup_type": item.markup_type,
+            "markup_value": item.markup_value,
+            "contacts": relationship_list(item.contacts, _contact),
+            "vehicles": relationship_list(item.vehicles, lambda vehicle: {
+                "id": vehicle.id,
+                "make": vehicle.make,
+                "model": vehicle.model,
+                "year": vehicle.year,
+                "capacity": vehicle.capacity,
+                "fitness_certificate": vehicle.fitness_certificate,
+                "insurance_document": vehicle.insurance_document,
+                "vehicle_photos": vehicle.vehicle_photos,
+                "approval_status": vehicle.approval_status,
+            }),
+            "documents": relationship_list(item.documents, _document),
+            "business_info": {
+                "years_in_business": item.business_info.years_in_business,
+                "certificate_of_incorporation": item.business_info.certificate_of_incorporation,
+                "monthly_customers_count": item.business_info.monthly_customers_count,
+                "target_market": item.business_info.target_market,
+                "destinations_sold": item.business_info.destinations_sold,
+                "gst_tax_number": item.business_info.gst_tax_number,
+                "business_registration_number": item.business_info.business_registration_number,
+                "approval_status": item.business_info.approval_status,
+            } if item.business_info else None,
+            "invoicing": {
+                "contact_name": item.invoicing.contact_name,
+                "email": item.invoicing.email,
+                "phone": item.invoicing.phone,
+                "account_name": item.invoicing.account_name,
+                "account_number": item.invoicing.account_number,
+                "bank_name": item.invoicing.bank_name,
+                "bank_branch": item.invoicing.bank_branch,
+                "swift_code": item.invoicing.swift_code,
+                "iban": item.invoicing.iban,
+                "country_id": item.invoicing.country_id,
+                "tax_number": item.invoicing.tax_number,
+            } if item.invoicing else None,
+        }
+    )
+    return data
+
+
+def list_suppliers(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = ""):
+    base_query = db.query(Supplier).options(
+        joinedload(Supplier.country),
+        joinedload(Supplier.city),
+        joinedload(Supplier.business_info),
+        joinedload(Supplier.invoicing),
+        selectinload(Supplier.contacts),
+        selectinload(Supplier.vehicles),
+        selectinload(Supplier.documents),
+    )
+    query = filter_review_query(base_query, Supplier, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, name_field="supplier_name")
+    return simple_paginate(query, page, limit, serialize_supplier)
+
+
+def get_supplier(db: Session, supplier_id: int):
+    return get_or_404(db, Supplier, supplier_id, "Supplier")
+
+
+def create_supplier(db: Session, data: SupplierCreate, actor: User, request: Request | None = None):
+    item = Supplier(**data.model_dump())
+    db.add(item)
+    db.flush()
+    item.supplier_code = code_for("TVA-SUP", item.id)
+    log_audit(db, actor=actor, action="create_supplier", entity_type="supplier", entity_id=item.id, new_values=serialize_supplier(item), request=request)
+    db.commit()
+    db.refresh(item)
+    return serialize_supplier(item)
+
+
+def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: User, request: Request | None = None):
+    item = get_supplier(db, supplier_id)
+    old = serialize_supplier(item)
+    
+    update_data = data.model_dump(exclude_unset=True)
+    contact_data = update_data.pop("contact", None)
+    business_data = update_data.pop("business_info", None)
+    invoicing_data = update_data.pop("invoicing", None)
+    
+    for key, value in update_data.items():
+        setattr(item, key, value)
+        
+    if contact_data:
+        if not item.contacts:
+            from app.models.suppliers import SupplierContact
+            new_contact = SupplierContact(supplier_id=item.id, is_primary=True)
+            db.add(new_contact)
+            item.contacts.append(new_contact)
+        for k, v in contact_data.items():
+            if v is not None:
+                setattr(item.contacts[0], k, v)
+                
+    if business_data:
+        if not item.business_info:
+            from app.models.suppliers import SupplierBusinessInfo
+            item.business_info = SupplierBusinessInfo(supplier_id=item.id)
+            db.add(item.business_info)
+        for k, v in business_data.items():
+            if v is not None:
+                setattr(item.business_info, k, v)
+                
+    if invoicing_data:
+        if not item.invoicing:
+            from app.models.suppliers import SupplierInvoicing
+            item.invoicing = SupplierInvoicing(supplier_id=item.id)
+            db.add(item.invoicing)
+        for k, v in invoicing_data.items():
+            if v is not None:
+                setattr(item.invoicing, k, v)
+                
+    log_audit(db, actor=actor, action="update_supplier", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
+    db.commit()
+    db.refresh(item)
+    return serialize_supplier(item)
+
+
+def approve_supplier(db: Session, supplier_id: int, actor: User, request: Request | None = None):
+    return approve_item(db, get_supplier(db, supplier_id), actor, "supplier", serialize_supplier, request)
+
+
+def reject_supplier(db: Session, supplier_id: int, data: RejectRequest, actor: User, request: Request | None = None):
+    return reject_item(db, get_supplier(db, supplier_id), data, actor, "supplier", serialize_supplier, request)
+
+
+def partial_approve_supplier(db: Session, supplier_id: int, data: PartialApprovalRequest, actor: User, request: Request | None = None):
+    return partial_approve_item(db, get_supplier(db, supplier_id), data, actor, "supplier", serialize_supplier, request)
+
+
+def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRequest, actor: User, request: Request | None = None):
+    item = get_supplier(db, supplier_id)
+    old = serialize_supplier(item)
+    item.markup_type = data.markup_type
+    item.markup_value = data.markup_value
+    commission_request_pending = bool(item.pending_requirements and "commission request" in item.pending_requirements.lower())
+    if commission_request_pending:
+        item.pending_requirements = None
+        item.approval_status = "approved"
+        item.status = "active"
+        if item.user:
+            item.user.approval_status = "approved"
+            item.user.is_active = True
+        try:
+            from app.utils.notification_triggers import notify_supplier_commission_approved
+            notify_supplier_commission_approved(db, supplier_id=item.id, supplier_name=item.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=item.user_id)
+        except Exception:
+            pass
+    log_audit(db, actor=actor, action="update_supplier_markup", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
+    db.commit()
+    db.refresh(item)
+    return serialize_supplier(item)
+
+
+def submit_supplier_verification(db: Session, user: User, request: Request | None = None):
+    supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    old = serialize_supplier(supplier)
+    supplier.approval_status = "admin_review_pending"
+    supplier.status = "inactive"
+    supplier.rejection_reason = None
+    supplier.pending_requirements = None
+    log_audit(db, actor=user, action="submit_supplier_verification", entity_type="supplier", entity_id=supplier.id, old_values=old, new_values=serialize_supplier(supplier), request=request)
+    db.commit()
+    db.refresh(supplier)
+    try:
+        from app.utils.notification_triggers import notify_supplier_submitted_verification
+        notify_supplier_submitted_verification(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, user_id=user.id)
+        db.commit()
+    except Exception:
+        pass
+    return serialize_supplier(supplier)
+
+
+def review_supplier_document(db: Session, supplier_id: int, document_id: int, data: DocumentReviewRequest, actor: User, request: Request | None = None):
+    document = (
+        db.query(SupplierDocument)
+        .filter(SupplierDocument.id == document_id, SupplierDocument.supplier_id == supplier_id)
+        .first()
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    old = _document(document)
+    document.status = data.status
+    document.rejection_reason = data.rejection_reason if data.status == "rejected" else None
+    document.reviewed_at = datetime.utcnow()
+    document.reviewed_by = actor.id
+
+    log_audit(
+        db,
+        actor=actor,
+        action=f"{data.status}_supplier_document",
+        entity_type="supplier_document",
+        entity_id=document.id,
+        old_values=old,
+        new_values=_document(document),
+        request=request,
+    )
+    db.commit()
+    db.refresh(document)
+    return _document(document)
+
+
+def review_supplier_vehicle(db: Session, supplier_id: int, vehicle_id: int, data: VehicleReviewRequest, actor: User, request: Request | None = None):
+    vehicle = (
+        db.query(SupplierVehicle)
+        .filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier_id)
+        .first()
+    )
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    old = {"id": vehicle.id, "approval_status": vehicle.approval_status, "rejection_reason": vehicle.rejection_reason}
+    vehicle.approval_status = data.approval_status
+    vehicle.rejection_reason = data.rejection_reason if data.approval_status == "rejected" else None
+    vehicle.reviewed_at = datetime.utcnow()
+    vehicle.reviewed_by = actor.id
+
+    log_audit(
+        db,
+        actor=actor,
+        action=f"{data.approval_status}_supplier_vehicle",
+        entity_type="supplier_vehicle",
+        entity_id=vehicle.id,
+        old_values=old,
+        new_values={"id": vehicle.id, "approval_status": vehicle.approval_status, "rejection_reason": vehicle.rejection_reason},
+        request=request,
+    )
+    db.commit()
+    db.refresh(vehicle)
+    return {
+        "id": vehicle.id,
+        "approval_status": vehicle.approval_status,
+        "rejection_reason": vehicle.rejection_reason,
+        "reviewed_at": str(vehicle.reviewed_at) if vehicle.reviewed_at else "",
+        "reviewed_by": vehicle.reviewed_by,
+    }

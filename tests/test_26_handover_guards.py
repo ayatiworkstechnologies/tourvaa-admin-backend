@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.modules.auth.schemas import RegisterSchema, ResetPasswordSchema
-from app.modules.users.schemas import UserCreate
-from app.modules.auth.service import verify_email
-from app.security import hash_reset_token
+from app.schemas.auth import RegisterSchema, ResetPasswordSchema
+from app.schemas.users import UserCreate
+from app.services.auth import verify_email
+from app.auth.security import hash_reset_token
 
 
 VALID_USER = {
@@ -55,8 +55,8 @@ def test_backend_private_key_files_are_not_tracked():
 
 def test_payments_are_internal_ledger_not_gateway_webhooks():
     backend_dir = Path(__file__).resolve().parents[1]
-    payment_router = (backend_dir / "app" / "modules" / "payments" / "router.py").read_text(encoding="utf-8")
-    payment_service = (backend_dir / "app" / "modules" / "payments" / "service.py").read_text(encoding="utf-8")
+    payment_router = (backend_dir / "app" / "routers" / "payments.py").read_text(encoding="utf-8")
+    payment_service = (backend_dir / "app" / "services" / "payments.py").read_text(encoding="utf-8")
 
     assert "/webhook" not in payment_router.lower()
     assert "stripe." not in payment_service.lower()
@@ -118,7 +118,7 @@ def test_verify_email_rejects_expired_registration_token():
 
 def test_auth_router_exposes_spec_registration_routes():
     backend_dir = Path(__file__).resolve().parents[1]
-    auth_router = (backend_dir / "app" / "modules" / "auth" / "router.py").read_text(encoding="utf-8")
+    auth_router = (backend_dir / "app" / "routers" / "auth.py").read_text(encoding="utf-8")
 
     assert '@router.post("/register/customer")' in auth_router
     assert '@router.post("/register/supplier")' in auth_router
@@ -130,7 +130,7 @@ def test_auth_router_exposes_spec_registration_routes():
 
 def test_auth_router_exposes_spec_session_routes():
     backend_dir = Path(__file__).resolve().parents[1]
-    auth_router = (backend_dir / "app" / "modules" / "auth" / "router.py").read_text(encoding="utf-8")
+    auth_router = (backend_dir / "app" / "routers" / "auth.py").read_text(encoding="utf-8")
 
     assert '@router.post("/refresh")' in auth_router
     assert '@router.post("/refresh-token")' in auth_router
@@ -150,7 +150,7 @@ def test_main_exposes_spec_admin_rbac_routes():
 
 def test_verification_workflow_status_contract_exists():
     backend_dir = Path(__file__).resolve().parents[1]
-    operations = (backend_dir / "app" / "modules" / "operations.py").read_text(encoding="utf-8")
+    operations = (backend_dir / "app" / "utils" / "operations.py").read_text(encoding="utf-8")
 
     for status in [
         "draft",
@@ -172,8 +172,8 @@ def test_verification_workflow_status_contract_exists():
 
 def test_supplier_agent_verification_api_contract_exists():
     backend_dir = Path(__file__).resolve().parents[1]
-    supplier_router = (backend_dir / "app" / "modules" / "suppliers" / "router.py").read_text(encoding="utf-8")
-    agent_router = (backend_dir / "app" / "modules" / "agents" / "router.py").read_text(encoding="utf-8")
+    supplier_router = (backend_dir / "app" / "routers" / "suppliers.py").read_text(encoding="utf-8")
+    agent_router = (backend_dir / "app" / "routers" / "agents.py").read_text(encoding="utf-8")
 
     for route in ["/register", "/verify-email", "/submit-verification", "/pending"]:
         assert route in supplier_router
@@ -188,7 +188,7 @@ def test_supplier_agent_verification_api_contract_exists():
 
 def test_email_verification_moves_portal_profiles_forward():
     backend_dir = Path(__file__).resolve().parents[1]
-    auth_service = (backend_dir / "app" / "modules" / "auth" / "service.py").read_text(encoding="utf-8")
+    auth_service = (backend_dir / "app" / "services" / "auth.py").read_text(encoding="utf-8")
 
     assert "profile_incomplete" in auth_service
     assert "email_verification_pending" in auth_service
