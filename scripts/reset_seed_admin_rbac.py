@@ -104,7 +104,7 @@ def run_rbac_seed(db) -> None:
 # ─── step 3: geo seed ───────────────────────────────────────────────────────
 
 def run_geo_seed(country_codes: list[str], include_cities: bool) -> None:
-    from app.modules.cms.geo_seed_router import _job, _lock, _run_import  # noqa: E402
+    from app.routers.cms_geo_seed import _job, _lock, _run_import  # noqa: E402
 
     scope = ", ".join(c.upper() for c in country_codes) if country_codes else "ALL 250 countries"
     _ok(f"Scope : {scope}")

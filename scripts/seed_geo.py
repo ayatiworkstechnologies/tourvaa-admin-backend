@@ -35,7 +35,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.modules.cms.geo_seed_router import _job, _lock, _run_phased  # noqa: E402
+from app.routers.cms_geo_seed import _job, _lock, _run_phased  # noqa: E402
 
 LINE  = "─" * 64
 THIN  = "·" * 44
