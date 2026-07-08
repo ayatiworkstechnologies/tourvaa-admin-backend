@@ -18,7 +18,12 @@ def list_payments(params: dict = Depends(pagination_params), customer_id: int = 
 
 
 @router.post("/")
-def add_payment(data: PaymentCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.create", "create-payments"))):
+def add_payment(
+    data: PaymentCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("payments.create", "create-payments")),
+):
     return {"status": "success", "message": "Payment recorded successfully", "data": create_payment(db, data, actor=current_user, request=request)}
 
 
@@ -58,5 +63,11 @@ def void(payment_id: int, data: PaymentVoid, request: Request, db: Session = Dep
 
 
 @router.post("/{payment_id}/refund")
-def refund_payment(payment_id: int, data: RefundRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.refund", "update-payments"))):
+def refund_payment(
+    payment_id: int,
+    data: RefundRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("payments.refund", "update-payments")),
+):
     return {"status": "success", "message": "Refund processed successfully", "data": process_refund(db, payment_id, data, actor=current_user, request=request)}

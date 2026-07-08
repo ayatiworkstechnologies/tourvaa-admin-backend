@@ -65,7 +65,7 @@ def permission_slug(action: str, module: str):
     return f"delete-{module}"
 
 
-# 27 modules Ã— 4 HTTP actions = 108 base permissions
+# 27 modules x 4 HTTP actions = 108 base permissions
 DEFAULT_PERMISSIONS = [
     {
         "name": f"{label} {module_label}",
@@ -102,7 +102,7 @@ EMAIL_TEMPLATE_GRANULAR_PERMISSIONS = [
 
 DEFAULT_PERMISSIONS.extend(EMAIL_TEMPLATE_GRANULAR_PERMISSIONS)
 
-# Dashboard-only granular permissions â€” no overlap with WEEK_11_15_PERMISSIONS slugs
+# Dashboard-only granular permissions -- no overlap with WEEK_11_15_PERMISSIONS slugs
 DASHBOARD_PERMISSIONS = [
     {"name": "View Dashboard", "slug": "dashboard.view", "module": "dashboard", "action": "get"},
     {"name": "View Dashboard Summary", "slug": "dashboard.summary", "module": "dashboard", "action": "get"},
@@ -317,7 +317,7 @@ def seed_default_roles_and_permissions(db: Session):
 
     default_role_permissions = {
         # ------------------------------------------------------------------
-        # Admin â€” full operational control; manages users, roles, permissions
+        # Admin -- full operational control; manages users, roles, permissions
         # ------------------------------------------------------------------
         admin: [
             # Dashboard
@@ -371,7 +371,7 @@ def seed_default_roles_and_permissions(db: Session):
         ],
 
         # ------------------------------------------------------------------
-        # Sub Admin â€” operations without system-level role/permission CRUD
+        # Sub Admin -- operations without system-level role/permission CRUD
         # ------------------------------------------------------------------
         sub_admin: [
             # Dashboard
@@ -419,12 +419,12 @@ def seed_default_roles_and_permissions(db: Session):
             "view-profile", "update-profile", "profile.view",
             # All operational granular permissions
             *_all_operational,
-            # Week granular â€” exclude system-only actions
+            # Week granular -- exclude system-only actions
             *_week_no_system,
         ],
 
         # ------------------------------------------------------------------
-        # Supplier â€” own data: tours, bookings on their tours, financials
+        # Supplier -- own data: tours, bookings on their tours, financials
         # ------------------------------------------------------------------
         supplier: [
             # Dashboard (limited)
@@ -461,7 +461,7 @@ def seed_default_roles_and_permissions(db: Session):
         ],
 
         # ------------------------------------------------------------------
-        # Agent / Reseller â€” customer bookings and their own account
+        # Agent / Reseller -- customer bookings and their own account
         # ------------------------------------------------------------------
         agent_reseller: [
             # Dashboard (limited)
@@ -503,7 +503,7 @@ def seed_default_roles_and_permissions(db: Session):
         ],
 
         # ------------------------------------------------------------------
-        # Customer â€” self-service: browse, book, pay, view own data
+        # Customer -- self-service: browse, book, pay, view own data
         # ------------------------------------------------------------------
         customer: [
             # Dashboard (minimal)

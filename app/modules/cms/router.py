@@ -161,7 +161,12 @@ def tours(params: dict = Depends(pagination_params), country_id: str = Query(def
 
 
 @router.post("/tours")
-def add_tour(data: TourPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.create", "create-tours"))):
+def add_tour(
+    data: TourPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("tours.create", "create-tours")),
+):
     actor_supplier_id = _get_actor_supplier_id(db, current_user)
     if actor_supplier_id and not data.supplier_id:
         # Auto-assign the supplier's own ID when creating from the supplier portal

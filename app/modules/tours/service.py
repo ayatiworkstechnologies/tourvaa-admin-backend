@@ -42,8 +42,7 @@ from app.modules.tours.schemas import (
 from app.modules.users.models import User
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
+# helpers
 def _require_tour(db: Session, tour_id: int) -> Tour:
     return get_or_404(db, Tour, tour_id, "Tour")
 
@@ -55,8 +54,7 @@ def _child_or_404(db: Session, model, record_id: int, tour_id: int, label: str):
     return obj
 
 
-# ── Overview ──────────────────────────────────────────────────────────────────
-
+# overview
 def _ser_overview(o: TourOverview) -> dict:
     return {
         "id": o.id, "tour_id": o.tour_id,
@@ -89,8 +87,7 @@ def save_overview(db: Session, tour_id: int, data: TourOverviewPayload, actor: U
     return _ser_overview(o)
 
 
-# ── Itinerary ─────────────────────────────────────────────────────────────────
-
+# itinerary
 def _ser_itinerary(i: TourItinerary) -> dict:
     return {
         "id": i.id, "tour_id": i.tour_id, "day_number": i.day_number,
@@ -142,8 +139,7 @@ def reorder_itineraries(db: Session, tour_id: int, data: ReorderPayload, actor: 
     db.commit()
 
 
-# ── Generic list/create/update/delete for simple child models ─────────────────
-
+# generic list/create/update/delete for simple child models
 def _simple_crud(Model, serializer):
     def list_fn(db: Session, tour_id: int) -> list[dict]:
         _require_tour(db, tour_id)
@@ -179,8 +175,7 @@ def _simple_crud(Model, serializer):
     return list_fn, create_fn, update_fn, delete_fn
 
 
-# ── Inclusion ─────────────────────────────────────────────────────────────────
-
+# inclusion
 def _ser_inclusion(o: TourInclusion) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "icon": o.icon, "title": o.title, "description": o.description, "display_order": o.display_order, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
@@ -192,8 +187,7 @@ def update_inclusion(db, tour_id, rid, data, actor, request=None): return _updat
 def delete_inclusion(db, tour_id, rid, actor, request=None): return _delete_inclusion_fn(db, tour_id, rid, actor, "delete_inclusion", "Inclusion", request)
 
 
-# ── Exclusion ─────────────────────────────────────────────────────────────────
-
+# exclusion
 def _ser_exclusion(o: TourExclusion) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "icon": o.icon, "title": o.title, "description": o.description, "display_order": o.display_order, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
@@ -205,8 +199,7 @@ def update_exclusion(db, tour_id, rid, data, actor, request=None): return _updat
 def delete_exclusion(db, tour_id, rid, actor, request=None): return _delete_exclusion_fn(db, tour_id, rid, actor, "delete_exclusion", "Exclusion", request)
 
 
-# ── Highlight ─────────────────────────────────────────────────────────────────
-
+# highlight
 def _ser_highlight(o: TourHighlight) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "image": o.image, "title": o.title, "short_description": o.short_description, "display_order": o.display_order, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
@@ -218,8 +211,7 @@ def update_highlight(db, tour_id, rid, data, actor, request=None): return _updat
 def delete_highlight(db, tour_id, rid, actor, request=None): return _delete_highlight_fn(db, tour_id, rid, actor, "delete_highlight", "Highlight", request)
 
 
-# ── Gallery ───────────────────────────────────────────────────────────────────
-
+# gallery
 def _ser_gallery(o: TourGalleryImage) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "image_path": o.image_path, "image_title": o.image_title, "image_alt_text": o.image_alt_text, "image_caption": o.image_caption, "image_type": o.image_type, "display_order": o.display_order, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
@@ -231,8 +223,7 @@ def update_gallery_image(db, tour_id, rid, data, actor, request=None): return _u
 def delete_gallery_image(db, tour_id, rid, actor, request=None): return _delete_gallery_fn(db, tour_id, rid, actor, "delete_gallery_image", "Gallery image", request)
 
 
-# ── Similar Tours ─────────────────────────────────────────────────────────────
-
+# similar tours
 def _ser_similar(o: TourSimilar) -> dict:
     return {
         "id": o.id, "tour_id": o.tour_id, "similar_tour_id": o.similar_tour_id,
@@ -270,8 +261,7 @@ def delete_similar_tour(db: Session, tour_id: int, similar_id: int, actor: User,
     db.commit()
 
 
-# ── Extension ─────────────────────────────────────────────────────────────────
-
+# extension
 def _ser_extension(o: TourExtension) -> dict:
     return {
         "id": o.id, "tour_id": o.tour_id, "extension_tour_id": o.extension_tour_id,
@@ -315,8 +305,7 @@ def delete_extension(db: Session, tour_id: int, ext_id: int, actor: User, reques
     db.commit()
 
 
-# ── Pricing ───────────────────────────────────────────────────────────────────
-
+# pricing
 def _ser_pricing(o: TourPricing) -> dict:
     return {
         "id": o.id, "tour_id": o.tour_id,
@@ -336,8 +325,7 @@ def update_pricing(db, tour_id, rid, data, actor, request=None): return _update_
 def delete_pricing(db, tour_id, rid, actor, request=None): return _delete_pricing_fn(db, tour_id, rid, actor, "delete_pricing", "Pricing slab", request)
 
 
-# ── Optional Activity ─────────────────────────────────────────────────────────
-
+# optional activity
 def _ser_activity(o: TourOptionalActivity) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "activity_name": o.activity_name, "description": o.description, "price_per_person": o.price_per_person, "image": o.image, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
@@ -349,8 +337,7 @@ def update_activity(db, tour_id, rid, data, actor, request=None): return _update
 def delete_activity(db, tour_id, rid, actor, request=None): return _delete_activity_fn(db, tour_id, rid, actor, "delete_optional_activity", "Activity", request)
 
 
-# ── Accommodation Extra ───────────────────────────────────────────────────────
-
+# accommodation extra
 def _ser_accommodation(o: TourAccommodationExtra) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "accommodation_name": o.accommodation_name, "description": o.description, "extra_price": o.extra_price, "price_type": o.price_type, "is_default": bool(o.is_default), "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
@@ -391,8 +378,7 @@ def delete_accommodation(db: Session, tour_id: int, extra_id: int, actor: User, 
     db.commit()
 
 
-# ── Calendar ──────────────────────────────────────────────────────────────────
-
+# calendar
 def _ser_calendar(o: TourCalendar) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "tour_date": o.tour_date, "start_date": o.start_date, "end_date": o.end_date, "available_seats": o.available_seats, "booked_seats": o.booked_seats, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
@@ -429,8 +415,7 @@ def delete_calendar_entry(db: Session, tour_id: int, cal_id: int, actor: User, r
     db.commit()
 
 
-# ── Unavailable Dates ─────────────────────────────────────────────────────────
-
+# unavailable dates
 def _ser_unavailable(o: TourUnavailableDate) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "unavailable_date": o.unavailable_date, "reason": o.reason, "created_at": o.created_at, "updated_at": o.updated_at}
 
@@ -457,8 +442,7 @@ def delete_unavailable_date(db: Session, tour_id: int, date_id: int, actor: User
     db.commit()
 
 
-# ── Discounts ─────────────────────────────────────────────────────────────────
-
+# discounts
 def _ser_discount(o: TourDiscount) -> dict:
     return {
         "id": o.id, "tour_id": o.tour_id, "category_id": o.category_id, "country_id": o.country_id,
@@ -515,8 +499,7 @@ def delete_discount(db: Session, tour_id: int, disc_id: int, actor: User, reques
     db.commit()
 
 
-# ── Global discounts (all scopes: tour / category / country / all_tours) ──────
-
+# global discounts (all scopes: tour / category / country / all_tours)
 def _validate_discount_scope(data) -> None:
     if data.discount_scope == "tour" and not data.tour_id:
         raise HTTPException(status_code=400, detail="tour_id is required for a tour-scoped discount")
@@ -588,8 +571,7 @@ def delete_global_discount(db: Session, discount_id: int, actor: User, request: 
     db.commit()
 
 
-# ── Price Calculation ─────────────────────────────────────────────────────────
-
+# price calculation
 def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> dict:
     tour = _require_tour(db, tour_id)
     total_pax = req.adults_count + req.children_count

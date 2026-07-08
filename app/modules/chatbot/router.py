@@ -30,8 +30,7 @@ def public_faqs(db: Session = Depends(get_db)):
     return service.list_faqs(db, include_inactive=False)
 
 
-# ── Admin FAQ management ─────────────────────────────────────────────────────
-
+# admin faq management
 @router.get("/admin/faqs", response_model=list[FAQResponse])
 def admin_list_faqs(
     db: Session = Depends(get_db),

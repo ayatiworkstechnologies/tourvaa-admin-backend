@@ -1,5 +1,9 @@
-﻿from pydantic_settings import BaseSettings, SettingsConfigDict
+﻿from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
+
+LOCAL_FRONTEND_URL = "http://localhost:3000"
+LIVE_FRONTEND_URL = "https://tourvaa.vercel.app"
 
 
 class Settings(BaseSettings):
@@ -21,7 +25,7 @@ class Settings(BaseSettings):
     REQUIRE_EMAIL_VERIFICATION: bool = False
     EMAIL_VERIFICATION_EXPIRE_MINUTES: int = 1440
 
-    FRONTEND_URL: str = "http://127.0.0.1:3000"
+    FRONTEND_URL: str = ""
     API_BASE_URL: str = "http://127.0.0.1:8000"
     ALLOWED_ORIGINS: str = "*"
     MOBILE_DEEP_LINK_URL: str = "tourvaa://reset-password"
@@ -71,6 +75,14 @@ class Settings(BaseSettings):
         env_file=".env",
         extra="ignore"
     )
+
+    @model_validator(mode="after")
+    def _default_frontend_url(self) -> "Settings":
+        if not self.FRONTEND_URL.strip():
+            self.FRONTEND_URL = (
+                LIVE_FRONTEND_URL if self.APP_ENV == "production" else LOCAL_FRONTEND_URL
+            )
+        return self
 
     @property
     def cors_origins(self):

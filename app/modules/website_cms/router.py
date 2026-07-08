@@ -17,9 +17,7 @@ router = APIRouter(prefix="/cms", tags=["Website CMS"])
 PERM = "update-settings"  # re-use settings permission for CMS admin actions
 
 
-# ---------------------------------------------------------------------------
-# Banners
-# ---------------------------------------------------------------------------
+# banners
 
 @router.get("/homepage-banners")
 def list_banners(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
@@ -39,9 +37,7 @@ def delete_banner(item_id: int, db: Session = Depends(get_db), _=Depends(require
     return {"status": "success", "message": "Banner deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Popular Destinations
-# ---------------------------------------------------------------------------
+# popular destinations
 
 @router.get("/popular-destinations")
 def list_destinations(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
@@ -61,9 +57,7 @@ def delete_destination(item_id: int, db: Session = Depends(get_db), _=Depends(re
     return {"status": "success", "message": "Destination deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Popular Tours
-# ---------------------------------------------------------------------------
+# popular tours
 
 @router.get("/popular-tours")
 def list_popular_tours(pagination=Depends(pagination_params), db: Session = Depends(get_db)):
@@ -79,9 +73,7 @@ def delete_popular_tour(item_id: int, db: Session = Depends(get_db), _=Depends(r
     return {"status": "success", "message": "Deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Tours on Deals
-# ---------------------------------------------------------------------------
+# tours on deals
 
 @router.get("/tours-on-deals")
 def list_deals(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
@@ -101,9 +93,7 @@ def delete_deal(item_id: int, db: Session = Depends(get_db), _=Depends(require_a
     return {"status": "success", "message": "Deal removed"}
 
 
-# ---------------------------------------------------------------------------
-# Blogs
-# ---------------------------------------------------------------------------
+# blogs
 
 @router.get("/blogs")
 def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
@@ -127,9 +117,7 @@ def delete_blog(item_id: int, db: Session = Depends(get_db), _=Depends(require_a
     return {"status": "success", "message": "Blog deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Customer Reviews
-# ---------------------------------------------------------------------------
+# customer reviews
 
 @router.get("/customer-reviews")
 def list_reviews(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
@@ -149,12 +137,15 @@ def delete_review(item_id: int, db: Session = Depends(get_db), _=Depends(require
     return {"status": "success", "message": "Review deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Help Centre
-# ---------------------------------------------------------------------------
+# help centre
 
 @router.get("/help-centre")
-def list_help(pagination=Depends(pagination_params), category: str = Query(default=""), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_help(
+    pagination=Depends(pagination_params),
+    category: str = Query(default=""),
+    active_only: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
     return {"status": "success", **service.list_help(db, pagination["page"], pagination["limit"], category, active_only)}
 
 @router.post("/help-centre")
@@ -171,9 +162,7 @@ def delete_help(item_id: int, db: Session = Depends(get_db), _=Depends(require_a
     return {"status": "success", "message": "Article deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Policies
-# ---------------------------------------------------------------------------
+# policies
 
 @router.get("/policies")
 def list_policies(pagination=Depends(pagination_params), db: Session = Depends(get_db)):
@@ -188,9 +177,7 @@ def upsert_policy(data: PolicyPayload, db: Session = Depends(get_db), _=Depends(
     return {"status": "success", "data": service.upsert_policy(db, data)}
 
 
-# ---------------------------------------------------------------------------
-# Promotional Popups
-# ---------------------------------------------------------------------------
+# promotional popups
 
 @router.get("/promotional-popups")
 def list_popups(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
@@ -210,9 +197,7 @@ def delete_popup(item_id: int, db: Session = Depends(get_db), _=Depends(require_
     return {"status": "success", "message": "Popup deleted"}
 
 
-# ---------------------------------------------------------------------------
-# External Links
-# ---------------------------------------------------------------------------
+# external links
 
 @router.get("/external-links")
 def list_links(pagination=Depends(pagination_params), location: str = Query(default=""), db: Session = Depends(get_db)):
@@ -232,9 +217,7 @@ def delete_link(item_id: int, db: Session = Depends(get_db), _=Depends(require_a
     return {"status": "success", "message": "Link deleted"}
 
 
-# ---------------------------------------------------------------------------
-# Sitemap
-# ---------------------------------------------------------------------------
+# sitemap
 
 @router.get("/sitemap")
 def list_sitemap_entries(pagination=Depends(pagination_params), db: Session = Depends(get_db)):

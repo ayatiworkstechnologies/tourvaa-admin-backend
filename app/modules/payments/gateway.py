@@ -14,9 +14,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Helpers to load gateway credentials
-# ---------------------------------------------------------------------------
+# helpers to load gateway credentials
 
 
 def _load_setting(db: Session, provider: str) -> "PaymentSetting | None":
@@ -28,9 +26,7 @@ def _load_setting(db: Session, provider: str) -> "PaymentSetting | None":
     ).first()
 
 
-# ---------------------------------------------------------------------------
-# Stripe
-# ---------------------------------------------------------------------------
+# stripe
 
 
 class StripeGateway:
@@ -109,9 +105,7 @@ class StripeGateway:
         return json.loads(payload)
 
 
-# ---------------------------------------------------------------------------
-# PayPal
-# ---------------------------------------------------------------------------
+# paypal
 
 
 class PayPalGateway:
@@ -173,9 +167,7 @@ class PayPalGateway:
         return resp.json()
 
 
-# ---------------------------------------------------------------------------
-# Factory functions — load from DB settings
-# ---------------------------------------------------------------------------
+# factory functions — load from db settings
 
 
 def get_stripe(db: Session) -> StripeGateway:

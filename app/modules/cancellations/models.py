@@ -6,11 +6,8 @@ from app.database import Base
 
 
 class RefundRule(Base):
-    """
-    Cancellation policy rules per tour (or global if tour_id is NULL).
-    Multiple rules per tour form a tiered policy.
-    Example: if cancelled > 30 days before: 100% refund; 7-30 days: 50%; <7 days: 0%.
-    """
+    # policy rules per tour (or global if tour_id is null), can be tiered
+    # e.g. >30 days before = 100% refund, 7-30 days = 50%, <7 days = 0%
     __tablename__ = "refund_rules"
 
     id = Column(Integer, primary_key=True, index=True)

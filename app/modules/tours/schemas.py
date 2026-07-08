@@ -13,8 +13,7 @@ DISCOUNT_SCOPES = {"tour", "all_tours", "category", "country"}
 PRICE_TYPES = {"per_person", "per_booking"}
 
 
-# ── Overview ──────────────────────────────────────────────────────────────────
-
+# overview
 class TourOverviewPayload(BaseModel):
     duration_text: str = Field(default="", max_length=100)
     start_location: str = Field(default="", max_length=150)
@@ -32,8 +31,7 @@ class TourOverviewPayload(BaseModel):
         return v
 
 
-# ── Itinerary ─────────────────────────────────────────────────────────────────
-
+# itinerary
 class ItineraryPayload(BaseModel):
     day_number: int = Field(ge=1)
     day_title: str = Field(default="", max_length=255)
@@ -58,8 +56,7 @@ class ReorderPayload(BaseModel):
     ordered_ids: list[int]
 
 
-# ── Inclusion / Exclusion ─────────────────────────────────────────────────────
-
+# inclusion / exclusion
 class InclusionPayload(BaseModel):
     icon: str = Field(default="", max_length=255)
     title: str = Field(min_length=1, max_length=255)
@@ -78,8 +75,7 @@ class InclusionPayload(BaseModel):
 ExclusionPayload = InclusionPayload
 
 
-# ── Highlight ─────────────────────────────────────────────────────────────────
-
+# highlight
 class HighlightPayload(BaseModel):
     image: str = Field(default="", max_length=255)
     title: str = Field(min_length=1, max_length=255)
@@ -95,15 +91,13 @@ class HighlightPayload(BaseModel):
         return v
 
 
-# ── Similar Tours ─────────────────────────────────────────────────────────────
-
+# similar tours
 class SimilarTourPayload(BaseModel):
     similar_tour_id: int
     display_order: int = Field(default=0, ge=0)
 
 
-# ── Extension ─────────────────────────────────────────────────────────────────
-
+# extension
 class ExtensionPayload(BaseModel):
     extension_tour_id: int
     extension_title: str = Field(default="", max_length=255)
@@ -120,8 +114,7 @@ class ExtensionPayload(BaseModel):
         return v
 
 
-# ── Gallery ───────────────────────────────────────────────────────────────────
-
+# gallery
 class GalleryImagePayload(BaseModel):
     image_path: str = Field(min_length=1, max_length=255)
     image_title: str = Field(default="", max_length=255)
@@ -146,8 +139,7 @@ class GalleryImagePayload(BaseModel):
         return v
 
 
-# ── Pricing ───────────────────────────────────────────────────────────────────
-
+# pricing
 class PricingPayload(BaseModel):
     passenger_from: int = Field(ge=1)
     passenger_to: int = Field(ge=1)
@@ -175,8 +167,7 @@ class PricingPayload(BaseModel):
         return v
 
 
-# ── Optional Activity ─────────────────────────────────────────────────────────
-
+# optional activity
 class OptionalActivityPayload(BaseModel):
     activity_name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="")
@@ -192,8 +183,7 @@ class OptionalActivityPayload(BaseModel):
         return v
 
 
-# ── Accommodation Extra ───────────────────────────────────────────────────────
-
+# accommodation extra
 class AccommodationExtraPayload(BaseModel):
     accommodation_name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="")
@@ -217,8 +207,7 @@ class AccommodationExtraPayload(BaseModel):
         return v
 
 
-# ── Calendar ──────────────────────────────────────────────────────────────────
-
+# calendar
 class CalendarPayload(BaseModel):
     tour_date: datetime
     start_date: datetime | None = None
@@ -235,15 +224,13 @@ class CalendarPayload(BaseModel):
         return v
 
 
-# ── Unavailable Date ──────────────────────────────────────────────────────────
-
+# unavailable date
 class UnavailableDatePayload(BaseModel):
     unavailable_date: datetime
     reason: str = Field(default="")
 
 
-# ── Discount ──────────────────────────────────────────────────────────────────
-
+# discount
 class DiscountPayload(BaseModel):
     category_id: int | None = None
     country_id: int | None = None
@@ -284,8 +271,7 @@ class GlobalDiscountPayload(DiscountPayload):
         return v
 
 
-# ── Price Calculation ─────────────────────────────────────────────────────────
-
+# price calculation
 class PriceCalculationRequest(BaseModel):
     tour_date: datetime | None = None
     adults_count: int = Field(default=1, ge=1)

@@ -33,8 +33,7 @@ from app.modules.settings.service import (
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
 
-# ── Dropdown helpers used by portal forms ──────────────────────────────────────
-
+# dropdown helpers used by portal forms
 @router.get("/countries")
 def settings_countries(
     search: str = Query(default=""),

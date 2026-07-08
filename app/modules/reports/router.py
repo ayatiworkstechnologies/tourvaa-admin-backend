@@ -189,7 +189,11 @@ def cancellations(params: dict = Depends(_period_params), db: Session = Depends(
 
 
 @router.get("/suppliers")
-def supplier_report(params: dict = Depends(_period_params), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.view", "reports.supplier", "reports.admin"))):
+def supplier_report(
+    params: dict = Depends(_period_params),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("reports.view", "reports.supplier", "reports.admin")),
+):
     _require_admin_report(current_user)
     query = db.query(Supplier.id, Supplier.supplier_name, func.count(Booking.id), func.coalesce(func.sum(Booking.final_amount), 0)).join(Booking, Booking.supplier_id == Supplier.id, isouter=True)
     query = _apply_range(query, Booking.created_at, params["start"], params["end"])
@@ -215,8 +219,7 @@ def customer_report(params: dict = Depends(_period_params), db: Session = Depend
     return {"status": "success", "data": [{"customer_id": cid, "customer_name": name, "bookings": count, "amount": _money(amount), "pending": _money(pending)} for cid, name, count, amount, pending in rows]}
 
 
-# ── Export ──────────────────────────────────────────────────────────────────
-
+# export
 REPORT_FETCHERS = {
     "summary": lambda db, params, actor: [summary(params, db, actor)["data"]],
     "bookings": lambda db, params, actor: booking_report(params, db, actor)["data"],

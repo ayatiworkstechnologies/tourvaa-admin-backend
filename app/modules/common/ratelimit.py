@@ -13,9 +13,7 @@ from fastapi import HTTPException, Request
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Redis client (optional)
-# ---------------------------------------------------------------------------
+# redis client (optional)
 
 _redis = None
 
@@ -38,9 +36,7 @@ def _get_redis():
     return _redis
 
 
-# ---------------------------------------------------------------------------
-# In-memory fallback (single-process only)
-# ---------------------------------------------------------------------------
+# in-memory fallback (single-process only)
 
 _lock = threading.Lock()
 _windows: dict[str, deque] = defaultdict(deque)
@@ -76,9 +72,7 @@ def _check_in_memory(bucket: str, max_calls: int, window_seconds: int) -> None:
         dq.append(now)
 
 
-# ---------------------------------------------------------------------------
-# Redis sliding-window implementation
-# ---------------------------------------------------------------------------
+# redis sliding-window implementation
 
 _LUA_SLIDING_WINDOW = """
 local key     = KEYS[1]
@@ -114,9 +108,7 @@ def _check_redis(r, bucket: str, max_calls: int, window_seconds: int) -> None:
         _check_in_memory(bucket, max_calls, window_seconds)
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+# public api
 
 def _client_ip(request: Request) -> str:
     forwarded_for = request.headers.get("X-Forwarded-For")

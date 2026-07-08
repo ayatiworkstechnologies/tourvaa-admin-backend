@@ -258,7 +258,7 @@ def _run_phased(country_codes: list[str]) -> None:
         })
 
     try:
-        # ── Download once ────────────────────────────────────────────────────
+        # download the dataset once
         try:
             resp = requests.get(GITHUB_URL, timeout=120)
             resp.raise_for_status()
@@ -273,7 +273,7 @@ def _run_phased(country_codes: list[str]) -> None:
 
         with engine.connect() as conn:
 
-            # ── Phase 1: Countries ───────────────────────────────────────────
+            # phase 1: countries
             with _lock:
                 _job.update({
                     "phase": 1, "phase_name": "Countries",
@@ -297,7 +297,7 @@ def _run_phased(country_codes: list[str]) -> None:
                     country_map[iso2] = (cid, c)
             conn.commit()
 
-            # ── Phase 2: States ──────────────────────────────────────────────
+            # phase 2: states
             states_flat = [
                 (iso2, data[0], s)
                 for iso2, data in country_map.items()
@@ -322,7 +322,7 @@ def _run_phased(country_codes: list[str]) -> None:
                     state_map[(iso2, s_name)] = (sid, s)
             conn.commit()
 
-            # ── Phase 3: Cities ──────────────────────────────────────────────
+            # phase 3: cities
             cities_flat = [
                 (iso2, country_map[iso2][0], sid_data[0], city)
                 for (iso2, _s_name), sid_data in state_map.items()

@@ -116,6 +116,30 @@ def schema_is_ready():
         "chat_faqs",
         "chat_sessions",
         "chat_messages",
+        "states",
+        "tour_versions",
+        "supplier_ledgers",
+        "supplier_payouts",
+        "supplier_payout_items",
+        "checkout_sessions",
+        "cms_homepage_banners",
+        "cms_popular_destinations",
+        "cms_popular_tours",
+        "cms_tours_on_deals",
+        "cms_blogs",
+        "cms_customer_reviews",
+        "cms_help_centre",
+        "cms_policies",
+        "cms_promotional_popups",
+        "cms_external_links",
+        "cms_sitemap_entries",
+        "cancellation_requests",
+        "refund_rules",
+        "booking_calendar_events",
+        "affiliate_links",
+        "affiliate_clicks",
+        "affiliate_conversions",
+        "affiliate_payouts",
     }
 
     if not required_tables.issubset(tables):
@@ -214,7 +238,7 @@ storage_root.joinpath("uploads", "profile-images").mkdir(parents=True, exist_ok=
 storage_root.joinpath("uploads", "admin-assets").mkdir(parents=True, exist_ok=True)
 app.mount("/storage", StaticFiles(directory=str(storage_root)), name="storage")
 
-# Private document storage Ã¢â‚¬â€ lives outside the public /storage mount
+# Private document storage -- lives outside the public /storage mount
 private_docs_root = storage_root.parent / "private-docs"
 private_docs_root.joinpath("supplier-documents").mkdir(parents=True, exist_ok=True)
 private_docs_root.joinpath("agent-documents").mkdir(parents=True, exist_ok=True)
