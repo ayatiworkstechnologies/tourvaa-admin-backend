@@ -33,6 +33,13 @@ def approve_version(tour_id: int, version_id: int, request: Request, db: Session
 
 
 @router.patch("/tours/{tour_id}/versions/{version_id}/reject")
-def reject_version(tour_id: int, version_id: int, body: TourVersionReject, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("tours.publish", "update-tours"))):
+def reject_version(
+    tour_id: int,
+    version_id: int,
+    body: TourVersionReject,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_permission("tours.publish", "update-tours")),
+):
     result = service.reject_version(db, tour_id=tour_id, version_id=version_id, data=body, actor=current_user, request=request)
     return {"status": "success", "message": "Tour version rejected", "data": result}

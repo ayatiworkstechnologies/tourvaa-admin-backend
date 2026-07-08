@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -210,31 +210,13 @@ def block_customer_account_compat(
 
 
 @router.patch("/{customer_id}/unblock")
-def unblock_customer_account(
-    customer_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_any_permission("customers.unblock", "update-customers")),
-):
-    return {
-        "status": "success",
-        "message": "Customer unblocked successfully",
-        "data": unblock_customer(db, customer_id, actor=current_user, request=request),
-    }
+def unblock_customer_account(customer_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("customers.unblock", "update-customers"))):
+    return {"status": "success", "message": "Customer unblocked successfully", "data": unblock_customer(db, customer_id, actor=current_user, request=request)}
 
 
 @router.post("/{customer_id}/unblock")
-def unblock_customer_account_compat(
-    customer_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_any_permission("customers.unblock", "update-customers")),
-):
-    return {
-        "status": "success",
-        "message": "Customer unblocked successfully",
-        "data": unblock_customer(db, customer_id, actor=current_user, request=request),
-    }
+def unblock_customer_account_compat(customer_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("customers.unblock", "update-customers"))):
+    return {"status": "success", "message": "Customer unblocked successfully", "data": unblock_customer(db, customer_id, actor=current_user, request=request)}
 
 
 @router.post("/{customer_id}/reset-password")
@@ -325,8 +307,7 @@ def send_customer_communication(
     }
 
 
-# ── Self-service booking endpoint (any authenticated user) ────────────────────
-
+# self-service booking endpoint (any authenticated user)
 class SelfBookingCreate(BookingCreate):
     customer_id: int = 0
 

@@ -144,8 +144,7 @@ class TourGalleryImage(Base):
     tour = relationship("Tour")
 
 
-# ── Week 10 ──────────────────────────────────────────────────────────────────
-
+# week 10
 class TourPricing(Base):
     __tablename__ = "tour_pricing"
 

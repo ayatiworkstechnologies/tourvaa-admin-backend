@@ -75,7 +75,16 @@ def pending_suppliers(params: dict = Depends(pagination_params), db: Session = D
 
 @router.get("")
 @router.get("/")
-def suppliers(params: dict = Depends(pagination_params), country_id: str = Query(default=""), status: str = Query(default=""), approval_status: str = Query(default=""), start_date: str = Query(default=""), end_date: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
+def suppliers(
+    params: dict = Depends(pagination_params),
+    country_id: str = Query(default=""),
+    status: str = Query(default=""),
+    approval_status: str = Query(default=""),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+    db: Session = Depends(get_db),
+    _=Depends(require_any_permission("suppliers.view", "view-suppliers")),
+):
     return {"status": "success", **list_suppliers(db, params["page"], params["limit"], params["search"], country_id, status, approval_status, start_date, end_date)}
 
 

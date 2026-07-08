@@ -55,7 +55,16 @@ def pending_agents(params: dict = Depends(pagination_params), db: Session = Depe
 
 @router.get("")
 @router.get("/")
-def agents(params: dict = Depends(pagination_params), country_id: str = Query(default=""), status: str = Query(default=""), approval_status: str = Query(default=""), start_date: str = Query(default=""), end_date: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("agents.view", "view-agents"))):
+def agents(
+    params: dict = Depends(pagination_params),
+    country_id: str = Query(default=""),
+    status: str = Query(default=""),
+    approval_status: str = Query(default=""),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+    db: Session = Depends(get_db),
+    _=Depends(require_any_permission("agents.view", "view-agents")),
+):
     return {"status": "success", **list_agents(db, params["page"], params["limit"], params["search"], country_id, status, approval_status, start_date, end_date)}
 
 

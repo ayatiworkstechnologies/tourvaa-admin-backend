@@ -1,4 +1,4 @@
-﻿import html as _html
+import html as _html
 
 
 def esc(value) -> str:
@@ -302,8 +302,7 @@ def payment_received_email(name: str, booking_code: str, tour_name: str, currenc
     )
 
 
-# ── Supplier lifecycle ───────────────────────────────────────────────────────
-
+# supplier lifecycle
 def supplier_rejected_email(supplier_name: str, reason: str):
     return base_email(
         "Supplier profile rejected",
@@ -366,8 +365,7 @@ def supplier_commission_approved_email(supplier_name: str, markup_type: str, mar
     )
 
 
-# ── Agent lifecycle ──────────────────────────────────────────────────────────
-
+# agent lifecycle
 def agent_submitted_verification_email(agent_name: str):
     return base_email(
         "Agent submitted for review",

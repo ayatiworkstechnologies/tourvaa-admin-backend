@@ -32,9 +32,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/payments", tags=["Payment Gateways"])
 
 
-# ---------------------------------------------------------------------------
-# Request schemas
-# ---------------------------------------------------------------------------
+# request schemas
 
 
 class StripeSessionRequest(BaseModel):
@@ -65,9 +63,7 @@ class PayPalCaptureRequest(BaseModel):
     payment_id: int
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# helpers
 
 
 def _ensure_booking_payment_access(booking: Booking, current_user) -> None:
@@ -113,9 +109,7 @@ def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gate
     return p
 
 
-# ---------------------------------------------------------------------------
-# Stripe endpoints
-# ---------------------------------------------------------------------------
+# stripe endpoints
 
 
 @router.post("/stripe/create-session")
@@ -165,7 +159,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
         stripe_gw = get_stripe(db)
         event = stripe_gw.construct_event(payload, stripe_signature, webhook_secret)
     elif app_settings.APP_ENV == "production":
-        logger.critical("Stripe webhook received without STRIPE_WEBHOOK_SECRET ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rejecting in production")
+        logger.critical("Stripe webhook received without STRIPE_WEBHOOK_SECRET -- rejecting in production")
         raise _HTTPException(status_code=400, detail="Webhook signature verification not configured")
     else:
         logger.warning("Stripe webhook received without signature verification (dev mode)")
@@ -177,7 +171,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
 
     # Idempotency: skip events already recorded via their Stripe event ID
     if event_id and db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first():
-        logger.info("Stripe event %s already processed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â skipping", event_id)
+        logger.info("Stripe event %s already processed -- skipping", event_id)
         return {"status": "success", "received": True}
 
     if event_type == "checkout.session.completed":
@@ -220,9 +214,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
     return {"status": "success", "received": True}
 
 
-# ---------------------------------------------------------------------------
-# PayPal endpoints
-# ---------------------------------------------------------------------------
+# paypal endpoints
 
 
 
@@ -372,7 +364,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
 
     # Idempotency: skip events already recorded via PayPal event ID
     if event_id and db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first():
-        logger.info("PayPal event %s already processed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â skipping", event_id)
+        logger.info("PayPal event %s already processed -- skipping", event_id)
         return {"status": "success", "received": True}
 
     if event_type == "PAYMENT.CAPTURE.COMPLETED":
@@ -413,9 +405,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
     return {"status": "success", "received": True}
 
 
-# ---------------------------------------------------------------------------
-# Gateway status probe  (GET /payments/gateways/status)
-# ---------------------------------------------------------------------------
+# gateway status probe  (get /payments/gateways/status)
 
 
 @router.get("/gateways/status")
@@ -444,9 +434,7 @@ def gateways_status(db: Session = Depends(get_db), current_user=Depends(get_curr
     }
 
 
-# ---------------------------------------------------------------------------
-# Test / simulate payment  (POST /payments/test/simulate)
-# ---------------------------------------------------------------------------
+# test / simulate payment  (post /payments/test/simulate)
 
 
 class TestPaymentRequest(BaseModel):

@@ -30,9 +30,7 @@ def _get_or_404(db, model, item_id: int, label: str):
     return obj
 
 
-# ---------------------------------------------------------------------------
-# Serializers
-# ---------------------------------------------------------------------------
+# serializers
 
 def _s_banner(r: HomepageBanner): return {"id": r.id, "title": r.title, "subtitle": r.subtitle, "image": r.image, "cta_text": r.cta_text, "cta_url": r.cta_url, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_dest(r: PopularDestination): return {"id": r.id, "country_id": r.country_id, "city_id": r.city_id, "title": r.title, "image": r.image, "description": r.description, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
@@ -47,9 +45,7 @@ def _s_link(r: ExternalLink): return {"id": r.id, "label": r.label, "url": r.url
 def _s_sitemap(r: SitemapEntry): return {"id": r.id, "url": r.url, "change_frequency": r.change_frequency, "priority": r.priority, "last_modified": r.last_modified, "is_active": r.is_active, "created_at": r.created_at}
 
 
-# ---------------------------------------------------------------------------
-# Generic CRUD factory
-# ---------------------------------------------------------------------------
+# generic crud factory
 
 def _list(db, model, serializer, page, limit, active_only=False):
     q = db.query(model)
@@ -83,44 +79,34 @@ def _delete(db, model, item_id, label):
     db.commit()
 
 
-# ---------------------------------------------------------------------------
-# Banners
-# ---------------------------------------------------------------------------
+# banners
 
 def list_banners(db, page, limit, active_only=False): return _list(db, HomepageBanner, _s_banner, page, limit, active_only)
 def create_banner(db, data: BannerPayload): return _create(db, HomepageBanner, data.model_dump(), _s_banner)
 def update_banner(db, item_id, data: BannerPayload): return _update(db, HomepageBanner, item_id, data.model_dump(exclude_unset=True), _s_banner, "Banner")
 def delete_banner(db, item_id): _delete(db, HomepageBanner, item_id, "Banner")
 
-# ---------------------------------------------------------------------------
-# Popular Destinations
-# ---------------------------------------------------------------------------
+# popular destinations
 
 def list_destinations(db, page, limit, active_only=False): return _list(db, PopularDestination, _s_dest, page, limit, active_only)
 def create_destination(db, data: PopularDestinationPayload): return _create(db, PopularDestination, data.model_dump(), _s_dest)
 def update_destination(db, item_id, data: PopularDestinationPayload): return _update(db, PopularDestination, item_id, data.model_dump(exclude_unset=True), _s_dest, "Destination")
 def delete_destination(db, item_id): _delete(db, PopularDestination, item_id, "Destination")
 
-# ---------------------------------------------------------------------------
-# Popular Tours
-# ---------------------------------------------------------------------------
+# popular tours
 
 def list_popular_tours(db, page, limit): return _list(db, PopularTour, _s_popular_tour, page, limit)
 def create_popular_tour(db, data: PopularTourPayload): return _create(db, PopularTour, data.model_dump(), _s_popular_tour)
 def delete_popular_tour(db, item_id): _delete(db, PopularTour, item_id, "Popular Tour")
 
-# ---------------------------------------------------------------------------
-# Tours on Deals
-# ---------------------------------------------------------------------------
+# tours on deals
 
 def list_deals(db, page, limit, active_only=False): return _list(db, TourOnDeal, _s_deal, page, limit, active_only)
 def create_deal(db, data: TourOnDealPayload): return _create(db, TourOnDeal, data.model_dump(), _s_deal)
 def update_deal(db, item_id, data: TourOnDealPayload): return _update(db, TourOnDeal, item_id, data.model_dump(exclude_unset=True), _s_deal, "Deal")
 def delete_deal(db, item_id): _delete(db, TourOnDeal, item_id, "Deal")
 
-# ---------------------------------------------------------------------------
-# Blogs
-# ---------------------------------------------------------------------------
+# blogs
 
 def _slugify_blog(title: str) -> str:
     import re
@@ -152,18 +138,14 @@ def update_blog(db, item_id, data: BlogPayload):
 def delete_blog(db, item_id): _delete(db, Blog, item_id, "Blog")
 def get_blog(db, item_id): return _s_blog(_get_or_404(db, Blog, item_id, "Blog"))
 
-# ---------------------------------------------------------------------------
-# Customer Reviews
-# ---------------------------------------------------------------------------
+# customer reviews
 
 def list_reviews(db, page, limit, active_only=False): return _list(db, CustomerReview, _s_review, page, limit, active_only)
 def create_review(db, data: ReviewPayload): return _create(db, CustomerReview, data.model_dump(), _s_review)
 def update_review(db, item_id, data: ReviewPayload): return _update(db, CustomerReview, item_id, data.model_dump(exclude_unset=True), _s_review, "Review")
 def delete_review(db, item_id): _delete(db, CustomerReview, item_id, "Review")
 
-# ---------------------------------------------------------------------------
-# Help Centre
-# ---------------------------------------------------------------------------
+# help centre
 
 def list_help(db, page, limit, category: str = "", active_only=False):
     q = db.query(HelpCentreArticle)
@@ -178,9 +160,7 @@ def create_help(db, data: HelpArticlePayload): return _create(db, HelpCentreArti
 def update_help(db, item_id, data: HelpArticlePayload): return _update(db, HelpCentreArticle, item_id, data.model_dump(exclude_unset=True), _s_help, "Help Article")
 def delete_help(db, item_id): _delete(db, HelpCentreArticle, item_id, "Help Article")
 
-# ---------------------------------------------------------------------------
-# Policies
-# ---------------------------------------------------------------------------
+# policies
 
 def list_policies(db, page, limit): return _list(db, CmsPolicy, _s_policy, page, limit)
 
@@ -203,18 +183,14 @@ def upsert_policy(db, data: PolicyPayload):
     db.refresh(obj)
     return _s_policy(obj)
 
-# ---------------------------------------------------------------------------
-# Promotional Popups
-# ---------------------------------------------------------------------------
+# promotional popups
 
 def list_popups(db, page, limit, active_only=False): return _list(db, PromotionalPopup, _s_popup, page, limit, active_only)
 def create_popup(db, data: PopupPayload): return _create(db, PromotionalPopup, data.model_dump(), _s_popup)
 def update_popup(db, item_id, data: PopupPayload): return _update(db, PromotionalPopup, item_id, data.model_dump(exclude_unset=True), _s_popup, "Popup")
 def delete_popup(db, item_id): _delete(db, PromotionalPopup, item_id, "Popup")
 
-# ---------------------------------------------------------------------------
-# External Links
-# ---------------------------------------------------------------------------
+# external links
 
 def list_external_links(db, page, limit, location: str = ""):
     q = db.query(ExternalLink)
@@ -227,9 +203,7 @@ def create_external_link(db, data: ExternalLinkPayload): return _create(db, Exte
 def update_external_link(db, item_id, data: ExternalLinkPayload): return _update(db, ExternalLink, item_id, data.model_dump(exclude_unset=True), _s_link, "External Link")
 def delete_external_link(db, item_id): _delete(db, ExternalLink, item_id, "External Link")
 
-# ---------------------------------------------------------------------------
-# Sitemap
-# ---------------------------------------------------------------------------
+# sitemap
 
 def list_sitemap(db, page, limit): return _list(db, SitemapEntry, _s_sitemap, page, limit)
 def create_sitemap_entry(db, data: SitemapEntryPayload): return _create(db, SitemapEntry, data.model_dump(), _s_sitemap)

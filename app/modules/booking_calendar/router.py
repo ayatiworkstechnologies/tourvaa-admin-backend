@@ -21,6 +21,11 @@ def get_calendar_event(booking_id: int, db: Session = Depends(get_db), current_u
 
 
 @router.get("/bookings/{booking_id}/calendar-event/download")
-def download_ics(booking_id: int, db: Session = Depends(get_db), current_user=Depends(require_any_permission("bookings.view"))):
+def download_ics(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_permission("bookings.view")),
+):
+    # returns the raw .ics file so it can be opened directly / added to a calendar app
     fs_path, filename = service.get_ics_path(db, booking_id=booking_id, actor=current_user)
     return FileResponse(path=fs_path, filename=filename, media_type="text/calendar")

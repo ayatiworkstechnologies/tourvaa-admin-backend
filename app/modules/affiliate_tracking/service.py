@@ -38,9 +38,7 @@ def _s_payout(r: AffiliatePayout) -> dict:
     return {"id": r.id, "payout_code": r.payout_code, "affiliate_id": r.affiliate_id, "total_amount": str(r.total_amount), "currency": r.currency, "payment_method": r.payment_method, "reference_number": r.reference_number, "status": r.status, "notes": r.notes, "paid_at": r.paid_at, "created_at": r.created_at}
 
 
-# ---------------------------------------------------------------------------
-# Links
-# ---------------------------------------------------------------------------
+# links
 
 def create_link(db: Session, affiliate_id: int, data: AffiliateLinkCreate, actor: User) -> dict:
     aff = db.query(Affiliate).filter(Affiliate.id == affiliate_id).first()
@@ -67,9 +65,7 @@ def track_click(db: Session, ref_code: str, ip_address: Optional[str] = None, us
     return {"ref_code": ref_code, "redirect_url": link.destination_url or "/", "tracked": True}
 
 
-# ---------------------------------------------------------------------------
-# Clicks & Conversions
-# ---------------------------------------------------------------------------
+# clicks & conversions
 
 def list_clicks(db: Session, affiliate_id: int, page: int = 1, limit: int = 20) -> dict:
     q = db.query(AffiliateClick).filter(AffiliateClick.affiliate_id == affiliate_id).order_by(AffiliateClick.id.desc())
@@ -118,9 +114,7 @@ def record_conversion(db: Session, *, ref_code: str, booking_id: int, booking_am
     return conversion
 
 
-# ---------------------------------------------------------------------------
-# Commission summary
-# ---------------------------------------------------------------------------
+# commission summary
 
 def get_commissions(db: Session, affiliate_id: int) -> dict:
     rows = db.query(AffiliateConversion).filter(AffiliateConversion.affiliate_id == affiliate_id).all()
@@ -139,9 +133,7 @@ def get_commissions(db: Session, affiliate_id: int) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Payouts
-# ---------------------------------------------------------------------------
+# payouts
 
 def create_payout(db: Session, data: AffiliatePayoutCreate, actor: User) -> dict:
     conversions = db.query(AffiliateConversion).filter(

@@ -239,8 +239,7 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
 
     booking = req.booking
 
-    # Actually move the money: refund real Payment rows up to the approved refund_amount,
-    # instead of just flipping status flags (previously a no-op that never touched Payment).
+    # refund the actual Payment rows up to refund_amount (used to just flip status flags)
     from app.modules.payments.models import Payment
     from app.modules.payments.schemas import RefundRequest as PaymentRefundRequest
     from app.modules.payments.service import process_refund as process_payment_refund
@@ -286,10 +285,6 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
     log_audit(db, actor=actor, action="process_refund", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "approved"}, new_values={"status": "refund_processed"}, request=request)
     return _serialize_request(req)
 
-
-# ---------------------------------------------------------------------------
-# Refund Rules
-# ---------------------------------------------------------------------------
 
 def list_rules(db: Session, tour_id: Optional[int] = None) -> list:
     q = db.query(RefundRule)

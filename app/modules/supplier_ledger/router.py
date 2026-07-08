@@ -34,7 +34,12 @@ def list_payouts(pagination=Depends(pagination_params), supplier_id: int = Query
 
 
 @router.post("/supplier-payouts")
-def create_payout(data: SupplierPayoutCreate, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.create_payout", "create-supplier_ledger"))):
+def create_payout(
+    data: SupplierPayoutCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_permission("supplier_ledger.create_payout", "create-supplier_ledger")),
+):
     result = service.create_payout(db, data=data, actor=current_user, request=request)
     return {"status": "success", "message": "Payout created", "data": result}
 

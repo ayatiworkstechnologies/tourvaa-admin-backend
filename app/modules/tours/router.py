@@ -115,8 +115,7 @@ def tour_categories(
     return {"status": "success", **list_categories(db, page, limit, search)}
 
 
-# ── Overview ──────────────────────────────────────────────────────────────────
-
+# overview
 @router.get("/{tour_id}/overview")
 def tour_overview(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": get_overview(db, tour_id)}
@@ -134,8 +133,7 @@ def update_tour_overview(tour_id: int, data: TourOverviewPayload, request: Reque
     return {"status": "success", "data": save_overview(db, tour_id, data, current_user, request)}
 
 
-# ── Itinerary ─────────────────────────────────────────────────────────────────
-
+# itinerary
 @router.get("/{tour_id}/itineraries")
 def tour_itineraries(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_itineraries(db, tour_id)}
@@ -173,8 +171,7 @@ def reorder_tour_itineraries(tour_id: int, data: ReorderPayload, request: Reques
     return {"status": "success", "message": "Itineraries reordered"}
 
 
-# ── Inclusions ────────────────────────────────────────────────────────────────
-
+# inclusions
 @router.get("/{tour_id}/inclusions")
 def tour_inclusions(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_inclusions(db, tour_id)}
@@ -199,8 +196,7 @@ def remove_inclusion(tour_id: int, inclusion_id: int, request: Request, db: Sess
     return {"status": "success", "message": "Inclusion deleted"}
 
 
-# ── Exclusions ────────────────────────────────────────────────────────────────
-
+# exclusions
 @router.get("/{tour_id}/exclusions")
 def tour_exclusions(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_exclusions(db, tour_id)}
@@ -225,8 +221,7 @@ def remove_exclusion(tour_id: int, exclusion_id: int, request: Request, db: Sess
     return {"status": "success", "message": "Exclusion deleted"}
 
 
-# ── Highlights ────────────────────────────────────────────────────────────────
-
+# highlights
 @router.get("/{tour_id}/highlights")
 def tour_highlights(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_highlights(db, tour_id)}
@@ -251,8 +246,7 @@ def remove_highlight(tour_id: int, highlight_id: int, request: Request, db: Sess
     return {"status": "success", "message": "Highlight deleted"}
 
 
-# ── Similar Tours ─────────────────────────────────────────────────────────────
-
+# similar tours
 @router.get("/{tour_id}/similar-tours")
 def tour_similar(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_similar_tours(db, tour_id)}
@@ -271,8 +265,7 @@ def remove_similar(tour_id: int, similar_id: int, request: Request, db: Session 
     return {"status": "success", "message": "Similar tour removed"}
 
 
-# ── Extensions ────────────────────────────────────────────────────────────────
-
+# extensions
 @router.get("/{tour_id}/extensions")
 def tour_extensions(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_extensions(db, tour_id)}
@@ -297,8 +290,7 @@ def remove_extension(tour_id: int, extension_id: int, request: Request, db: Sess
     return {"status": "success", "message": "Extension deleted"}
 
 
-# ── Gallery ───────────────────────────────────────────────────────────────────
-
+# gallery
 @router.get("/{tour_id}/gallery")
 def tour_gallery(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_gallery(db, tour_id)}
@@ -323,8 +315,7 @@ def remove_gallery_image(tour_id: int, image_id: int, request: Request, db: Sess
     return {"status": "success", "message": "Image deleted"}
 
 
-# ── Pricing ───────────────────────────────────────────────────────────────────
-
+# pricing
 @router.get("/{tour_id}/pricing")
 def tour_pricing(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_pricing(db, tour_id)}
@@ -349,8 +340,7 @@ def remove_pricing(tour_id: int, pricing_id: int, request: Request, db: Session 
     return {"status": "success", "message": "Pricing slab deleted"}
 
 
-# ── Optional Activities ───────────────────────────────────────────────────────
-
+# optional activities
 @router.get("/{tour_id}/optional-activities")
 def tour_activities(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_activities(db, tour_id)}
@@ -375,8 +365,7 @@ def remove_activity(tour_id: int, activity_id: int, request: Request, db: Sessio
     return {"status": "success", "message": "Activity deleted"}
 
 
-# ── Accommodation Extras ──────────────────────────────────────────────────────
-
+# accommodation extras
 @router.get("/{tour_id}/accommodation-extras")
 def tour_accommodations(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_accommodations(db, tour_id)}
@@ -401,8 +390,7 @@ def remove_accommodation(tour_id: int, extra_id: int, request: Request, db: Sess
     return {"status": "success", "message": "Accommodation extra deleted"}
 
 
-# ── Calendar ──────────────────────────────────────────────────────────────────
-
+# calendar
 @router.get("/{tour_id}/calendar")
 def tour_calendar(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_calendar(db, tour_id)}
@@ -427,8 +415,7 @@ def remove_calendar(tour_id: int, calendar_id: int, request: Request, db: Sessio
     return {"status": "success", "message": "Calendar entry deleted"}
 
 
-# ── Unavailable Dates ─────────────────────────────────────────────────────────
-
+# unavailable dates
 @router.get("/{tour_id}/unavailable-dates")
 def tour_unavailable(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_unavailable_dates(db, tour_id)}
@@ -447,8 +434,7 @@ def remove_unavailable(tour_id: int, date_id: int, request: Request, db: Session
     return {"status": "success", "message": "Unavailable date deleted"}
 
 
-# ── Discounts ─────────────────────────────────────────────────────────────────
-
+# discounts
 @router.get("/{tour_id}/discounts")
 def tour_discounts(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": list_discounts(db, tour_id)}
@@ -473,14 +459,13 @@ def remove_discount(tour_id: int, discount_id: int, request: Request, db: Sessio
     return {"status": "success", "message": "Discount deleted"}
 
 
-# ── Price Calculation ─────────────────────────────────────────────────────────
-
+# price calculation
 @router.post("/{tour_id}/calculate-price")
 def tour_calculate_price(tour_id: int, req: PriceCalculationRequest, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
     return {"status": "success", "data": calculate_price(db, tour_id, req)}
 
 
-# ── Global Discounts (any scope: tour / category / country / all_tours) ───────
+# global discounts (any scope: tour / category / country / all_tours)
 # Standalone from the tour-scoped /{tour_id}/discounts endpoints above — this
 # powers a top-level Discounts admin page that can manage discounts of any scope.
 

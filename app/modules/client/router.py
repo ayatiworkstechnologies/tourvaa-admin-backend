@@ -14,6 +14,7 @@ from app.modules.tours.service import (
     list_gallery,
     list_activities,
     list_calendar,
+    list_pricing,
 )
 
 router = APIRouter(prefix="/client", tags=["Client"])
@@ -112,3 +113,16 @@ def public_tour_activities(tour_id: int, db: Session = Depends(get_db)):
 @router.get("/tours/{tour_id}/calendar")
 def public_tour_calendar(tour_id: int, db: Session = Depends(get_db)):
     return {"status": "success", "data": list_calendar(db, tour_id)}
+
+@router.get("/tours/{tour_id}/pricing")
+def public_tour_pricing(tour_id: int, db: Session = Depends(get_db)):
+    # Strip internal cost/margin fields (supplier_price, markup_type, markup_value)
+    # before returning pricing slabs to unauthenticated public clients.
+    rows = list_pricing(db, tour_id)
+    public_fields = (
+        "id", "tour_id", "passenger_from", "passenger_to",
+        "adult_price", "child_price", "final_price", "currency", "status",
+        "created_at", "updated_at",
+    )
+    safe_rows = [{k: row.get(k) for k in public_fields} for row in rows]
+    return {"status": "success", "data": safe_rows}

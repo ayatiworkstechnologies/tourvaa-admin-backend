@@ -13,20 +13,20 @@ from app.modules.common.pagination import pagination_params
 router = APIRouter(tags=["Cancellations"])
 
 
-# ---------------------------------------------------------------------------
-# Customer-facing: create cancellation request
-# ---------------------------------------------------------------------------
-
 @router.post("/bookings/{booking_id}/cancel-request")
-def customer_cancel_request(booking_id: int, body: CancellationRequestCreate, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def customer_cancel_request(
+    booking_id: int,
+    body: CancellationRequestCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
     body.booking_id = booking_id
     result = service.create_request(db, data=body, actor=current_user, request=request)
     return {"status": "success", "message": "Cancellation request submitted", "data": result}
 
 
-# ---------------------------------------------------------------------------
-# Admin: list and manage requests
-# ---------------------------------------------------------------------------
+# admin side - list + approve/reject/refund
 
 @router.get("/cancellations")
 def list_cancellations(pagination=Depends(pagination_params), status: str = Query(default=""), customer_id: int = Query(default=0), db: Session = Depends(get_db), _=Depends(require_any_permission("bookings.cancel", "bookings.view"))):
@@ -46,18 +46,22 @@ def reject_cancellation(request_id: int, data: CancellationReject, request: Requ
 
 
 @router.post("/cancellations/{request_id}/process-refund")
-def process_refund(request_id: int, data: ProcessRefundBody, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("payments.refund", "bookings.cancel"))):
+def process_refund(
+    request_id: int,
+    data: ProcessRefundBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_permission("payments.refund", "bookings.cancel")),
+):
     result = service.process_refund(db, request_id=request_id, data=data, actor=current_user, request=request)
     return {"status": "success", "message": "Refund processed", "data": result}
 
 
-# ---------------------------------------------------------------------------
-# Refund rules (policy)
-# ---------------------------------------------------------------------------
+# refund policy rules
 
 @router.get("/refund-rules")
 def list_rules(tour_id: int = Query(default=0), db: Session = Depends(get_db), _=Depends(require_any_permission("tours.view", "view-tours"))):
-    return {"status": "success", "data": service.list_rules(db, tour_id=tour_id or None)}
+    return service.list_rules(db, tour_id=tour_id or None)
 
 
 @router.post("/refund-rules")

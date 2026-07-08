@@ -63,9 +63,7 @@ def _serialize_payout(row: SupplierPayout) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Ledger
-# ---------------------------------------------------------------------------
+# -- ledger --
 
 
 def create_ledger_entry(db: Session, *, booking: Booking, supplier_id: int, gross_amount: Decimal, commission_percentage: Decimal) -> SupplierLedger:
@@ -132,9 +130,7 @@ def get_supplier_statement(db: Session, supplier_id: int) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Payouts
-# ---------------------------------------------------------------------------
+# -- payouts --
 
 
 def list_payouts(db: Session, page: int = 1, limit: int = 20, supplier_id: Optional[int] = None, status: str = "") -> dict:
