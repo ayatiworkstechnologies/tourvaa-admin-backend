@@ -1,6 +1,6 @@
 # Tourvaa Backend
 
-FastAPI REST API powering the Tourvaa travel platform. Provides authentication, dynamic RBAC, tour CMS, customer/supplier/agent/affiliate management, role-scoped dashboards, settings, email templates, file uploads, and audit logging.
+FastAPI REST API powering the Tourvaa travel platform. Provides authentication, dynamic RBAC, tour CMS, bookings/payments/invoices, customer/supplier/agent/affiliate self-service portals, cancellations, supplier ledger & payouts, notifications, chatbot, website CMS, audit logging, and role-scoped dashboards.
 
 ---
 
@@ -16,7 +16,9 @@ FastAPI REST API powering the Tourvaa travel platform. Provides authentication, 
 | Password Hashing | Bcrypt via Passlib |
 | Validation | Pydantic v2 |
 | File Uploads | python-multipart |
+| PDF Generation | ReportLab (invoices) |
 | Email | SMTP (smtplib) |
+| AI Chatbot | Anthropic SDK |
 
 ---
 
@@ -65,6 +67,8 @@ SUPER_ADMIN_NAME=Super Admin
 SUPER_ADMIN_EMAIL=admin@tourvaa.com
 SUPER_ADMIN_PASSWORD=Admin@123
 SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false
+
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 > **Security:** Generate a strong JWT secret with `python -c "import secrets; print(secrets.token_hex(32))"` and keep `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false` in production.
@@ -100,41 +104,50 @@ Seeded automatically on first startup:
 
 ---
 
-## Module Structure
+## Project Structure
+
+Layer-based architecture — code is organized by technical concern rather than by feature module:
 
 ```text
 app/
-├── main.py                    Entry point, router registration
-├── config.py                  Pydantic settings (reads .env)
-├── database.py                SQLAlchemy engine and session
-├── security.py                JWT and password utilities
-└── modules/
-    ├── auth/                  Registration, login, refresh, reset password
-    ├── users/                 User CRUD, approval workflow
-    ├── roles/                 Role CRUD + permission assignment
-    ├── permissions/           Permission CRUD
-    ├── dashboard/             Role-scoped dashboard data
-    ├── customers/             Customer CRUD, communications, block/unblock
-    ├── suppliers/             Supplier CRUD, approval, markup
-    ├── agents/                Agent CRUD, approval, discount
-    ├── affiliates/            Affiliate CRUD, approval, API link
-    ├── cms/                   Tours, categories, subcategories, countries, cities
-    ├── settings/              App, system, payment, API integration settings
-    ├── email_templates/       Email template CRUD
-    ├── profile/               User profile, password change
-    ├── uploads/               Profile images, admin assets
-    └── common/                Shared auth helpers, permission checks
+├── main.py                    Entry point, middleware + router registration
+├── seed.py                    First-run super admin / role / permission seeding
+├── config/                    Pydantic settings (reads .env)
+├── database/                  SQLAlchemy engine and session
+├── auth/
+│   ├── security.py            JWT encode/decode, password hashing
+│   └── permissions.py         get_current_user, permission-check dependencies
+├── middleware/
+│   ├── cors.py                CORS configuration
+│   └── error_handlers.py      Global exception handlers
+├── api/
+│   └── router.py              Aggregates and mounts all routers under /api
+├── routers/                   One file per resource — HTTP layer only (request/response, no business logic)
+├── schemas/                   Pydantic request/response models, one file per resource
+├── services/                  Business logic, one file per resource — called by routers
+├── models/                    SQLAlchemy ORM models, one file per resource
+└── utils/                     Shared helpers: money, pagination, response envelope,
+                                rate limiting, mailer, ImageKit client, invoice PDF
+                                generation, notification triggers, crypto, misc operations
 ```
+
+Each resource (e.g. `bookings`) follows the same four-file pattern: `routers/bookings.py` → `services/bookings.py` → `schemas/bookings.py` → `models/bookings.py`.
+
+Resources currently implemented: `auth`, `users`, `roles`, `permissions`, `dashboard`, `customers` (+ `customers_portal` self-service), `suppliers` (+ ledger, payouts), `agents`, `affiliates` (+ tracking), `cms` (+ geo, geo-seed), `tours` (+ `tour_versions`), `bookings` (+ `booking_calendar`), `cancellations`, `payments` (+ `payments_gateway`), `invoices`, `checkout`, `notifications`, `chatbot`, `email_templates`, `settings`, `admin_modules`, `profile`, `uploads`, `private_documents`, `sessions`, `reports`, `audit`, `website_cms`, `client` (public/external API), `public`.
 
 ---
 
 ## API Endpoints
+
+All endpoints are mounted under `/api`. Full interactive reference: `/docs` (Swagger) or `/redoc`.
 
 ### Auth — `/api/auth`
 
 | Method | Path | Description |
 | --- | --- | --- |
 | POST | `/register` | User registration |
+| POST | `/register/supplier` | Supplier self-registration |
+| POST | `/register/agent` | Agent self-registration |
 | POST | `/login` | Login (rate limited: 10/min) |
 | GET | `/me` | Current user session |
 | POST | `/forgot-password` | Request password reset (rate limited: 5/5min) |
@@ -145,35 +158,27 @@ app/
 | GET | `/login-history` | User login history |
 | POST | `/force-logout` | Force logout other sessions |
 
-### Users — `/api/users`
+### Self-service portals
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET/POST | `/` | List / create users |
-| GET/PUT | `/{id}` | Get / update user |
-| DELETE | `/{id}` | Delete user |
-| POST | `/{id}/approve` | Approve pending user |
-| POST | `/{id}/reject` | Reject pending user |
-| POST | `/{id}/send-reset-mail` | Send password reset email |
-| POST | `/{id}/roles` | Assign roles to user |
+| Base Path | Description |
+| --- | --- |
+| `/api/customer/*` | Profile, travellers, bookings, cancellations, invoices, payments, messages, change-password |
+| `/api/suppliers/me/*` | Profile, vehicles CRUD, commission requests |
+| `/api/supplier/*` | Booking accept/decline/complete/cancel/postpone/notify, status history, messages |
+| `/api/agents/me` | Profile |
+| `/api/agent/*` | Messages (bookings/customers/invoices reuse the shared admin endpoints, row-scoped by role server-side) |
 
-### Roles — `/api/roles`
+### Bookings — `/api/bookings`
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET | `/public/options` | Public role options (for registration) |
-| GET/POST | `/` | List / create roles |
-| GET/PUT | `/{id}` | Get / update role |
-| DELETE | `/{id}` | Delete role |
-| GET/POST | `/{id}/permissions` | Get / assign permissions |
+Calculate-price, assign-supplier, cancel-request, calendar-event get/download, calendar-sync, status-history, payment-link, communications + replies, export, status updates.
 
-### Permissions — `/api/permissions`
+### Payments — `/api/payments`
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET/POST | `/` | List / create permissions |
-| GET/PUT | `/{id}` | Get / update permission |
-| DELETE | `/{id}` | Delete permission |
+Authorize, capture, void, refund, status updates, gateway test/simulate, gateway status, per-customer listing.
+
+### Invoices — `/api/invoices`
+
+Generate, generate-pdf, email, download (GST invoice PDF with tour name, traveller names, and payment method), detail/list.
 
 ### Dashboard — `/api/dashboard`
 
@@ -189,99 +194,35 @@ app/
 | GET | `/payments` | Payment summary | Admin+ |
 | GET | `/reports` | Reports summary | Admin+ |
 
-Dashboard responses differ by role:
-
-| Role | Summary Content |
-| --- | --- |
-| super-admin / admin | Platform-wide totals (users, tours, bookings, revenue) |
-| sub-admin | Module-specific totals based on assigned permissions |
-| supplier | Own tour count, booking count, revenue, pending payouts |
-| agent | Own booking count, clients, commission |
-| customer | Own booking count, spend, upcoming trips |
-| affiliate | Referral count, commission, payouts |
-
 ### CMS — `/api`
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET/POST | `/countries` | List / create countries |
-| GET/PUT/PATCH | `/countries/{id}` | Get / update / toggle status |
-| GET/POST | `/cities` | List / create cities |
-| GET/PUT/PATCH | `/cities/{id}` | Get / update / toggle status |
-| GET/POST | `/tour-categories` | List / create tour categories |
-| GET/PUT/PATCH | `/tour-categories/{id}` | Get / update / toggle status |
-| GET/POST | `/tour-subcategories` | List / create subcategories |
-| GET/PUT/PATCH | `/tour-subcategories/{id}` | Get / update / toggle status |
-| GET/POST | `/tours` | List / create tours |
-| GET/PUT/PATCH | `/tours/{id}` | Get / update / toggle status |
+Countries, cities, tour categories, tour subcategories, tours (CRUD + pricing + calendar + discounts + versions), CMS geo reference data, popular tours, website CMS content blocks.
 
-### Customers — `/api/customers`
+### Customers / Suppliers / Agents / Affiliates (admin side)
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET/POST | `/` | List / create customers |
-| GET/PUT | `/{id}` | Get / update customer |
-| PATCH | `/{id}/status` | Update status |
-| POST | `/{id}/block` | Block customer |
-| POST | `/{id}/unblock` | Unblock customer |
-| POST | `/{id}/reset-password` | Reset password |
-| GET | `/{id}/bookings` | Booking history |
-| GET | `/{id}/payments` | Payment history |
-| GET/POST | `/{id}/communications` | Get / send communications |
-
-### Suppliers — `/api/suppliers`
-
-| Method | Path | Description |
-| --- | --- | --- |
-| GET/POST | `/` | List / create suppliers |
-| GET/PUT | `/{id}` | Get / update supplier |
-| PATCH | `/{id}/approve` | Approve supplier |
-| PATCH | `/{id}/reject` | Reject supplier |
-| PATCH | `/{id}/partial-approve` | Partial approval |
-| PATCH | `/{id}/markup` | Update markup settings |
-
-### Agents — `/api/agents`
-
-| Method | Path | Description |
-| --- | --- | --- |
-| GET/POST | `/` | List / create agents |
-| GET/PUT | `/{id}` | Get / update agent |
-| PATCH | `/{id}/approve` | Approve agent |
-| PATCH | `/{id}/reject` | Reject agent |
-| PATCH | `/{id}/partial-approve` | Partial approval |
-| PATCH | `/{id}/discount` | Update discount settings |
-
-### Affiliates — `/api/affiliates`
-
-| Method | Path | Description |
-| --- | --- | --- |
-| GET/POST | `/` | List / create affiliates |
-| GET/PUT | `/{id}` | Get / update affiliate |
-| PATCH | `/{id}/approve` | Approve affiliate |
-| PATCH | `/{id}/reject` | Reject affiliate |
-| PATCH | `/{id}/api-link` | Update API link |
-
-### Settings — `/api/settings`
-
-| Method | Path | Description |
-| --- | --- | --- |
-| GET/PUT | `/` | General settings |
-| GET/PUT | `/system` | System settings |
-| GET/PUT | `/payment` | Payment provider settings |
-| GET | `/payment/summary` | Payment summary |
-| PUT | `/payment/{provider_name}` | Update single provider |
-| GET/PUT | `/api` | API integration settings |
-| GET | `/api/summary` | API summary |
-| PUT | `/api/{api_name}` | Update single API config |
+Standard CRUD + approve/reject/partial-approve + block/unblock + markup/discount/commission settings + communications, under `/api/customers`, `/api/suppliers`, `/api/agents`, `/api/affiliates`.
 
 ### Other Modules
 
 | Module | Base Path | Description |
 | --- | --- | --- |
+| Roles | `/api/roles` | Role CRUD + permission assignment |
+| Permissions | `/api/permissions` | Permission CRUD |
+| Settings | `/api/settings` | General / system / payment / API integration settings |
 | Email Templates | `/api/email-templates` | CRUD |
+| Cancellations | `/api/cancellations` | Cancellation requests + refund workflow |
+| Supplier Ledger | `/api/supplier-ledger` | Ledger entries, payouts |
+| Notifications | `/api/notifications` | List, mark-all-read, retry, push subscribe/broadcast |
+| Sessions | `/api/sessions` | Active sessions, revoke, force-logout, expire-inactive |
+| Reports | `/api/reports` | Snapshot reporting |
+| Audit | `/api/audit-logs` | Audit log listing + export |
+| Chatbot | `/api/chatbot` | AI assistant (Anthropic-backed) |
 | Profile | `/api/profile` | View / update profile, change password |
 | Uploads | `/api/uploads` | Profile images, admin assets |
+| Private Documents | `/api/private-documents` | Signed/authenticated document access |
+| Checkout | `/api/checkout` | Public booking checkout flow |
 | Client API | `/api/client` | Public/external client API |
+| Public | `/api/public` | Public-facing settings and content |
 
 ---
 
@@ -305,38 +246,25 @@ Permission format: `{module}.{action}` (e.g. `dashboard.view`, `bookings.view`) 
 
 ## Tests
 
+37+ test modules, ~390+ test functions, run against a live dev server at `http://127.0.0.1:8000/api`.
+
 ```bash
-# Run all tests
+# Start the server first (separate terminal)
+uvicorn app.main:app --reload
+
+# Run all tests (read-only — safe against a live DB)
 venv\Scripts\python -m pytest tests/ -v
 
+# Include destructive/write tests (creates, updates, deletes real records)
+TOURVAA_WRITE_TESTS=1 venv\Scripts\python -m pytest tests/ -v
+
 # Run a specific test file
-venv\Scripts\python -m pytest tests/test_dashboard_role_based.py -v
+venv\Scripts\python -m pytest tests/test_35_customer_portal.py -v
 ```
 
-Test files:
+Coverage by area: core health & auth (`test_01`–`test_03`), dashboard & settings (`test_04`–`test_05`), customers/suppliers/agents/affiliates admin CRUD (`test_06`–`test_09`), geo & tour CMS (`test_10`–`test_18`), uploads (`test_19`), bookings/payments/invoices/communications (`test_20`–`test_24`), notifications/reports/sessions (`test_25`), handover guards & state machine (`test_26`), geo reference & public settings (`test_27`–`test_28`), chatbot (`test_29`), cancellations & payouts (`test_30`–`test_32`), website CMS & tour versions (`test_33`–`test_34`), and self-service portals for customer/supplier/agent (`test_35`–`test_37`).
 
-| File | Coverage |
-| --- | --- |
-| `test_01_core_health.py` | Health check endpoint |
-| `test_02_auth.py` | Auth flows (register, login, refresh, reset) |
-| `test_03_rbac.py` | Role and permission checks |
-| `test_04_dashboard.py` | Dashboard endpoints |
-| `test_05_settings.py` | Settings CRUD |
-| `test_06_customers.py` | Customer management |
-| `test_07_suppliers.py` | Supplier management |
-| `test_08_agents.py` | Agent management |
-| `test_09_affiliates.py` | Affiliate management |
-| `test_10_countries.py` | Country CMS |
-| `test_11_cities.py` | City CMS |
-| `test_12_tour_categories.py` | Tour category CMS |
-| `test_13_tour_subcategories.py` | Tour subcategory CMS |
-| `test_14_basic_tours.py` | Basic tour CRUD |
-| `test_15_advanced_tour_cms.py` | Advanced tour CMS |
-| `test_16_tour_pricing.py` | Tour pricing |
-| `test_17_tour_calendar.py` | Tour calendar |
-| `test_18_tour_discounts.py` | Tour discounts |
-| `test_19_uploads.py` | File uploads |
-| `test_dashboard_role_based.py` | Role-scoped dashboard data (32 tests) |
+Write/destructive tests are gated behind `TOURVAA_WRITE_TESTS=1` so a default run never mutates data.
 
 ---
 
@@ -346,6 +274,7 @@ Test files:
 - [ ] Set `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false`
 - [ ] Change default super admin password
 - [ ] Point `DATABASE_URL` to production MySQL
+- [ ] Run `alembic upgrade head` against production before first deploy
 - [ ] Configure real SMTP credentials
 - [ ] Set `ALLOWED_ORIGINS` to production frontend domains
 - [ ] Set `APP_ENV=production` and `APP_DEBUG=false`
