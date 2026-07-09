@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.utils.money import utcnow
+from app.models.cms import Tour
 from app.models.website_cms import (
     Blog, CmsPolicy, CustomerReview, ExternalLink, HelpCentreArticle,
     HomepageBanner, PopularDestination, PopularTour, PromotionalPopup,
@@ -19,7 +20,13 @@ from app.schemas.website_cms import (
 
 def _paginate(q, page: int, limit: int, serializer) -> dict:
     total = q.count()
-    items = [serializer(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
+    rows = q.offset((page - 1) * limit).limit(limit).all()
+    items = []
+    for row in rows:
+        try:
+            items.append(serializer(row))
+        except TypeError:
+            items.append(serializer(row, q.session))
     return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
@@ -34,8 +41,19 @@ def _get_or_404(db, model, item_id: int, label: str):
 
 def _s_banner(r: HomepageBanner): return {"id": r.id, "title": r.title, "subtitle": r.subtitle, "image": r.image, "cta_text": r.cta_text, "cta_url": r.cta_url, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_dest(r: PopularDestination): return {"id": r.id, "country_id": r.country_id, "city_id": r.city_id, "title": r.title, "image": r.image, "description": r.description, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
-def _s_popular_tour(r: PopularTour): return {"id": r.id, "tour_id": r.tour_id, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
-def _s_deal(r: TourOnDeal): return {"id": r.id, "tour_id": r.tour_id, "deal_label": r.deal_label, "discount_percentage": r.discount_percentage, "valid_until": r.valid_until, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
+def _tour_label(db: Session, tour_id: int):
+    tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    if not tour:
+        return {"tour_title": "", "tour_code": ""}
+    return {"tour_title": tour.title, "tour_code": tour.tour_code}
+
+
+def _s_popular_tour(r: PopularTour, db: Session | None = None):
+    tour = _tour_label(db, r.tour_id) if db else {"tour_title": "", "tour_code": ""}
+    return {"id": r.id, "tour_id": r.tour_id, **tour, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
+def _s_deal(r: TourOnDeal, db: Session | None = None):
+    tour = _tour_label(db, r.tour_id) if db else {"tour_title": "", "tour_code": ""}
+    return {"id": r.id, "tour_id": r.tour_id, **tour, "deal_label": r.deal_label, "discount_percentage": r.discount_percentage, "valid_until": r.valid_until, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_blog(r: Blog): return {"id": r.id, "title": r.title, "slug": r.slug, "excerpt": r.excerpt, "content": r.content, "featured_image": r.featured_image, "author": r.author, "tags": r.tags, "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "published_at": r.published_at, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_review(r: CustomerReview): return {"id": r.id, "reviewer_name": r.reviewer_name, "reviewer_image": r.reviewer_image, "rating": r.rating, "review_text": r.review_text, "tour_name": r.tour_name, "country": r.country, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_help(r: HelpCentreArticle): return {"id": r.id, "category": r.category, "question": r.question, "answer": r.answer, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
@@ -95,14 +113,28 @@ def delete_destination(db, item_id): _delete(db, PopularDestination, item_id, "D
 
 # popular tours
 
-def list_popular_tours(db, page, limit): return _list(db, PopularTour, _s_popular_tour, page, limit)
-def create_popular_tour(db, data: PopularTourPayload): return _create(db, PopularTour, data.model_dump(), _s_popular_tour)
+def list_popular_tours(db, page, limit): return _list(db, PopularTour, lambda row: _s_popular_tour(row, db), page, limit)
+def create_popular_tour(db, data: PopularTourPayload):
+    if not db.query(Tour).filter(Tour.id == data.tour_id).first():
+        raise HTTPException(status_code=400, detail="Selected tour does not exist")
+    obj = PopularTour(**data.model_dump())
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return _s_popular_tour(obj, db)
 def delete_popular_tour(db, item_id): _delete(db, PopularTour, item_id, "Popular Tour")
 
 # tours on deals
 
-def list_deals(db, page, limit, active_only=False): return _list(db, TourOnDeal, _s_deal, page, limit, active_only)
-def create_deal(db, data: TourOnDealPayload): return _create(db, TourOnDeal, data.model_dump(), _s_deal)
+def list_deals(db, page, limit, active_only=False): return _list(db, TourOnDeal, lambda row: _s_deal(row, db), page, limit, active_only)
+def create_deal(db, data: TourOnDealPayload):
+    if not db.query(Tour).filter(Tour.id == data.tour_id).first():
+        raise HTTPException(status_code=400, detail="Selected tour does not exist")
+    obj = TourOnDeal(**data.model_dump())
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return _s_deal(obj, db)
 def update_deal(db, item_id, data: TourOnDealPayload): return _update(db, TourOnDeal, item_id, data.model_dump(exclude_unset=True), _s_deal, "Deal")
 def delete_deal(db, item_id): _delete(db, TourOnDeal, item_id, "Deal")
 
