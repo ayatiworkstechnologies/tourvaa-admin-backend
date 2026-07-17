@@ -8,6 +8,24 @@ from tests.conftest import BASE_URL, skip_if_readonly, unique, auth_headers
 _created_id = None
 
 
+def _india_country_id(headers):
+    resp = requests.get(f"{BASE_URL}/countries", headers=headers, timeout=10)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    items = body if isinstance(body, list) else body.get("data", body.get("items", []))
+    india = next(
+        (
+            item for item in items
+            if (item.get("country_code") or item.get("code") or "").upper() == "IN"
+            or (item.get("country_name") or item.get("name") or "").lower() == "india"
+        ),
+        None,
+    )
+    if not india:
+        pytest.skip("India is not present; run POST /api/admin/seed/geo before geo completeness tests")
+    return india["id"]
+
+
 def test_states_list(headers):
     resp = requests.get(f"{BASE_URL}/states", headers=headers, timeout=10)
     assert resp.status_code == 200, resp.text
@@ -38,7 +56,12 @@ def test_states_filter_by_country_id(headers):
 
 
 def test_states_india_has_enough_states(headers):
-    resp = requests.get(f"{BASE_URL}/states", headers=headers, params={"country_id": 101}, timeout=10)
+    resp = requests.get(
+        f"{BASE_URL}/states",
+        headers=headers,
+        params={"country_id": _india_country_id(headers)},
+        timeout=10,
+    )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     items = body if isinstance(body, list) else body.get("data", body.get("items", []))

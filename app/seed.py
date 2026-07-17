@@ -44,6 +44,7 @@ MODULES = [
     ("email", "Email Templates"),
     ("settings", "Settings"),
     ("website_cms", "Website CMS"),
+    ("chatbot", "Chatbot"),
     ("profile", "Profile"),
 ]
 
@@ -362,6 +363,7 @@ def seed_default_roles_and_permissions(db: Session):
             "view-email", "create-email", "update-email", "delete-email", *_email_template_granular,
             "view-settings", "update-settings", "settings.view",
             "view-website_cms", "create-website_cms", "update-website_cms", "delete-website_cms",
+            "view-chatbot", "create-chatbot", "update-chatbot", "delete-chatbot",
             # Profile
             "view-profile", "update-profile", "profile.view",
             # All operational granular permissions
@@ -415,6 +417,7 @@ def seed_default_roles_and_permissions(db: Session):
             "view-settings", "settings.view",
             # Website CMS (no delete)
             "view-website_cms", "create-website_cms", "update-website_cms",
+            "view-chatbot", "create-chatbot", "update-chatbot",
             # Profile
             "view-profile", "update-profile", "profile.view",
             # All operational granular permissions
