@@ -139,13 +139,13 @@ def test_auth_router_exposes_spec_session_routes():
 
 
 def test_main_exposes_spec_admin_rbac_routes():
-    backend_dir = Path(__file__).resolve().parents[1]
-    main_py = (backend_dir / "app" / "main.py").read_text(encoding="utf-8")
+    from app.main import app
 
-    assert 'app.include_router(roles_router, prefix="/api")' in main_py
-    assert 'app.include_router(roles_router, prefix="/api/admin")' in main_py
-    assert 'app.include_router(permissions_router, prefix="/api")' in main_py
-    assert 'app.include_router(permissions_router, prefix="/api/admin")' in main_py
+    paths = app.openapi()["paths"]
+    assert "get" in paths["/api/roles/"]
+    assert "get" in paths["/api/admin/roles/"]
+    assert "get" in paths["/api/permissions/"]
+    assert "get" in paths["/api/admin/permissions/"]
 
 
 def test_verification_workflow_status_contract_exists():
@@ -168,6 +168,13 @@ def test_verification_workflow_status_contract_exists():
 
     for status in ["expired", "reupload_required"]:
         assert status in operations
+
+
+def test_chatbot_permissions_are_seeded_for_admin_access():
+    from app.seed import DEFAULT_PERMISSIONS
+
+    slugs = {permission["slug"] for permission in DEFAULT_PERMISSIONS}
+    assert {"view-chatbot", "create-chatbot", "update-chatbot", "delete-chatbot"} <= slugs
 
 
 def test_supplier_agent_verification_api_contract_exists():
