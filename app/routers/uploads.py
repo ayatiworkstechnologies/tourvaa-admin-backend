@@ -1,10 +1,10 @@
-import imghdr
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 
 from app.auth.permissions import get_current_user
 from app.utils.imagekit_client import upload_to_imagekit
+from app.utils.media import detect_image_type
 from app.models.users import User
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
@@ -39,7 +39,7 @@ async def upload_profile_image(
     if len(content) > MAX_IMAGE_SIZE:
         raise HTTPException(status_code=400, detail="Image must be 2MB or smaller")
 
-    detected_type = imghdr.what(None, h=content)
+    detected_type = detect_image_type(content)
 
     if detected_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Invalid image file")
@@ -85,7 +85,7 @@ async def upload_admin_asset(
         raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, and PDF files are allowed")
 
     if extension in {"jpg", "png", "webp"}:
-        detected_type = imghdr.what(None, h=content)
+        detected_type = detect_image_type(content)
         if detected_type not in ALLOWED_IMAGE_TYPES:
             raise HTTPException(status_code=400, detail="Invalid image file")
         extension = ALLOWED_IMAGE_TYPES[detected_type]

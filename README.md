@@ -172,6 +172,16 @@ All endpoints are mounted under `/api`. Full interactive reference: `/docs` (Swa
 
 Calculate-price, assign-supplier, cancel-request, calendar-event get/download, calendar-sync, status-history, payment-link, communications + replies, export, status updates.
 
+#### Core booking lifecycle
+
+1. A new booking starts in `pending_payment`.
+2. Payment authorization creates an active hold. An assigned booking moves to `pending_supplier_acceptance`; an unassigned booking moves to `payment_authorized`.
+3. Supplier acceptance confirms the booking, captures authorized funds, generates the invoice, updates the supplier ledger, and notifies the admin and customer.
+4. Supplier decline marks the booking as `declined`, voids active payment holds or refunds captured funds, releases reserved calendar seats, and sends notifications.
+5. Supplier decisions are idempotent and final: retrying the same decision is safe, while reversing an accepted or declined decision returns HTTP `409`.
+
+A paid booking with a pending supplier decision remains `pending_supplier_acceptance`; payment synchronization cannot bypass supplier approval.
+
 ### Payments — `/api/payments`
 
 Authorize, capture, void, refund, status updates, gateway test/simulate, gateway status, per-customer listing.
@@ -248,6 +258,12 @@ Permission format: `{module}.{action}` (e.g. `dashboard.view`, `bookings.view`) 
 
 37+ test modules, ~390+ test functions, run against a live dev server at `http://127.0.0.1:8000/api`.
 
+Install the development test dependencies once:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 ```bash
 # Start the server first (separate terminal)
 uvicorn app.main:app --reload
@@ -260,6 +276,15 @@ TOURVAA_WRITE_TESTS=1 venv\Scripts\python -m pytest tests/ -v
 
 # Run a specific test file
 venv\Scripts\python -m pytest tests/test_35_customer_portal.py -v
+```
+
+Audit the complete OpenAPI surface for duplicate routes, route shadowing, and server errors without changing real records:
+
+```bash
+venv\Scripts\python scripts/audit_api.py
+
+# Also exercise every GET endpoint using the configured super-admin account
+venv\Scripts\python scripts/audit_api.py --authenticated-reads
 ```
 
 Coverage by area: core health & auth (`test_01`–`test_03`), dashboard & settings (`test_04`–`test_05`), customers/suppliers/agents/affiliates admin CRUD (`test_06`–`test_09`), geo & tour CMS (`test_10`–`test_18`), uploads (`test_19`), bookings/payments/invoices/communications (`test_20`–`test_24`), notifications/reports/sessions (`test_25`), handover guards & state machine (`test_26`), geo reference & public settings (`test_27`–`test_28`), chatbot (`test_29`), cancellations & payouts (`test_30`–`test_32`), website CMS & tour versions (`test_33`–`test_34`), and self-service portals for customer/supplier/agent (`test_35`–`test_37`).
