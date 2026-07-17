@@ -30,6 +30,7 @@ from app.schemas.bookings import (
 from app.models.cms import City, Country, Tour
 from app.utils.money import money, money_str, utcnow
 from app.models.customers import Customer
+from app.models.suppliers import Supplier
 from app.models.tours import TourAccommodationExtra, TourCalendar, TourDiscount, TourExtension, TourOptionalActivity, TourPricing, TourUnavailableDate
 from app.models.users import User
 
@@ -230,11 +231,29 @@ def serialize_communication(c: BookingCommunication) -> dict:
     return {"id": c.id, "booking_id": c.booking_id, "sender_user_id": c.sender_user_id, "sender_type": c.sender_type, "message_type": c.message_type, "subject": c.subject, "message": c.message, "visibility": c.visibility, "created_at": c.created_at}
 
 
-def get_booking_by_id(db: Session, booking_id: int) -> Booking:
-    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+def get_booking_by_id(db: Session, booking_id: int, for_update: bool = False) -> Booking:
+    query = db.query(Booking).filter(Booking.id == booking_id)
+    if for_update:
+        query = query.with_for_update()
+    booking = query.first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
     return booking
+
+
+def _start_supplier_decision(booking: Booking, decision: str) -> bool:
+    """Validate a supplier decision and return False when it is an idempotent retry."""
+    if not booking.supplier_id:
+        raise HTTPException(status_code=400, detail="No supplier is assigned to this booking")
+    current = booking.supplier_acceptance_status
+    if current == decision:
+        return False
+    if current != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Supplier decision is already {current}; it cannot be changed to {decision}",
+        )
+    return True
 
 
 def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consume: bool = False):
@@ -426,6 +445,29 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
     return serialize_booking(booking, detail=True)
 
 
+def _validate_customer_travellers(data: BookingCreate, adults: int, children: int) -> None:
+    if data.booking_source != "customer" or not data.travellers:
+        return
+
+    adult_rows = [row for row in data.travellers if row.traveller_type == "adult"]
+    child_rows = [row for row in data.travellers if row.traveller_type == "child"]
+    if len(adult_rows) != adults or len(child_rows) != children:
+        raise HTTPException(status_code=400, detail="Traveller details must match the selected adult and child counts")
+    if sum(1 for row in data.travellers if row.is_primary_contact) != 1:
+        raise HTTPException(status_code=400, detail="Exactly one traveller must be the primary contact")
+
+    for row in data.travellers:
+        full_name = (row.full_name or f"{row.first_name} {row.last_name}").strip()
+        if not full_name:
+            raise HTTPException(status_code=400, detail="Every traveller must have a full name")
+        if row.age is None:
+            raise HTTPException(status_code=400, detail="Every traveller must have an age")
+        if row.traveller_type == "adult" and not 12 <= row.age <= 120:
+            raise HTTPException(status_code=400, detail="Adult traveller age must be between 12 and 120")
+        if row.traveller_type == "child" and not 2 <= row.age <= 11:
+            raise HTTPException(status_code=400, detail="Child traveller age must be between 2 and 11")
+
+
 def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     customer = db.query(Customer).filter(Customer.id == data.customer_id).first()
     if not customer:
@@ -437,6 +479,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     if data.booking_source == "agent" and not data.agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required for agent bookings")
     tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions = _price_booking(db, data, lock_calendar=True, consume_discount=True)
+    _validate_customer_travellers(data, adults, children)
     country = db.query(Country).filter(Country.id == (data.country_id or (tour.country_id if tour else None))).first() if (data.country_id or tour) else None
     city = db.query(City).filter(City.id == (data.city_id or (tour.city_id if tour else None))).first() if (data.city_id or tour) else None
     supplier = tour.supplier if tour and tour.supplier else None
@@ -584,6 +627,11 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
 
 def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, actor: User, request: Request | None = None) -> dict:
     booking = get_booking_by_id(db, booking_id)
+    supplier = db.query(Supplier).filter(Supplier.id == data.supplier_id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    if booking.booking_status in {"completed", "cancelled", "declined", "refunded"}:
+        raise HTTPException(status_code=409, detail="A supplier cannot be assigned to a closed booking")
     old_values = serialize_booking(booking)
     booking.supplier_id = data.supplier_id
     booking.supplier_acceptance_status = "pending"
@@ -611,8 +659,10 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
 
 
 def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecisionRequest, actor: User, request: Request | None = None) -> dict:
-    booking = get_booking_by_id(db, booking_id)
+    booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
+    if not _start_supplier_decision(booking, "accepted"):
+        return serialize_booking(booking, detail=True)
     booking.supplier_acceptance_status = "accepted"
     _set_status(db, booking, "confirmed", actor, "supplier", data.reason or "Supplier accepted booking")
 
@@ -680,10 +730,17 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
 
 
 def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisionRequest, actor: User, request: Request | None = None) -> dict:
-    booking = get_booking_by_id(db, booking_id)
+    booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
+    if not _start_supplier_decision(booking, "declined"):
+        return serialize_booking(booking, detail=True)
     booking.supplier_acceptance_status = "declined"
     _set_status(db, booking, "declined", actor, "supplier", data.reason or "Supplier declined booking")
+    if booking.calendar:
+        booking.calendar.booked_seats = max(
+            0,
+            (booking.calendar.booked_seats or 0) - (booking.total_travellers or 0),
+        )
 
     from app.services.notifications import enqueue_notification, notify_admins
     from app.models.payments import Payment

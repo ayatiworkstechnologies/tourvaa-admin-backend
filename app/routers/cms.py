@@ -174,7 +174,7 @@ def add_tour(
     return {"status": "success", "data": save_tour(db, data, current_user, request)}
 
 
-@router.get("/tours/categories")
+@router.get("/tours/categories", operation_id="cms_list_tour_categories")
 def tour_categories(
     search: str = Query(default=""),
     page: int = Query(default=1),

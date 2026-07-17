@@ -75,6 +75,20 @@ def _derive_booking_status(net_paid, final_amount) -> str:
     return "partially_paid"
 
 
+def _status_after_payment_sync(booking: Booking, payment_status: str) -> str | None:
+    """Return a booking status change without bypassing supplier acceptance."""
+    if payment_status != "paid" or booking.booking_status not in {
+        "pending_payment",
+        "draft",
+        "payment_authorized",
+        "pending_supplier_acceptance",
+    }:
+        return None
+    if booking.supplier_id and booking.supplier_acceptance_status != "accepted":
+        return "pending_supplier_acceptance"
+    return "confirmed"
+
+
 def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
     payments = db.query(Payment).filter(Payment.booking_id == booking.id).all()
     captured = sum(money(p.captured_amount or p.paid_amount or 0) for p in payments if p.payment_status not in {"voided", "failed"})
@@ -84,8 +98,9 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
     booking.amount_paid = net_paid
     booking.amount_pending = max(money(0), final - net_paid)
     booking.payment_status = _derive_booking_status(net_paid, final)
-    if booking.payment_status == "paid" and booking.booking_status in {"pending_payment", "draft", "payment_authorized"}:
-        booking.booking_status = "confirmed"
+    next_status = _status_after_payment_sync(booking, booking.payment_status)
+    if next_status:
+        booking.booking_status = next_status
 
 
 def _sync_customer_payment_fields(db: Session, customer: Customer) -> None:
@@ -227,7 +242,11 @@ def authorize_payment(db: Session, data: PaymentAuthorize, actor: Optional[User]
     _transaction(db, payment, "authorize", amount, actor)
     booking.payment_status = "authorized"
     if booking.booking_status == "pending_payment":
-        booking.booking_status = "payment_authorized"
+        booking.booking_status = (
+            "pending_supplier_acceptance"
+            if booking.supplier_id and booking.supplier_acceptance_status == "pending"
+            else "payment_authorized"
+        )
     log_audit(db, actor=actor, action="authorize_payment", entity_type="payment", entity_id=payment.id, request=request)
     from app.services.notifications import notify_admins
     notify_admins(db, notification_type="payment_authorized", title="Payment authorized", message=f"Payment hold created for booking {booking.booking_code}", entity_type="payment", entity_id=payment.id)

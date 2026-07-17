@@ -83,6 +83,22 @@ def _booking_or_404(db: Session, booking_id: int) -> Booking:
     return b
 
 
+def _validate_payment_request(booking: Booking, amount: Decimal, current_user) -> Decimal:
+    _ensure_booking_payment_access(booking, current_user)
+    if booking.booking_status in {"cancelled", "declined", "completed", "refunded"}:
+        raise HTTPException(status_code=409, detail="This booking is not eligible for payment")
+
+    requested = money(amount)
+    outstanding = money(booking.amount_pending or 0)
+    if requested <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+    if outstanding <= 0:
+        raise HTTPException(status_code=409, detail="This booking has no outstanding balance")
+    if requested > outstanding:
+        raise HTTPException(status_code=400, detail=f"Payment amount cannot exceed the outstanding balance of {outstanding:.2f}")
+    return requested
+
+
 def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gateway: str, gateway_order_id: str, idempotency_key: Optional[str], current_user) -> Payment:
     customer_id = booking.customer_id
     p = Payment(
@@ -90,7 +106,7 @@ def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gate
         customer_id=customer_id,
         created_by=current_user.id if current_user else None,
         payment_method="card",
-        payment_type="full",
+        payment_type="partial" if money(amount) < money(booking.amount_pending or 0) else "full",
         gateway=gateway,
         gateway_order_id=gateway_order_id,
         idempotency_key=idempotency_key,
@@ -114,9 +130,10 @@ def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gate
 
 @router.post("/stripe/create-session")
 def stripe_create_session(body: StripeSessionRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    stripe = get_stripe(db)
     booking = _booking_or_404(db, body.booking_id)
-    amount_cents = int(money(body.amount) * 100)
+    amount = _validate_payment_request(booking, body.amount, current_user)
+    stripe = get_stripe(db)
+    amount_cents = int(amount * 100)
 
     session_data = stripe.create_checkout_session(
         amount_cents=amount_cents,
@@ -129,7 +146,7 @@ def stripe_create_session(body: StripeSessionRequest, db: Session = Depends(get_
     )
 
     payment = _record_pending_payment(
-        db, booking, body.amount, "stripe",
+        db, booking, amount, "stripe",
         gateway_order_id=session_data["id"],
         idempotency_key=body.idempotency_key,
         current_user=current_user,
@@ -163,7 +180,13 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
         raise _HTTPException(status_code=400, detail="Webhook signature verification not configured")
     else:
         logger.warning("Stripe webhook received without signature verification (dev mode)")
-        event = json.loads(payload)
+        try:
+            event = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise _HTTPException(status_code=400, detail="Invalid Stripe webhook payload") from error
+
+    if not isinstance(event, dict):
+        raise _HTTPException(status_code=400, detail="Invalid Stripe webhook payload")
 
     event_id = event.get("id", "")
     event_type = event.get("type", "")
@@ -284,9 +307,10 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
 
 @router.post("/paypal/create-order")
 def paypal_create_order(body: PayPalOrderRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    paypal = get_paypal(db)
     booking = _booking_or_404(db, body.booking_id)
-    amount_str = f"{money(body.amount):.2f}"
+    amount = _validate_payment_request(booking, body.amount, current_user)
+    paypal = get_paypal(db)
+    amount_str = f"{amount:.2f}"
 
     order = paypal.create_order(
         amount=amount_str,
@@ -298,7 +322,7 @@ def paypal_create_order(body: PayPalOrderRequest, db: Session = Depends(get_db),
     )
 
     payment = _record_pending_payment(
-        db, booking, body.amount, "paypal",
+        db, booking, amount, "paypal",
         gateway_order_id=order["id"],
         idempotency_key=body.idempotency_key,
         current_user=current_user,
@@ -318,13 +342,19 @@ def paypal_create_order(body: PayPalOrderRequest, db: Session = Depends(get_db),
 
 @router.post("/paypal/capture")
 def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    payment = db.query(Payment).filter(
+        Payment.id == body.payment_id,
+        Payment.gateway == "paypal",
+        Payment.gateway_order_id == body.order_id,
+    ).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="PayPal payment record not found")
+    _ensure_booking_payment_access(payment.booking, current_user)
+    if payment.payment_status == "paid":
+        return {"status": "success", "message": "PayPal payment was already captured", "data": {"paypal_status": "COMPLETED", "payment_id": payment.id}}
+
     paypal = get_paypal(db)
     captured = paypal.capture_order(order_id=body.order_id)
-
-    payment = db.query(Payment).filter(Payment.id == body.payment_id).first()
-    if not payment:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Payment record not found")
 
     status = captured.get("status", "")
     if status == "COMPLETED":
@@ -454,7 +484,7 @@ def test_simulate_payment(
         raise HTTPException(status_code=403, detail="Test payments are not available in production.")
 
     booking = _booking_or_404(db, body.booking_id)
-    amount = money(body.amount)
+    amount = _validate_payment_request(booking, body.amount, current_user)
     fake_ref = f"TEST-{uuid.uuid4().hex[:10].upper()}"
 
     payment = Payment(
@@ -462,7 +492,7 @@ def test_simulate_payment(
         customer_id=booking.customer_id,
         created_by=current_user.id if current_user else None,
         payment_method="test",
-        payment_type="full",
+        payment_type="partial" if amount < money(booking.amount_pending or 0) else "full",
         gateway="test",
         gateway_order_id=fake_ref,
         idempotency_key=fake_ref,

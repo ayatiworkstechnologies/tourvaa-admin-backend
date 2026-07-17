@@ -71,17 +71,20 @@ PARTNER_AND_CUSTOMER_ROUTERS = (
 CONTENT_AND_TOUR_ROUTERS = (
     tour_detail_router,
     discounts_router,
+    # Static /tours/pending-approval must be registered before CMS /tours/{tour_id}.
+    tour_versions_router,
     cms_router,
     geo_seed_router,
     geo_router,
     website_cms_router,
-    tour_versions_router,
 )
 
 OPERATIONS_ROUTERS = (
     bookings_router,
-    payments_router,
+    # Static gateway paths such as /payments/paypal/capture must precede
+    # /payments/{payment_id}/capture from the core payments router.
     payments_gateway_router,
+    payments_router,
     invoices_router,
     notifications_router,
     reports_router,
