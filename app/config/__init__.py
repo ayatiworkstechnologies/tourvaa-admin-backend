@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
 
-    # Per-portal JWT secrets — fall back to JWT_SECRET_KEY if not set
+    # Per-portal JWT secrets - fall back to JWT_SECRET_KEY if not set
     SUPPLIER_JWT_SECRET_KEY: str = ""
     AGENT_JWT_SECRET_KEY: str = ""
     CUSTOMER_JWT_SECRET_KEY: str = ""
@@ -109,6 +109,6 @@ def get_storage_root() -> Path:
 
 
 def get_private_docs_root() -> Path:
-    """Private document storage — outside the public /storage static-files mount."""
+    """Private document storage - outside the public /storage static-files mount."""
     return get_storage_root().parent / "private-docs"
 

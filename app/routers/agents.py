@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.agents import Agent
-from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentUpdate
-from app.services.agents import approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
+from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentSelfUpdate, AgentUpdate
+from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
 from app.schemas.auth import RegisterSchema, VerifyEmailSchema
 from app.services.auth import register_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs
@@ -81,13 +81,25 @@ def my_agent(db: Session = Depends(get_db), current_user: User = Depends(get_cur
     return {"status": "success", "data": serialize_agent(agent)}
 
 
+@router.get("/document-requirements")
+def document_requirements(_current_user: User = Depends(get_current_user)):
+    return {
+        "status": "success",
+        "data": [
+            {"document_type": key, **metadata}
+            for key, metadata in AGENT_DOCUMENT_TYPES.items()
+        ],
+    }
+
+
 @router.put("/me")
 @router.patch("/me")
-def edit_my_agent(data: AgentUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def edit_my_agent(data: AgentSelfUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent profile not found")
-    return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent.id, data, current_user, request)}
+    safe_update = AgentUpdate(**data.model_dump(exclude_unset=True))
+    return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent.id, safe_update, current_user, request)}
 
 
 @router.get("/{agent_id}")
@@ -106,6 +118,7 @@ def agent_detail(agent_id: int, db: Session = Depends(get_db), current_user: Use
         )
         if not allowed:
             raise HTTPException(status_code=403, detail="Permission denied")
+
     return {"status": "success", "data": serialize_agent(agent)}
 
 
@@ -176,6 +189,10 @@ async def upload_agent_document(
         if not allowed:
             raise HTTPException(status_code=403, detail="Permission denied")
 
+    document_type = document_type.strip().lower()
+    if document_type not in AGENT_DOCUMENT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid agent document type")
+
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="File is required")
@@ -230,6 +247,12 @@ async def upload_agent_document(
         existing_doc.mime_type = file.content_type or "application/octet-stream"
         existing_doc.status = "pending"
         existing_doc.rejection_reason = None
+        existing_doc.reviewed_at = None
+        existing_doc.reviewed_by = None
+        if document_type in {key for key, value in AGENT_DOCUMENT_TYPES.items() if value["required"]} and agent.approval_status in {"approved", "approved_live"}:
+            agent.approval_status = "documents_pending"
+            agent.status = "inactive"
+            current_user.approval_status = "documents_pending"
         db.commit()
         db.refresh(existing_doc)
         doc_obj = existing_doc
@@ -252,6 +275,22 @@ async def upload_agent_document(
         "status": "success",
         "message": "Document uploaded successfully",
         "data": _document(doc_obj)
+    }
+
+
+@router.patch("/{agent_id}/documents/{document_id}/review")
+def review_document(
+    agent_id: int,
+    document_id: int,
+    data: AgentDocumentReviewRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("agents.approve", "agents.reject")),
+):
+    return {
+        "status": "success",
+        "message": f"Document {data.status} successfully",
+        "data": review_agent_document(db, agent_id, document_id, data, current_user, request),
     }
 
 

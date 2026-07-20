@@ -148,10 +148,10 @@ def get_ics_path(db: Session, booking_id: int, actor: Optional[User] = None) -> 
     _ensure_booking_access(booking, actor)
     event = db.query(BookingCalendarEvent).filter(BookingCalendarEvent.booking_id == booking_id).first()
     if not event or not event.ics_file_path:
-        raise HTTPException(status_code=404, detail="Calendar file not found — please sync first")
+        raise HTTPException(status_code=404, detail="Calendar file not found - please sync first")
     fs_path = str(get_storage_root()) + event.ics_file_path.replace("/storage", "")
     import os
     if not os.path.exists(fs_path):
-        raise HTTPException(status_code=404, detail="Calendar file missing — please re-sync")
+        raise HTTPException(status_code=404, detail="Calendar file missing - please re-sync")
     booking_code = event.booking.booking_code if event.booking else str(booking_id)
     return fs_path, f"{booking_code}.ics"

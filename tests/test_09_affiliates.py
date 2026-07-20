@@ -1,4 +1,4 @@
-"""Module 09 — Affiliates"""
+"""Module 09 - Affiliates"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique

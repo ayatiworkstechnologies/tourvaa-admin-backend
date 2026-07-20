@@ -1,6 +1,6 @@
 """
 Migration script: add columns that exist in models but are missing from the DB.
-Safe to run multiple times — skips columns that already exist.
+Safe to run multiple times - skips columns that already exist.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(__file__))

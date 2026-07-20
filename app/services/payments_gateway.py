@@ -167,7 +167,7 @@ class PayPalGateway:
         return resp.json()
 
 
-# factory functions — load from db settings
+# factory functions - load from db settings
 
 
 def get_stripe(db: Session) -> StripeGateway:

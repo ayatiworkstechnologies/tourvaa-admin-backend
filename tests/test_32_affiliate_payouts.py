@@ -1,4 +1,4 @@
-"""Module 32 — Affiliate Payouts, Conversions, Commissions"""
+"""Module 32 - Affiliate Payouts, Conversions, Commissions"""
 import pytest
 import requests
 import os

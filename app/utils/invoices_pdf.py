@@ -20,7 +20,7 @@ try:
     REPORTLAB_AVAILABLE = True
 except ImportError:
     REPORTLAB_AVAILABLE = False
-    logger.warning("reportlab not installed — invoice PDFs will be plain text. Run: pip install reportlab")
+    logger.warning("reportlab not installed - invoice PDFs will be plain text. Run: pip install reportlab")
 
 
 def _plain_text_pdf(path: Path, data: dict) -> None:

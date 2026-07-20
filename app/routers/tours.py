@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.services.cms import list_categories
 from app.auth.permissions import require_any_permission
+from app.services.supplier_scope import is_supplier_user
 from app.schemas.tours import (
     AccommodationExtraPayload,
     CalendarPayload,
@@ -117,7 +118,8 @@ def tour_categories(
 
 # overview
 @router.get("/{tour_id}/overview")
-def tour_overview(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_overview(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": get_overview(db, tour_id)}
 
 
@@ -135,7 +137,8 @@ def update_tour_overview(tour_id: int, data: TourOverviewPayload, request: Reque
 
 # itinerary
 @router.get("/{tour_id}/itineraries")
-def tour_itineraries(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_itineraries(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_itineraries(db, tour_id)}
 
 
@@ -146,7 +149,8 @@ def add_itinerary(tour_id: int, data: ItineraryPayload, request: Request, db: Se
 
 
 @router.get("/{tour_id}/itineraries/{itinerary_id}")
-def get_itinerary(tour_id: int, itinerary_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def get_itinerary(tour_id: int, itinerary_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     from app.services.tours import _child_or_404, _ser_itinerary, TourItinerary
     return {"status": "success", "data": _ser_itinerary(_child_or_404(db, TourItinerary, itinerary_id, tour_id, "Itinerary"))}
 
@@ -173,7 +177,8 @@ def reorder_tour_itineraries(tour_id: int, data: ReorderPayload, request: Reques
 
 # inclusions
 @router.get("/{tour_id}/inclusions")
-def tour_inclusions(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_inclusions(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_inclusions(db, tour_id)}
 
 
@@ -198,7 +203,8 @@ def remove_inclusion(tour_id: int, inclusion_id: int, request: Request, db: Sess
 
 # exclusions
 @router.get("/{tour_id}/exclusions")
-def tour_exclusions(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_exclusions(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_exclusions(db, tour_id)}
 
 
@@ -223,7 +229,8 @@ def remove_exclusion(tour_id: int, exclusion_id: int, request: Request, db: Sess
 
 # highlights
 @router.get("/{tour_id}/highlights")
-def tour_highlights(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_highlights(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_highlights(db, tour_id)}
 
 
@@ -248,7 +255,8 @@ def remove_highlight(tour_id: int, highlight_id: int, request: Request, db: Sess
 
 # similar tours
 @router.get("/{tour_id}/similar-tours")
-def tour_similar(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_similar(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_similar_tours(db, tour_id)}
 
 
@@ -267,7 +275,8 @@ def remove_similar(tour_id: int, similar_id: int, request: Request, db: Session 
 
 # extensions
 @router.get("/{tour_id}/extensions")
-def tour_extensions(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_extensions(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_extensions(db, tour_id)}
 
 
@@ -292,7 +301,8 @@ def remove_extension(tour_id: int, extension_id: int, request: Request, db: Sess
 
 # gallery
 @router.get("/{tour_id}/gallery")
-def tour_gallery(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_gallery(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_gallery(db, tour_id)}
 
 
@@ -317,7 +327,8 @@ def remove_gallery_image(tour_id: int, image_id: int, request: Request, db: Sess
 
 # pricing
 @router.get("/{tour_id}/pricing")
-def tour_pricing(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_pricing(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_pricing(db, tour_id)}
 
 
@@ -342,7 +353,8 @@ def remove_pricing(tour_id: int, pricing_id: int, request: Request, db: Session 
 
 # optional activities
 @router.get("/{tour_id}/optional-activities")
-def tour_activities(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_activities(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_activities(db, tour_id)}
 
 
@@ -367,7 +379,8 @@ def remove_activity(tour_id: int, activity_id: int, request: Request, db: Sessio
 
 # accommodation extras
 @router.get("/{tour_id}/accommodation-extras")
-def tour_accommodations(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_accommodations(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_accommodations(db, tour_id)}
 
 
@@ -392,7 +405,8 @@ def remove_accommodation(tour_id: int, extra_id: int, request: Request, db: Sess
 
 # calendar
 @router.get("/{tour_id}/calendar")
-def tour_calendar(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_calendar(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_calendar(db, tour_id)}
 
 
@@ -417,7 +431,8 @@ def remove_calendar(tour_id: int, calendar_id: int, request: Request, db: Sessio
 
 # unavailable dates
 @router.get("/{tour_id}/unavailable-dates")
-def tour_unavailable(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_unavailable(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_unavailable_dates(db, tour_id)}
 
 
@@ -436,7 +451,8 @@ def remove_unavailable(tour_id: int, date_id: int, request: Request, db: Session
 
 # discounts
 @router.get("/{tour_id}/discounts")
-def tour_discounts(tour_id: int, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_discounts(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": list_discounts(db, tour_id)}
 
 
@@ -461,15 +477,21 @@ def remove_discount(tour_id: int, discount_id: int, request: Request, db: Sessio
 
 # price calculation
 @router.post("/{tour_id}/calculate-price")
-def tour_calculate_price(tour_id: int, req: PriceCalculationRequest, db: Session = Depends(get_db), _: User = Depends(require_any_permission(VIEW))):
+def tour_calculate_price(tour_id: int, req: PriceCalculationRequest, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": calculate_price(db, tour_id, req)}
 
 
 # global discounts (any scope: tour / category / country / all_tours)
-# Standalone from the tour-scoped /{tour_id}/discounts endpoints above — this
+# Standalone from the tour-scoped /{tour_id}/discounts endpoints above - this
 # powers a top-level Discounts admin page that can manage discounts of any scope.
 
 discounts_router = APIRouter(prefix="/discounts", tags=["Discounts"])
+
+
+def _reject_supplier_global_discount_access(current_user: User) -> None:
+    if is_supplier_user(current_user):
+        raise HTTPException(status_code=403, detail="Global discounts are restricted to administrators")
 
 
 @discounts_router.get("")
@@ -478,8 +500,9 @@ def all_discounts(
     scope: str = Query(default=""),
     search: str = Query(default=""),
     db: Session = Depends(get_db),
-    _: User = Depends(require_any_permission(VIEW)),
+    current_user: User = Depends(require_any_permission(VIEW)),
 ):
+    _reject_supplier_global_discount_access(current_user)
     return {"status": "success", "data": list_all_discounts(db, scope, search)}
 
 
@@ -491,6 +514,7 @@ def add_global_discount(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission(EDIT)),
 ):
+    _reject_supplier_global_discount_access(current_user)
     return {"status": "success", "data": create_global_discount(db, data, current_user, request)}
 
 
@@ -502,6 +526,7 @@ def edit_global_discount(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission(EDIT)),
 ):
+    _reject_supplier_global_discount_access(current_user)
     return {"status": "success", "data": update_global_discount(db, discount_id, data, current_user, request)}
 
 
@@ -512,5 +537,6 @@ def remove_global_discount(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission(EDIT)),
 ):
+    _reject_supplier_global_discount_access(current_user)
     delete_global_discount(db, discount_id, current_user, request)
     return {"status": "success", "message": "Discount deleted"}

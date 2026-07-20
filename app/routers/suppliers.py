@@ -13,6 +13,7 @@ from app.schemas.suppliers import (
     DocumentReviewRequest,
     SupplierCreate,
     SupplierMarkupRequest,
+    SupplierSelfUpdate,
     SupplierUpdate,
     VehicleCreate,
     VehicleReviewRequest,
@@ -104,12 +105,13 @@ def my_supplier(db: Session = Depends(get_db), current_user: User = Depends(get_
 
 @router.patch("/me")
 @router.put("/me")
-def edit_my_supplier(data: SupplierUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def edit_my_supplier(data: SupplierSelfUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.suppliers import Supplier
     supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier profile not found")
-    return {"status": "success", "message": "Supplier updated successfully", "data": update_supplier(db, supplier.id, data, current_user, request)}
+    safe_update = SupplierUpdate(**data.model_dump(exclude_unset=True))
+    return {"status": "success", "message": "Supplier updated successfully", "data": update_supplier(db, supplier.id, safe_update, current_user, request)}
 
 
 @router.post("/me/commission-request")
@@ -340,7 +342,14 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db), current_use
 @router.patch("/{supplier_id}")
 def edit_supplier(supplier_id: int, data: SupplierUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     supplier = get_supplier(db, supplier_id)
-    if supplier.user_id != current_user.id:
+    if supplier.user_id == current_user.id:
+        # The legacy ID-based self route must enforce the same safe field set as /me.
+        forbidden_fields = data.model_fields_set - set(SupplierSelfUpdate.model_fields)
+        if forbidden_fields:
+            raise HTTPException(status_code=403, detail=f"Supplier self-service cannot update: {', '.join(sorted(forbidden_fields))}")
+        safe_self_update = SupplierSelfUpdate(**data.model_dump(exclude_unset=True))
+        data = SupplierUpdate(**safe_self_update.model_dump(exclude_unset=True))
+    else:
         role_ids = get_user_role_ids(current_user)
         allowed_slugs = expand_permission_slugs(("suppliers.edit", "update-suppliers"))
         allowed = (

@@ -1,7 +1,7 @@
 """
 API endpoints to seed countries, states, and cities from GitHub dataset.
-POST /api/admin/seed/geo        — trigger import (background task)
-GET  /api/admin/seed/geo/status — poll job progress
+POST /api/admin/seed/geo        - trigger import (background task)
+GET  /api/admin/seed/geo/status - poll job progress
 """
 
 import logging
@@ -67,7 +67,7 @@ def _api_get(url: str) -> list:
 def _upsert_country(conn, name: str, iso2: str, phone: str, currency: str) -> int | None:
     if not name or not iso2:
         return None
-    # Single atomic statement — no SELECT+UPDATE race, no lock contention
+    # Single atomic statement - no SELECT+UPDATE race, no lock contention
     result = conn.execute(
         text(
             "INSERT INTO countries (country_name, country_code, phone_code, currency_code, status) "
@@ -85,7 +85,7 @@ def _upsert_country(conn, name: str, iso2: str, phone: str, currency: str) -> in
 
 
 def _upsert_state(conn, country_id: int, name: str, code: str) -> int | None:
-    # No unique constraint on states — SELECT first (read-only, no lock), INSERT only if absent.
+    # No unique constraint on states - SELECT first (read-only, no lock), INSERT only if absent.
     # Deliberately skip UPDATE on existing rows to avoid write-lock contention.
     if not name:
         return None
@@ -109,7 +109,7 @@ def _upsert_state(conn, country_id: int, name: str, code: str) -> int | None:
 
 
 def _upsert_city(conn, country_id: int, state_id: int, name: str) -> None:
-    # No unique constraint on cities — SELECT first, INSERT only if absent.
+    # No unique constraint on cities - SELECT first, INSERT only if absent.
     if not name:
         return
     exists = conn.execute(
@@ -242,9 +242,9 @@ def _run_import(country_codes: list[str], include_cities: bool) -> None:
 def _run_phased(country_codes: list[str]) -> None:
     """
     Three-pass import: downloads GitHub JSON ONCE, then:
-      Phase 1 — upsert all countries
-      Phase 2 — upsert all states
-      Phase 3 — upsert all cities
+      Phase 1 - upsert all countries
+      Phase 2 - upsert all states
+      Phase 3 - upsert all cities
     Exposes _job["phase"] (1/2/3) so callers can render per-phase progress.
     """
     codes = {c.upper() for c in country_codes}
@@ -264,7 +264,7 @@ def _run_phased(country_codes: list[str]) -> None:
             resp.raise_for_status()
             dataset: list[dict] = resp.json()
         except Exception as gh_err:
-            logger.warning("GitHub failed (%s) — falling back to _run_import", gh_err)
+            logger.warning("GitHub failed (%s) - falling back to _run_import", gh_err)
             _run_import(country_codes, include_cities=True)
             return
 

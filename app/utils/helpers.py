@@ -14,7 +14,7 @@ def slugify(text: str) -> str:
     return text
 
 
-def format_currency(amount: float, currency: str = "AED", decimals: int = 2) -> str:
+def format_currency(amount: float, currency: str = "USD", decimals: int = 2) -> str:
     return f"{currency} {amount:,.{decimals}f}"
 
 

@@ -1,4 +1,4 @@
-"""Module 18 — Tour Discounts"""
+"""Module 18 - Tour Discounts"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique

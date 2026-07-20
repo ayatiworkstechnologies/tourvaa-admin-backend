@@ -1,6 +1,6 @@
 """
 Centralized helper for all domain event notifications.
-Import and call these functions from service layers — keeps notification
+Import and call these functions from service layers - keeps notification
 logic out of the business logic files.
 """
 

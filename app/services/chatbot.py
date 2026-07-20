@@ -94,7 +94,7 @@ def _tour_action(db: Session, user_message: str) -> tuple[str, str | None, dict 
             "title": t.title,
             "duration_days": t.number_of_days,
             "price": price,
-            "currency": t.currency or "AED",
+            "currency": t.currency or "USD",
             "cover_image": t.banner_image or None,
             "slug": t.slug or str(t.id),
         })
@@ -138,13 +138,13 @@ def _parse_booking_command(db: Session, user_message: str) -> tuple[str, str | N
         tour = db.query(Tour).filter(Tour.id == tour_id).first()
         if not tour:
             return "Sorry, that tour could not be found.", None, None
-        reply = f"Great choice — **{tour.title}**! What date are you planning to travel? (e.g. 15 July 2025)"
+        reply = f"Great choice - **{tour.title}**! What date are you planning to travel? (e.g. 15 July 2025)"
         return reply, "select_date", {
             "tour_id": tour.id,
             "tour_title": tour.title,
             "duration_days": tour.number_of_days,
             "price": float(tour.price_start_per_person) if tour.price_start_per_person else None,
-            "currency": tour.currency or "AED",
+            "currency": tour.currency or "USD",
         }
 
     if msg.startswith("__select_date__:"):
@@ -163,7 +163,7 @@ def _parse_booking_command(db: Session, user_message: str) -> tuple[str, str | N
             "tour_title": tour_title,
             "date": date_str,
             "price": float(tour.price_start_per_person) if tour and tour.price_start_per_person else None,
-            "currency": (tour.currency if tour else None) or "AED",
+            "currency": (tour.currency if tour else None) or "USD",
         }
 
     if msg.startswith("__select_travellers__:"):
@@ -178,7 +178,7 @@ def _parse_booking_command(db: Session, user_message: str) -> tuple[str, str | N
         tour = db.query(Tour).filter(Tour.id == tour_id).first()
         tour_title = tour.title if tour else "the tour"
         price_per = float(tour.price_start_per_person) if tour and tour.price_start_per_person else None
-        currency = (tour.currency if tour else None) or "AED"
+        currency = (tour.currency if tour else None) or "USD"
         total = price_per * travellers if price_per else None
         total_str = f"{currency} {total:,.0f}" if total else "price on request"
         reply = (

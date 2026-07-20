@@ -106,7 +106,7 @@ Seeded automatically on first startup:
 
 ## Project Structure
 
-Layer-based architecture — code is organized by technical concern rather than by feature module:
+Layer-based architecture - code is organized by technical concern rather than by feature module:
 
 ```text
 app/
@@ -122,9 +122,9 @@ app/
 │   └── error_handlers.py      Global exception handlers
 ├── api/
 │   └── router.py              Aggregates and mounts all routers under /api
-├── routers/                   One file per resource — HTTP layer only (request/response, no business logic)
+├── routers/                   One file per resource - HTTP layer only (request/response, no business logic)
 ├── schemas/                   Pydantic request/response models, one file per resource
-├── services/                  Business logic, one file per resource — called by routers
+├── services/                  Business logic, one file per resource - called by routers
 ├── models/                    SQLAlchemy ORM models, one file per resource
 └── utils/                     Shared helpers: money, pagination, response envelope,
                                 rate limiting, mailer, ImageKit client, invoice PDF
@@ -141,7 +141,7 @@ Resources currently implemented: `auth`, `users`, `roles`, `permissions`, `dashb
 
 All endpoints are mounted under `/api`. Full interactive reference: `/docs` (Swagger) or `/redoc`.
 
-### Auth — `/api/auth`
+### Auth - `/api/auth`
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -168,7 +168,7 @@ All endpoints are mounted under `/api`. Full interactive reference: `/docs` (Swa
 | `/api/agents/me` | Profile |
 | `/api/agent/*` | Messages (bookings/customers/invoices reuse the shared admin endpoints, row-scoped by role server-side) |
 
-### Bookings — `/api/bookings`
+### Bookings - `/api/bookings`
 
 Calculate-price, assign-supplier, cancel-request, calendar-event get/download, calendar-sync, status-history, payment-link, communications + replies, export, status updates.
 
@@ -182,15 +182,15 @@ Calculate-price, assign-supplier, cancel-request, calendar-event get/download, c
 
 A paid booking with a pending supplier decision remains `pending_supplier_acceptance`; payment synchronization cannot bypass supplier approval.
 
-### Payments — `/api/payments`
+### Payments - `/api/payments`
 
 Authorize, capture, void, refund, status updates, gateway test/simulate, gateway status, per-customer listing.
 
-### Invoices — `/api/invoices`
+### Invoices - `/api/invoices`
 
 Generate, generate-pdf, email, download (GST invoice PDF with tour name, traveller names, and payment method), detail/list.
 
-### Dashboard — `/api/dashboard`
+### Dashboard - `/api/dashboard`
 
 | Method | Path | Description | Auth |
 | --- | --- | --- | --- |
@@ -204,7 +204,7 @@ Generate, generate-pdf, email, download (GST invoice PDF with tour name, travell
 | GET | `/payments` | Payment summary | Admin+ |
 | GET | `/reports` | Reports summary | Admin+ |
 
-### CMS — `/api`
+### CMS - `/api`
 
 Countries, cities, tour categories, tour subcategories, tours (CRUD + pricing + calendar + discounts + versions), CMS geo reference data, popular tours, website CMS content blocks.
 
@@ -250,7 +250,7 @@ Seven built-in roles:
 | `customer` | Own bookings and profile only |
 | `affiliate` | Own referrals and commissions only |
 
-Permission format: `{module}.{action}` (e.g. `dashboard.view`, `bookings.view`) or legacy `view-{module}` — both supported via `expand_permission_slugs()`.
+Permission format: `{module}.{action}` (e.g. `dashboard.view`, `bookings.view`) or legacy `view-{module}` - both supported via `expand_permission_slugs()`.
 
 ---
 
@@ -268,7 +268,7 @@ pip install -r requirements-dev.txt
 # Start the server first (separate terminal)
 uvicorn app.main:app --reload
 
-# Run all tests (read-only — safe against a live DB)
+# Run all tests (read-only - safe against a live DB)
 venv\Scripts\python -m pytest tests/ -v
 
 # Include destructive/write tests (creates, updates, deletes real records)

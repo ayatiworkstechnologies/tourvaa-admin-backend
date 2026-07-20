@@ -1,5 +1,5 @@
 """
-Module — Role-Based Dashboard Tests
+Module - Role-Based Dashboard Tests
 
 Tests verify:
 1. /api/dashboard/me returns required fields
@@ -29,7 +29,7 @@ def _get_data(resp: requests.Response) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 1. GET /dashboard/me — Super Admin token
+# 1. GET /dashboard/me - Super Admin token
 # ---------------------------------------------------------------------------
 
 def test_dashboard_me_returns_200(headers):

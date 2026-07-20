@@ -135,7 +135,7 @@ def user_created_email(name: str, email: str, set_password_url: str):
         (
             "An administrator created a Tourvaa account for you.<br /><br />"
             f"<strong>Email:</strong> {esc(email)}<br /><br />"
-            "For security, no password was set for you — use the button below to create your own password before signing in. This link expires in 30 minutes."
+            "For security, no password was set for you - use the button below to create your own password before signing in. This link expires in 30 minutes."
         ),
         "Set your password",
         set_password_url,
@@ -176,7 +176,7 @@ def _booking_summary_rows(booking_code: str, tour_name: str, tour_date: str, adu
     rows = [
         ("Booking ID", esc(booking_code)),
         ("Tour", esc(tour_name)),
-        ("Date", esc(tour_date) or "—"),
+        ("Date", esc(tour_date) or "-"),
         ("Adults", esc(adults)),
         ("Total", f"{esc(currency)} {esc(total)}"),
     ]
@@ -273,7 +273,7 @@ def supplier_booking_assigned_email(supplier_name: str, booking_code: str, tour_
                 for label, value in [
                     ("Booking ID", esc(booking_code)),
                     ("Tour", esc(tour_name)),
-                    ("Date", esc(tour_date) or "—"),
+                    ("Date", esc(tour_date) or "-"),
                     ("Customer", esc(customer_name)),
                     ("Adults", esc(adults)),
                     ("Total", f"{esc(currency)} {esc(total)}"),

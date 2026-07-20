@@ -1,12 +1,12 @@
-"""Module 37 — Agent Self-Service Portal (/api/agents/me, /api/agent/*)
+"""Module 37 - Agent Self-Service Portal (/api/agents/me, /api/agent/*)
 
 Note: unlike customers/suppliers, agents have no dedicated /api/agent/bookings,
-/customers, /invoices, or /tours endpoints — the frontend's agent portal pages
+/customers, /invoices, or /tours endpoints - the frontend's agent portal pages
 reuse the shared admin endpoints (e.g. /api/bookings), which apply row-level
 scoping server-side based on the caller's role (see get_bookings() in
 app/services/bookings.py: role == "agent" filters to Booking.agent.user_id).
 Whether that succeeds depends on the agent-reseller role having the relevant
-view permission seeded — both outcomes (200 scoped, or 403 no permission) are
+view permission seeded - both outcomes (200 scoped, or 403 no permission) are
 treated as valid here; only 5xx is a real failure.
 """
 import pytest

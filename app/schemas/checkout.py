@@ -15,6 +15,6 @@ class CheckoutUpdate(BaseModel):
 
 
 class CheckoutConfirm(BaseModel):
-    """Final confirmation — creates the actual booking from the session."""
+    """Final confirmation - creates the actual booking from the session."""
     notes: Optional[str] = None
     promo_code: Optional[str] = None

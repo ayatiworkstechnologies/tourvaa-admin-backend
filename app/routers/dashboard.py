@@ -363,6 +363,7 @@ def dashboard_summary(
     country_id: int | None = Query(default=None),
     supplier_id: int | None = Query(default=None),
     agent_id: int | None = Query(default=None),
+    booking_status: str = Query(default=""),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("dashboard.view", "view-dashboard")),
 ):
@@ -406,10 +407,38 @@ def dashboard_summary(
             return {"status": "success", "data": {**filters, **_empty_agent_summary()}}
 
         aid = agent.id
-        total_bookings = _safe_count(db, Booking, Booking.agent_id == aid)
-        upcoming = _safe_count(db, Booking, Booking.agent_id == aid, Booking.booking_status == "upcoming")
-        completed = _safe_count(db, Booking, Booking.agent_id == aid, Booking.booking_status == "completed")
-        cancelled = _safe_count(db, Booking, Booking.agent_id == aid, Booking.booking_status == "cancelled")
+        booking_query = db.query(Booking).filter(Booking.agent_id == aid)
+        if start_date:
+            booking_query = booking_query.filter(sqlfunc.date(Booking.created_at) >= start_date)
+        if end_date:
+            booking_query = booking_query.filter(sqlfunc.date(Booking.created_at) <= end_date)
+        if country_id:
+            booking_query = booking_query.filter(Booking.country_id == country_id)
+        if booking_status:
+            booking_query = booking_query.filter(Booking.booking_status == booking_status.strip().lower())
+
+        total_bookings = booking_query.count()
+        active_customers = booking_query.with_entities(Booking.customer_id).filter(
+            Booking.customer_id.is_not(None),
+            Booking.booking_status.notin_(["cancelled", "declined", "refunded"]),
+        ).distinct().count()
+        upcoming = booking_query.filter(Booking.booking_status.in_([
+            "pending_payment", "payment_authorized", "pending_supplier_acceptance",
+            "confirmed", "upcoming", "ongoing",
+        ])).count()
+        completed = booking_query.filter(Booking.booking_status == "completed").count()
+        cancelled = booking_query.filter(Booking.booking_status.in_(["cancelled", "declined", "refunded"])).count()
+        eligible_query = booking_query.filter(Booking.booking_status.notin_(["cancelled", "declined", "refunded"]))
+        paid_revenue = float(eligible_query.with_entities(
+            sqlfunc.coalesce(sqlfunc.sum(Booking.amount_paid), 0)
+        ).scalar() or 0)
+        gross_value = float(eligible_query.with_entities(
+            sqlfunc.coalesce(sqlfunc.sum(Booking.final_amount), 0)
+        ).scalar() or 0)
+        if (agent.discount_type or "").lower() == "percentage":
+            commission_earned = gross_value * float(agent.discount_value or 0) / 100
+        else:
+            commission_earned = eligible_query.count() * float(agent.discount_value or 0)
 
         return {
             "status": "success",
@@ -417,9 +446,13 @@ def dashboard_summary(
                 **filters,
                 "dashboard_type": "agent",
                 "total_bookings": total_bookings,
+                "active_customers": active_customers,
                 "upcoming_bookings": upcoming,
                 "completed_bookings": completed,
                 "cancelled_bookings": cancelled,
+                "monthly_revenue": paid_revenue,
+                "commission_earned": commission_earned,
+                "gross_booking_value": gross_value,
                 "pending_payments": 0.0,
                 "discount_type": agent.discount_type,
                 "discount_value": float(agent.discount_value or 0),
@@ -565,9 +598,13 @@ def _empty_agent_summary():
     return {
         "dashboard_type": "agent",
         "total_bookings": 0,
+        "active_customers": 0,
         "upcoming_bookings": 0,
         "completed_bookings": 0,
         "cancelled_bookings": 0,
+        "monthly_revenue": 0.0,
+        "commission_earned": 0.0,
+        "gross_booking_value": 0.0,
         "pending_payments": 0.0,
         "discount_type": None,
         "discount_value": 0.0,
@@ -922,9 +959,9 @@ def dashboard_alerts(
 
         if customer:
             active_customer_statuses = ["pending_payment", "payment_authorized", "pending_supplier_acceptance", "confirmed", "upcoming", "ongoing"]
-            pending_amount = _safe_sum(db, Booking.amount_pending, Booking.customer_id == customer.id)
-            if pending_amount > 0:
-                alerts.append({"type": "warning", "message": f"You have AED {pending_amount:,.0f} in pending payments", "action": "payments"})
+            pending_payment_count = _safe_count(db, Booking, Booking.customer_id == customer.id, Booking.amount_pending > 0)
+            if pending_payment_count > 0:
+                alerts.append({"type": "warning", "message": f"You have {pending_payment_count} booking(s) with a pending balance", "action": "payments"})
 
             upcoming = _safe_count(db, Booking, Booking.customer_id == customer.id, Booking.booking_status.in_(active_customer_statuses))
             if upcoming > 0:

@@ -1,5 +1,5 @@
 """
-Lightweight geo reference endpoints — no auth, no pagination.
+Lightweight geo reference endpoints - no auth, no pagination.
 Used by dropdowns and selects across the entire frontend.
 
 GET /api/geo/countries          → all active countries

@@ -5,9 +5,9 @@ Primary source : github.com/dr5hn/countries-states-cities-database (one JSON, no
 Fallback source: countrystatecity.in API  (key from COUNTRY_STATE_CITY_API_KEY in .env)
 
 Three sequential phases in a single trigger:
-  Phase 1 — Countries   (upsert all country records)
-  Phase 2 — States      (upsert all state/province records)
-  Phase 3 — Cities      (upsert all city records)
+  Phase 1 - Countries   (upsert all country records)
+  Phase 2 - States      (upsert all state/province records)
+  Phase 3 - Cities      (upsert all city records)
 
 Default countries (Tourvaa launch markets):
   US  United States    CA  Canada          IN  India
@@ -88,7 +88,7 @@ def main() -> None:
 
     print()
     print(LINE)
-    print("  Tourvaa — Geo Data Seed  (Countries → States → Cities)")
+    print("  Tourvaa - Geo Data Seed  (Countries → States → Cities)")
     print(LINE)
     print(f"  Scope  : {scope}")
     print(f"  Source : GitHub (dr5hn/countries-states-cities-database)")
@@ -121,7 +121,7 @@ def main() -> None:
                 prev_counts = phase_done_counts.get(displayed_phase, (0, 0, 0))
                 print(f"\r    [{_bar(prev_counts[1], prev_counts[1])}] 100%  {'done':<36}", flush=True)
 
-            print(f"\n  Phase {phase}/3 — {p_name}")
+            print(f"\n  Phase {phase}/3 - {p_name}")
             print(f"  {THIN}")
             displayed_phase = phase
 
@@ -149,9 +149,9 @@ def main() -> None:
 
     print("  All phases complete.")
     print(f"  {THIN}")
-    print(f"  Phase 1 — Countries : {j['countries_added']:>6} added")
-    print(f"  Phase 2 — States    : {j['states_added']:>6} added")
-    print(f"  Phase 3 — Cities    : {j['cities_added']:>6} added")
+    print(f"  Phase 1 - Countries : {j['countries_added']:>6} added")
+    print(f"  Phase 2 - States    : {j['states_added']:>6} added")
+    print(f"  Phase 3 - Cities    : {j['cities_added']:>6} added")
     print(LINE)
     print()
 

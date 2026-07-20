@@ -1,4 +1,4 @@
-"""Module 04 — Dashboard"""
+"""Module 04 - Dashboard"""
 import pytest
 import requests
 from tests.conftest import BASE_URL

@@ -136,7 +136,7 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
     if not s.tour_id:
         raise HTTPException(status_code=400, detail="No tour selected in this checkout session")
     if not s.customer_id:
-        raise HTTPException(status_code=400, detail="Customer identity not resolved — please log in first")
+        raise HTTPException(status_code=400, detail="Customer identity not resolved - please log in first")
 
     from app.services.bookings import create_booking
     from app.schemas.bookings import BookingAddonPayload, BookingCreate, BookingTravellerPayload

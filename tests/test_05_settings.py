@@ -1,4 +1,4 @@
-"""Module 05 — Settings"""
+"""Module 05 - Settings"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly

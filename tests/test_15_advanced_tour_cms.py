@@ -1,4 +1,4 @@
-"""Module 15 — Advanced Tour CMS (Overview / Itinerary / Inclusions / Exclusions / Highlights / Similar / Extensions / Gallery)"""
+"""Module 15 - Advanced Tour CMS (Overview / Itinerary / Inclusions / Exclusions / Highlights / Similar / Extensions / Gallery)"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique

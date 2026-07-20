@@ -1,4 +1,4 @@
-"""Module 02 — Authentication"""
+"""Module 02 - Authentication"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD, skip_if_readonly

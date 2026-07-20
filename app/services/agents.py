@@ -1,11 +1,26 @@
+from datetime import datetime
+
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.services.audit import log_audit
-from app.models.agents import Agent, AgentBusinessInfo, AgentContact, AgentInvoicing
-from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentUpdate
+from app.models.agents import Agent, AgentBusinessInfo, AgentContact, AgentDocument, AgentInvoicing
+from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentUpdate
 from app.utils.operations import PartialApprovalRequest, RejectRequest, approve_item, code_for, filter_review_query, get_or_404, partial_approve_item, reject_item, relationship_list, serialize_common_review, simple_paginate
 from app.models.users import User
+
+
+AGENT_DOCUMENT_TYPES = {
+    "company_registration": {"label": "Business Registration Certificate", "required": True},
+    "tax_certificate": {"label": "Tax Registration (GST / VAT / TIN)", "required": True},
+    "identity_proof": {"label": "Owner / Authorized Signatory ID", "required": True},
+    "bank_details": {"label": "Bank Proof / Cancelled Cheque", "required": True},
+    "travel_license": {"label": "Travel License / IATA Accreditation", "required": False},
+    "address_proof": {"label": "Business Address Proof", "required": False},
+}
+REQUIRED_AGENT_DOCUMENT_TYPES = {
+    key for key, metadata in AGENT_DOCUMENT_TYPES.items() if metadata["required"]
+}
 
 
 def _contact(item):
@@ -143,7 +158,23 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
 
 
 def approve_agent(db: Session, agent_id: int, actor: User, request: Request | None = None):
-    return approve_item(db, get_agent(db, agent_id), actor, "agent", serialize_agent, request)
+    agent = get_agent(db, agent_id)
+    # The formal verification path is strict. Keep the legacy direct-admin approval
+    # path compatible for records created before document onboarding was introduced.
+    if agent.approval_status == "admin_review_pending":
+        approved_types = {
+            document.document_type
+            for document in agent.documents
+            if document.status == "approved"
+        }
+        missing = sorted(REQUIRED_AGENT_DOCUMENT_TYPES - approved_types)
+        if missing:
+            labels = [AGENT_DOCUMENT_TYPES[item]["label"] for item in missing]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Approve all required documents first: {', '.join(labels)}",
+            )
+    return approve_item(db, agent, actor, "agent", serialize_agent, request)
 
 
 def reject_agent(db: Session, agent_id: int, data: RejectRequest, actor: User, request: Request | None = None):
@@ -169,6 +200,20 @@ def submit_agent_verification(db: Session, user: User, request: Request | None =
     agent = db.query(Agent).filter(Agent.user_id == user.id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent profile not found")
+    if agent.approval_status in {"approved", "approved_live"}:
+        raise HTTPException(status_code=400, detail="Agent profile is already approved")
+    ready_types = {
+        document.document_type
+        for document in agent.documents
+        if document.status != "rejected"
+    }
+    missing = sorted(REQUIRED_AGENT_DOCUMENT_TYPES - ready_types)
+    if missing:
+        labels = [AGENT_DOCUMENT_TYPES[item]["label"] for item in missing]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upload all required documents before submitting: {', '.join(labels)}",
+        )
     old = serialize_agent(agent)
     agent.approval_status = "admin_review_pending"
     agent.status = "inactive"
@@ -183,3 +228,49 @@ def submit_agent_verification(db: Session, user: User, request: Request | None =
     db.commit()
     db.refresh(agent)
     return serialize_agent(agent)
+
+
+def review_agent_document(
+    db: Session,
+    agent_id: int,
+    document_id: int,
+    data: AgentDocumentReviewRequest,
+    actor: User,
+    request: Request | None = None,
+):
+    document = (
+        db.query(AgentDocument)
+        .filter(AgentDocument.id == document_id, AgentDocument.agent_id == agent_id)
+        .first()
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if data.status == "rejected" and not data.rejection_reason:
+        raise HTTPException(status_code=400, detail="Rejection reason is required")
+
+    old = _document(document)
+    document.status = data.status
+    document.rejection_reason = data.rejection_reason if data.status == "rejected" else None
+    document.reviewed_at = datetime.utcnow()
+    document.reviewed_by = actor.id
+    agent = get_agent(db, agent_id)
+    if data.status == "rejected":
+        label = AGENT_DOCUMENT_TYPES.get(document.document_type, {}).get("label", document.document_type)
+        agent.approval_status = "partial_approved"
+        agent.status = "inactive"
+        agent.pending_requirements = f"Re-upload {label}: {data.rejection_reason}"
+        if agent.user:
+            agent.user.approval_status = "partial_approved"
+    log_audit(
+        db,
+        actor=actor,
+        action=f"{data.status}_agent_document",
+        entity_type="agent_document",
+        entity_id=document.id,
+        old_values=old,
+        new_values=_document(document),
+        request=request,
+    )
+    db.commit()
+    db.refresh(document)
+    return _document(document)

@@ -1,4 +1,4 @@
-"""Module 19 — Uploads"""
+"""Module 19 - Uploads"""
 import io
 import pytest
 import requests

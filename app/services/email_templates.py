@@ -57,7 +57,7 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "booking_confirmation",
         "name": "Booking Confirmation",
-        "subject": "Booking received — {{booking_code}}",
+        "subject": "Booking received - {{booking_code}}",
         "body": (
             "Thank you for booking with Tourvaa! Your booking is received and pending confirmation.\n\n"
             "Booking ID: {{booking_code}}\n"
@@ -72,7 +72,7 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "booking_confirmed",
         "name": "Booking Confirmed",
-        "subject": "Your booking is confirmed — {{booking_code}}",
+        "subject": "Your booking is confirmed - {{booking_code}}",
         "body": (
             "Great news! Your Tourvaa booking has been confirmed by the supplier.\n\n"
             "Booking ID: {{booking_code}}\n"
@@ -86,7 +86,7 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "booking_cancelled",
         "name": "Booking Cancelled",
-        "subject": "Booking cancelled — {{booking_code}}",
+        "subject": "Booking cancelled - {{booking_code}}",
         "body": (
             "Your booking {{booking_code}} for {{tour_name}} has been cancelled.\n\n"
             "Reason: {{reason}}\n\n"
@@ -96,7 +96,7 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "booking_declined",
         "name": "Booking Declined by Supplier",
-        "subject": "Booking declined — {{booking_code}}",
+        "subject": "Booking declined - {{booking_code}}",
         "body": (
             "Unfortunately your booking {{booking_code}} for {{tour_name}} was declined by the supplier.\n\n"
             "Reason: {{reason}}\n\n"
@@ -106,7 +106,7 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "booking_status_update",
         "name": "Booking Status Update",
-        "subject": "Booking update — {{booking_code}}",
+        "subject": "Booking update - {{booking_code}}",
         "body": (
             "Your booking {{booking_code}} for {{tour_name}} status has been updated.\n\n"
             "New status: {{new_status}}\n"
@@ -117,7 +117,7 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "supplier_booking_assigned",
         "name": "Supplier Booking Assigned",
-        "subject": "New booking assigned — {{booking_code}}",
+        "subject": "New booking assigned - {{booking_code}}",
         "body": (
             "A new booking has been assigned to you on Tourvaa and is awaiting your acceptance.\n\n"
             "Booking ID: {{booking_code}}\n"
@@ -197,7 +197,7 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "payment_received",
         "name": "Payment Received",
-        "subject": "Payment received — {{booking_code}}",
+        "subject": "Payment received - {{booking_code}}",
         "body": (
             "We have received your payment for booking {{booking_code}}.\n\n"
             "Tour: {{tour_name}}\n"

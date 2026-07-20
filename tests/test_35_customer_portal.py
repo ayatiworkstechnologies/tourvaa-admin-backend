@@ -1,4 +1,4 @@
-"""Module 35 — Customer Self-Service Portal (/api/customer/*)"""
+"""Module 35 - Customer Self-Service Portal (/api/customer/*)"""
 import pytest
 import requests
 
@@ -95,7 +95,7 @@ def test_customer_change_password_success(customer_ctx):
     }, headers=headers, timeout=10)
     assert resp.status_code == 200, resp.text
 
-    # Old token is invalidated (token_version bumped) — old password no longer works.
+    # Old token is invalidated (token_version bumped) - old password no longer works.
     relogin_old = requests.post(f"{BASE_URL}/auth/login", json={
         "email": customer_ctx["email"], "password": customer_ctx["password"],
     }, timeout=10)
