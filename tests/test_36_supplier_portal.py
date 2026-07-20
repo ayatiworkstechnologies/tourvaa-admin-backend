@@ -1,4 +1,4 @@
-"""Module 36 — Supplier Self-Service Portal (/api/suppliers/me/*, /api/supplier/*)"""
+"""Module 36 - Supplier Self-Service Portal (/api/suppliers/me/*, /api/supplier/*)"""
 import pytest
 import requests
 
@@ -35,7 +35,7 @@ def supplier_ctx(headers):
     name, email, password = _register_supplier()
 
     # New suppliers register with approval_status=email_verification_pending on both
-    # the Supplier row and the linked User, is_active=False — must be approved by an
+    # the Supplier row and the linked User, is_active=False - must be approved by an
     # admin before they can log in at all.
     supplier_id = _find_supplier_id_by_name(headers, name)
     assert supplier_id, f"Newly registered supplier {name!r} not found via admin search"
@@ -149,7 +149,7 @@ def test_supplier_booking_detail_not_found(supplier_headers):
 def test_supplier_booking_actions_on_nonexistent_booking(supplier_headers):
     for action, method in [
         ("accept", "post"), ("decline", "post"), ("notify", "post"),
-        ("complete", "patch"), ("cancel", "patch"), ("postpone", "patch"),
+        ("ongoing", "patch"), ("complete", "patch"), ("cancel", "patch"), ("postpone", "patch"),
     ]:
         resp = requests.request(
             method, f"{BASE_URL}/supplier/bookings/999999999/{action}",

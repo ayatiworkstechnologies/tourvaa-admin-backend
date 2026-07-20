@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.utils.operations import ACTIVE_STATUSES, APPROVAL_STATUSES, VALUE_TYPES
 
@@ -89,6 +89,24 @@ class SupplierUpdate(BaseModel):
         if value not in ACTIVE_STATUSES:
             raise ValueError("Invalid supplier status")
         return value
+
+
+class SupplierSelfUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supplier_name: str | None = Field(default=None, max_length=150)
+    supplier_type: str | None = Field(default=None, max_length=75)
+    country_id: int | None = None
+    city_id: int | None = None
+    years_in_operation: int | None = Field(default=None, ge=0)
+    contact: SupplierContactUpdate | None = None
+    business_info: SupplierBusinessInfoUpdate | None = None
+    invoicing: SupplierInvoicingUpdate | None = None
+
+    @field_validator("supplier_name", "supplier_type")
+    @classmethod
+    def trim_self_text(cls, value: str | None):
+        return value.strip() if isinstance(value, str) else value
 
 
 class VehicleCreate(BaseModel):

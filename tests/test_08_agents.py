@@ -1,4 +1,4 @@
-"""Module 08 — Agents"""
+"""Module 08 - Agents"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique

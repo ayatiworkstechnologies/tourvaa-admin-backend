@@ -1,4 +1,4 @@
-"""Module 03 — RBAC / Roles / Permissions"""
+"""Module 03 - RBAC / Roles / Permissions"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique

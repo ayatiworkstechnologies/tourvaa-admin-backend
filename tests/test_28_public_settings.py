@@ -1,4 +1,4 @@
-"""Module 28 — Public Settings (no auth required)"""
+"""Module 28 - Public Settings (no auth required)"""
 import pytest
 import requests
 import os

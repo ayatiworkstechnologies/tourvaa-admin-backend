@@ -1,7 +1,7 @@
 """
 IP-based sliding-window rate limiter.
 
-Uses Redis when REDIS_URL is configured — safe across multiple workers.
+Uses Redis when REDIS_URL is configured - safe across multiple workers.
 Falls back to an in-process deque when Redis is unavailable or not configured.
 """
 import logging

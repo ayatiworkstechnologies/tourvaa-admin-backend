@@ -44,7 +44,7 @@ def encrypt_secret(value: str | None) -> str | None:
         return value  # already encrypted
     f = _get_fernet()
     if not f:
-        return value  # encryption unavailable — store plain (safe fallback)
+        return value  # encryption unavailable - store plain (safe fallback)
     try:
         token = f.encrypt(value.encode()).decode()
         return f"{_PREFIX}{token}"
@@ -58,7 +58,7 @@ def decrypt_secret(value: str | None) -> str | None:
     if not value:
         return value
     if not value.startswith(_PREFIX):
-        return value  # legacy plain-text — return as-is
+        return value  # legacy plain-text - return as-is
     f = _get_fernet()
     if not f:
         return value

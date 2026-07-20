@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.utils.operations import ACTIVE_STATUSES, APPROVAL_STATUSES, VALUE_TYPES
 
@@ -99,6 +99,24 @@ class AgentUpdate(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class AgentSelfUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_name: str | None = Field(default=None, max_length=150)
+    agent_type: str | None = Field(default=None, max_length=75)
+    country_id: int | None = None
+    city_id: int | None = None
+    years_in_operation: int | None = Field(default=None, ge=0)
+    contact: AgentContactUpdate | None = None
+    business_info: AgentBusinessInfoUpdate | None = None
+    invoicing: AgentInvoicingUpdate | None = None
+
+    @field_validator("agent_name", "agent_type")
+    @classmethod
+    def trim_self_text(cls, value: str | None):
+        return value.strip() if isinstance(value, str) else value
+
+
 class AgentDiscountRequest(BaseModel):
     discount_type: str = Field(max_length=20)
     discount_value: float = Field(ge=0)
@@ -110,3 +128,22 @@ class AgentDiscountRequest(BaseModel):
         if value not in VALUE_TYPES:
             raise ValueError("Invalid discount type")
         return value
+
+
+class AgentDocumentReviewRequest(BaseModel):
+    status: str = Field(max_length=20)
+    rejection_reason: str | None = Field(default=None, max_length=255)
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str):
+        value = value.strip().lower()
+        if value not in {"approved", "rejected"}:
+            raise ValueError("Status must be 'approved' or 'rejected'")
+        return value
+
+    @field_validator("rejection_reason")
+    @classmethod
+    def trim_rejection_reason(cls, value: str | None):
+        value = value.strip() if isinstance(value, str) else value
+        return value or None

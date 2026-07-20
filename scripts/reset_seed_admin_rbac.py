@@ -1,5 +1,5 @@
 """
-Tourvaa — unified DB reset + seed runner.
+Tourvaa - unified DB reset + seed runner.
 
 Run from the backend/ directory:
 
@@ -34,7 +34,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from sqlalchemy import text  # noqa: E402
 
-import app.main  # noqa: F401,E402  — loads every model into Base.metadata
+import app.main  # noqa: F401,E402  - loads every model into Base.metadata
 from app.config import settings  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.seed import seed_default_roles_and_permissions  # noqa: E402
@@ -69,7 +69,7 @@ def _ordered_tables() -> list[str]:
 def reset_database(db) -> None:
     tables = _ordered_tables()
     if not tables:
-        raise SystemExit("No SQLAlchemy tables found in metadata — aborting.")
+        raise SystemExit("No SQLAlchemy tables found in metadata - aborting.")
 
     dialect = engine.dialect.name
     _ok(f"Dialect: {dialect}  |  {len(tables)} tables")
@@ -108,7 +108,7 @@ def run_geo_seed(country_codes: list[str], include_cities: bool) -> None:
 
     scope = ", ".join(c.upper() for c in country_codes) if country_codes else "ALL 250 countries"
     _ok(f"Scope : {scope}")
-    _ok(f"Cities: {'yes' if include_cities else 'no — states only'}")
+    _ok(f"Cities: {'yes' if include_cities else 'no - states only'}")
     _print()
 
     thread = threading.Thread(
@@ -174,10 +174,10 @@ def main() -> None:
 
     _print()
     _print(LINE)
-    _print("  Tourvaa — Seed Runner")
+    _print("  Tourvaa - Seed Runner")
     _print(LINE)
     _print(f"  Database : {settings.DATABASE_URL}")
-    _print(f"  Reset    : {'YES — all data will be wiped' if args.reset else 'No'}")
+    _print(f"  Reset    : {'YES - all data will be wiped' if args.reset else 'No'}")
     _print(f"  RBAC     : Yes (always)")
     _print(f"  Geo      : {'Yes' if args.geo else 'No'}")
     if args.geo:

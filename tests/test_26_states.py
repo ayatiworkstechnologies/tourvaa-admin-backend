@@ -1,4 +1,4 @@
-"""Module 26 — States CRUD"""
+"""Module 26 - States CRUD"""
 import pytest
 import requests
 import os
@@ -161,6 +161,6 @@ def test_patch_state_status(headers):
         body = resp.json()
         state = body.get("data", body)
         status_val = state.get("status") or state.get("is_active")
-        # status toggled to inactive — accept either falsy or "inactive"
+        # status toggled to inactive - accept either falsy or "inactive"
         if status_val is not None:
             assert status_val in (False, 0, "inactive"), f"Unexpected status: {status_val}"

@@ -1,4 +1,4 @@
-"""Module 14 — Basic Tours"""
+"""Module 14 - Basic Tours"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique

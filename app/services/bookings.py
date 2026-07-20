@@ -30,6 +30,7 @@ from app.schemas.bookings import (
 from app.models.cms import City, Country, Tour
 from app.utils.money import money, money_str, utcnow
 from app.models.customers import Customer
+from app.models.agents import Agent
 from app.models.suppliers import Supplier
 from app.models.tours import TourAccommodationExtra, TourCalendar, TourDiscount, TourExtension, TourOptionalActivity, TourPricing, TourUnavailableDate
 from app.models.users import User
@@ -256,6 +257,24 @@ def _start_supplier_decision(booking: Booking, decision: str) -> bool:
     return True
 
 
+def _validate_supplier_lifecycle_transition(booking: Booking, target_status: str) -> bool:
+    """Validate supplier-owned tour execution transitions and make retries idempotent."""
+    current = (booking.booking_status or "").lower()
+    if current == target_status:
+        return False
+    if booking.supplier_acceptance_status != "accepted":
+        raise HTTPException(status_code=409, detail="The supplier must accept the booking before updating tour execution")
+    allowed_sources = {
+        "ongoing": {"confirmed", "postponed"},
+        # Keep confirmed -> completed for backward compatibility with existing clients.
+        "completed": {"confirmed", "ongoing"},
+    }
+    if target_status not in allowed_sources or current not in allowed_sources[target_status]:
+        allowed = " or ".join(sorted(allowed_sources.get(target_status, set())))
+        raise HTTPException(status_code=400, detail=f"Only {allowed} bookings can be marked as {target_status}")
+    return True
+
+
 def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consume: bool = False):
     """Look up and validate a promo code against tour_discounts. Raises 400 if the
     code doesn't exist or doesn't apply; returns 0 if no code was supplied."""
@@ -413,8 +432,6 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
         query = query.filter(or_(Booking.booking_code.ilike(pattern), Booking.tour_name.ilike(pattern), Booking.country.ilike(pattern), Booking.supplier_name.ilike(pattern)))
     if customer_id:
         query = query.filter(Booking.customer_id == customer_id)
-    if booking_status:
-        query = query.filter(Booking.booking_status == booking_status.strip().lower())
     if payment_status:
         query = query.filter(Booking.payment_status == payment_status.strip().lower())
     if supplier_acceptance_status:
@@ -431,10 +448,18 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
         query = query.filter(Booking.created_at >= start_date)
     if end_date:
         query = query.filter(Booking.created_at <= f"{end_date} 23:59:59")
+    status_counts = {
+        status: count
+        for status, count in query.enable_eagerloads(False).with_entities(Booking.booking_status, func.count(Booking.id))
+        .group_by(Booking.booking_status)
+        .all()
+    }
+    if booking_status:
+        query = query.filter(Booking.booking_status == booking_status.strip().lower())
     query = query.order_by(Booking.id.asc() if sort_by == "oldest" else Booking.id.desc())
     total = query.count()
     items = [serialize_booking(b) for b in query.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit)), "status_counts": status_counts}
 
 
 def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -446,8 +471,10 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
 
 
 def _validate_customer_travellers(data: BookingCreate, adults: int, children: int) -> None:
-    if data.booking_source != "customer" or not data.travellers:
+    if data.booking_source not in {"customer", "agent"}:
         return
+    if not data.travellers:
+        raise HTTPException(status_code=400, detail="Traveller details are required for customer and agent bookings")
 
     adult_rows = [row for row in data.travellers if row.traveller_type == "adult"]
     child_rows = [row for row in data.travellers if row.traveller_type == "child"]
@@ -476,6 +503,16 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         raise HTTPException(status_code=400, detail="customer_id is required for customer bookings")
     if data.booking_source == "customer" and actor and _user_role(actor) == "customer" and customer.user_id != actor.id:
         raise HTTPException(status_code=403, detail="Customer booking access denied")
+    if actor and _user_role(actor) == "agent":
+        from app.services.agent_scope import ensure_agent_customer_access
+        ensure_agent_customer_access(db, data.customer_id, actor)
+        agent = db.query(Agent).filter(Agent.user_id == actor.id).first()
+        if not agent:
+            raise HTTPException(status_code=403, detail="Agent profile not found")
+        # The authenticated identity is authoritative. Never trust a portal
+        # caller to choose another agent or disguise the booking source.
+        data.agent_id = agent.id
+        data.booking_source = "agent"
     if data.booking_source == "agent" and not data.agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required for agent bookings")
     tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions = _price_booking(db, data, lock_calendar=True, consume_discount=True)
@@ -552,6 +589,11 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
 def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
+    if _user_role(actor) == "agent":
+        agent_editable = {"notes", "customer_notes"}
+        restricted = set(data.model_fields_set) - agent_editable
+        if restricted:
+            raise HTTPException(status_code=403, detail="Agents may only update booking notes")
     old_values = serialize_booking(booking)
     for field in ["tour_name", "tour_date", "country", "supplier_name", "notes", "customer_notes", "admin_notes"]:
         value = getattr(data, field)
@@ -573,6 +615,8 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
 def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
+    if _user_role(actor) == "agent":
+        raise HTTPException(status_code=403, detail="Agents cannot directly change booking status")
     old_values = serialize_booking(booking)
     _set_status(db, booking, data.booking_status, actor, _user_role(actor), data.reason, data.metadata)
     log_audit(db, actor=actor, action="update_booking_status", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
@@ -777,21 +821,58 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
     return serialize_booking(booking, detail=True)
 
 
+def supplier_start_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
+    from app.services.notifications import enqueue_notification, notify_admins
+    from app.utils.email_templates import booking_status_update_email
+
+    booking = get_booking_by_id(db, booking_id, for_update=True)
+    _ensure_booking_access(booking, actor)
+    if not _validate_supplier_lifecycle_transition(booking, "ongoing"):
+        return serialize_booking(booking, detail=True)
+
+    old_values = serialize_booking(booking)
+    transition_reason = reason or "Tour started by supplier"
+    _set_status(db, booking, "ongoing", actor, "supplier", transition_reason)
+    log_audit(db, actor=actor, action="supplier_start_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
+    notify_admins(db, notification_type="booking_ongoing", title="Tour started", message=f"Supplier started {booking.booking_code}", entity_type="booking", entity_id=booking.id)
+    if booking.customer and booking.customer.user_id:
+        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_ongoing", title="Your tour has started", message=f"Tour {booking.booking_code} is now ongoing", entity_type="booking", entity_id=booking.id)
+    if booking.agent and booking.agent.user_id:
+        enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_ongoing", title="Tour started", message=f"Booking {booking.booking_code} is now ongoing", entity_type="booking", entity_id=booking.id)
+    db.commit(); db.refresh(booking)
+
+    if booking.customer and booking.customer.email:
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        _send_booking_email(
+            db, "booking_status_update",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "new_status": "Ongoing", "reason": transition_reason, "login_url": login_url,
+             "button_text": "View booking", "button_url": login_url},
+            f"Tour started - {booking.booking_code}",
+            booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, "ongoing", transition_reason, login_url),
+            booking.customer.email,
+        )
+    return serialize_booking(booking, detail=True)
+
+
 def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
     from app.services.notifications import enqueue_notification, notify_admins
-    from app.schemas.bookings import SupplierDecisionRequest
-    booking = get_booking_by_id(db, booking_id)
+    from app.utils.email_templates import booking_status_update_email
+    booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
-    if booking.booking_status == "completed":
+    if not _validate_supplier_lifecycle_transition(booking, "completed"):
         return serialize_booking(booking, detail=True)
-    if booking.booking_status not in ("confirmed", "ongoing"):
-        raise HTTPException(status_code=400, detail="Only confirmed or ongoing bookings can be marked as completed")
     old_values = serialize_booking(booking)
     _set_status(db, booking, "completed", actor, "supplier", reason or "Tour completed by supplier")
     log_audit(db, actor=actor, action="supplier_complete_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
     notify_admins(db, notification_type="booking_completed", title="Tour completed", message=f"Supplier marked {booking.booking_code} as completed", entity_type="booking", entity_id=booking.id)
     if booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_completed", title="Tour completed", message=f"Your tour {booking.booking_code} has been completed", entity_type="booking", entity_id=booking.id)
+    if booking.agent and booking.agent.user_id:
+        enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_completed", title="Tour completed", message=f"Booking {booking.booking_code} has been completed", entity_type="booking", entity_id=booking.id)
+    if booking.customer:
+        booking.customer.completed_bookings = (booking.customer.completed_bookings or 0) + 1
+        booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
     db.commit(); db.refresh(booking)
     if booking.customer and booking.customer.email:
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"

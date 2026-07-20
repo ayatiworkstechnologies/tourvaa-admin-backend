@@ -6,7 +6,7 @@ from app.database import Base
 
 
 class SupplierLedger(Base):
-    """One row per booking — tracks what is owed to the supplier."""
+    """One row per booking - tracks what is owed to the supplier."""
     __tablename__ = "supplier_ledgers"
 
     id = Column(Integer, primary_key=True, index=True)

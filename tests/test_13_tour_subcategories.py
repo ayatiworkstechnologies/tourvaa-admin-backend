@@ -1,4 +1,4 @@
-"""Module 13 — Tour Subcategories"""
+"""Module 13 - Tour Subcategories"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique

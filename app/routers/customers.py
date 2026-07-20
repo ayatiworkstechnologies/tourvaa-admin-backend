@@ -15,6 +15,7 @@ from app.schemas.customers import (
 from app.schemas.bookings import BookingCreate
 from app.services.bookings import create_booking
 from app.models.customers import Customer
+from app.services.agent_scope import ensure_agent_customer_access, is_agent_user
 from app.services.customers import (
     block_customer,
     create_customer,
@@ -77,10 +78,12 @@ def list_customers(
         sort_by=sort_by,
         sort_order=sort_order,
         agent_id=effective_agent_id,
+        agent_user_id=current_user.id if is_agent_user(current_user) else None,
     )
     return {"status": "success", "data": paginated["items"], **paginated}
 
 
+@router.post("")
 @router.post("/")
 def add_customer(
     data: CustomerCreate,
@@ -142,6 +145,7 @@ def customer_detail(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("customers.view", "view-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     return {
         "status": "success",
         "data": get_customer_detail(db, customer_id, actor=current_user, request=request),
@@ -156,6 +160,7 @@ def edit_customer(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("customers.edit", "update-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     return {
         "status": "success",
         "message": "Customer updated successfully",
@@ -171,6 +176,7 @@ def change_customer_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("customers.edit", "update-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     return {
         "status": "success",
         "message": "Customer status updated successfully",
@@ -186,6 +192,7 @@ def block_customer_account(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("customers.block", "update-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     return {
         "status": "success",
         "message": "Customer blocked successfully",
@@ -201,6 +208,7 @@ def block_customer_account_compat(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("customers.block", "update-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     block_data = data or CustomerBlockRequest(reason="Blocked by admin")
     return {
         "status": "success",
@@ -211,11 +219,13 @@ def block_customer_account_compat(
 
 @router.patch("/{customer_id}/unblock")
 def unblock_customer_account(customer_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("customers.unblock", "update-customers"))):
+    ensure_agent_customer_access(db, customer_id, current_user)
     return {"status": "success", "message": "Customer unblocked successfully", "data": unblock_customer(db, customer_id, actor=current_user, request=request)}
 
 
 @router.post("/{customer_id}/unblock")
 def unblock_customer_account_compat(customer_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("customers.unblock", "update-customers"))):
+    ensure_agent_customer_access(db, customer_id, current_user)
     return {"status": "success", "message": "Customer unblocked successfully", "data": unblock_customer(db, customer_id, actor=current_user, request=request)}
 
 
@@ -226,6 +236,7 @@ def reset_customer_login_password(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("customers.reset_password", "update-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     return {
         "status": "success",
         "message": "Customer password reset email sent successfully",
@@ -240,8 +251,9 @@ def customer_booking_history(
     booking_status: str = Query(default=""),
     payment_status: str = Query(default=""),
     db: Session = Depends(get_db),
-    _=Depends(require_any_permission("customers.view_bookings", "customers.view", "view-customers")),
+    current_user: User = Depends(require_any_permission("customers.view_bookings", "customers.view", "view-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     get_customer_detail(db, customer_id)
     paginated = get_customer_booking_history(
         db,
@@ -261,8 +273,9 @@ def customer_payment_history(
     payment_status: str = Query(default=""),
     payment_method: str = Query(default=""),
     db: Session = Depends(get_db),
-    _=Depends(require_any_permission("customers.view_payments", "customers.view", "view-customers")),
+    current_user: User = Depends(require_any_permission("customers.view_payments", "customers.view", "view-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     get_customer_detail(db, customer_id)
     paginated = get_customer_payment_history(
         db,
@@ -280,8 +293,9 @@ def customer_communication_history(
     customer_id: int,
     params: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
-    _=Depends(require_any_permission("customers.view_communications", "customers.view", "view-customers")),
+    current_user: User = Depends(require_any_permission("customers.view_communications", "customers.view", "view-customers")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     get_customer_detail(db, customer_id)
     paginated = get_customer_communication_history(
         db,
@@ -300,6 +314,7 @@ def send_customer_communication(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("customers.communicate")),
 ):
+    ensure_agent_customer_access(db, customer_id, current_user)
     return {
         "status": "success",
         "message": "Customer message sent successfully",

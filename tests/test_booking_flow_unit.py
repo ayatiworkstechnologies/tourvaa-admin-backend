@@ -2,11 +2,16 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
-from app.services.bookings import _start_supplier_decision, _validate_customer_travellers
+from app.services.bookings import _start_supplier_decision, _validate_customer_travellers, _validate_supplier_lifecycle_transition
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
-from app.routers.payments_gateway import _validate_payment_request
+from app.routers.payments_gateway import _ensure_booking_payment_access, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
+from app.schemas.agents import AgentSelfUpdate
+from app.schemas.suppliers import SupplierSelfUpdate
+from app.services.agent_scope import is_agent_user
+from app.services.supplier_scope import is_supplier_user, reject_supplier_review_action
 
 
 def booking(**overrides):
@@ -17,6 +22,19 @@ def booking(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def test_supplier_self_update_rejects_admin_managed_fields():
+    with pytest.raises(ValidationError):
+        SupplierSelfUpdate(status="active")
+
+
+def test_supplier_role_is_scoped_and_cannot_review_tours():
+    user = SimpleNamespace(role=SimpleNamespace(slug="supplier"), user_roles=[])
+    assert is_supplier_user(user) is True
+    with pytest.raises(HTTPException) as exc:
+        reject_supplier_review_action(user)
+    assert exc.value.status_code == 403
 
 
 def test_paid_booking_waits_for_supplier_acceptance():
@@ -76,10 +94,36 @@ def test_supplier_decision_requires_assignment():
     assert exc.value.status_code == 400
 
 
+@pytest.mark.parametrize(("current", "target"), [("confirmed", "ongoing"), ("postponed", "ongoing"), ("ongoing", "completed"), ("confirmed", "completed")])
+def test_supplier_lifecycle_allows_valid_execution_transitions(current, target):
+    row = booking(booking_status=current, supplier_acceptance_status="accepted")
+    assert _validate_supplier_lifecycle_transition(row, target) is True
+
+
+def test_supplier_lifecycle_retry_is_idempotent():
+    row = booking(booking_status="completed", supplier_acceptance_status="accepted")
+    assert _validate_supplier_lifecycle_transition(row, "completed") is False
+
+
+def test_supplier_lifecycle_requires_acceptance():
+    row = booking(booking_status="confirmed", supplier_acceptance_status="pending")
+    with pytest.raises(HTTPException) as exc:
+        _validate_supplier_lifecycle_transition(row, "ongoing")
+    assert exc.value.status_code == 409
+
+
+def test_supplier_lifecycle_rejects_invalid_source_status():
+    row = booking(booking_status="pending_payment", supplier_acceptance_status="accepted")
+    with pytest.raises(HTTPException) as exc:
+        _validate_supplier_lifecycle_transition(row, "completed")
+    assert exc.value.status_code == 400
+
+
 def payment_booking(**overrides):
     values = {
         "booking_status": "pending_payment",
         "amount_pending": "1000.00",
+        "currency": "USD",
         "customer": SimpleNamespace(user_id=42),
     }
     values.update(overrides)
@@ -101,9 +145,30 @@ def test_gateway_rejects_overpayment():
     assert exc.value.status_code == 400
 
 
+def test_gateway_requires_the_immutable_booking_currency():
+    assert _validate_payment_currency(payment_booking(), "usd") == "USD"
+    with pytest.raises(HTTPException) as exc:
+        _validate_payment_currency(payment_booking(), "INR")
+    assert exc.value.status_code == 400
+
+
 def test_gateway_rejects_payment_from_another_customer():
     with pytest.raises(HTTPException) as exc:
         _validate_payment_request(payment_booking(), "300.00", customer_user(99))
+    assert exc.value.status_code == 403
+
+
+def test_agent_can_pay_booking_created_by_own_agent_profile():
+    row = payment_booking(agent=SimpleNamespace(user_id=77))
+    actor = SimpleNamespace(id=77, role=SimpleNamespace(slug="agent-reseller"))
+    _ensure_booking_payment_access(row, actor)
+
+
+def test_agent_cannot_pay_another_agents_booking():
+    row = payment_booking(agent=SimpleNamespace(user_id=77))
+    actor = SimpleNamespace(id=88, role=SimpleNamespace(slug="agent-reseller"))
+    with pytest.raises(HTTPException) as exc:
+        _ensure_booking_payment_access(row, actor)
     assert exc.value.status_code == 403
 
 
@@ -181,3 +246,35 @@ def test_customer_traveller_manifest_requires_one_primary_contact():
     with pytest.raises(HTTPException) as exc:
         _validate_customer_travellers(data, adults=2, children=1)
     assert exc.value.status_code == 400
+
+
+def test_agent_traveller_manifest_matches_selected_counts():
+    data = BookingCreate(
+        customer_id=1,
+        agent_id=7,
+        booking_source="agent",
+        no_of_adults=1,
+        no_of_children=1,
+        travellers=[
+            BookingTravellerPayload(traveller_type="adult", full_name="Adult One", age=35, is_primary_contact=True),
+            BookingTravellerPayload(traveller_type="child", full_name="Child One", age=8),
+        ],
+    )
+    _validate_customer_travellers(data, adults=1, children=1)
+
+
+def test_agent_traveller_manifest_is_required():
+    data = BookingCreate(customer_id=1, agent_id=7, booking_source="agent", no_of_adults=1)
+    with pytest.raises(HTTPException) as exc:
+        _validate_customer_travellers(data, adults=1, children=0)
+    assert exc.value.status_code == 400
+
+
+def test_agent_self_update_rejects_admin_only_fields():
+    with pytest.raises(ValidationError):
+        AgentSelfUpdate(agent_name="Safe Agency", status="active")
+
+
+def test_agent_role_detection_handles_agent_reseller():
+    actor = SimpleNamespace(role=SimpleNamespace(slug="agent-reseller"))
+    assert is_agent_user(actor) is True

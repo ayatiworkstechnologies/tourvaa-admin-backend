@@ -1,4 +1,4 @@
-"""Module 29 — Chatbot FAQ CRUD and Chat"""
+"""Module 29 - Chatbot FAQ CRUD and Chat"""
 import pytest
 import requests
 import os

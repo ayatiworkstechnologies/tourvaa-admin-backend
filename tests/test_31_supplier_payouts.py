@@ -1,4 +1,4 @@
-"""Module 31 — Supplier Payouts and Ledgers"""
+"""Module 31 - Supplier Payouts and Ledgers"""
 import pytest
 import requests
 import os

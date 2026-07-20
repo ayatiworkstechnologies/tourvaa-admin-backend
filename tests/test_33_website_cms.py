@@ -1,4 +1,4 @@
-"""Module 33 — Website CMS endpoints"""
+"""Module 33 - Website CMS endpoints"""
 import pytest
 import requests
 import os
@@ -225,7 +225,7 @@ def test_cms_sitemap_returns_200(headers):
 
 
 def test_cms_sitemap_xml_returns_200():
-    """sitemap.xml is typically public — no auth needed."""
+    """sitemap.xml is typically public - no auth needed."""
     resp = requests.get(f"{BASE_URL}/cms/sitemap.xml", timeout=10)
     assert resp.status_code == 200, resp.text
     content_type = resp.headers.get("content-type", "")

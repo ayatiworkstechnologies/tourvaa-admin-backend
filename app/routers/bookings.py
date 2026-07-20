@@ -167,6 +167,13 @@ def supplier_complete(booking_id: int, request: Request, data: SupplierDecisionR
     return {"status": "success", "message": "Booking marked as completed", "data": supplier_complete_booking(db, booking_id, reason, current_user, request)}
 
 
+@supplier_router.patch("/{booking_id}/ongoing")
+def supplier_start(booking_id: int, request: Request, data: SupplierDecisionRequest | None = None, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
+    from app.services.bookings import supplier_start_booking
+    reason = (data.reason if data else None) or "Tour started by supplier"
+    return {"status": "success", "message": "Booking marked as ongoing", "data": supplier_start_booking(db, booking_id, reason, current_user, request)}
+
+
 @supplier_router.patch("/{booking_id}/cancel")
 def supplier_cancel(booking_id: int, data: BookingCancelRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
     return {"status": "success", "message": "Booking cancelled", "data": supplier_cancel_booking(db, booking_id, data.reason or "Cancelled by supplier", current_user, request)}

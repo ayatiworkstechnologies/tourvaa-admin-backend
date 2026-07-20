@@ -168,8 +168,8 @@ def add_tour(
     current_user: User = Depends(require_any_permission("tours.create", "create-tours")),
 ):
     actor_supplier_id = _get_actor_supplier_id(db, current_user)
-    if actor_supplier_id and not data.supplier_id:
-        # Auto-assign the supplier's own ID when creating from the supplier portal
+    if actor_supplier_id:
+        # Supplier-created tours must always remain attached to the caller's profile.
         data = data.model_copy(update={"supplier_id": actor_supplier_id})
     return {"status": "success", "data": save_tour(db, data, current_user, request)}
 

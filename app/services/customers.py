@@ -133,6 +133,7 @@ def get_customers(
     sort_by: str = "newest",
     sort_order: str = "desc",
     agent_id: int | None = None,
+    agent_user_id: int | None = None,
 ):
     query = db.query(Customer).options(
         joinedload(Customer.country_ref),
@@ -140,11 +141,17 @@ def get_customers(
     )
 
     if agent_id:
-        query = query.filter(
-            Customer.id.in_(
-                db.query(Booking.customer_id).filter(Booking.agent_id == agent_id).distinct()
+        if agent_user_id:
+            from app.models.agents import Agent
+            from app.services.agent_scope import agent_customer_filter
+            agent = db.query(Agent).filter(Agent.id == agent_id).first()
+            query = query.filter(agent_customer_filter(db, agent, agent_user_id)) if agent else query.filter(Customer.id == -1)
+        else:
+            query = query.filter(
+                Customer.id.in_(
+                    db.query(Booking.customer_id).filter(Booking.agent_id == agent_id).distinct()
+                )
             )
-        )
 
     if search:
         pattern = f"%{search.strip().lower()}%"

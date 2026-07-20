@@ -1,4 +1,4 @@
-"""Module 30 — Cancellations and Refund Rules"""
+"""Module 30 - Cancellations and Refund Rules"""
 import pytest
 import requests
 import os

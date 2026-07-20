@@ -1,4 +1,4 @@
-"""Module 07 — Suppliers"""
+"""Module 07 - Suppliers"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique

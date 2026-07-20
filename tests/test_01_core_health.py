@@ -1,4 +1,4 @@
-"""Module 01 — Core / Health"""
+"""Module 01 - Core / Health"""
 import requests
 from tests.conftest import BASE_URL
 

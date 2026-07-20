@@ -1,4 +1,4 @@
-"""Module 27 — Geo Reference endpoints (no auth required)"""
+"""Module 27 - Geo Reference endpoints (no auth required)"""
 import pytest
 import requests
 import os

@@ -16,7 +16,7 @@ ADMIN_PASSWORD = "Admin@123"
 WRITE_TESTS = os.environ.get("TOURVAA_WRITE_TESTS", "0") == "1"
 
 
-def skip_if_readonly(reason="write test — set TOURVAA_WRITE_TESTS=1 to run"):
+def skip_if_readonly(reason="write test - set TOURVAA_WRITE_TESTS=1 to run"):
     return pytest.mark.skipif(not WRITE_TESTS, reason=reason)
 
 
@@ -47,7 +47,7 @@ def login_with_retry(email: str, password: str, attempts: int = 6, backoff: floa
     than 10 login calls well within a minute, so any fixture that logs in as a
     freshly-registered role user can get legitimately rate-limited even though
     the login itself would otherwise succeed. This is not a bug to test around
-    with a looser assertion (that would mask a real 401/403) — it's a timing
+    with a looser assertion (that would mask a real 401/403) - it's a timing
     issue, so retry with backoff instead.
     """
     last = None

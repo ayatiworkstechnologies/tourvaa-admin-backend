@@ -21,6 +21,7 @@ from app.routers.cms_geo_seed import router as geo_seed_router
 from app.routers.cms import router as cms_router
 from app.routers.customers_portal import router as customer_portal_router
 from app.routers.customers import router as customers_router
+from app.routers.currency import router as currency_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.email_templates import router as email_templates_router
 from app.routers.invoices import router as invoices_router
@@ -55,6 +56,7 @@ CORE_ROUTERS = (
     dashboard_router,
     profile_router,
     settings_router,
+    currency_router,
     email_templates_router,
     uploads_router,
     client_router,

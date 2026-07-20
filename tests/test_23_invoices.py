@@ -32,7 +32,7 @@ def test_invoice_generate_pdf_and_download_and_email(headers, first_booking_id):
     }, headers=headers, timeout=10)
     assert generate.status_code in (200, 201, 400), generate.text
     if generate.status_code not in (200, 201):
-        return  # booking not in an invoiceable state — not a test failure
+        return  # booking not in an invoiceable state - not a test failure
 
     invoice_id = generate.json()["data"]["id"]
 

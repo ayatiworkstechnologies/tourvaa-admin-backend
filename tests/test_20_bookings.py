@@ -41,7 +41,7 @@ def test_booking_detail_not_found(headers):
 
 def test_booking_detail_and_dependents(headers, first_booking_id):
     if not first_booking_id:
-        return  # no bookings seeded in this environment — nothing to assert against
+        return  # no bookings seeded in this environment - nothing to assert against
 
     detail = requests.get(f"{BASE_URL}/bookings/{first_booking_id}", headers=headers, timeout=10)
     assert detail.status_code == 200, detail.text

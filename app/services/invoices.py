@@ -60,7 +60,7 @@ def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | N
 
 
 def serialize_invoice(inv: Invoice, detail: bool = False) -> dict:
-    data = {"id": inv.id, "invoice_number": inv.invoice_number, "booking_id": inv.booking_id, "payment_id": inv.payment_id, "customer_id": inv.customer_id, "invoice_type": inv.invoice_type, "status": inv.status, "currency": inv.currency, "subtotal_amount": money_str(inv.subtotal_amount), "gst_amount": money_str(inv.gst_amount), "total_amount": money_str(inv.total_amount), "amount_paid": money_str(inv.amount_paid), "amount_due": money_str(inv.amount_due), "pdf_path": inv.pdf_path, "emailed_at": inv.emailed_at, "created_at": inv.created_at, "updated_at": inv.updated_at}
+    data = {"id": inv.id, "invoice_number": inv.invoice_number, "booking_id": inv.booking_id, "booking_code": inv.booking.booking_code if inv.booking else None, "payment_id": inv.payment_id, "customer_id": inv.customer_id, "customer_name": inv.customer.full_name if inv.customer else None, "invoice_type": inv.invoice_type, "status": inv.status, "currency": inv.currency, "subtotal_amount": money_str(inv.subtotal_amount), "gst_amount": money_str(inv.gst_amount), "total_amount": money_str(inv.total_amount), "amount_paid": money_str(inv.amount_paid), "amount_due": money_str(inv.amount_due), "pdf_path": inv.pdf_path, "emailed_at": inv.emailed_at, "created_at": inv.created_at, "updated_at": inv.updated_at}
     if detail:
         data["items"] = [{"id": i.id, "item_type": i.item_type, "description": i.description, "quantity": i.quantity, "unit_price": money_str(i.unit_price), "tax_amount": money_str(i.tax_amount), "total_price": money_str(i.total_price)} for i in inv.items]
     return data
@@ -136,13 +136,13 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
     db.add(inv)
     db.flush()
     inv.invoice_number = _invoice_number(inv.id)
-    db.add(InvoiceItem(invoice_id=inv.id, item_type="booking", description=f"Booking {booking.booking_code or booking.id} — {booking.tour_name or 'Tour'}", quantity=1, unit_price=subtotal, tax_amount=gst, total_price=total))
+    db.add(InvoiceItem(invoice_id=inv.id, item_type="booking", description=f"Booking {booking.booking_code or booking.id} - {booking.tour_name or 'Tour'}", quantity=1, unit_price=subtotal, tax_amount=gst, total_price=total))
     storage = get_storage_root().joinpath("invoices")
     storage.mkdir(parents=True, exist_ok=True)
     pdf_path = storage.joinpath(f"{inv.invoice_number}.pdf")
     invoice_data = _build_invoice_pdf_data(
         inv, booking, payment,
-        items=[{"description": f"Booking {booking.booking_code or booking.id} — {booking.tour_name or 'Tour'}", "quantity": 1, "unit_price": money_str(subtotal), "tax_amount": money_str(gst), "total_price": money_str(total)}],
+        items=[{"description": f"Booking {booking.booking_code or booking.id} - {booking.tour_name or 'Tour'}", "quantity": 1, "unit_price": money_str(subtotal), "tax_amount": money_str(gst), "total_price": money_str(total)}],
     )
     from app.utils.invoices_pdf import generate_pdf
     generate_pdf(pdf_path, invoice_data)
@@ -188,7 +188,7 @@ def download_invoice_pdf(db: Session, invoice_id: int, actor: User | None = None
     fs_path = str(get_storage_root()) + inv.pdf_path.replace("/storage", "")
     import os
     if not os.path.exists(fs_path):
-        raise HTTPException(status_code=404, detail="PDF file not found on server — please regenerate")
+        raise HTTPException(status_code=404, detail="PDF file not found on server - please regenerate")
     return fs_path, f"{inv.invoice_number}.pdf"
 
 

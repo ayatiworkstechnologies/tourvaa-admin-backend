@@ -70,7 +70,9 @@ def _ensure_booking_payment_access(booking: Booking, current_user) -> None:
     role_slug = getattr(getattr(current_user, "role", None), "slug", "") or ""
     if role_slug in {"super-admin", "admin"} or "admin" in role_slug:
         return
-    if booking.customer and booking.customer.user_id == current_user.id:
+    if getattr(booking, "customer", None) and booking.customer.user_id == current_user.id:
+        return
+    if getattr(booking, "agent", None) and booking.agent.user_id == current_user.id:
         return
     raise HTTPException(status_code=403, detail="Booking access denied")
 
@@ -97,6 +99,17 @@ def _validate_payment_request(booking: Booking, amount: Decimal, current_user) -
     if requested > outstanding:
         raise HTTPException(status_code=400, detail=f"Payment amount cannot exceed the outstanding balance of {outstanding:.2f}")
     return requested
+
+
+def _validate_payment_currency(booking: Booking, requested_currency: str) -> str:
+    booking_currency = (booking.currency or "USD").strip().upper()
+    requested = (requested_currency or "").strip().upper()
+    if requested != booking_currency:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Payment currency must match the booking currency ({booking_currency})",
+        )
+    return booking_currency
 
 
 def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gateway: str, gateway_order_id: str, idempotency_key: Optional[str], current_user) -> Payment:
@@ -132,12 +145,13 @@ def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gate
 def stripe_create_session(body: StripeSessionRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     booking = _booking_or_404(db, body.booking_id)
     amount = _validate_payment_request(booking, body.amount, current_user)
+    currency = _validate_payment_currency(booking, body.currency)
     stripe = get_stripe(db)
     amount_cents = int(amount * 100)
 
     session_data = stripe.create_checkout_session(
         amount_cents=amount_cents,
-        currency=body.currency,
+        currency=currency,
         booking_id=body.booking_id,
         success_url=body.success_url,
         cancel_url=body.cancel_url,
@@ -309,12 +323,13 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
 def paypal_create_order(body: PayPalOrderRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     booking = _booking_or_404(db, body.booking_id)
     amount = _validate_payment_request(booking, body.amount, current_user)
+    currency = _validate_payment_currency(booking, body.currency)
     paypal = get_paypal(db)
     amount_str = f"{amount:.2f}"
 
     order = paypal.create_order(
         amount=amount_str,
-        currency=body.currency,
+        currency=currency,
         booking_id=body.booking_id,
         return_url=body.return_url,
         cancel_url=body.cancel_url,

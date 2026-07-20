@@ -1,4 +1,4 @@
-# Tourvaa Backend — End-to-End Documentation
+# Tourvaa Backend - End-to-End Documentation
 
 ---
 
@@ -10,8 +10,8 @@
 4. [Configuration & Environment](#4-configuration--environment)
 5. [Database](#5-database)
 6. [Security & Authentication](#6-security--authentication)
-7. [RBAC — Roles & Permissions](#7-rbac--roles--permissions)
-8. [API Modules — Full Endpoint Reference](#8-api-modules--full-endpoint-reference)
+7. [RBAC - Roles & Permissions](#7-rbac--roles--permissions)
+8. [API Modules - Full Endpoint Reference](#8-api-modules--full-endpoint-reference)
    - [Auth](#81-auth--apiauth)
    - [Users](#82-users--apiusers)
    - [Roles](#83-roles--apiroles--apiadminroles)
@@ -21,7 +21,7 @@
    - [Suppliers](#87-suppliers--apisuppliers)
    - [Agents](#88-agents--apiagents)
    - [Affiliates](#89-affiliates--apiaffiliates)
-   - [CMS — Countries, Cities, Categories](#810-cms--countries-cities-categories)
+   - [CMS - Countries, Cities, Categories](#810-cms--countries-cities-categories)
    - [Tours (CMS)](#811-tours-cms--apitours)
    - [Tour Detail Sub-Resources](#812-tour-detail-sub-resources--apitours)
    - [Bookings](#813-bookings--apibookings)
@@ -73,12 +73,12 @@ Tourvaa Backend is a **FastAPI** REST API that powers the Tourvaa tour-and-trave
 
 ```
 backend/
-├── main.py                          # does not exist — app entry is run via uvicorn app.main:app
+├── main.py                          # does not exist - app entry is run via uvicorn app.main:app
 ├── app/
 │   ├── config.py                    # Pydantic settings loaded from .env
 │   ├── database.py                  # SQLAlchemy engine, SessionLocal, Base, get_db()
 │   ├── security.py                  # JWT creation, bcrypt hashing, token utilities
-│   ├── seed.py                      # DB seeder — roles, permissions, super admin
+│   ├── seed.py                      # DB seeder - roles, permissions, super admin
 │   └── modules/
 │       ├── auth/                    # Login, register, password reset, email verify
 │       ├── users/                   # User CRUD and role assignment
@@ -209,7 +209,7 @@ Imported everywhere as:
 from app.config import settings
 ```
 
-Key property: `settings.cors_origins` — parses `ALLOWED_ORIGINS` CSV into a list.
+Key property: `settings.cors_origins` - parses `ALLOWED_ORIGINS` CSV into a list.
 
 ---
 
@@ -309,7 +309,7 @@ require_permission("update-users")
 
 ---
 
-## 7. RBAC — Roles & Permissions
+## 7. RBAC - Roles & Permissions
 
 ### Built-in Roles (seeded)
 
@@ -358,13 +358,13 @@ The dependency returns the authenticated `User` object. Raises `403` if none of 
 
 ---
 
-## 8. API Modules — Full Endpoint Reference
+## 8. API Modules - Full Endpoint Reference
 
 All routes are prefixed with `/api`. Every response follows the [standard format](#15-common-response-format).
 
 ---
 
-### 8.1 Auth — `/api/auth`
+### 8.1 Auth - `/api/auth`
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
@@ -373,7 +373,7 @@ All routes are prefixed with `/api`. Every response follows the [standard format
 | POST | `/auth/register/supplier` | Public | Register as supplier (starts approval flow) |
 | POST | `/auth/register/agent` | Public | Register as agent-reseller (starts approval flow) |
 | POST | `/auth/login` | Public (rate limited 10/60s) | Login. Returns `access_token`, `user` payload, `session_id` |
-| GET | `/auth/me` | Bearer | Returns current user session — roles, permissions, profile |
+| GET | `/auth/me` | Bearer | Returns current user session - roles, permissions, profile |
 | POST | `/auth/forgot-password` | Public (rate limited 5/300s) | Sends password reset email |
 | GET | `/auth/reset-password/validate` | Public | Validates a reset token before showing the reset form |
 | POST | `/auth/reset-password` | Public | Sets new password using reset token; invalidates all sessions |
@@ -409,7 +409,7 @@ All routes are prefixed with `/api`. Every response follows the [standard format
 
 ---
 
-### 8.2 Users — `/api/users`
+### 8.2 Users - `/api/users`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -425,7 +425,7 @@ All routes are prefixed with `/api`. Every response follows the [standard format
 
 ---
 
-### 8.3 Roles — `/api/roles` & `/api/admin/roles`
+### 8.3 Roles - `/api/roles` & `/api/admin/roles`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -440,7 +440,7 @@ All routes are prefixed with `/api`. Every response follows the [standard format
 
 ---
 
-### 8.4 Permissions — `/api/permissions` & `/api/admin/permissions`
+### 8.4 Permissions - `/api/permissions` & `/api/admin/permissions`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -452,7 +452,7 @@ All routes are prefixed with `/api`. Every response follows the [standard format
 
 ---
 
-### 8.5 Dashboard — `/api/dashboard`
+### 8.5 Dashboard - `/api/dashboard`
 
 All endpoints require Bearer token. Response is scoped to the caller's role.
 
@@ -470,7 +470,7 @@ All endpoints require Bearer token. Response is scoped to the caller's role.
 
 ---
 
-### 8.6 Customers — `/api/customers`
+### 8.6 Customers - `/api/customers`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -489,7 +489,7 @@ All endpoints require Bearer token. Response is scoped to the caller's role.
 
 ---
 
-### 8.7 Suppliers — `/api/suppliers`
+### 8.7 Suppliers - `/api/suppliers`
 
 #### Self-service (Public / Auth)
 
@@ -521,7 +521,7 @@ email_verification_pending → profile_incomplete → admin_review_pending → a
 
 ---
 
-### 8.8 Agents — `/api/agents`
+### 8.8 Agents - `/api/agents`
 
 Same pattern as Suppliers. Replaces "markup" with:
 
@@ -531,7 +531,7 @@ Same pattern as Suppliers. Replaces "markup" with:
 
 ---
 
-### 8.9 Affiliates — `/api/affiliates`
+### 8.9 Affiliates - `/api/affiliates`
 
 Same pattern as Suppliers/Agents. Adds:
 
@@ -541,7 +541,7 @@ Same pattern as Suppliers/Agents. Adds:
 
 ---
 
-### 8.10 CMS — Countries, Cities, Categories
+### 8.10 CMS - Countries, Cities, Categories
 
 #### Countries
 
@@ -585,7 +585,7 @@ Same pattern as Suppliers/Agents. Adds:
 
 ---
 
-### 8.11 Tours (CMS) — `/api/tours`
+### 8.11 Tours (CMS) - `/api/tours`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -597,7 +597,7 @@ Same pattern as Suppliers/Agents. Adds:
 
 ---
 
-### 8.12 Tour Detail Sub-Resources — `/api/tours/{tour_id}/...`
+### 8.12 Tour Detail Sub-Resources - `/api/tours/{tour_id}/...`
 
 All require `tours.view` for reads and `tours.edit` for writes.
 
@@ -621,7 +621,7 @@ All require `tours.view` for reads and `tours.edit` for writes.
 
 ---
 
-### 8.13 Bookings — `/api/bookings` & `/api/supplier/bookings`
+### 8.13 Bookings - `/api/bookings` & `/api/supplier/bookings`
 
 #### Admin / Agent routes (`/api/bookings`)
 
@@ -657,7 +657,7 @@ All require `tours.view` for reads and `tours.edit` for writes.
 
 ---
 
-### 8.14 Payments — `/api/payments`
+### 8.14 Payments - `/api/payments`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -678,7 +678,7 @@ All require `tours.view` for reads and `tours.edit` for writes.
 
 ---
 
-### 8.15 Invoices — `/api/invoices`
+### 8.15 Invoices - `/api/invoices`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -691,7 +691,7 @@ All require `tours.view` for reads and `tours.edit` for writes.
 
 ---
 
-### 8.16 Notifications — `/api/notifications`
+### 8.16 Notifications - `/api/notifications`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -709,7 +709,7 @@ All require `tours.view` for reads and `tours.edit` for writes.
 
 ---
 
-### 8.17 Reports — `/api/reports`
+### 8.17 Reports - `/api/reports`
 
 All require `reports.view` minimum.
 
@@ -729,7 +729,7 @@ All require `reports.view` minimum.
 
 ---
 
-### 8.18 Chatbot — `/api/chatbot`
+### 8.18 Chatbot - `/api/chatbot`
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
@@ -756,7 +756,7 @@ All require `reports.view` minimum.
 
 ---
 
-### 8.19 Settings — `/api/settings`
+### 8.19 Settings - `/api/settings`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -769,7 +769,7 @@ All require `reports.view` minimum.
 
 ---
 
-### 8.20 Email Templates — `/api/email-templates`
+### 8.20 Email Templates - `/api/email-templates`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -792,7 +792,7 @@ If a key is not found in the DB, the system falls back to hardcoded HTML templat
 
 ---
 
-### 8.21 Profile — `/api/profile`
+### 8.21 Profile - `/api/profile`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -802,7 +802,7 @@ If a key is not found in the DB, the system falls back to hardcoded HTML templat
 
 ---
 
-### 8.22 Uploads — `/api/uploads`
+### 8.22 Uploads - `/api/uploads`
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
@@ -812,7 +812,7 @@ Files are stored under `STORAGE_ROOT` (default: `backend/storage/`).
 
 ---
 
-### 8.23 Audit Logs — `/api/audit-logs`
+### 8.23 Audit Logs - `/api/audit-logs`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -822,7 +822,7 @@ Every service call that mutates data calls `log_audit(db, actor, action, entity_
 
 ---
 
-### 8.24 Sessions — `/api/sessions`
+### 8.24 Sessions - `/api/sessions`
 
 | Method | Path | Permission | Description |
 |---|---|---|---|
@@ -831,7 +831,7 @@ Every service call that mutates data calls `log_audit(db, actor, action, entity_
 
 ---
 
-### 8.25 Client API — `/api/client`
+### 8.25 Client API - `/api/client`
 
 Public-facing endpoints for the customer-side frontend (tours browsing, booking flow, self-service). Exact endpoints mirror relevant admin reads but without admin permissions.
 
@@ -898,7 +898,7 @@ try_send_email(to, subject, html)  # logs error, does not raise
 
 **Template resolution:**
 
-1. `render_database_email(db, key, context, fallback_subject, fallback_html)` — looks up key in `email_templates` table
+1. `render_database_email(db, key, context, fallback_subject, fallback_html)` - looks up key in `email_templates` table
 2. If not found in DB → uses the fallback HTML passed in (hardcoded templates in `common/email_templates.py`)
 
 **System emails sent:**
@@ -910,7 +910,7 @@ try_send_email(to, subject, html)  # logs error, does not raise
 | Forgot password | `password_reset` | User |
 | Password changed | `password_changed` | User |
 | Booking created | booking-related | Customer + admin |
-| Supplier approved/rejected | — | Supplier |
+| Supplier approved/rejected | - | Supplier |
 
 ---
 
@@ -958,7 +958,7 @@ Implemented in `app/modules/common/ratelimit.py`.
 5. Creates or updates the super admin `User` from `SUPER_ADMIN_EMAIL` + `SUPER_ADMIN_PASSWORD`
 6. Seeds a demo tour (Dubai City Highlights) if no tours exist
 
-**Safe to re-run:** All operations are upserts — existing records are updated, not duplicated.
+**Safe to re-run:** All operations are upserts - existing records are updated, not duplicated.
 
 **Demo tour:** Only seeded when `tours` table is empty. Useful for local dev smoke tests.
 
@@ -984,7 +984,7 @@ mysql -u root -p -e "CREATE DATABASE tourvaa_db CHARACTER SET utf8mb4 COLLATE ut
 
 # 3. Copy and fill .env
 cp .env.example .env
-# edit .env — set DATABASE_URL, JWT_SECRET_KEY, SMTP_*, ANTHROPIC_API_KEY
+# edit .env - set DATABASE_URL, JWT_SECRET_KEY, SMTP_*, ANTHROPIC_API_KEY
 
 # 4. Run migrations
 python -m alembic upgrade head

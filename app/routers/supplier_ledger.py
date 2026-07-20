@@ -1,35 +1,43 @@
 ﻿from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
+from fastapi import HTTPException
 
 from app.database import get_db
 from app.auth.permissions import require_any_permission
 from app.utils.pagination import pagination_params
 from app.services import supplier_ledger as service
 from app.schemas.supplier_ledger import SupplierPayoutCreate, SupplierPayoutMarkPaid
+from app.services.supplier_scope import ensure_supplier_account_access, get_actor_supplier, is_supplier_user
 
 router = APIRouter(tags=["Supplier Ledger"])
 
 
 @router.get("/supplier-ledgers")
 def list_ledgers(pagination=Depends(pagination_params), supplier_id: int = Query(default=0), status: str = Query(default=""), db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
-    own_supplier_id = service._actor_supplier_id(db, current_user) if service._is_supplier_actor(current_user) else None
-    scoped_supplier_id = supplier_id or own_supplier_id
+    own_supplier_id = get_actor_supplier(db, current_user).id if is_supplier_user(current_user) else None
+    if own_supplier_id and supplier_id and supplier_id != own_supplier_id:
+        raise HTTPException(status_code=403, detail="You can only access your own supplier account")
+    scoped_supplier_id = own_supplier_id or supplier_id
     return {"status": "success", **service.list_all_ledgers(db, page=pagination["page"], limit=pagination["limit"], supplier_id=scoped_supplier_id or None, status=status)}
 
 @router.get("/suppliers/{supplier_id}/ledger")
-def supplier_ledger(supplier_id: int, pagination=Depends(pagination_params), status: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
+def supplier_ledger(supplier_id: int, pagination=Depends(pagination_params), status: str = Query(default=""), db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
+    ensure_supplier_account_access(db, supplier_id, current_user)
     return {"status": "success", **service.get_supplier_ledger(db, supplier_id=supplier_id, page=pagination["page"], limit=pagination["limit"], status=status)}
 
 
 @router.get("/supplier-statements/{supplier_id}")
-def supplier_statement(supplier_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
+def supplier_statement(supplier_id: int, db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
+    ensure_supplier_account_access(db, supplier_id, current_user)
     return {"status": "success", "data": service.get_supplier_statement(db, supplier_id=supplier_id)}
 
 
 @router.get("/supplier-payouts")
 def list_payouts(pagination=Depends(pagination_params), supplier_id: int = Query(default=0), status: str = Query(default=""), db: Session = Depends(get_db), current_user=Depends(require_any_permission("supplier_ledger.view", "view-supplier_ledger"))):
-    own_supplier_id = service._actor_supplier_id(db, current_user) if service._is_supplier_actor(current_user) else None
-    scoped_supplier_id = supplier_id or own_supplier_id
+    own_supplier_id = get_actor_supplier(db, current_user).id if is_supplier_user(current_user) else None
+    if own_supplier_id and supplier_id and supplier_id != own_supplier_id:
+        raise HTTPException(status_code=403, detail="You can only access your own supplier account")
+    scoped_supplier_id = own_supplier_id or supplier_id
     return {"status": "success", **service.list_payouts(db, page=pagination["page"], limit=pagination["limit"], supplier_id=scoped_supplier_id or None, status=status)}
 
 

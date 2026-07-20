@@ -1,4 +1,4 @@
-"""Module 11 — Cities"""
+"""Module 11 - Cities"""
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly, unique
