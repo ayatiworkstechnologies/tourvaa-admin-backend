@@ -46,17 +46,17 @@ def get_portal_for_role(role_slug: str) -> str:
     return ROLE_SLUG_TO_PORTAL.get((role_slug or "").lower(), "admin")
 
 
-def create_token(data: dict, portal: str | None = None):
+def create_token(data: dict, portal: str | None = None, *, token_type: str = "access", expires_minutes: int | None = None):
     token_data = data.copy()
 
     expire_time = datetime.utcnow() + timedelta(
-        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        minutes=expires_minutes if expires_minutes is not None else settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
 
     if portal:
         token_data["portal"] = portal
 
-    token_data.update({"exp": expire_time})
+    token_data.update({"exp": expire_time, "token_type": token_type})
 
     secret = settings.get_portal_secret(portal) if portal else settings.JWT_SECRET_KEY
 

@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from app.models.permissions import Permission, RolePermission
 from app.models.users import User, UserRole
 
 bearer_scheme = HTTPBearer(auto_error=False)
+ACCESS_COOKIE_NAME = "tourvaa_access"
 
 
 ACTION_TO_DOTTED = {
@@ -93,15 +94,24 @@ def _decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+def _request_token(request: Request, credentials: HTTPAuthorizationCredentials | None) -> str:
+    if credentials and credentials.scheme.lower() == "bearer" and credentials.credentials:
+        return credentials.credentials
+    token = request.cookies.get(ACCESS_COOKIE_NAME, "")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authorization token missing")
+    return token
+
+
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ):
-    if not credentials or credentials.scheme.lower() != "bearer" or not credentials.credentials:
-        raise HTTPException(status_code=401, detail="Authorization token missing")
-
-    token = credentials.credentials
+    token = _request_token(request, credentials)
     payload = _decode_token(token)
+    if payload.get("token_type") not in {None, "access"}:
+        raise HTTPException(status_code=401, detail="Invalid access token")
 
     user_id = payload.get("user_id")
     token_version = payload.get("token_version")
@@ -124,14 +134,14 @@ def get_current_user(
 def require_portal(expected_portal: str):
     """Dependency that additionally enforces the token's portal claim matches the expected portal."""
     def dependency(
+        request: Request,
         credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
         db: Session = Depends(get_db),
     ):
-        if not credentials or credentials.scheme.lower() != "bearer" or not credentials.credentials:
-            raise HTTPException(status_code=401, detail="Authorization token missing")
-
-        token = credentials.credentials
+        token = _request_token(request, credentials)
         payload = _decode_token(token)
+        if payload.get("token_type") not in {None, "access"}:
+            raise HTTPException(status_code=401, detail="Invalid access token")
         portal = payload.get("portal", "")
 
         if portal != expected_portal:

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # Per-portal JWT secrets - fall back to JWT_SECRET_KEY if not set
     SUPPLIER_JWT_SECRET_KEY: str = ""

@@ -361,6 +361,15 @@ def login_user(db: Session, data, request=None):
         "device_id": data.device_id,
         "token_version": user.token_version,
     }, portal=portal)
+    refresh_token = create_token({
+        "user_id": user.id,
+        "email": user.email,
+        "role": role_slug,
+        "portal": portal,
+        "client_type": data.client_type or "web",
+        "device_id": data.device_id,
+        "token_version": user.token_version,
+    }, portal=portal, token_type="refresh", expires_minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60)
 
     try:
         session = create_session(db, user, request=request)
@@ -394,6 +403,7 @@ def login_user(db: Session, data, request=None):
 
     return {
         "access_token": token,
+        "_refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "client_type": data.client_type or "web",
@@ -415,9 +425,19 @@ def refresh_user_token(db: Session, user: User, client_type: str | None = "web",
         "device_id": device_id,
         "token_version": user.token_version,
     }, portal=portal)
+    refresh_token = create_token({
+        "user_id": user.id,
+        "email": user.email,
+        "role": role_slug,
+        "portal": portal,
+        "client_type": client_type or "web",
+        "device_id": device_id,
+        "token_version": user.token_version,
+    }, portal=portal, token_type="refresh", expires_minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60)
 
     return {
         "access_token": token,
+        "_refresh_token": refresh_token,
         "token_type": "bearer",
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "client_type": client_type or "web",

@@ -2,6 +2,8 @@
 Public API - no authentication required.
 Serves tour listing and detail for the public website.
 """
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -9,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.cms import City, Country, Tour, TourCategory, TourSubcategory
 from app.services.cms import _category, _city, _country, _subcategory, _tour
+from app.schemas.cms import slugify
 from app.models.tours import (
     TourAccommodationExtra,
     TourCalendar,
@@ -41,7 +44,9 @@ def _ser_overview(o: TourOverview):
     }
 
 
-def _public_tour(item: Tour):
+def _public_tour(item: Tour, departures: list[TourCalendar] | None = None):
+    country_name = item.country.country_name if item.country else ""
+    country_slug = slugify(country_name or "worldwide")
     return {
         "id": item.id,
         "tour_code": item.tour_code,
@@ -50,7 +55,8 @@ def _public_tour(item: Tour):
         "subtitle": item.subtitle,
         "price_start_per_person": item.price_start_per_person,
         "currency": item.currency,
-        "country_name": item.country.country_name if item.country else "",
+        "country_name": country_name,
+        "country_slug": country_slug,
         "city_name": item.city.city_name if item.city else "",
         "category_name": item.category.category_name if item.category else "",
         "number_of_days": item.number_of_days,
@@ -58,6 +64,16 @@ def _public_tour(item: Tour):
         "short_description": item.short_description,
         "banner_image": item.banner_image,
         "status": item.status,
+        "canonical_path": f"/tours/{country_slug}/{item.slug}",
+        "departures": [
+            {
+                "id": departure.id,
+                "date": str(departure.tour_date.date()),
+                "slots": max(0, departure.available_seats - departure.booked_seats),
+                "status": departure.status,
+            }
+            for departure in (departures or [])
+        ],
     }
 
 
@@ -73,8 +89,11 @@ def public_tours(
     max_days: str = Query(default=""),
     min_price: str = Query(default=""),
     max_price: str = Query(default=""),
+    departure_month: str = Query(default="", pattern=r"^$|^\d{4}-\d{2}$"),
+    available_only: bool = Query(default=False),
+    sort: str = Query(default="newest", pattern="^(newest|price_asc|price_desc|duration_asc)$"),
     page: int = Query(default=1, ge=1),
-    limit: int = Query(default=PAGE_SIZE, ge=1, le=50),
+    limit: int = Query(default=PAGE_SIZE, ge=1, le=100),
 ):
     query = db.query(Tour).filter(Tour.status == "published")
     if search:
@@ -82,8 +101,12 @@ def public_tours(
         query = query.filter(or_(Tour.title.ilike(pat), Tour.short_description.ilike(pat)))
     if country:
         c = db.query(Country).filter(Country.country_name.ilike(country)).first()
+        if not c:
+            c = next((item for item in db.query(Country).all() if slugify(item.country_name) == slugify(country)), None)
         if c:
             query = query.filter(Tour.country_id == c.id)
+        else:
+            query = query.filter(Tour.id == -1)
     if city:
         ci = db.query(City).filter(City.city_name.ilike(city)).first()
         if ci:
@@ -123,15 +146,61 @@ def public_tours(
         except ValueError:
             pass
 
+    calendar_query = db.query(TourCalendar.tour_id).filter(
+        TourCalendar.status == "available",
+        TourCalendar.available_seats > TourCalendar.booked_seats,
+        TourCalendar.tour_date >= datetime.now(timezone.utc),
+    )
+    if departure_month:
+        month_start = datetime.strptime(f"{departure_month}-01", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        next_month = datetime(month_start.year + (month_start.month == 12), (month_start.month % 12) + 1, 1, tzinfo=timezone.utc)
+        calendar_query = calendar_query.filter(TourCalendar.tour_date >= month_start, TourCalendar.tour_date < next_month)
+        query = query.filter(Tour.id.in_(calendar_query))
+    elif available_only:
+        query = query.filter(Tour.id.in_(calendar_query))
+
     total = query.count()
-    tours = query.order_by(Tour.id.desc()).offset((page - 1) * limit).limit(limit).all()
+    if sort == "price_asc":
+        query = query.order_by(Tour.price_start_per_person.asc(), Tour.id.desc())
+    elif sort == "price_desc":
+        query = query.order_by(Tour.price_start_per_person.desc(), Tour.id.desc())
+    elif sort == "duration_asc":
+        query = query.order_by(Tour.number_of_days.asc(), Tour.id.desc())
+    else:
+        query = query.order_by(Tour.id.desc())
+    tours = query.offset((page - 1) * limit).limit(limit).all()
+    tour_ids = [tour.id for tour in tours]
+    departure_map: dict[int, list[TourCalendar]] = {tour_id: [] for tour_id in tour_ids}
+    if tour_ids:
+        upcoming = db.query(TourCalendar).filter(
+            TourCalendar.tour_id.in_(tour_ids),
+            TourCalendar.status == "available",
+            TourCalendar.available_seats > TourCalendar.booked_seats,
+            TourCalendar.tour_date >= datetime.now(timezone.utc),
+        ).order_by(TourCalendar.tour_date.asc()).all()
+        for departure in upcoming:
+            if len(departure_map[departure.tour_id]) < 3:
+                departure_map[departure.tour_id].append(departure)
     return {
         "status": "success",
         "total": total,
         "page": page,
         "limit": limit,
         "total_pages": max(1, (total + limit - 1) // limit),
-        "items": [_public_tour(t) for t in tours],
+        "items": [_public_tour(t, departure_map.get(t.id)) for t in tours],
+        "filters_applied": {
+            "search": search,
+            "country": country,
+            "city": city,
+            "category": category,
+            "min_days": min_days,
+            "max_days": max_days,
+            "min_price": min_price,
+            "max_price": max_price,
+            "departure_month": departure_month,
+            "available_only": available_only,
+            "sort": sort,
+        },
     }
 
 
@@ -141,12 +210,32 @@ def featured_tours(db: Session = Depends(get_db), limit: int = Query(default=6, 
     return {"status": "success", "items": [_public_tour(t) for t in tours]}
 
 
-@router.get("/tours/{tour_id}")
-def public_tour_detail(tour_id: int, db: Session = Depends(get_db)):
+@router.get("/tours/{country_slug}/{tour_slug}")
+def public_tour_detail_by_slug(country_slug: str, tour_slug: str, db: Session = Depends(get_db)):
+    """Resolve the canonical public tour URL and reject mismatched countries."""
     from fastapi import HTTPException
-    tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
+
+    tour = db.query(Tour).filter(Tour.slug == tour_slug, Tour.status == "published").first()
     if not tour:
         raise HTTPException(status_code=404, detail="Tour not found")
+    expected_country = slugify(tour.country.country_name if tour.country else "worldwide")
+    if country_slug != expected_country:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "Tour not found for this country", "canonical_path": f"/tours/{expected_country}/{tour.slug}"},
+        )
+    return public_tour_detail(tour.slug, db)
+
+
+@router.get("/tours/{tour_id}")
+def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
+    from fastapi import HTTPException
+    lookup = Tour.id == int(tour_id) if tour_id.isdigit() else Tour.slug == tour_id
+    tour = db.query(Tour).filter(lookup, Tour.status == "published").first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+
+    tour_id = tour.id
 
     overview = db.query(TourOverview).filter(TourOverview.tour_id == tour_id).first()
     itineraries = db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id).order_by(TourItinerary.day_number.asc()).all()
