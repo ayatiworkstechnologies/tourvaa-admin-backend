@@ -25,10 +25,7 @@ def unique(prefix: str) -> str:
 
 
 def get_admin_token() -> str:
-    resp = requests.post(f"{BASE_URL}/auth/login", json={
-        "email": ADMIN_EMAIL,
-        "password": ADMIN_PASSWORD,
-    }, timeout=10)
+    resp = login_with_retry(ADMIN_EMAIL, ADMIN_PASSWORD, attempts=12, backoff=6.0)
     assert resp.status_code == 200, f"Login failed: {resp.text}"
     data = resp.json()
     token = data.get("data", {}).get("access_token") or data.get("access_token")

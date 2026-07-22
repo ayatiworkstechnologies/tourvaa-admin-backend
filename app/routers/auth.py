@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth.permissions import get_current_user, require_permission
 from app.utils.ratelimit import check_rate_limit
 from app.models.users import User
 from app.models.roles import Role
+from app.config import settings
 
 from app.schemas.auth import (
     ForceLogoutSchema,
@@ -29,6 +30,26 @@ from app.services.auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+ACCESS_COOKIE_NAME = "tourvaa_access"
+REFRESH_COOKIE_NAME = "tourvaa_refresh"
+
+
+def _set_auth_cookies(response: Response, result: dict, *, expose_access_token: bool = True) -> dict:
+    access_token = result.get("access_token", "")
+    refresh_token = result.pop("_refresh_token", "")
+    secure = settings.APP_ENV.lower() == "production"
+    response.set_cookie(ACCESS_COOKIE_NAME, access_token, max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60, httponly=True, secure=secure, samesite="lax", path="/")
+    response.set_cookie(REFRESH_COOKIE_NAME, refresh_token, max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, httponly=True, secure=secure, samesite="lax", path="/api/auth")
+    if not expose_access_token:
+        result.pop("access_token", None)
+        result.pop("token_type", None)
+    return result
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    secure = settings.APP_ENV.lower() == "production"
+    response.delete_cookie(ACCESS_COOKIE_NAME, path="/", httponly=True, secure=secure, samesite="lax")
+    response.delete_cookie(REFRESH_COOKIE_NAME, path="/api/auth", httponly=True, secure=secure, samesite="lax")
 
 
 def _register_with_role(role_slug: str, data: RegisterSchema, db: Session):
@@ -83,9 +104,9 @@ def register_agent(data: RegisterSchema, db: Session = Depends(get_db)):
 
 
 @router.post("/login")
-def login(request: Request, data: LoginSchema, db: Session = Depends(get_db)):
+def login(request: Request, response: Response, data: LoginSchema, db: Session = Depends(get_db)):
     check_rate_limit(request, "login", max_calls=10, window_seconds=60)
-    result = login_user(db, data, request=request)
+    result = _set_auth_cookies(response, login_user(db, data, request=request), expose_access_token=data.client_type != "web-cookie")
 
     return {
         "status": "success",
@@ -145,18 +166,20 @@ def validate_reset_password_link(
 @router.post("/refresh-token")
 def refresh_token(
     request: Request,
+    response: Response,
     data: RefreshTokenSchema | None = None,
     db: Session = Depends(get_db),
 ):
     from jose import jwt as jose_jwt, JWTError
     from app.config import settings as _settings
 
-    authorization = request.headers.get("Authorization", "")
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
+    token = request.cookies.get(REFRESH_COOKIE_NAME, "")
+    if not token:
+        authorization = request.headers.get("Authorization", "")
+        parts = authorization.split()
+        token = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else ""
+    if not token:
         raise HTTPException(status_code=401, detail="Authorization token missing")
-
-    token = parts[1]
     try:
         # Read portal claim without full verification to pick the correct secret
         try:
@@ -175,6 +198,8 @@ def refresh_token(
         )
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+    if request.cookies.get(REFRESH_COOKIE_NAME) and payload.get("token_type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     user_id = payload.get("user_id")
     token_version = payload.get("token_version")
@@ -188,33 +213,37 @@ def refresh_token(
         raise HTTPException(status_code=403, detail="Account is not active")
 
     refresh_data = data or RefreshTokenSchema()
+    result = _set_auth_cookies(response, refresh_user_token(
+        db,
+        user,
+        client_type=refresh_data.client_type,
+        device_id=refresh_data.device_id,
+    ), expose_access_token=refresh_data.client_type != "web-cookie")
     return {
         "status": "success",
         "message": "Token refreshed successfully",
-        "data": refresh_user_token(
-            db,
-            user,
-            client_type=refresh_data.client_type,
-            device_id=refresh_data.device_id,
-        ),
+        "data": result,
     }
 
 @router.post("/refresh")
 def refresh(
     request: Request,
+    response: Response,
     data: RefreshTokenSchema | None = None,
     db: Session = Depends(get_db),
 ):
-    return refresh_token(request, data, db)
+    return refresh_token(request, response, data, db)
 
 
 @router.post("/logout")
 def logout(
     request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     force_logout_user(db, current_user, actor=current_user, request=request)
+    _clear_auth_cookies(response)
     return {
         "status": "success",
         "message": "Logged out successfully",
