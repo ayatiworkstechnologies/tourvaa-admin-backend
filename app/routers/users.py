@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth.permissions import require_permission
 from app.utils.pagination import pagination_params
 from app.models.users import User
-from app.schemas.users import UserApprovalUpdate, UserCreate, UserRolesUpdate, UserUpdate
+from app.schemas.users import UserApprovalUpdate, UserCreate, UserDeactivationUpdate, UserRolesUpdate, UserUpdate
 from app.services.users import (
     get_all_users,
     get_user_detail,
@@ -12,7 +12,7 @@ from app.services.users import (
     update_user,
     delete_user,
     approve_user,
-    reject_user,
+    deactivate_user,
     send_user_password_reset,
     assign_roles_to_user,
 )
@@ -22,6 +22,8 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 @router.get("/")
 def list_users(
+    account_status: str = Query(default=""),
+    user_type: str = Query(default=""),
     params: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
     _=Depends(require_permission("view-users")),
@@ -31,6 +33,8 @@ def list_users(
         page=params["page"],
         limit=params["limit"],
         search=params["search"],
+        account_status=account_status,
+        user_type=user_type,
     )
 
     return {
@@ -102,37 +106,26 @@ def remove_user(
     }
 
 
-@router.post("/{user_id}/approve")
-def approve_pending_user(
+@router.post("/{user_id}/activate")
+def activate_user_account(
     user_id: int,
     data: UserApprovalUpdate,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("update-users")),
 ):
-    user = approve_user(db, user_id, data.role_id, actor=current_user, request=request)
-
-    return {
-        "status": "success",
-        "message": "User approved successfully",
-        "data": user
-    }
+    return {"status": "success", "message": "User activated successfully", "data": approve_user(db, user_id, data.role_id, actor=current_user, request=request)}
 
 
-@router.post("/{user_id}/reject")
-def reject_pending_user(
+@router.post("/{user_id}/deactivate")
+def deactivate_user_account(
     user_id: int,
+    data: UserDeactivationUpdate,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("update-users")),
 ):
-    user = reject_user(db, user_id, actor=current_user, request=request)
-
-    return {
-        "status": "success",
-        "message": "User rejected successfully",
-        "data": user
-    }
+    return {"status": "success", "message": "User deactivated successfully", "data": deactivate_user(db, user_id, data.reason, actor=current_user, request=request)}
 
 
 @router.post("/{user_id}/send-reset-mail")

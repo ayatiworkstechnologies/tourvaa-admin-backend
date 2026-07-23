@@ -295,7 +295,7 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     from app.utils.imagekit_client import upload_to_imagekit
     ALLOWED = {
         "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
-        "image/webp": "webp", "application/pdf": "pdf",
+        "image/webp": "webp", "image/avif": "avif", "application/pdf": "pdf",
     }
     content = await upload.read()
     if not content:
@@ -303,7 +303,7 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     ext = ALLOWED.get(upload.content_type or "")
     if not ext:
         fname = (upload.filename or "").lower()
-        for s, e in [(".pdf", "pdf"), (".jpg", "jpg"), (".jpeg", "jpg"), (".png", "png"), (".webp", "webp")]:
+        for s, e in [(".pdf", "pdf"), (".jpg", "jpg"), (".jpeg", "jpg"), (".png", "png"), (".webp", "webp"), (".avif", "avif")]:
             if fname.endswith(s):
                 ext = e
                 break
@@ -423,6 +423,7 @@ async def upload_supplier_document(
         "image/jpeg": "jpg",
         "image/png": "png",
         "image/webp": "webp",
+        "image/avif": "avif",
         "application/pdf": "pdf",
         "application/msword": "doc",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -438,12 +439,14 @@ async def upload_supplier_document(
             extension = "png"
         elif filename_lower.endswith(".webp"):
             extension = "webp"
+        elif filename_lower.endswith(".avif"):
+            extension = "avif"
         elif filename_lower.endswith(".doc"):
             extension = "doc"
         elif filename_lower.endswith(".docx"):
             extension = "docx"
         else:
-            raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, PDF, DOC, and DOCX files are allowed")
+            raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, AVIF, PDF, DOC, and DOCX files are allowed")
 
     from uuid import uuid4
     from app.utils.imagekit_client import upload_to_imagekit

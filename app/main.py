@@ -15,7 +15,7 @@ from app.models.users import User
 from app.models.settings import ApiSetting, AppSetting, PaymentSetting
 from app.models.email_templates import EmailTemplate
 from app.models.audit import AuditLog
-from app.models.customers import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerCancellationRequest
+from app.models.customers import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerCancellationRequest, CustomerWishlistItem
 from app.models.cms import Country, State, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
 from app.models.bookings import Booking, BookingTraveller, BookingOptionalActivity, BookingAccommodation, BookingExtension, BookingStatusHistory, BookingCommunication, MessageReply, EmailLog
 from app.models.payments import Payment, PaymentTransaction, PaymentHold
@@ -72,6 +72,7 @@ def schema_is_ready():
         "customer_communications",
         "customer_saved_travellers",
         "customer_cancellation_requests",
+        "customer_wishlist_items",
         "countries",
         "cities",
         "tour_categories",
@@ -138,6 +139,7 @@ def schema_is_ready():
         "affiliate_clicks",
         "affiliate_conversions",
         "affiliate_payouts",
+        "user_status_history",
     }
 
     if not required_tables.issubset(tables):
@@ -157,6 +159,20 @@ def schema_is_ready():
             "email_verification_expires_at",
             "two_factor_enabled",
             "force_password_reset",
+            "user_type",
+            "country_code",
+            "mobile_number",
+            "email_verified",
+            "password_created_at",
+            "account_status",
+            "admin_verified",
+            "admin_verified_at",
+            "admin_verified_by",
+            "deactivated_at",
+            "deactivated_by",
+            "deactivation_reason",
+            "last_login_at",
+            "updated_at",
         },
     }
 

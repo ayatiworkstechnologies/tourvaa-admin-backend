@@ -58,13 +58,15 @@ def supplier_headers(supplier_ctx):
 # Registration / approval gate
 # ---------------------------------------------------------------------------
 
-def test_supplier_login_blocked_until_approved():
+def test_supplier_login_returns_status_until_approved():
     _, email, password = _register_supplier()
     resp = requests.post(f"{BASE_URL}/auth/login", json={"email": email, "password": password}, timeout=10)
-    # 429 is also acceptable: /auth/login is IP-rate-limited (10 calls/60s) and the
-    # full suite makes far more than 10 login calls, so this can legitimately trip
-    # under heavy test-suite load rather than the approval-status gate itself.
-    assert resp.status_code in (403, 429), resp.text
+    if resp.status_code == 429:
+        return
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["account_restricted"] is True
+    assert data["account_status"] == "PENDING_ADMIN_VERIFICATION"
 
 
 def test_supplier_can_login_after_approval(supplier_ctx):

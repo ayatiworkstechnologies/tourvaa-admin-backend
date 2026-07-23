@@ -58,6 +58,11 @@ def serialize_agent(item: Agent):
         "agent_type": item.agent_type,
         "discount_type": item.discount_type,
         "discount_value": item.discount_value,
+        "commission_request_type": item.commission_request_type,
+        "commission_request_value": item.commission_request_value,
+        "commission_request_status": item.commission_request_status,
+        "commission_requested_at": item.commission_requested_at,
+        "commission_reviewed_at": item.commission_reviewed_at,
         "contacts": relationship_list(item.contacts, _contact),
         "documents": relationship_list(item.documents, _document),
         "business_info": {
@@ -190,7 +195,28 @@ def update_agent_discount(db: Session, agent_id: int, data: AgentDiscountRequest
     old = serialize_agent(item)
     item.discount_type = data.discount_type
     item.discount_value = data.discount_value
+    if item.commission_request_status == "pending":
+        item.commission_request_status = "approved"
+        item.commission_reviewed_at = datetime.utcnow()
     log_audit(db, actor=actor, action="update_agent_discount", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
+    db.commit()
+    db.refresh(item)
+    return serialize_agent(item)
+
+
+def request_agent_commission(db: Session, user: User, data: AgentDiscountRequest, request: Request | None = None):
+    item = db.query(Agent).filter(Agent.user_id == user.id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    if item.commission_request_status == "pending":
+        raise HTTPException(status_code=400, detail="A commission request is already pending")
+    old = serialize_agent(item)
+    item.commission_request_type = data.discount_type
+    item.commission_request_value = data.discount_value
+    item.commission_request_status = "pending"
+    item.commission_requested_at = datetime.utcnow()
+    item.commission_reviewed_at = None
+    log_audit(db, actor=user, action="request_agent_commission", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)
     return serialize_agent(item)

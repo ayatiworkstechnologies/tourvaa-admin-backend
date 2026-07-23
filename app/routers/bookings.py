@@ -181,7 +181,19 @@ def supplier_cancel(booking_id: int, data: BookingCancelRequest, request: Reques
 
 @supplier_router.patch("/{booking_id}/postpone")
 def supplier_postpone(booking_id: int, data: SupplierPostponeRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
-    return {"status": "success", "message": "Booking postponed", "data": supplier_postpone_booking(db, booking_id, data.reason, data.new_tour_date, current_user, request)}
+    return {
+        "status": "success",
+        "message": "Booking postponed",
+        "data": supplier_postpone_booking(
+            db,
+            booking_id,
+            data.reason,
+            data.new_tour_date,
+            current_user,
+            request,
+            new_tour_calendar_id=data.new_tour_calendar_id,
+        ),
+    }
 
 
 @supplier_router.post("/{booking_id}/notify")

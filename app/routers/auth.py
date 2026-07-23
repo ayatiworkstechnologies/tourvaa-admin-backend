@@ -1,20 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.auth.permissions import get_current_user, require_permission
+from app.auth.permissions import get_current_user, get_token_user_including_inactive, require_permission
 from app.utils.ratelimit import check_rate_limit
 from app.models.users import User
 from app.models.roles import Role
 from app.config import settings
+from app.auth.security import create_token
 
 from app.schemas.auth import (
     ForceLogoutSchema,
+    CompleteRegistrationSchema,
+    ChangeRegistrationEmailSchema,
     ForgotPasswordSchema,
     LoginSchema,
     RefreshTokenSchema,
     RegisterSchema,
+    ResendVerificationSchema,
     ResetPasswordSchema,
     VerifyEmailSchema,
+    UnifiedRegisterSchema,
 )
 from app.services.auth import (
     force_logout_user,
@@ -22,10 +27,15 @@ from app.services.auth import (
     get_auth_user_payload,
     get_login_history,
     login_user,
+    change_registration_email,
+    complete_registration,
     refresh_user_token,
     register_user,
+    register_unified_user,
+    resend_registration_verification,
     reset_password,
     validate_reset_token,
+    validate_registration_token,
     verify_email,
 )
 
@@ -65,6 +75,11 @@ def _register_with_role(role_slug: str, data: RegisterSchema, db: Session):
 
 
 def _registration_response(user: User):
+    change_token = create_token(
+        {"user_id": user.id, "token_version": user.token_version},
+        token_type="registration_change",
+        expires_minutes=30,
+    )
     return {
         "status": "success",
         "message": "User registered successfully",
@@ -78,12 +93,14 @@ def _registration_response(user: User):
                 "slug": user.role.slug if user.role else None,
             },
             "approval_status": user.approval_status,
+            "account_status": user.account_status,
+            "registration_change_token": change_token,
         },
     }
 
 @router.post("/register")
-def register(data: RegisterSchema, db: Session = Depends(get_db)):
-    user = register_user(db, data)
+def register(data: UnifiedRegisterSchema, db: Session = Depends(get_db)):
+    user = register_unified_user(db, data)
 
     return _registration_response(user)
 
@@ -110,9 +127,17 @@ def login(request: Request, response: Response, data: LoginSchema, db: Session =
 
     return {
         "status": "success",
-        "message": "Login successful",
+        "message": "Account status returned" if result.get("account_restricted") else "Login successful",
         "data": result
     }
+
+
+@router.get("/account-status")
+def account_status(
+    current_user: User = Depends(get_token_user_including_inactive),
+    db: Session = Depends(get_db),
+):
+    return {"status": "success", "data": {"user": get_auth_user_payload(db, current_user)}}
 
 
 @router.get("/me")
@@ -209,7 +234,7 @@ def refresh_token(
         raise HTTPException(status_code=401, detail="User not found")
     if token_version is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Session invalidated. Please log in again.")
-    if user.approval_status != "approved" or not user.is_active:
+    if user.account_status != "ACTIVE" or not user.is_active:
         raise HTTPException(status_code=403, detail="Account is not active")
 
     refresh_data = data or RefreshTokenSchema()
@@ -239,7 +264,7 @@ def refresh(
 def logout(
     request: Request,
     response: Response,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_token_user_including_inactive),
     db: Session = Depends(get_db),
 ):
     force_logout_user(db, current_user, actor=current_user, request=request)
@@ -257,6 +282,35 @@ def verify_email_request(request: Request, data: VerifyEmailSchema, db: Session 
         "status": "success",
         "message": "Email verified successfully",
     }
+
+
+@router.get("/verify-email/validate")
+def validate_verification_link(token: str = Query(default=""), db: Session = Depends(get_db)):
+    return {"status": "success", "data": validate_registration_token(db, token)}
+
+
+@router.post("/complete-registration")
+def complete_registration_request(data: CompleteRegistrationSchema, db: Session = Depends(get_db)):
+    user = complete_registration(db, data.token, data.password)
+    return {
+        "status": "success",
+        "message": "Password created. Your account is pending administrator verification.",
+        "data": {"account_status": user.account_status},
+    }
+
+
+@router.post("/resend-verification")
+def resend_verification(request: Request, data: ResendVerificationSchema, db: Session = Depends(get_db)):
+    check_rate_limit(request, "resend-verification", max_calls=3, window_seconds=300)
+    resend_registration_verification(db, str(data.email), data.redirect)
+    return {"status": "success", "message": "If the account is pending, a new verification email has been sent."}
+
+
+@router.post("/change-registration-email")
+def change_email(request: Request, data: ChangeRegistrationEmailSchema, db: Session = Depends(get_db)):
+    check_rate_limit(request, "change-registration-email", max_calls=3, window_seconds=300)
+    user = change_registration_email(db, data.change_token, str(data.email), data.redirect)
+    return {"status": "success", "message": "Email updated and verification link sent.", "data": {"email": user.email}}
 
 
 @router.get("/login-history")

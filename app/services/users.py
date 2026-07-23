@@ -8,20 +8,19 @@ from app.models.roles import Role
 from app.config import settings
 from app.utils.email_templates import (
     approved_email,
+    base_email,
+    esc,
     password_reset_email,
     render_database_email,
     user_created_email,
 )
 from app.utils.mailer import send_email, try_send_email
 from app.services.audit import log_audit
-from app.models.users import User, UserRole
+from app.models.users import User, UserRole, UserStatusHistory
 from app.schemas.users import UserCreate, UserUpdate
 from app.auth.security import create_password_reset_token, hash_password
 from app.services.auth import build_password_reset_url
 from app.utils.media import existing_storage_path
-
-
-APPROVAL_STATUSES = ["pending", "approved", "rejected"]
 
 
 def serialize_user(user: User):
@@ -58,14 +57,40 @@ def serialize_user(user: User):
         "is_active": user.is_active,
         "token_version": user.token_version,
         "approval_status": user.approval_status,
+        "user_type": user.user_type,
+        "country_code": user.country_code,
+        "mobile_number": user.mobile_number,
+        "email_verified": user.email_verified,
+        "password_created": bool(user.password_created_at),
+        "account_status": user.account_status,
+        "admin_verified": user.admin_verified,
+        "admin_verified_at": user.admin_verified_at,
+        "admin_verified_by": user.admin_verified_by,
+        "deactivated_at": user.deactivated_at,
+        "deactivated_by": user.deactivated_by,
+        "deactivation_reason": user.deactivation_reason,
+        "last_login_at": user.last_login_at,
+        "updated_at": user.updated_at,
+        "status_history": [
+            {
+                "id": entry.id,
+                "from_status": entry.from_status,
+                "to_status": entry.to_status,
+                "reason": entry.reason,
+                "changed_by": entry.changed_by,
+                "created_at": entry.created_at,
+            }
+            for entry in sorted(user.status_history, key=lambda item: item.id, reverse=True)
+        ],
         "created_at": user.created_at,
     }
 
 
-def get_all_users(db: Session, page: int | None = None, limit: int | None = None, search: str = ""):
+def get_all_users(db: Session, page: int | None = None, limit: int | None = None, search: str = "", account_status: str = "", user_type: str = ""):
     query = db.query(User).options(
         joinedload(User.role),
         selectinload(User.user_roles).joinedload(UserRole.role),
+        selectinload(User.status_history),
     )
 
     if search:
@@ -77,6 +102,10 @@ def get_all_users(db: Session, page: int | None = None, limit: int | None = None
                 User.phone.ilike(pattern),
             )
         )
+    if account_status:
+        query = query.filter(User.account_status == account_status.upper())
+    if user_type:
+        query = query.filter(User.user_type == user_type.upper())
 
     query = query.order_by(User.id.desc())
 
@@ -101,6 +130,7 @@ def get_user_by_id(db: Session, user_id: int):
         .options(
             joinedload(User.role),
             selectinload(User.user_roles).joinedload(UserRole.role),
+            selectinload(User.status_history),
         )
         .filter(User.id == user_id)
         .first()
@@ -265,7 +295,6 @@ def update_user(
 ):
     user = get_user_by_id(db, user_id)
     old_values = serialize_user(user)
-    was_approved = user.approval_status == "approved"
 
     if data.name is not None:
         user.name = data.name.strip()
@@ -306,33 +335,6 @@ def update_user(
         sync_user_roles(db, user, [data.role_id])
         new_role_id = data.role_id
 
-    if data.is_active is not None:
-        ensure_not_removing_last_super_admin(db, user, new_is_active=data.is_active)
-        if user.is_active != data.is_active:
-            user.token_version += 1
-        user.is_active = data.is_active
-
-    if data.approval_status is not None:
-        if data.approval_status not in APPROVAL_STATUSES:
-            raise HTTPException(status_code=400, detail="Invalid approval status")
-
-        if data.approval_status == "approved" and user.role_id is None:
-            raise HTTPException(status_code=400, detail="Assign a role before approval")
-
-        ensure_not_removing_last_super_admin(
-            db,
-            user,
-            new_role_id=new_role_id,
-            new_approval_status=data.approval_status,
-        )
-        if user.approval_status != data.approval_status:
-            user.token_version += 1
-        new_active = data.approval_status == "approved"
-        if user.is_active != new_active:
-            user.token_version += 1
-        user.approval_status = data.approval_status
-        user.is_active = new_active
-
     log_audit(
         db,
         actor=actor,
@@ -346,16 +348,6 @@ def update_user(
     db.commit()
     db.refresh(user)
 
-    if data.approval_status == "approved" and not was_approved:
-        login_url = f"{settings.FRONTEND_URL}/login"
-        subject, html = render_database_email(
-            db, "account_approved",
-            {"name": user.name, "login_url": login_url},
-            "Your Tourvaa account is approved",
-            approved_email(user.name, login_url),
-        )
-        try_send_email(user.email, subject, html)
-
     return serialize_user(user)
 
 
@@ -368,7 +360,8 @@ def approve_user(
 ):
     user = get_user_by_id(db, user_id)
     old_values = serialize_user(user)
-    was_approved = user.approval_status == "approved"
+    if user.account_status == "ACTIVE" and user.is_active:
+        raise HTTPException(status_code=400, detail="User account is already active")
 
     if role_id is not None:
         validate_role(db, role_id)
@@ -377,10 +370,38 @@ def approve_user(
 
     if user.role_id is None:
         raise HTTPException(status_code=400, detail="Assign a role before approval")
+    if user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"} and (not user.email_verified or not user.password_created_at):
+        raise HTTPException(status_code=400, detail="Email verification and password creation must be completed before activation")
 
+    old_status = user.account_status
     user.approval_status = "approved"
     user.is_active = True
-    user.token_version += 1
+    user.account_status = "ACTIVE"
+    user.admin_verified = True
+    user.admin_verified_at = datetime.utcnow()
+    user.admin_verified_by = actor.id if actor else None
+    user.deactivated_at = None
+    user.deactivated_by = None
+    user.deactivation_reason = None
+    db.add(UserStatusHistory(user_id=user.id, from_status=old_status, to_status="ACTIVE", reason="Activated by administrator", changed_by=actor.id if actor else None))
+    role_slug = user.role.slug if user.role else ""
+    if role_slug == "customer":
+        from app.models.customers import Customer
+        profile = db.query(Customer).filter(Customer.user_id == user.id).first()
+        if profile:
+            profile.status = "active"
+    elif role_slug == "supplier":
+        from app.models.suppliers import Supplier
+        profile = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+        if profile:
+            profile.status = "active"
+            profile.approval_status = "approved"
+    elif role_slug == "agent-reseller":
+        from app.models.agents import Agent
+        profile = db.query(Agent).filter(Agent.user_id == user.id).first()
+        if profile:
+            profile.status = "active"
+            profile.approval_status = "approved"
 
     log_audit(
         db,
@@ -395,16 +416,48 @@ def approve_user(
     db.commit()
     db.refresh(user)
 
-    if not was_approved:
-        login_url = f"{settings.FRONTEND_URL}/login"
-        subject, html = render_database_email(
-            db, "account_approved",
-            {"name": user.name, "login_url": login_url},
-            "Your Tourvaa account is approved",
-            approved_email(user.name, login_url),
-        )
-        try_send_email(user.email, subject, html)
+    login_url = f"{settings.FRONTEND_URL}/login"
+    subject, html = render_database_email(
+        db, "account_approved",
+        {"name": user.name, "login_url": login_url},
+        "Your Tourvaa account is active",
+        approved_email(user.name, login_url),
+    )
+    try_send_email(user.email, subject, html)
 
+    return serialize_user(user)
+
+
+def deactivate_user(db: Session, user_id: int, reason: str, actor: User | None = None, request: Request | None = None):
+    user = get_user_by_id(db, user_id)
+    ensure_not_removing_last_super_admin(db, user, new_is_active=False)
+    old_values = serialize_user(user)
+    old_status = user.account_status
+    user.account_status = "INACTIVE"
+    user.is_active = False
+    user.deactivated_at = datetime.utcnow()
+    user.deactivated_by = actor.id if actor else None
+    user.deactivation_reason = reason.strip()
+    user.token_version += 1
+    role_slug = user.role.slug if user.role else ""
+    if role_slug == "customer":
+        from app.models.customers import Customer
+        profile = db.query(Customer).filter(Customer.user_id == user.id).first()
+    elif role_slug == "supplier":
+        from app.models.suppliers import Supplier
+        profile = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    elif role_slug == "agent-reseller":
+        from app.models.agents import Agent
+        profile = db.query(Agent).filter(Agent.user_id == user.id).first()
+    else:
+        profile = None
+    if profile:
+        profile.status = "inactive"
+    db.add(UserStatusHistory(user_id=user.id, from_status=old_status, to_status="INACTIVE", reason=reason.strip(), changed_by=actor.id if actor else None))
+    log_audit(db, actor=actor, action="deactivate_user", entity_type="user", entity_id=user.id, old_values=old_values, new_values=serialize_user(user), request=request)
+    db.commit()
+    db.refresh(user)
+    try_send_email(user.email, "Your Tourvaa account is inactive", base_email("Account deactivated", f"Hi {esc(user.name)},", f"Your Tourvaa account has been deactivated.<br /><br />Reason: {esc(reason)}"))
     return serialize_user(user)
 
 
@@ -447,35 +500,6 @@ def assign_roles_to_user(
         entity_id=user.id,
         old_values=old_values,
         new_values={"role_ids": [role.id for role in roles]},
-        request=request,
-    )
-    db.commit()
-    db.refresh(user)
-
-    return serialize_user(user)
-
-
-def reject_user(
-    db: Session,
-    user_id: int,
-    actor: User | None = None,
-    request: Request | None = None,
-):
-    user = get_user_by_id(db, user_id)
-    ensure_not_removing_last_super_admin(db, user, new_approval_status="rejected")
-    old_values = serialize_user(user)
-    user.approval_status = "rejected"
-    user.is_active = False
-    user.token_version += 1
-
-    log_audit(
-        db,
-        actor=actor,
-        action="reject_user",
-        entity_type="user",
-        entity_id=user.id,
-        old_values=old_values,
-        new_values=serialize_user(user),
         request=request,
     )
     db.commit()

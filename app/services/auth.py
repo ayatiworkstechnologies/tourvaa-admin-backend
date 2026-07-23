@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta
 import logging
+from urllib.parse import quote
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -15,8 +17,7 @@ from app.utils.email_templates import (
 from app.utils.mailer import send_email, try_send_email
 from app.models.audit import AuditLog
 from app.services.audit import log_audit
-from app.models.users import User
-from app.models.users import UserRole
+from app.models.users import User, UserRole, UserStatusHistory
 from app.models.roles import Role
 from app.models.permissions import Permission, RolePermission
 from app.models.customers import Customer
@@ -123,6 +124,12 @@ def get_auth_user_payload(db: Session, user: User):
         "name": user.name,
         "email": user.email,
         "phone": user.phone,
+        "country_code": user.country_code,
+        "mobile_number": user.mobile_number,
+        "user_type": user.user_type,
+        "email_verified": user.email_verified,
+        "admin_verified": user.admin_verified,
+        "account_status": user.account_status,
         "profile_image": existing_storage_path(user.profile_image),
         "role": {
             "id": user.role_id,
@@ -144,11 +151,12 @@ def build_password_reset_url(token: str, client_type: str | None = "web"):
 
     return f"{settings.FRONTEND_URL}/reset-password?token={token}"
 
-def build_email_verification_url(token: str):
-    return f"{settings.FRONTEND_URL}/verify-email?token={token}"
+def build_email_verification_url(token: str, redirect: str | None = None):
+    url = f"{settings.FRONTEND_URL}/auth/verify-email?token={token}"
+    return f"{url}&redirect={quote(redirect, safe='')}" if redirect else url
 
-def send_email_verification(db: Session, user: User, token: str):
-    verification_url = build_email_verification_url(token)
+def send_email_verification(db: Session, user: User, token: str, redirect: str | None = None):
+    verification_url = build_email_verification_url(token, redirect)
     subject, html = render_database_email(
         db,
         "email_verification",
@@ -156,13 +164,147 @@ def send_email_verification(db: Session, user: User, token: str):
             "name": user.name,
             "email": user.email,
             "verification_url": verification_url,
-            "button_text": "Verify Email",
+            "button_text": "Verify Email & Create Password",
             "button_url": verification_url,
         },
-        "Verify your Tourvaa email",
+        "Verify your Tourvaa email and create your password",
         email_verification_email(user.name, verification_url),
     )
     try_send_email(user.email, subject, html)
+
+
+def register_unified_user(db: Session, data):
+    email = str(data.email).strip().lower()
+    phone = f"{data.country_code}{data.mobile_number}"
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=400, detail="Email already exists")
+    if db.query(User).filter(or_(User.mobile_number == phone, User.phone == phone)).first():
+        raise HTTPException(status_code=400, detail="Mobile number already exists")
+
+    role_slug = {"CUSTOMER": "customer", "AGENT": "agent-reseller", "SUPPLIER": "supplier"}[data.account_type]
+    role = db.query(Role).filter(Role.slug == role_slug, Role.is_active == True).first()
+    if not role:
+        raise HTTPException(status_code=400, detail="Selected account type is not available")
+
+    token, token_hash = create_password_reset_token()
+    user = User(
+        name=data.first_name,
+        email=email,
+        phone=phone,
+        country_code=data.country_code,
+        mobile_number=phone,
+        password=None,
+        role_id=role.id,
+        user_type=data.account_type,
+        is_active=False,
+        approval_status="pending",
+        email_verified=False,
+        admin_verified=False,
+        account_status="PENDING_EMAIL_VERIFICATION",
+        email_verification_token=token_hash,
+        email_verification_expires_at=datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES),
+    )
+    db.add(user)
+    db.flush()
+    db.add(UserRole(user_id=user.id, role_id=role.id))
+    db.add(UserStatusHistory(user_id=user.id, to_status=user.account_status, reason="Registration started"))
+
+    if role_slug == "customer":
+        db.add(Customer(user_id=user.id, first_name=user.name, last_name="", full_name=user.name, email=email, phone=phone, status="inactive", email_verified=False))
+    elif role_slug == "supplier":
+        db.add(Supplier(user_id=user.id, supplier_name=user.name, status="inactive", approval_status="email_verification_pending"))
+    else:
+        db.add(Agent(user_id=user.id, agent_name=user.name, status="inactive", approval_status="email_verification_pending"))
+
+    db.commit()
+    db.refresh(user)
+    send_email_verification(db, user, token, data.redirect)
+    return user
+
+
+def validate_registration_token(db: Session, token: str):
+    user = _registration_token_user(db, token)
+    if user.account_status == "PENDING_EMAIL_VERIFICATION":
+        old_status = user.account_status
+        user.account_status = "PENDING_PASSWORD_CREATION"
+        db.add(UserStatusHistory(user_id=user.id, from_status=old_status, to_status=user.account_status, reason="Email link opened"))
+        db.commit()
+    return {"email": user.email, "account_type": user.user_type}
+
+
+def _registration_token_user(db: Session, token: str):
+    if not token:
+        raise HTTPException(status_code=400, detail="Verification token is required")
+    user = db.query(User).filter(User.email_verification_token == hash_reset_token(token)).first()
+    if not user or not user.email_verification_expires_at:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+    if user.email_verification_expires_at.replace(tzinfo=None) < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+    if user.account_status not in {"PENDING_EMAIL_VERIFICATION", "PENDING_PASSWORD_CREATION"}:
+        raise HTTPException(status_code=400, detail="Verification link has already been used")
+    return user
+
+
+def complete_registration(db: Session, token: str, password: str):
+    user = _registration_token_user(db, token)
+    old_status = user.account_status
+    user.password = hash_password(password)
+    user.password_created_at = datetime.utcnow()
+    user.email_verified = True
+    user.email_verified_at = datetime.utcnow()
+    user.email_verification_token = None
+    user.email_verification_expires_at = None
+    user.account_status = "PENDING_ADMIN_VERIFICATION"
+    customer = db.query(Customer).filter(Customer.user_id == user.id).first()
+    if customer:
+        customer.email_verified = True
+    db.add(UserStatusHistory(user_id=user.id, from_status=old_status, to_status=user.account_status, reason="Password created"))
+    db.commit()
+    return user
+
+
+def resend_registration_verification(db: Session, email: str, redirect: str | None = None):
+    user = db.query(User).filter(User.email == email.strip().lower()).first()
+    if not user:
+        return True
+    if user.account_status not in {"PENDING_EMAIL_VERIFICATION", "PENDING_PASSWORD_CREATION"}:
+        raise HTTPException(status_code=400, detail="This account no longer needs email verification")
+    token, token_hash = create_password_reset_token()
+    user.account_status = "PENDING_EMAIL_VERIFICATION"
+    user.email_verification_token = token_hash
+    user.email_verification_expires_at = datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
+    db.commit()
+    send_email_verification(db, user, token, redirect)
+    return True
+
+
+def change_registration_email(db: Session, change_token: str, email: str, redirect: str | None = None):
+    from jose import JWTError, jwt
+    try:
+        payload = jwt.decode(change_token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Change-email session has expired")
+    if payload.get("token_type") != "registration_change":
+        raise HTTPException(status_code=400, detail="Invalid change-email session")
+    user = db.query(User).filter(User.id == payload.get("user_id")).first()
+    if not user or payload.get("token_version") != user.token_version:
+        raise HTTPException(status_code=400, detail="Invalid change-email session")
+    if user.account_status not in {"PENDING_EMAIL_VERIFICATION", "PENDING_PASSWORD_CREATION"}:
+        raise HTTPException(status_code=400, detail="Email can no longer be changed")
+    normalized = email.strip().lower()
+    if db.query(User).filter(User.email == normalized, User.id != user.id).first():
+        raise HTTPException(status_code=400, detail="Email already exists")
+    user.email = normalized
+    customer = db.query(Customer).filter(Customer.user_id == user.id).first()
+    if customer:
+        customer.email = normalized
+    token, token_hash = create_password_reset_token()
+    user.account_status = "PENDING_EMAIL_VERIFICATION"
+    user.email_verification_token = token_hash
+    user.email_verification_expires_at = datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
+    db.commit()
+    send_email_verification(db, user, token, redirect)
+    return user
 
 
 
@@ -223,8 +365,14 @@ def register_user(db: Session, data):
         pincode=data.pincode.strip(),
         password=hash_password(data.password),
         role_id=selected_role.id if selected_role else None,
+        user_type={"customer": "CUSTOMER", "supplier": "SUPPLIER", "agent-reseller": "AGENT"}.get(selected_role.slug if selected_role else "", "ADMIN"),
         is_active=is_customer,
         approval_status="approved" if is_customer else "pending",
+        account_status="ACTIVE" if is_customer else "PENDING_ADMIN_VERIFICATION",
+        admin_verified=is_customer,
+        admin_verified_at=datetime.utcnow() if is_customer else None,
+        email_verified=False,
+        password_created_at=datetime.utcnow(),
         email_verified_at=None,
         email_verification_token=verification_token_hash,
         email_verification_expires_at=datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES),
@@ -306,8 +454,15 @@ def register_user(db: Session, data):
 
 
 def login_user(db: Session, data, request=None):
-    email = str(data.email).strip().lower()
-    user = db.query(User).filter(User.email == email).first()
+    identifier = data.login_identifier
+    digits = "".join(character for character in identifier if character.isdigit())
+    normalized_phone = f"+{digits}" if digits else ""
+    user = db.query(User).filter(or_(
+        User.email == identifier,
+        User.phone == identifier,
+        User.mobile_number == normalized_phone,
+    )).first()
+    email = user.email if user else identifier
 
     if not user:
         _record_login_history(db, data=data, email=email, status="failed", failure_reason="unknown_user", request=request)
@@ -322,7 +477,7 @@ def login_user(db: Session, data, request=None):
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if not verify_password(data.password, user.password):
+    if not user.password or not verify_password(data.password, user.password):
         _record_login_history(db, data=data, email=email, status="failed", user=user, failure_reason="bad_password", request=request)
         log_audit(
             db,
@@ -339,15 +494,6 @@ def login_user(db: Session, data, request=None):
     if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Email verification is required before login")
 
-    if user.approval_status == "pending":
-        raise HTTPException(status_code=403, detail="Account is waiting for admin approval")
-
-    if user.approval_status == "rejected":
-        raise HTTPException(status_code=403, detail="Account approval was rejected")
-
-    if not user.is_active:
-        raise HTTPException(status_code=403, detail="User is inactive")
-
     auth_user = get_auth_user_payload(db, user)
     role_slug = auth_user["role"]["slug"]
     portal = get_portal_for_role(role_slug)
@@ -361,6 +507,20 @@ def login_user(db: Session, data, request=None):
         "device_id": data.device_id,
         "token_version": user.token_version,
     }, portal=portal)
+
+    if user.account_status != "ACTIVE" or not user.is_active:
+        _record_login_history(db, data=data, email=email, status="restricted", user=user, failure_reason=user.account_status, request=request)
+        db.commit()
+        return {
+            "access_token": token,
+            "_refresh_token": "",
+            "token_type": "bearer",
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "account_restricted": True,
+            "account_status": user.account_status,
+            "user": auth_user,
+        }
+
     refresh_token = create_token({
         "user_id": user.id,
         "email": user.email,
@@ -399,6 +559,7 @@ def login_user(db: Session, data, request=None):
             "device_name": data.device_name,
         },
     )
+    user.last_login_at = datetime.utcnow()
     db.commit()
 
     return {

@@ -1,5 +1,6 @@
 ﻿from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import relationship
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -122,5 +123,21 @@ class CustomerCancellationRequest(Base):
     customer = relationship("Customer", back_populates="cancellation_requests")
     booking = relationship("Booking")
     reviewer = relationship("User")
+
+
+class CustomerWishlistItem(Base):
+    __tablename__ = "customer_wishlist_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tour_id = Column(Integer, ForeignKey("tours.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User")
+    tour = relationship("Tour")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "tour_id", name="uq_customer_wishlist_user_tour"),
+    )
 
 

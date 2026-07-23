@@ -47,6 +47,9 @@ class Booking(Base):
     tax_amount = Column(Numeric(12, 2), default=0, nullable=False)
     surcharge_amount = Column(Numeric(12, 2), default=0, nullable=False)
     final_amount = Column(Numeric(12, 2), default=0, nullable=False)
+    agent_net_price = Column(Numeric(12, 2), default=0, nullable=False)
+    agent_markup = Column(Numeric(12, 2), default=0, nullable=False)
+    customer_selling_price = Column(Numeric(12, 2), default=0, nullable=False)
     amount_paid = Column(Numeric(12, 2), default=0, nullable=False)
     amount_pending = Column(Numeric(12, 2), default=0, nullable=False)
 
@@ -54,6 +57,8 @@ class Booking(Base):
     supplier_acceptance_status = Column(String(30), default="not_assigned", nullable=False, index=True)
     payment_status = Column(String(30), default="unpaid", nullable=False, index=True)
     payment_type = Column(String(30), default="full", nullable=False)
+    agent_payment_method = Column(String(30), nullable=True)
+    agent_reference = Column(String(100), nullable=True)
 
     notes = Column(Text, nullable=True)
     customer_notes = Column(Text, nullable=True)

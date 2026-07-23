@@ -7,6 +7,7 @@ from app.utils.pagination import pagination_params
 from app.schemas.customers import (
     CustomerBlockRequest,
     CustomerCreate,
+    CustomerLinkRequest,
     CustomerStatusUpdate,
     CustomerUpdate,
     CustomerProfileUpdate,
@@ -32,6 +33,7 @@ from app.services.customers import (
     update_customer_status,
 )
 from app.models.users import User
+from app.services.audit import log_audit
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
 
@@ -96,6 +98,23 @@ def add_customer(
         "message": "Customer created successfully",
         "data": create_customer(db, data, actor=current_user, request=request),
     }
+
+
+@router.post("/link")
+def link_existing_customer(
+    data: CustomerLinkRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("customers.create", "create-customers")),
+):
+    if not is_agent_user(current_user):
+        raise HTTPException(status_code=403, detail="Only agent accounts can link an existing customer")
+    customer = db.query(Customer).filter(Customer.email == str(data.email).lower()).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    log_audit(db, actor=current_user, action="link_customer", entity_type="customer", entity_id=customer.id, new_values={"email": customer.email}, request=request)
+    db.commit()
+    return {"status": "success", "message": "Customer linked to agent account", "data": serialize_customer(customer)}
 
 
 @router.get("/me")

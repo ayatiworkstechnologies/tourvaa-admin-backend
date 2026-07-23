@@ -164,10 +164,15 @@ def password_changed_email(name: str, login_url: str):
 
 def email_verification_email(name: str, verification_url: str):
     return base_email(
-        "Verify your email",
+        "Verify your email and create your password",
         f"Hi {esc(name)},",
-        "Please verify your email address to complete your Tourvaa account setup. This link expires in 24 hours.",
-        "Verify Email",
+        (
+            "Thanks for registering with Tourvaa.<br /><br />"
+            "Use the secure button below to verify your email and create your password. "
+            "After that, your account will be sent to our team for activation.<br /><br />"
+            "<strong>For your security:</strong> this single-use link expires in 24 hours."
+        ),
+        "Verify Email & Create Password",
         verification_url,
     )
 

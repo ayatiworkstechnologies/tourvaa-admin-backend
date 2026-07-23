@@ -4,7 +4,14 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.services.bookings import _start_supplier_decision, _validate_customer_travellers, _validate_supplier_lifecycle_transition
+from app.services.bookings import (
+    _booking_seat_count,
+    _price_booking,
+    _start_supplier_decision,
+    _validate_booking_status_transition,
+    _validate_customer_travellers,
+    _validate_supplier_lifecycle_transition,
+)
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
 from app.routers.payments_gateway import _ensure_booking_payment_access, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
@@ -117,6 +124,34 @@ def test_supplier_lifecycle_rejects_invalid_source_status():
     with pytest.raises(HTTPException) as exc:
         _validate_supplier_lifecycle_transition(row, "completed")
     assert exc.value.status_code == 400
+
+
+def test_admin_booking_status_transition_allows_forward_progress():
+    assert _validate_booking_status_transition("confirmed", "ongoing") is True
+
+
+def test_admin_booking_status_transition_is_idempotent():
+    assert _validate_booking_status_transition("confirmed", "confirmed") is False
+
+
+def test_admin_booking_status_transition_rejects_terminal_reversal():
+    with pytest.raises(HTTPException) as exc:
+        _validate_booking_status_transition("completed", "pending_payment")
+    assert exc.value.status_code == 409
+
+
+def test_total_travellers_includes_infants_but_seat_count_does_not():
+    data = BookingCreate(
+        customer_id=1,
+        booking_source="admin",
+        no_of_adults=2,
+        no_of_children=1,
+        no_of_infants=1,
+    )
+    priced = _price_booking(None, data)
+    assert priced[4] == 4
+    row = SimpleNamespace(adults_count=2, children_count=1, no_of_adults=2, no_of_children=1)
+    assert _booking_seat_count(row) == 3
 
 
 def payment_booking(**overrides):

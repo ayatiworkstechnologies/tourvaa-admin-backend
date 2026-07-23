@@ -2,9 +2,9 @@ from decimal import Decimal
 from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator
 
-BOOKING_STATUSES = {"draft", "pending_payment", "payment_authorized", "pending_supplier_acceptance", "confirmed", "ongoing", "completed", "cancelled", "declined", "refunded", "upcoming", "postponed"}
+BOOKING_STATUSES = {"draft", "pending_payment", "pending_credit_approval", "pending_supplier_assignment", "payment_authorized", "pending_supplier_acceptance", "supplier_reassignment_required", "confirmed", "ready_to_travel", "ongoing", "completed", "cancellation_requested", "cancelled", "declined", "refunded", "upcoming", "postponed"}
 SUPPLIER_ACCEPTANCE_STATUSES = {"not_assigned", "pending", "accepted", "declined", "expired"}
-PAYMENT_STATUSES = {"unpaid", "pending", "authorized", "partially_paid", "paid", "failed", "refunded", "partially_refunded", "voided", "partial"}
+PAYMENT_STATUSES = {"unpaid", "pending", "authorized", "partially_paid", "paid", "failed", "bank_transfer_pending", "credit_approval_pending", "refund_pending", "refunded", "partially_refunded", "voided", "partial"}
 PAYMENT_TYPES = {"partial", "full"}
 BOOKING_SOURCES = {"customer", "agent", "admin"}
 TRAVELLER_TYPES = {"adult", "child"}
@@ -64,6 +64,9 @@ class BookingCreate(BaseModel):
     children_count: Optional[int] = Field(default=None, ge=0)
     currency: str = "USD"
     payment_type: str = "full"
+    agent_markup: Decimal = Field(default=Decimal("0"), ge=0)
+    agent_payment_method: Optional[str] = None
+    agent_reference: Optional[str] = Field(default=None, max_length=100)
     promo_code: Optional[str] = None
     optional_activities: list[BookingAddonPayload] = Field(default_factory=list)
     accommodations: list[BookingAddonPayload] = Field(default_factory=list)
@@ -89,6 +92,17 @@ class BookingCreate(BaseModel):
         if v not in PAYMENT_TYPES:
             raise ValueError("Invalid payment_type")
         return v
+
+    @field_validator("agent_payment_method")
+    @classmethod
+    def validate_agent_payment_method(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        value = v.strip().lower()
+        allowed = {"online", "wallet", "credit", "bank_transfer", "pay_later"}
+        if value not in allowed:
+            raise ValueError(f"agent_payment_method must be one of: {', '.join(sorted(allowed))}")
+        return value
 
 
 class BookingUpdate(BaseModel):
@@ -138,6 +152,7 @@ class SupplierDecisionRequest(BaseModel):
 class SupplierPostponeRequest(BaseModel):
     reason: str = Field(min_length=1)
     new_tour_date: Optional[str] = None
+    new_tour_calendar_id: Optional[int] = Field(default=None, gt=0)
 
 
 class SupplierNotifyRequest(BaseModel):

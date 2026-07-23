@@ -25,7 +25,7 @@ def agent_customer_filter(db: Session, agent: Agent, actor_user_id: int):
     booked_customer_ids = db.query(Booking.customer_id).filter(Booking.agent_id == agent.id)
     created_customer_ids = db.query(AuditLog.entity_id).filter(
         AuditLog.actor_user_id == actor_user_id,
-        AuditLog.action == "create_customer",
+        AuditLog.action.in_(["create_customer", "link_customer"]),
         AuditLog.entity_type == "customer",
     )
     return or_(Customer.id.in_(booked_customer_ids), Customer.id.in_(created_customer_ids))
