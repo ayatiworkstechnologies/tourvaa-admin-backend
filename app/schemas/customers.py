@@ -77,6 +77,15 @@ class CustomerCreate(BaseModel):
         return value
 
 
+class CustomerLinkRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr):
+        return str(value).strip().lower()
+
+
 class CustomerUpdate(BaseModel):
     first_name: Optional[str] = Field(default=None, max_length=75)
     last_name: Optional[str] = Field(default=None, max_length=75)

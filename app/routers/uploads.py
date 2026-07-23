@@ -15,11 +15,13 @@ ALLOWED_CONTENT_TYPES = {
     "image/jpeg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
+    "image/avif": "avif",
 }
 ALLOWED_IMAGE_TYPES = {
     "jpeg": "jpg",
     "png": "png",
     "webp": "webp",
+    "avif": "avif",
 }
 
 
@@ -29,7 +31,7 @@ async def upload_profile_image(
     current_user: User = Depends(get_current_user),
 ):
     if file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(status_code=400, detail="Only JPG, PNG, and WEBP images are allowed")
+        raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, and AVIF images are allowed")
 
     content = await file.read()
 
@@ -77,14 +79,15 @@ async def upload_admin_asset(
         "image/jpeg": "jpg",
         "image/png": "png",
         "image/webp": "webp",
+        "image/avif": "avif",
         "application/pdf": "pdf",
     }
     extension = allowed_types.get(file.content_type or "")
 
     if not extension:
-        raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, and PDF files are allowed")
+        raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, AVIF, and PDF files are allowed")
 
-    if extension in {"jpg", "png", "webp"}:
+    if extension in {"jpg", "png", "webp", "avif"}:
         detected_type = detect_image_type(content)
         if detected_type not in ALLOWED_IMAGE_TYPES:
             raise HTTPException(status_code=400, detail="Invalid image file")

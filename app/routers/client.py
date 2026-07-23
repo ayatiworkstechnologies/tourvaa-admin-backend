@@ -44,7 +44,7 @@ def client_config():
             "uploads": {
                 "profile_image": {
                     "max_size_mb": 2,
-                    "mime_types": ["image/png", "image/jpeg", "image/webp"],
+                    "mime_types": ["image/png", "image/jpeg", "image/webp", "image/avif"],
                 }
             },
             "headers": {

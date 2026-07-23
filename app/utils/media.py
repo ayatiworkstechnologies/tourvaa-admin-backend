@@ -18,6 +18,21 @@ def detect_image_type(content: bytes) -> str | None:
     ):
         return "webp"
 
+    # AVIF uses the ISO Base Media File Format. Require an AVIF major or
+    # compatible brand inside the declared ftyp box instead of trusting the
+    # browser-provided MIME type or filename.
+    if len(content) >= 16 and content[4:8] == b"ftyp":
+        box_size = int.from_bytes(content[:4], byteorder="big")
+        box_end = min(len(content), box_size) if box_size >= 16 else len(content)
+        brands = [content[8:12]]
+        brands.extend(
+            content[offset:offset + 4]
+            for offset in range(16, box_end, 4)
+            if len(content[offset:offset + 4]) == 4
+        )
+        if b"avif" in brands or b"avis" in brands:
+            return "avif"
+
     return None
 
 

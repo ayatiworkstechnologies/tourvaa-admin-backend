@@ -123,12 +123,26 @@ def get_current_user(
     if token_version is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Token has expired")
 
-    if user.approval_status not in {"approved", "profile_incomplete", "admin_review_pending", "partial_approved"} or not user.is_active:
+    if user.account_status != "ACTIVE" or not user.is_active:
         raise HTTPException(status_code=403, detail="User is not approved")
 
     if user.role and not user.role.is_active:
         raise HTTPException(status_code=403, detail="Role is inactive")
 
+    return user
+
+
+def get_token_user_including_inactive(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    payload = _decode_token(_request_token(request, credentials))
+    if payload.get("token_type") not in {None, "access"}:
+        raise HTTPException(status_code=401, detail="Invalid access token")
+    user = db.query(User).filter(User.id == payload.get("user_id")).first()
+    if not user or payload.get("token_version") != user.token_version:
+        raise HTTPException(status_code=401, detail="Session invalidated")
     return user
 
 def require_portal(expected_portal: str):
@@ -158,7 +172,7 @@ def require_portal(expected_portal: str):
             raise HTTPException(status_code=401, detail="Invalid user")
         if token_version is None or token_version != user.token_version:
             raise HTTPException(status_code=401, detail="Token has expired")
-        if user.approval_status not in {"approved", "profile_incomplete", "admin_review_pending", "partial_approved"} or not user.is_active:
+        if user.account_status != "ACTIVE" or not user.is_active:
             raise HTTPException(status_code=403, detail="User is not approved")
         if user.role and not user.role.is_active:
             raise HTTPException(status_code=403, detail="Role is inactive")

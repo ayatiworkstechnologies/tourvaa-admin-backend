@@ -10,7 +10,8 @@ from app.services.bookings import calculate_booking_price, create_booking, get_b
 from app.auth.permissions import get_current_user
 from app.utils.money import money
 from app.utils.pagination import pagination_params
-from app.models.customers import Customer, CustomerCancellationRequest, CustomerCommunication, CustomerSavedTraveller
+from app.models.cms import Tour
+from app.models.customers import Customer, CustomerCancellationRequest, CustomerCommunication, CustomerSavedTraveller, CustomerWishlistItem
 from app.schemas.customers import (
     CustomerCancellationCreate,
     CustomerManualPaymentRequest,
@@ -25,6 +26,7 @@ from app.services.payments import create_payment, get_customer_payments
 from app.models.users import User
 from app.auth.security import hash_password, verify_password
 from app.schemas.profile import PasswordUpdate
+from app.schemas.cms import slugify
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 
@@ -88,6 +90,25 @@ def _serialize_cancellation(row: CustomerCancellationRequest) -> dict:
     }
 
 
+def _serialize_wishlist_item(row: CustomerWishlistItem) -> dict:
+    tour = row.tour
+    country_name = tour.country.country_name if tour.country else ""
+    country_slug = slugify(country_name or "worldwide")
+    return {
+        "id": tour.id,
+        "wishlist_id": row.id,
+        "user_id": row.user_id,
+        "title": tour.title,
+        "place": country_name or tour.start_location,
+        "image": tour.banner_image,
+        "price": tour.price_start_per_person,
+        "currency": tour.currency,
+        "duration": f"{tour.number_of_days} day{'s' if tour.number_of_days != 1 else ''}",
+        "href": f"/tours/{country_slug}/{tour.slug}",
+        "created_at": row.created_at,
+    }
+
+
 @router.get("/profile")
 def customer_profile(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
@@ -134,6 +155,53 @@ def change_customer_password(data: PasswordUpdate, db: Session = Depends(get_db)
     current_user.token_version += 1
     db.commit()
     return {"status": "success", "message": "Password updated successfully"}
+
+
+@router.get("/wishlist")
+def customer_wishlist(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _current_customer(db, current_user)
+    rows = (
+        db.query(CustomerWishlistItem)
+        .join(Tour, Tour.id == CustomerWishlistItem.tour_id)
+        .filter(CustomerWishlistItem.user_id == current_user.id, Tour.status == "published")
+        .order_by(CustomerWishlistItem.id.desc())
+        .all()
+    )
+    items = [_serialize_wishlist_item(row) for row in rows]
+    return {"status": "success", "items": items, "data": items, "total": len(items)}
+
+
+@router.post("/wishlist/{tour_id}")
+def add_customer_wishlist_item(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _current_customer(db, current_user)
+    tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+
+    row = db.query(CustomerWishlistItem).filter(
+        CustomerWishlistItem.user_id == current_user.id,
+        CustomerWishlistItem.tour_id == tour_id,
+    ).first()
+    if not row:
+        row = CustomerWishlistItem(user_id=current_user.id, tour_id=tour_id)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+    return {"status": "success", "message": "Tour saved to wishlist", "data": _serialize_wishlist_item(row)}
+
+
+@router.delete("/wishlist/{tour_id}")
+def delete_customer_wishlist_item(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _current_customer(db, current_user)
+    row = db.query(CustomerWishlistItem).filter(
+        CustomerWishlistItem.user_id == current_user.id,
+        CustomerWishlistItem.tour_id == tour_id,
+    ).first()
+    if row:
+        db.delete(row)
+        db.commit()
+    return {"status": "success", "message": "Tour removed from wishlist"}
 
 
 @router.get("/bookings")

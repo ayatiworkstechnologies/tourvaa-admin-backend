@@ -115,6 +115,93 @@ def _set_status(db: Session, booking: Booking, new_status: str, actor: User | No
         _history(db, booking, old_status, new_status, actor, source, reason, metadata)
 
 
+BOOKING_STATUS_TRANSITIONS = {
+    "draft": {"pending_payment", "pending_credit_approval", "pending_supplier_assignment", "cancelled"},
+    "pending_payment": {"pending_credit_approval", "payment_authorized", "pending_supplier_assignment", "pending_supplier_acceptance", "confirmed", "cancellation_requested", "cancelled", "declined"},
+    "pending_credit_approval": {"pending_payment", "payment_authorized", "pending_supplier_assignment", "cancellation_requested", "cancelled", "declined"},
+    "pending_supplier_assignment": {"pending_payment", "payment_authorized", "pending_supplier_acceptance", "supplier_reassignment_required", "cancellation_requested", "cancelled", "declined"},
+    "payment_authorized": {"pending_supplier_assignment", "pending_supplier_acceptance", "confirmed", "cancellation_requested", "cancelled", "declined"},
+    "pending_supplier_acceptance": {"pending_supplier_assignment", "supplier_reassignment_required", "confirmed", "postponed", "cancellation_requested", "cancelled", "declined"},
+    "supplier_reassignment_required": {"pending_supplier_assignment", "pending_supplier_acceptance", "cancellation_requested", "cancelled", "declined"},
+    "confirmed": {"ready_to_travel", "ongoing", "completed", "postponed", "cancellation_requested", "cancelled"},
+    "ready_to_travel": {"ongoing", "completed", "postponed", "cancellation_requested", "cancelled"},
+    "upcoming": {"confirmed", "ready_to_travel", "ongoing", "completed", "postponed", "cancellation_requested", "cancelled"},
+    "ongoing": {"completed", "postponed", "cancellation_requested", "cancelled"},
+    "postponed": {"confirmed", "ready_to_travel", "ongoing", "completed", "cancellation_requested", "cancelled"},
+    "cancellation_requested": {"pending_payment", "payment_authorized", "pending_supplier_acceptance", "confirmed", "ready_to_travel", "ongoing", "postponed", "cancelled"},
+    "cancelled": {"refunded"},
+    "declined": {"pending_supplier_assignment", "supplier_reassignment_required", "refunded"},
+    "completed": set(),
+    "refunded": set(),
+}
+
+
+def _validate_booking_status_transition(current_status: str, target_status: str) -> bool:
+    current = (current_status or "").strip().lower()
+    target = (target_status or "").strip().lower()
+    if current == target:
+        return False
+    allowed = BOOKING_STATUS_TRANSITIONS.get(current, set())
+    if target not in allowed:
+        allowed_text = ", ".join(sorted(allowed)) or "none (terminal status)"
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot change booking status from {current or 'unknown'} to {target}. Allowed next statuses: {allowed_text}",
+        )
+    return True
+
+
+def _booking_seat_count(booking: Booking) -> int:
+    adults = booking.adults_count if booking.adults_count is not None else booking.no_of_adults
+    children = booking.children_count if booking.children_count is not None else booking.no_of_children
+    return max(0, int(adults or 0) + int(children or 0))
+
+
+def _settle_cancelled_booking_payments(
+    db: Session,
+    booking: Booking,
+    actor: User | None,
+    request: Request | None,
+    reason: str,
+) -> None:
+    from app.models.payments import Payment
+    from app.schemas.payments import PaymentVoid, RefundRequest
+    from app.services.payments import process_refund, void_payment
+
+    original_status = (booking.payment_status or "").lower()
+    payments = list(db.query(Payment).filter(Payment.booking_id == booking.id).all())
+    found_refundable_payment = False
+    for payment in payments:
+        captured = money(payment.captured_amount or payment.paid_amount)
+        refunded = money(payment.refunded_amount)
+        if captured > refunded:
+            found_refundable_payment = True
+            booking.payment_status = "refund_pending"
+            process_refund(
+                db,
+                payment.id,
+                RefundRequest(amount=captured - refunded, reason=reason),
+                actor=actor,
+                request=request,
+            )
+        elif payment.payment_status in {"authorized", "pending"}:
+            void_payment(
+                db,
+                payment.id,
+                PaymentVoid(reason=reason),
+                actor=actor,
+                request=request,
+            )
+
+    if found_refundable_payment:
+        booking.payment_status = "refunded"
+    elif original_status == "refund_pending":
+        booking.payment_status = "refund_pending"
+    elif money(booking.amount_paid) <= 0:
+        booking.payment_status = "voided"
+    booking.amount_pending = money(0)
+
+
 def _money_total(rows) -> str:
     return money_str(sum(money(getattr(row, "total_price", 0)) for row in rows))
 
@@ -170,12 +257,17 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
         "tax_amount": money_str(booking.tax_amount),
         "surcharge_amount": money_str(booking.surcharge_amount),
         "final_amount": money_str(booking.final_amount),
+        "agent_net_price": money_str(booking.agent_net_price),
+        "agent_markup": money_str(booking.agent_markup),
+        "customer_selling_price": money_str(booking.customer_selling_price),
         "amount_paid": money_str(booking.amount_paid),
         "amount_pending": money_str(booking.amount_pending),
         "booking_status": booking.booking_status,
         "supplier_acceptance_status": booking.supplier_acceptance_status,
         "payment_status": booking.payment_status,
         "payment_type": booking.payment_type,
+        "agent_payment_method": booking.agent_payment_method,
+        "agent_reference": booking.agent_reference,
         "promo_code": booking.promo_code,
         "notes": booking.notes,
         "customer_notes": booking.customer_notes,
@@ -205,6 +297,9 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
                 "tax_amount": money_str(booking.tax_amount),
                 "surcharge_amount": money_str(booking.surcharge_amount),
                 "final_amount": money_str(booking.final_amount),
+                "agent_net_price": money_str(booking.agent_net_price),
+                "agent_markup": money_str(booking.agent_markup),
+                "customer_selling_price": money_str(booking.customer_selling_price),
             },
             "payment_summary": {"status": booking.payment_status, "paid": money_str(booking.amount_paid), "pending": money_str(booking.amount_pending)},
             "invoice_summary": None,
@@ -312,15 +407,18 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
 def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False):
     adults = data.adults_count if data.adults_count is not None else data.no_of_adults
     children = data.children_count if data.children_count is not None else data.no_of_children
-    total_travellers = adults + children
-    if total_travellers <= 0:
+    seat_travellers = adults + children
+    total_travellers = seat_travellers + data.no_of_infants
+    if seat_travellers <= 0:
         raise HTTPException(status_code=400, detail="At least one traveller is required")
 
     tour = db.query(Tour).filter(Tour.id == data.tour_id).first() if data.tour_id else None
-    calendar_query = db.query(TourCalendar).filter(TourCalendar.id == data.tour_calendar_id)
-    if lock_calendar:
-        calendar_query = calendar_query.with_for_update()
-    calendar = calendar_query.first() if data.tour_calendar_id else None
+    calendar = None
+    if data.tour_calendar_id:
+        calendar_query = db.query(TourCalendar).filter(TourCalendar.id == data.tour_calendar_id)
+        if lock_calendar:
+            calendar_query = calendar_query.with_for_update()
+        calendar = calendar_query.first()
     if data.tour_id and not tour:
         raise HTTPException(status_code=404, detail="Tour not found")
     if tour and tour.status != "published":
@@ -330,7 +428,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             raise HTTPException(status_code=400, detail="Calendar date does not belong to tour")
         if calendar.status not in {"available", "active"}:
             raise HTTPException(status_code=400, detail="Selected tour date is not available")
-        if calendar.available_seats and calendar.booked_seats + total_travellers > calendar.available_seats:
+        if calendar.available_seats and calendar.booked_seats + seat_travellers > calendar.available_seats:
             raise HTTPException(status_code=409, detail="Not enough seats available")
     if data.tour_id and data.tour_start_date:
         start = _parse_dt(data.tour_start_date)
@@ -340,7 +438,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
 
     slab = None
     if data.tour_id:
-        slab = db.query(TourPricing).filter(TourPricing.tour_id == data.tour_id, TourPricing.status == "active", TourPricing.passenger_from <= total_travellers, TourPricing.passenger_to >= total_travellers).first()
+        slab = db.query(TourPricing).filter(TourPricing.tour_id == data.tour_id, TourPricing.status == "active", TourPricing.passenger_from <= seat_travellers, TourPricing.passenger_to >= seat_travellers).first()
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
     adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
     child_unit = money(slab.child_price if slab else 0)
@@ -364,7 +462,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         if not row or (data.tour_id and row.tour_id != data.tour_id):
             raise HTTPException(status_code=400, detail="Invalid accommodation extra")
         unit = money(row.extra_price)
-        qty = total_travellers if row.price_type == "per_person" else item.quantity
+        qty = seat_travellers if row.price_type == "per_person" else item.quantity
         total = money(unit * qty)
         accommodation_total += total
         accommodation_rows.append((row, qty, unit, total))
@@ -392,6 +490,8 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
 
 def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
     tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions = _price_booking(db, data)
+    agent_markup = money(data.agent_markup if data.booking_source == "agent" else 0)
+    customer_selling_price = money(final + agent_markup)
     return {
         "tour_id": data.tour_id,
         "tour_calendar_id": data.tour_calendar_id,
@@ -406,7 +506,10 @@ def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
         "discount_amount": money_str(discount),
         "tax_amount": money_str(tax),
         "surcharge_amount": money_str(surcharge),
-        "final_amount": money_str(final),
+        "final_amount": money_str(customer_selling_price),
+        "agent_net_price": money_str(final),
+        "agent_markup": money_str(agent_markup),
+        "customer_selling_price": money_str(customer_selling_price),
         "available": True,
         "tour_name": tour.title if tour else data.tour_name,
         "tour_date": calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else data.tour_date,
@@ -521,18 +624,28 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     city = db.query(City).filter(City.id == (data.city_id or (tour.city_id if tour else None))).first() if (data.city_id or tour) else None
     supplier = tour.supplier if tour and tour.supplier else None
     supplier_id = data.supplier_id or (supplier.id if supplier else None)
+    agent_net_price = final if data.booking_source == "agent" else money(0)
+    agent_markup = money(data.agent_markup if data.booking_source == "agent" else 0)
+    customer_selling_price = money(final + agent_markup) if data.booking_source == "agent" else final
+    payment_status = "pending"
+    booking_status = "pending_payment"
+    if data.booking_source == "agent" and data.agent_payment_method in {"credit", "pay_later"}:
+        payment_status = "credit_approval_pending"
+        booking_status = "pending_credit_approval"
+    elif data.booking_source == "agent" and data.agent_payment_method == "bank_transfer":
+        payment_status = "bank_transfer_pending"
     booking = Booking(
         customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=data.affiliate_id, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
         no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
-        total_cost=final, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=final, amount_paid=money(0), amount_pending=final,
-        booking_status="pending_payment", supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status="pending", payment_type=data.payment_type, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
+        total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
+        booking_status=booking_status, supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status=payment_status, payment_type=data.payment_type, agent_payment_method=data.agent_payment_method if data.booking_source == "agent" else None, agent_reference=data.agent_reference if data.booking_source == "agent" else None, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
     )
     db.add(booking)
     db.flush()
     booking.booking_code = _booking_code(booking.id)
     if calendar:
-        calendar.booked_seats += total_travellers
+        calendar.booked_seats += adults + children
     for t in data.travellers:
         full = t.full_name or f"{t.first_name} {t.last_name}".strip()
         db.add(BookingTraveller(booking_id=booking.id, traveller_type=t.traveller_type, first_name=t.first_name, last_name=t.last_name, full_name=full, age=t.age, gender=t.gender, nationality=t.nationality, passport_number=t.passport_number, email=t.email, phone=t.phone, is_primary_contact=1 if t.is_primary_contact else 0, special_requirements=t.special_requirements))
@@ -545,7 +658,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     _history(db, booking, None, booking.booking_status, actor, _user_role(actor), "Booking created")
     customer.total_bookings = (customer.total_bookings or 0) + 1
     customer.upcoming_bookings = (customer.upcoming_bookings or 0) + 1
-    customer.total_amount_pending = money(customer.total_amount_pending or 0) + final
+    customer.total_amount_pending = money(customer.total_amount_pending or 0) + customer_selling_price
     log_audit(db, actor=actor, action="create_booking", entity_type="booking", entity_id=booking.id, new_values=serialize_booking(booking), request=request)
     from app.services.notifications import enqueue_notification, notify_admins
     notify_admins(db, notification_type="new_booking", title="New booking created", message=f"Booking {booking.booking_code} was created", entity_type="booking", entity_id=booking.id)
@@ -604,9 +717,17 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
         if value is not None:
             setattr(booking, field, value)
     if data.total_cost is not None:
-        booking.total_cost = money(data.total_cost)
-        booking.final_amount = money(data.total_cost)
-        booking.amount_pending = max(money(0), money(data.total_cost) - money(booking.amount_paid))
+        new_total = money(data.total_cost)
+        booking.total_cost = new_total
+        booking.final_amount = new_total
+        if booking.booking_source == "agent":
+            booking.customer_selling_price = new_total
+            booking.agent_net_price = max(money(0), new_total - money(booking.agent_markup))
+        else:
+            booking.customer_selling_price = new_total
+            booking.agent_net_price = money(0)
+            booking.agent_markup = money(0)
+        booking.amount_pending = max(money(0), new_total - money(booking.amount_paid))
     log_audit(db, actor=actor, action="update_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
     db.commit(); db.refresh(booking)
     return serialize_booking(booking, detail=True)
@@ -617,6 +738,7 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
     _ensure_booking_access(booking, actor)
     if _user_role(actor) == "agent":
         raise HTTPException(status_code=403, detail="Agents cannot directly change booking status")
+    _validate_booking_status_transition(booking.booking_status, data.booking_status)
     old_values = serialize_booking(booking)
     _set_status(db, booking, data.booking_status, actor, _user_role(actor), data.reason, data.metadata)
     log_audit(db, actor=actor, action="update_booking_status", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
@@ -640,7 +762,7 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
 
 
 def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
-    booking = get_booking_by_id(db, booking_id)
+    booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if booking.booking_status == "cancelled":
         raise HTTPException(status_code=400, detail="Booking is already cancelled")
@@ -650,7 +772,15 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
     booking.cancelled_at = utcnow()
     booking.cancelled_by = actor.id if actor else None
     if booking.calendar:
-        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - (booking.total_travellers or 0))
+        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
+    pending_before_cancel = money(booking.amount_pending)
+    _settle_cancelled_booking_payments(db, booking, actor, request, data.reason or "Cancelled by admin")
+    if booking.customer:
+        booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
+        booking.customer.total_amount_pending = max(
+            money(0),
+            money(booking.customer.total_amount_pending or 0) - pending_before_cancel,
+        )
     log_audit(db, actor=actor, action="cancel_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
     db.commit(); db.refresh(booking)
 
@@ -778,26 +908,23 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
     _ensure_booking_access(booking, actor)
     if not _start_supplier_decision(booking, "declined"):
         return serialize_booking(booking, detail=True)
+    pending_before_decline = money(booking.amount_pending)
     booking.supplier_acceptance_status = "declined"
     _set_status(db, booking, "declined", actor, "supplier", data.reason or "Supplier declined booking")
     if booking.calendar:
         booking.calendar.booked_seats = max(
             0,
-            (booking.calendar.booked_seats or 0) - (booking.total_travellers or 0),
+            (booking.calendar.booked_seats or 0) - _booking_seat_count(booking),
         )
 
     from app.services.notifications import enqueue_notification, notify_admins
-    from app.models.payments import Payment
-    from app.schemas.payments import PaymentVoid, RefundRequest
-    from app.services.payments import process_refund, void_payment
-
-    payments = list(db.query(Payment).filter(Payment.booking_id == booking.id).all())
-    for payment in payments:
-        if payment.payment_status == "authorized" and money(payment.captured_amount) <= 0:
-            void_payment(db, payment.id, PaymentVoid(reason="Released after supplier decline"), actor=actor, request=request)
-        elif money(payment.captured_amount) > money(payment.refunded_amount):
-            amount = money(payment.captured_amount) - money(payment.refunded_amount)
-            process_refund(db, payment.id, RefundRequest(amount=amount, reason="Refund after supplier decline"), actor=actor, request=request)
+    _settle_cancelled_booking_payments(db, booking, actor, request, "Released after supplier decline")
+    if booking.customer:
+        booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
+        booking.customer.total_amount_pending = max(
+            money(0),
+            money(booking.customer.total_amount_pending or 0) - pending_before_decline,
+        )
 
     notify_admins(db, notification_type="supplier_declined_booking", title="Supplier declined booking", message=f"Supplier declined {booking.booking_code}", entity_type="booking", entity_id=booking.id)
     if booking.customer and booking.customer.user_id:
@@ -901,8 +1028,16 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
     booking.cancellation_reason = reason
     booking.cancelled_at = utcnow()
     booking.cancelled_by = actor.id if actor else None
+    pending_before_cancel = money(booking.amount_pending)
     if booking.calendar:
-        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - (booking.total_travellers or 0))
+        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
+    _settle_cancelled_booking_payments(db, booking, actor, request, reason)
+    if booking.customer:
+        booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
+        booking.customer.total_amount_pending = max(
+            money(0),
+            money(booking.customer.total_amount_pending or 0) - pending_before_cancel,
+        )
     log_audit(db, actor=actor, action="supplier_cancel_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
     notify_admins(db, notification_type="supplier_cancelled_booking", title="Supplier cancelled booking", message=f"Supplier cancelled {booking.booking_code}: {reason}", entity_type="booking", entity_id=booking.id)
     if booking.customer and booking.customer.user_id:
@@ -922,15 +1057,68 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
     return serialize_booking(booking, detail=True)
 
 
-def supplier_postpone_booking(db: Session, booking_id: int, reason: str, new_tour_date: str | None, actor: User, request: Request | None = None) -> dict:
+def supplier_postpone_booking(
+    db: Session,
+    booking_id: int,
+    reason: str,
+    new_tour_date: str | None,
+    actor: User,
+    request: Request | None = None,
+    new_tour_calendar_id: int | None = None,
+) -> dict:
     from app.services.notifications import enqueue_notification, notify_admins
-    booking = get_booking_by_id(db, booking_id)
+    booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if booking.booking_status in ("cancelled", "completed", "declined"):
         raise HTTPException(status_code=400, detail=f"Cannot postpone a {booking.booking_status} booking")
     old_values = serialize_booking(booking)
+    parsed_new_date = None
     if new_tour_date:
-        booking.tour_date = new_tour_date
+        try:
+            parsed_new_date = _parse_dt(new_tour_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid new tour date") from exc
+
+    new_calendar_query = db.query(TourCalendar)
+    if new_tour_calendar_id:
+        new_calendar_query = new_calendar_query.filter(TourCalendar.id == new_tour_calendar_id)
+    elif parsed_new_date and booking.tour_id:
+        new_calendar_query = new_calendar_query.filter(
+            TourCalendar.tour_id == booking.tour_id,
+            func.date(TourCalendar.tour_date) == parsed_new_date.date(),
+        )
+    else:
+        new_calendar_query = None
+
+    new_calendar = new_calendar_query.with_for_update().first() if new_calendar_query is not None else None
+    if (new_tour_calendar_id or (parsed_new_date and booking.tour_calendar_id)) and not new_calendar:
+        raise HTTPException(status_code=400, detail="No tour calendar is available for the requested date")
+    if new_calendar:
+        if booking.tour_id and new_calendar.tour_id != booking.tour_id:
+            raise HTTPException(status_code=400, detail="New calendar date does not belong to this booking's tour")
+        if new_calendar.status not in {"available", "active"}:
+            raise HTTPException(status_code=400, detail="New calendar date is not available")
+        seats = _booking_seat_count(booking)
+        if new_calendar.id != booking.tour_calendar_id:
+            if new_calendar.available_seats and (new_calendar.booked_seats or 0) + seats > new_calendar.available_seats:
+                raise HTTPException(status_code=409, detail="Not enough seats available on the new tour date")
+            old_calendar = (
+                db.query(TourCalendar)
+                .filter(TourCalendar.id == booking.tour_calendar_id)
+                .with_for_update()
+                .first()
+                if booking.tour_calendar_id
+                else None
+            )
+            if old_calendar:
+                old_calendar.booked_seats = max(0, (old_calendar.booked_seats or 0) - seats)
+            new_calendar.booked_seats = (new_calendar.booked_seats or 0) + seats
+            booking.tour_calendar_id = new_calendar.id
+        booking.tour_date = new_calendar.tour_date.date().isoformat()
+        booking.tour_start_date = new_calendar.start_date or new_calendar.tour_date
+    elif parsed_new_date:
+        booking.tour_date = parsed_new_date.date().isoformat()
+        booking.tour_start_date = parsed_new_date
     _set_status(db, booking, "postponed", actor, "supplier", reason)
     log_audit(db, actor=actor, action="supplier_postpone_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
     notify_admins(db, notification_type="booking_postponed", title="Booking postponed", message=f"Supplier postponed {booking.booking_code}: {reason}", entity_type="booking", entity_id=booking.id)
@@ -940,7 +1128,7 @@ def supplier_postpone_booking(db: Session, booking_id: int, reason: str, new_tou
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_postponed", title="Booking postponed", message=f"Booking {booking.booking_code} has been postponed by supplier", entity_type="booking", entity_id=booking.id)
     db.commit(); db.refresh(booking)
     if booking.customer and booking.customer.email:
-        date_info = f" New date: {new_tour_date}." if new_tour_date else ""
+        date_info = f" New date: {booking.tour_date}." if new_tour_date or new_tour_calendar_id else ""
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         _send_booking_email(
             db, "booking_status_update",

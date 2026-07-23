@@ -8,7 +8,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.services.audit import log_audit
-from app.models.users import User
+from app.models.users import User, UserStatusHistory
 
 ACTIVE_STATUSES = {"active", "inactive", "suspended", "blocked"}
 APPROVAL_STATUSES = {
@@ -197,8 +197,15 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
         if user:
+            old_account_status = user.account_status
             user.approval_status = "approved"
             user.is_active = True
+            user.account_status = "ACTIVE"
+            user.admin_verified = True
+            user.admin_verified_at = datetime.utcnow()
+            user.admin_verified_by = actor.id
+            if old_account_status != "ACTIVE":
+                db.add(UserStatusHistory(user_id=user.id, from_status=old_account_status, to_status="ACTIVE", reason=f"{entity_type.title()} profile approved", changed_by=actor.id))
             
     log_audit(db, actor=actor, action=f"approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
     # Notifications

@@ -73,8 +73,6 @@ class UserUpdate(BaseModel):
     city: Optional[str] = None
     pincode: Optional[str] = None
     role_id: Optional[int] = None
-    is_active: Optional[bool] = None
-    approval_status: Optional[str] = None
 
     @field_validator(
         "name",
@@ -114,6 +112,10 @@ class UserUpdate(BaseModel):
 
 class UserApprovalUpdate(BaseModel):
     role_id: Optional[int] = None
+
+
+class UserDeactivationUpdate(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
 
 
 class UserRolesUpdate(BaseModel):

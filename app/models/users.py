@@ -17,12 +17,25 @@ class User(Base):
     state = Column(String(100), default="", nullable=False)
     city = Column(String(100), default="", nullable=False)
     pincode = Column(String(20), default="", nullable=False)
-    password = Column(String(255), nullable=False)
+    password = Column(String(255), nullable=True)
 
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=True, index=True)
 
     is_active = Column(Boolean, default=True, index=True)
     approval_status = Column(String(20), default="approved", nullable=False, index=True)
+    user_type = Column(String(20), nullable=True, index=True)
+    country_code = Column(String(8), default="", nullable=False)
+    mobile_number = Column(String(20), nullable=True, unique=True, index=True)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    password_created_at = Column(DateTime(timezone=True), nullable=True)
+    account_status = Column(String(40), default="ACTIVE", nullable=False, index=True)
+    admin_verified = Column(Boolean, default=False, nullable=False)
+    admin_verified_at = Column(DateTime(timezone=True), nullable=True)
+    admin_verified_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    deactivated_at = Column(DateTime(timezone=True), nullable=True)
+    deactivated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    deactivation_reason = Column(String(500), nullable=True)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
     reset_password_token = Column(String(255), nullable=True)
     reset_password_expires_at = Column(DateTime(timezone=True), nullable=True)
     email_verified_at = Column(DateTime(timezone=True), nullable=True)
@@ -33,9 +46,30 @@ class User(Base):
     two_factor_secret = Column(String(255), nullable=True)
     force_password_reset = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     role = relationship("Role", back_populates="users")
     user_roles = relationship("UserRole", back_populates="user", cascade="all, delete-orphan")
+    status_history = relationship(
+        "UserStatusHistory",
+        foreign_keys="UserStatusHistory.user_id",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class UserStatusHistory(Base):
+    __tablename__ = "user_status_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    from_status = Column(String(40), nullable=True)
+    to_status = Column(String(40), nullable=False, index=True)
+    reason = Column(String(500), nullable=True)
+    changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User", foreign_keys=[user_id], back_populates="status_history")
 
 
 class UserRole(Base):

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.agents import Agent
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentSelfUpdate, AgentUpdate
-from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
+from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
 from app.schemas.auth import RegisterSchema, VerifyEmailSchema
 from app.services.auth import register_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs
@@ -100,6 +100,11 @@ def edit_my_agent(data: AgentSelfUpdate, request: Request, db: Session = Depends
         raise HTTPException(status_code=404, detail="Agent profile not found")
     safe_update = AgentUpdate(**data.model_dump(exclude_unset=True))
     return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent.id, safe_update, current_user, request)}
+
+
+@router.post("/me/commission-request")
+def request_my_commission(data: AgentDiscountRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", "message": "Commission request submitted for admin approval", "data": request_agent_commission(db, current_user, data, request)}
 
 
 @router.get("/{agent_id}")
@@ -204,6 +209,7 @@ async def upload_agent_document(
         "image/jpeg": "jpg",
         "image/png": "png",
         "image/webp": "webp",
+        "image/avif": "avif",
         "application/pdf": "pdf",
         "application/msword": "doc",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -219,12 +225,14 @@ async def upload_agent_document(
             extension = "png"
         elif filename_lower.endswith(".webp"):
             extension = "webp"
+        elif filename_lower.endswith(".avif"):
+            extension = "avif"
         elif filename_lower.endswith(".doc"):
             extension = "doc"
         elif filename_lower.endswith(".docx"):
             extension = "docx"
         else:
-            raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, PDF, DOC, and DOCX files are allowed")
+            raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, AVIF, PDF, DOC, and DOCX files are allowed")
 
     from uuid import uuid4
     from app.utils.imagekit_client import upload_to_imagekit

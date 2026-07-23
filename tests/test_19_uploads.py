@@ -3,10 +3,27 @@ import io
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly
+from app.utils.media import detect_image_type
 
 
 PROFILE_IMAGE_URL = f"{BASE_URL}/uploads/profile-image"
 ADMIN_ASSET_URL = f"{BASE_URL}/uploads/admin-asset"
+
+
+def test_avif_signature_is_detected():
+    avif_bytes = (
+        b"\x00\x00\x00\x20ftypavif\x00\x00\x00\x00"
+        b"avifmif1\x00\x00\x00\x00"
+    )
+    assert detect_image_type(avif_bytes) == "avif"
+
+
+def test_non_avif_iso_media_is_not_accepted_as_avif():
+    heic_bytes = (
+        b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00"
+        b"mif1heic"
+    )
+    assert detect_image_type(heic_bytes) is None
 
 
 def test_upload_profile_image_endpoint_exists(headers):
