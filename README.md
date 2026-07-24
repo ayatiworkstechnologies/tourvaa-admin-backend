@@ -89,7 +89,7 @@ python -m alembic upgrade head
 python -m alembic current
 ```
 
-The current schema head is `20260724_0036`. Revision `0036` repairs verification metadata only for legacy supplier accounts that were already approved, active, and password-enabled.
+The current schema head is `20260724_0037`. Revision `0037` adds supplier commission-request staging fields (`suppliers.commission_request_*`, mirroring the existing agent commission-request flow) and a `supplier_payouts.paid_by` audit column. Revision `0036` repairs verification metadata only for legacy supplier accounts that were already approved, active, and password-enabled.
 
 Seed or synchronize roles and permissions without deleting application data:
 
@@ -362,7 +362,7 @@ Write/destructive tests are gated behind `TOURVAA_WRITE_TESTS=1` so a default ru
 - [ ] Set `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false`
 - [ ] Set a unique super-admin password and verify the admin login
 - [ ] Point `DATABASE_URL` to production MySQL
-- [ ] Back up the database, run `alembic upgrade head`, and confirm `alembic current` reports `20260724_0036`
+- [ ] Back up the database, run `alembic upgrade head`, and confirm `alembic current` reports `20260724_0037`
 - [ ] Run the RBAC seed without `--reset`
 - [ ] Configure real SMTP credentials
 - [ ] Set `ALLOWED_ORIGINS` to production frontend domains
@@ -408,3 +408,36 @@ To resync RBAC later without clearing production data:
 ```powershell
 python -m scripts.reset_seed_admin_rbac
 ```
+
+---
+
+## Live/Production Troubleshooting
+
+### A live endpoint returns 500 with a generic message
+
+`app/middleware/error_handlers.py`'s catch-all handler always returns `{"status": "error", "message": "An unexpected error occurred. Please try again later."}` for any unhandled exception, on purpose — the client never sees internals. That means the JSON response alone never tells you the real cause. Before guessing:
+
+1. **Read the real traceback from the server logs**, not the HTTP response. The handler does `logger.exception(...)` before returning the generic body, so the actual exception (including the SQL error, if any) is in stdout/stderr wherever the process logs to (PM2: `pm2 logs tourvaa-admin-backend --err --lines 100`, or the log files directly, e.g. `/root/.pm2/logs/tourvaa-admin-backend-error.log`).
+2. **If the traceback mentions a missing table or column** (`Table '...' doesn't exist`, `Unknown column '...'`), the deployed database schema is behind the deployed code — the app was updated but `alembic upgrade head` was not run against the database this environment actually points at. Run `python -m alembic current` and compare it against the latest revision in `alembic/versions/` (or `python -m alembic heads`); if they differ, back up the database and run `python -m alembic upgrade head`.
+3. **This is a recurring failure class in this codebase, not a one-off**: several endpoints call a shared serializer (e.g. `serialize_supplier`) that reads a relationship or column added by a migration newer than the one applied to that environment's database. The fix is always the same — apply the pending migration — not a code change, unless the endpoint needs a defensive fallback to degrade gracefully while a migration rollout is in progress (see `_approval_history()` in `app/services/suppliers.py` for the pattern: catch `sqlalchemy.exc.SQLAlchemyError` around the specific lazy-loaded relationship, log it, and return an empty/degraded value instead of letting the whole request 500).
+4. **Confirm the fix live** by re-requesting the endpoint and checking the access log for `200` instead of `500` (PM2: `pm2 logs tourvaa-admin-backend --out --lines 30`).
+
+### PM2: `OSError: [Errno 98] Address already in use` / a process keeps crash-looping
+
+This means two PM2-managed processes are trying to bind the same port — almost always a duplicate app entry, `pm2 start` run a second time without deleting the first, or `ecosystem.config.js` misconfigured (e.g. `instances` set higher than intended in fork mode). Diagnose before restarting anything:
+
+```bash
+pm2 list                                   # look for more than one entry for this app, or unexpected restart counts
+pm2 describe tourvaa-admin-backend         # confirms script path, port, exec mode, instance count
+cat ecosystem.config.js                    # check for a duplicate `apps:` entry or `instances` > 1 in fork mode
+```
+
+Once you know which process id is the stale/duplicate one:
+
+```bash
+pm2 delete <id>                            # remove the duplicate/zombie entry, not the one actually serving traffic
+pm2 restart tourvaa-admin-backend          # restart the real app cleanly
+pm2 save                                   # persist the corrected process list so a server reboot doesn't resurrect the duplicate
+```
+
+Verify with `pm2 list` that exactly one process remains for this app and its status is `online` with a low/zero restart count before moving on.
