@@ -89,7 +89,7 @@ python -m alembic upgrade head
 python -m alembic current
 ```
 
-The current schema head is `20260724_0037`. Revision `0037` adds supplier commission-request staging fields (`suppliers.commission_request_*`, mirroring the existing agent commission-request flow) and a `supplier_payouts.paid_by` audit column. Revision `0036` repairs verification metadata only for legacy supplier accounts that were already approved, active, and password-enabled.
+The current schema head is `20260724_0038`. Revision `0038` idempotently backfills `supplier_vehicles.vehicle_type`/`registration_number` for any database that was bootstrapped purely through the migration chain (these columns were added to the model without ever getting a migration -- see the troubleshooting section below). Revision `0037` adds supplier commission-request staging fields (`suppliers.commission_request_*`, mirroring the existing agent commission-request flow) and a `supplier_payouts.paid_by` audit column. Revision `0036` repairs verification metadata only for legacy supplier accounts that were already approved, active, and password-enabled.
 
 Seed or synchronize roles and permissions without deleting application data:
 
@@ -362,7 +362,7 @@ Write/destructive tests are gated behind `TOURVAA_WRITE_TESTS=1` so a default ru
 - [ ] Set `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false`
 - [ ] Set a unique super-admin password and verify the admin login
 - [ ] Point `DATABASE_URL` to production MySQL
-- [ ] Back up the database, run `alembic upgrade head`, and confirm `alembic current` reports `20260724_0037`
+- [ ] Back up the database, run `alembic upgrade head`, and confirm `alembic current` reports `20260724_0038`
 - [ ] Run the RBAC seed without `--reset`
 - [ ] Configure real SMTP credentials
 - [ ] Set `ALLOWED_ORIGINS` to production frontend domains
@@ -419,8 +419,9 @@ python -m scripts.reset_seed_admin_rbac
 
 1. **Read the real traceback from the server logs**, not the HTTP response. The handler does `logger.exception(...)` before returning the generic body, so the actual exception (including the SQL error, if any) is in stdout/stderr wherever the process logs to (PM2: `pm2 logs tourvaa-admin-backend --err --lines 100`, or the log files directly, e.g. `/root/.pm2/logs/tourvaa-admin-backend-error.log`).
 2. **If the traceback mentions a missing table or column** (`Table '...' doesn't exist`, `Unknown column '...'`), the deployed database schema is behind the deployed code — the app was updated but `alembic upgrade head` was not run against the database this environment actually points at. Run `python -m alembic current` and compare it against the latest revision in `alembic/versions/` (or `python -m alembic heads`); if they differ, back up the database and run `python -m alembic upgrade head`.
-3. **This is a recurring failure class in this codebase, not a one-off**: several endpoints call a shared serializer (e.g. `serialize_supplier`) that reads a relationship or column added by a migration newer than the one applied to that environment's database. The fix is always the same — apply the pending migration — not a code change, unless the endpoint needs a defensive fallback to degrade gracefully while a migration rollout is in progress (see `_approval_history()` in `app/services/suppliers.py` for the pattern: catch `sqlalchemy.exc.SQLAlchemyError` around the specific lazy-loaded relationship, log it, and return an empty/degraded value instead of letting the whole request 500).
-4. **Confirm the fix live** by re-requesting the endpoint and checking the access log for `200` instead of `500` (PM2: `pm2 logs tourvaa-admin-backend --out --lines 30`).
+3. **`alembic current` already reports `head` but the column is still missing anyway** (this happened for real with `supplier_vehicles.vehicle_type`/`registration_number` — see revision `0038`): that means a column was added directly to a SQLAlchemy model in `app/models/` without a migration ever being written for it. Any database bootstrapped purely by running the migration chain from scratch will be missing it forever, no matter how many times you run `alembic upgrade head`, because there is nothing in the migration history that adds it. `alembic current` reporting `head` only proves every *known* migration ran -- it says nothing about whether the models and the migration history have actually stayed in sync. The fix is a new migration (guard each `op.add_column` with an inspector `_has_column` check like `0038` does, so it's safe to run against environments that already have the column some other way, e.g. local dev DBs that were bootstrapped differently).
+4. **This is a recurring failure class in this codebase, not a one-off**: several endpoints call a shared serializer (e.g. `serialize_supplier`) that reads a relationship or column added by a migration newer than the one applied to that environment's database. The fix is always the same — apply the pending migration — not a code change, unless the endpoint needs a defensive fallback to degrade gracefully while a migration rollout is in progress (see `_approval_history()` in `app/services/suppliers.py` for the pattern: catch `sqlalchemy.exc.SQLAlchemyError` around the specific lazy-loaded relationship, log it, and return an empty/degraded value instead of letting the whole request 500).
+5. **Confirm the fix live** by re-requesting the endpoint and checking the access log for `200` instead of `500` (PM2: `pm2 logs tourvaa-admin-backend --out --lines 30`).
 
 ### PM2: `OSError: [Errno 98] Address already in use` / a process keeps crash-looping
 
