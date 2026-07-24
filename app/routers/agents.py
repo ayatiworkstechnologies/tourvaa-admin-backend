@@ -5,36 +5,23 @@ from app.database import get_db
 from app.models.agents import Agent
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentSelfUpdate, AgentUpdate
 from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
-from app.schemas.auth import RegisterSchema, VerifyEmailSchema
-from app.services.auth import register_user, verify_email
+from app.schemas.auth import UnifiedRegisterSchema, VerifyEmailSchema
+from app.services.auth import register_unified_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs
 from app.utils.pagination import pagination_params
 from app.utils.operations import PartialApprovalRequest, RejectRequest
-from app.models.roles import Role
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
 
-def _registration_with_role(db: Session, data: RegisterSchema, role_slug: str):
-    role = db.query(Role).filter(Role.slug == role_slug).filter(Role.is_active == True).first()
-    if not role:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Registration role is not available")
-    return register_user(db, data.model_copy(update={"role_id": role.id}))
-
-
 @router.post("/register")
-def register_agent(data: RegisterSchema, db: Session = Depends(get_db)):
-    user = _registration_with_role(db, data, "agent-reseller")
-    try:
-        from app.utils.notification_triggers import notify_agent_registered
-        notify_agent_registered(db, agent_id=0, agent_name=user.name or user.email, user_id=user.id)
-        db.commit()
-    except Exception:
-        pass
-    return {"status": "success", "message": "Agent registration received", "data": {"id": user.id, "email": user.email, "approval_status": user.approval_status}}
+def register_agent(data: UnifiedRegisterSchema, db: Session = Depends(get_db)):
+    if data.account_type != "AGENT":
+        raise HTTPException(status_code=422, detail="account_type must be AGENT")
+    user = register_unified_user(db, data)
+    return {"status": "success", "message": "Verification email sent", "data": {"id": user.id, "email": user.email, "approval_status": user.approval_status, "verification_required": True}}
 
 
 @router.post("/verify-email")

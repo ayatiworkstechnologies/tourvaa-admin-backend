@@ -11,8 +11,8 @@ from app.utils.email_templates import (
     render_database_email,
     password_changed_email,
     password_reset_email,
-    pending_approval_email,
     email_verification_email,
+    registration_password_created_email,
 )
 from app.utils.mailer import send_email, try_send_email
 from app.models.audit import AuditLog
@@ -102,6 +102,7 @@ def get_auth_user_payload(db: Session, user: User):
 
     customer_id = None
     supplier_id = None
+    supplier_approval_status = "NOT_REQUIRED"
     agent_id = None
     role_slug = user.role.slug if user.role else ""
     if "customer" in role_slug:
@@ -113,6 +114,7 @@ def get_auth_user_payload(db: Session, user: User):
         supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
         if supplier:
             supplier_id = supplier.id
+            supplier_approval_status = (supplier.approval_status or "PENDING").upper()
     elif "agent" in role_slug.lower():
         from app.models.agents import Agent
         agent = db.query(Agent).filter(Agent.user_id == user.id).first()
@@ -122,6 +124,7 @@ def get_auth_user_payload(db: Session, user: User):
     return {
         "id": user.id,
         "name": user.name,
+        "first_name": (user.name or "").split(" ", 1)[0],
         "email": user.email,
         "phone": user.phone,
         "country_code": user.country_code,
@@ -140,7 +143,14 @@ def get_auth_user_payload(db: Session, user: User):
         "permissions": permissions,
         "customer_id": customer_id,
         "supplier_id": supplier_id,
+        "supplier_approval_status": supplier_approval_status,
         "agent_id": agent_id,
+        "dashboard_route": {
+            "customer": "/customer/dashboard",
+            "agent-reseller": "/agent/dashboard",
+            "supplier": "/supplier/dashboard",
+            "affiliate": "/affiliate/dashboard",
+        }.get(role_slug, "/admin/dashboard"),
     }
 
 
@@ -154,6 +164,28 @@ def build_password_reset_url(token: str, client_type: str | None = "web"):
 def build_email_verification_url(token: str, redirect: str | None = None):
     url = f"{settings.FRONTEND_URL}/auth/verify-email?token={token}"
     return f"{url}&redirect={quote(redirect, safe='')}" if redirect else url
+
+
+def build_portal_login_url(user: User):
+    role_slug = user.role.slug if user.role else ""
+    role_param = {
+        "customer": "traveller",
+        "agent-reseller": "agent",
+        "supplier": "supplier",
+    }.get(role_slug)
+    if role_param:
+        return f"{settings.FRONTEND_URL}/login?role={role_param}"
+    return f"{settings.FRONTEND_URL}/login"
+
+
+def portal_display_name(user: User):
+    role_slug = user.role.slug if user.role else ""
+    return {
+        "customer": "traveller",
+        "agent-reseller": "agent",
+        "supplier": "supplier",
+    }.get(role_slug, "admin")
+
 
 def send_email_verification(db: Session, user: User, token: str, redirect: str | None = None):
     verification_url = build_email_verification_url(token, redirect)
@@ -186,7 +218,9 @@ def register_unified_user(db: Session, data):
     if not role:
         raise HTTPException(status_code=400, detail="Selected account type is not available")
 
+    now = datetime.utcnow()
     token, token_hash = create_password_reset_token()
+
     user = User(
         name=data.first_name,
         email=email,
@@ -197,28 +231,50 @@ def register_unified_user(db: Session, data):
         role_id=role.id,
         user_type=data.account_type,
         is_active=False,
-        approval_status="pending",
+        approval_status="PENDING" if data.account_type == "SUPPLIER" else "NOT_REQUIRED",
         email_verified=False,
         admin_verified=False,
+        password_created_at=None,
         account_status="PENDING_EMAIL_VERIFICATION",
         email_verification_token=token_hash,
-        email_verification_expires_at=datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES),
+        email_verification_expires_at=now + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES),
     )
     db.add(user)
     db.flush()
     db.add(UserRole(user_id=user.id, role_id=role.id))
-    db.add(UserStatusHistory(user_id=user.id, to_status=user.account_status, reason="Registration started"))
+    db.add(UserStatusHistory(
+        user_id=user.id,
+        to_status=user.account_status,
+        reason=f"{data.account_type.title()} email verification started",
+    ))
 
     if role_slug == "customer":
         db.add(Customer(user_id=user.id, first_name=user.name, last_name="", full_name=user.name, email=email, phone=phone, status="inactive", email_verified=False))
     elif role_slug == "supplier":
-        db.add(Supplier(user_id=user.id, supplier_name=user.name, status="inactive", approval_status="email_verification_pending"))
+        db.add(Supplier(user_id=user.id, supplier_name=user.name, status="inactive", approval_status="PENDING"))
     else:
-        db.add(Agent(user_id=user.id, agent_name=user.name, status="inactive", approval_status="email_verification_pending"))
+        db.add(Agent(user_id=user.id, agent_name=user.name, status="inactive", approval_status="NOT_REQUIRED"))
 
+    log_audit(
+        db,
+        actor=user,
+        action="registration",
+        entity_type="auth",
+        entity_id=user.id,
+        new_values={"email": user.email, "user_type": user.user_type, "account_status": user.account_status},
+    )
     db.commit()
     db.refresh(user)
     send_email_verification(db, user, token, data.redirect)
+    log_audit(
+        db,
+        actor=user,
+        action="verification_email_sent",
+        entity_type="auth",
+        entity_id=user.id,
+        new_values={"email": user.email},
+    )
+    db.commit()
     return user
 
 
@@ -248,18 +304,86 @@ def _registration_token_user(db: Session, token: str):
 def complete_registration(db: Session, token: str, password: str):
     user = _registration_token_user(db, token)
     old_status = user.account_status
+    now = datetime.utcnow()
     user.password = hash_password(password)
-    user.password_created_at = datetime.utcnow()
+    user.password_created_at = now
     user.email_verified = True
-    user.email_verified_at = datetime.utcnow()
+    user.email_verified_at = now
     user.email_verification_token = None
     user.email_verification_expires_at = None
-    user.account_status = "PENDING_ADMIN_VERIFICATION"
+    user.account_status = "ACTIVE"
+    user.is_active = True
+    user.approval_status = "PENDING" if user.user_type == "SUPPLIER" else "NOT_REQUIRED"
+
     customer = db.query(Customer).filter(Customer.user_id == user.id).first()
     if customer:
         customer.email_verified = True
-    db.add(UserStatusHistory(user_id=user.id, from_status=old_status, to_status=user.account_status, reason="Password created"))
+        customer.status = "active"
+
+    agent = db.query(Agent).filter(Agent.user_id == user.id).first()
+    if agent:
+        agent.status = "active"
+        agent.approval_status = "NOT_REQUIRED"
+        agent.approved_at = None
+        agent.rejection_reason = None
+
+    supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    if supplier:
+        supplier.status = "active"
+        supplier.approval_status = "PENDING"
+        supplier.approved_at = None
+        supplier.rejection_reason = None
+
+    db.add(UserStatusHistory(
+        user_id=user.id,
+        from_status=old_status,
+        to_status=user.account_status,
+        reason="Email verified and password created; account activated",
+    ))
+    log_audit(
+        db,
+        actor=user,
+        action="email_verified",
+        entity_type="auth",
+        entity_id=user.id,
+        new_values={"email_verified": True},
+    )
+    log_audit(
+        db,
+        actor=user,
+        action="password_created",
+        entity_type="auth",
+        entity_id=user.id,
+        new_values={"account_status": "ACTIVE"},
+    )
+    if supplier:
+        from app.utils.notification_triggers import notify_supplier_approval_pending
+        notify_supplier_approval_pending(
+            db,
+            supplier_id=supplier.id,
+            supplier_name=supplier.supplier_name,
+            user_id=user.id,
+        )
     db.commit()
+    login_url = build_portal_login_url(user)
+    try:
+        subject, html = render_database_email(
+            db,
+            "registration_password_created",
+            {
+                "name": user.name,
+                "email": user.email,
+                "portal_name": portal_display_name(user),
+                "login_url": login_url,
+                "button_text": "Login to Tourvaa",
+                "button_url": login_url,
+            },
+            "Your Tourvaa account is ready to sign in",
+            registration_password_created_email(user.name, login_url),
+        )
+        try_send_email(user.email, subject, html)
+    except Exception as exc:
+        logger.warning("Password-created login email failed for user id=%s: %s", user.id, exc)
     return user
 
 
@@ -349,9 +473,13 @@ def register_user(db: Session, data):
             .first()
         )
 
-    is_customer = selected_role.slug == "customer" if selected_role else False
-
-    verification_token, verification_token_hash = create_password_reset_token()
+    role_slug = selected_role.slug if selected_role else None
+    supplier_verification = role_slug == "supplier"
+    verification_token = None
+    verification_token_hash = None
+    if supplier_verification:
+        verification_token, verification_token_hash = create_password_reset_token()
+    now = datetime.utcnow()
 
     new_user = User(
         name=data.name.strip(),
@@ -366,24 +494,25 @@ def register_user(db: Session, data):
         password=hash_password(data.password),
         role_id=selected_role.id if selected_role else None,
         user_type={"customer": "CUSTOMER", "supplier": "SUPPLIER", "agent-reseller": "AGENT"}.get(selected_role.slug if selected_role else "", "ADMIN"),
-        is_active=is_customer,
-        approval_status="approved" if is_customer else "pending",
-        account_status="ACTIVE" if is_customer else "PENDING_ADMIN_VERIFICATION",
-        admin_verified=is_customer,
-        admin_verified_at=datetime.utcnow() if is_customer else None,
+        is_active=not supplier_verification,
+        approval_status="pending" if supplier_verification else "approved",
+        account_status="PENDING_EMAIL_VERIFICATION" if supplier_verification else "ACTIVE",
+        admin_verified=False,
+        admin_verified_at=None,
         email_verified=False,
-        password_created_at=datetime.utcnow(),
+        password_created_at=now,
         email_verified_at=None,
         email_verification_token=verification_token_hash,
-        email_verification_expires_at=datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES),
+        email_verification_expires_at=(
+            now + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
+            if supplier_verification else None
+        ),
     )
 
     db.add(new_user)
     db.flush()
     if new_user.role_id:
         db.add(UserRole(user_id=new_user.id, role_id=new_user.role_id))
-
-    role_slug = selected_role.slug if selected_role else None
 
     # Auto-create the corresponding profile record linked by user_id
     if role_slug == "customer":
@@ -421,34 +550,16 @@ def register_user(db: Session, data):
             db.add(Agent(
                 user_id=new_user.id,
                 agent_name=new_user.name.strip(),
-                status="inactive",
-                approval_status="email_verification_pending",
+                status="active",
+                approval_status="approved",
+                approved_at=now,
             ))
 
     db.commit()
     db.refresh(new_user)
 
-    send_email_verification(db, new_user, verification_token)
-
-    if not is_customer:
-        subject, html = render_database_email(
-            db,
-            "registration_pending",
-            {
-                "name": new_user.name,
-                "email": new_user.email,
-                "phone": new_user.phone,
-                "role_name": new_user.role.name if new_user.role else "Customer",
-            },
-            "Tourvaa registration received",
-            pending_approval_email(new_user.name),
-        )
-
-        try_send_email(
-            new_user.email,
-            subject,
-            html,
-        )
+    if supplier_verification and verification_token:
+        send_email_verification(db, new_user, verification_token)
 
     return new_user
 
@@ -491,7 +602,7 @@ def login_user(db: Session, data, request=None):
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
+    if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Email verification is required before login")
 
     auth_user = get_auth_user_payload(db, user)
@@ -511,6 +622,11 @@ def login_user(db: Session, data, request=None):
     if user.account_status != "ACTIVE" or not user.is_active:
         _record_login_history(db, data=data, email=email, status="restricted", user=user, failure_reason=user.account_status, request=request)
         db.commit()
+        if user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"}:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Account is {user.account_status.lower().replace('_', ' ')}",
+            )
         return {
             "access_token": token,
             "_refresh_token": "",
@@ -701,18 +817,10 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web"):
         logger.info("Password reset requested for unknown email: %s", normalized_email)
         return False
 
-    if settings.REQUIRE_EMAIL_VERIFICATION and not user.email_verified_at:
+    if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Email verification is required before password reset")
 
-    if user.approval_status == "pending":
-        logger.info("Password reset skipped for pending user id=%s", user.id)
-        raise HTTPException(status_code=403, detail="Your account is pending approval. You cannot reset your password yet.")
-
-    if user.approval_status == "rejected":
-        logger.info("Password reset skipped for rejected user id=%s", user.id)
-        raise HTTPException(status_code=403, detail="Your account has been rejected. Please contact support.")
-
-    if not user.is_active:
+    if user.account_status != "ACTIVE" or not user.is_active:
         logger.info("Password reset skipped for inactive user id=%s", user.id)
         raise HTTPException(status_code=403, detail="Your account is inactive. Please contact support.")
 
@@ -765,7 +873,7 @@ def reset_password(db: Session, token: str, password: str):
     if expires_at.replace(tzinfo=None) < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    if user.approval_status != "approved" or not user.is_active:
+    if user.account_status != "ACTIVE" or not user.is_active or not user.email_verified:
         raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
 
     user.password = hash_password(password)
@@ -810,7 +918,7 @@ def validate_reset_token(db: Session, token: str):
     if user.reset_password_expires_at.replace(tzinfo=None) < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    if user.approval_status != "approved" or not user.is_active:
+    if user.account_status != "ACTIVE" or not user.is_active or not user.email_verified:
         raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
 
     return True

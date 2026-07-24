@@ -2,6 +2,7 @@ import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_
 from sqlalchemy import func as sqlfunc
 from sqlalchemy.orm import Session
 
@@ -29,14 +30,16 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 # the broader definition already used by the approval-queue lists, so the
 # "X pending" stat/alert counts don't disagree with what's actually listed.
 PENDING_REVIEW_STATUSES = [
-    "pending",
-    "email_verification_pending",
-    "profile_incomplete",
-    "documents_pending",
-    "admin_review_pending",
-    "partial_approved",
-    "partially_approved",
+    "PENDING",
+    "EMAIL_VERIFICATION_PENDING",
+    "PROFILE_INCOMPLETE",
+    "DOCUMENTS_PENDING",
+    "ADMIN_REVIEW_PENDING",
+    "PARTIAL_APPROVED",
+    "PARTIALLY_APPROVED",
+    "MORE_INFORMATION_REQUIRED",
 ]
+ADMIN_ROLE_SLUGS = ("super-admin", "admin", "sub-admin")
 
 # Maps role slug -> dashboard type key used by the frontend
 ROLE_TO_DASHBOARD_TYPE = {
@@ -223,6 +226,39 @@ def _safe_sum(db, column, *filters):
         return 0.0
 
 
+def _safe_query_count(query):
+    try:
+        return query.count()
+    except Exception:
+        return 0
+
+
+def _safe_query_sum(query, column):
+    try:
+        return float(query.with_entities(sqlfunc.coalesce(sqlfunc.sum(column), 0)).scalar() or 0)
+    except Exception:
+        return 0.0
+
+
+def _with_created_at_filters(query, model, start_date: date | None, end_date: date | None):
+    if start_date:
+        query = query.filter(sqlfunc.date(model.created_at) >= start_date)
+    if end_date:
+        query = query.filter(sqlfunc.date(model.created_at) <= end_date)
+    return query
+
+
+def _is_pending_review(column):
+    return sqlfunc.upper(column).in_(PENDING_REVIEW_STATUSES)
+
+
+def _is_admin_user():
+    return or_(
+        sqlfunc.upper(User.user_type) == "ADMIN",
+        User.role.has(Role.slug.in_(ADMIN_ROLE_SLUGS)),
+    )
+
+
 # ---------------------------------------------------------------------------
 # GET /dashboard/me
 # ---------------------------------------------------------------------------
@@ -255,14 +291,14 @@ def my_dashboard(
 
     total_users = db.query(User).count() if can_view_users else 0
     active_users = db.query(User).filter(User.is_active == True).count() if can_view_users else 0
-    pending_users = db.query(User).filter(User.approval_status == "pending").count() if can_manage_users else 0
+    pending_users = db.query(User).filter(_is_admin_user(), _is_pending_review(User.approval_status)).count() if can_manage_users else 0
     total_roles = db.query(Role).filter(Role.is_active == True).count() if can_view_roles else 0
 
     pending_approval_users = []
     if can_manage_users:
         pending_approval_users = (
             db.query(User)
-            .filter(User.approval_status == "pending")
+            .filter(_is_admin_user(), _is_pending_review(User.approval_status))
             .order_by(User.id.desc())
             .limit(5)
             .all()
@@ -304,6 +340,8 @@ def my_dashboard(
                 "name": current_user.name,
                 "email": current_user.email,
                 "user_type": role_slug,
+                "account_status": current_user.account_status,
+                "email_verified": current_user.email_verified,
                 "profile_image": existing_storage_path(current_user.profile_image),
                 "role": {
                     "id": current_user.role.id if current_user.role else None,
@@ -312,6 +350,7 @@ def my_dashboard(
                 },
                 "profile_status": profile_status,
                 "approval_status": approval_status,
+                "supplier_approval_status": (approval_status or "PENDING").upper() if role_slug == "supplier" else "NOT_REQUIRED",
                 "customer_id": (lambda c: c.id if c else None)(db.query(Customer).filter(Customer.user_id == current_user.id).first()) if role_slug == "customer" else None,
                 "supplier_id": supplier_id,
                 "agent_id": agent_id,
@@ -375,13 +414,33 @@ def dashboard_summary(
         supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
         if not supplier:
             return {"status": "success", "data": {**filters, **_empty_supplier_summary()}}
+        if (supplier.approval_status or "").upper() != "APPROVED":
+            return {
+                "status": "success",
+                "data": {
+                    **filters,
+                    **_empty_supplier_summary(),
+                    "dashboard_type": "supplier_pending",
+                    "profile_approval_status": (supplier.approval_status or "PENDING").upper(),
+                    "document_verification_status": "pending",
+                },
+            }
 
-        sid = supplier.id
-        total_bookings = _safe_count(db, Booking, Booking.supplier_id == sid)
-        upcoming = _safe_count(db, Booking, Booking.supplier_id == sid, Booking.booking_status == "upcoming")
-        accepted = _safe_count(db, Booking, Booking.supplier_id == sid, Booking.booking_status == "ongoing")
-        completed = _safe_count(db, Booking, Booking.supplier_id == sid, Booking.booking_status == "completed")
-        cancelled = _safe_count(db, Booking, Booking.supplier_id == sid, Booking.booking_status == "cancelled")
+        booking_query = db.query(Booking).filter(Booking.supplier_id == supplier.id)
+        booking_query = _with_created_at_filters(booking_query, Booking, start_date, end_date)
+        if country_id:
+            booking_query = booking_query.filter(Booking.country_id == country_id)
+        if booking_status:
+            booking_query = booking_query.filter(Booking.booking_status == booking_status.strip().lower())
+
+        total_bookings = _safe_query_count(booking_query)
+        upcoming = _safe_query_count(booking_query.filter(Booking.booking_status.in_([
+            "pending_payment", "payment_authorized", "pending_supplier_acceptance",
+            "confirmed", "upcoming",
+        ])))
+        accepted = _safe_query_count(booking_query.filter(Booking.booking_status.in_(["confirmed", "ongoing"])))
+        completed = _safe_query_count(booking_query.filter(Booking.booking_status == "completed"))
+        cancelled = _safe_query_count(booking_query.filter(Booking.booking_status.in_(["cancelled", "declined", "refunded"])))
 
         return {
             "status": "success",
@@ -391,10 +450,10 @@ def dashboard_summary(
                 "total_bookings": total_bookings,
                 "upcoming_bookings": upcoming,
                 "accepted_bookings": accepted,
-                "declined_bookings": 0,
+                "declined_bookings": _safe_query_count(booking_query.filter(Booking.booking_status == "declined")),
                 "completed_bookings": completed,
                 "cancelled_bookings": cancelled,
-                "pending_payments": _safe_sum(db, Payment.pending_amount, Payment.payment_status.in_(["pending", "partial"])),
+                "pending_payments": _safe_query_sum(booking_query, Booking.amount_pending),
                 "profile_approval_status": supplier.approval_status,
                 "document_verification_status": "pending",
             },
@@ -453,7 +512,7 @@ def dashboard_summary(
                 "monthly_revenue": paid_revenue,
                 "commission_earned": commission_earned,
                 "gross_booking_value": gross_value,
-                "pending_payments": 0.0,
+                "pending_payments": _safe_query_sum(eligible_query, Booking.amount_pending),
                 "discount_type": agent.discount_type,
                 "discount_value": float(agent.discount_value or 0),
                 "agent_approval_status": agent.approval_status,
@@ -466,14 +525,20 @@ def dashboard_summary(
         if not customer:
             return {"status": "success", "data": {**filters, **_empty_customer_summary()}}
 
-        cid = customer.id
         active_customer_statuses = ["pending_payment", "payment_authorized", "pending_supplier_acceptance", "confirmed", "upcoming", "ongoing"]
-        total_bookings = _safe_count(db, Booking, Booking.customer_id == cid)
-        upcoming = _safe_count(db, Booking, Booking.customer_id == cid, Booking.booking_status.in_(active_customer_statuses))
-        completed = _safe_count(db, Booking, Booking.customer_id == cid, Booking.booking_status == "completed")
-        cancelled = _safe_count(db, Booking, Booking.customer_id == cid, Booking.booking_status == "cancelled")
-        paid_amount = _safe_sum(db, Booking.amount_paid, Booking.customer_id == cid)
-        pending_amount = _safe_sum(db, Booking.amount_pending, Booking.customer_id == cid)
+        booking_query = db.query(Booking).filter(Booking.customer_id == customer.id)
+        booking_query = _with_created_at_filters(booking_query, Booking, start_date, end_date)
+        if country_id:
+            booking_query = booking_query.filter(Booking.country_id == country_id)
+        if booking_status:
+            booking_query = booking_query.filter(Booking.booking_status == booking_status.strip().lower())
+
+        total_bookings = _safe_query_count(booking_query)
+        upcoming = _safe_query_count(booking_query.filter(Booking.booking_status.in_(active_customer_statuses)))
+        completed = _safe_query_count(booking_query.filter(Booking.booking_status == "completed"))
+        cancelled = _safe_query_count(booking_query.filter(Booking.booking_status.in_(["cancelled", "declined", "refunded"])))
+        paid_amount = _safe_query_sum(booking_query, Booking.amount_paid)
+        pending_amount = _safe_query_sum(booking_query, Booking.amount_pending)
         return {
             "status": "success",
             "data": {
@@ -530,28 +595,71 @@ def dashboard_summary(
     can_affiliates = _can("affiliates.view", "view-affiliates")
     can_tours = _can("tours.view", "view-tours")
     can_payments = _can("payments.view", "view-payments")
+    can_bookings = _can("bookings.view", "view-bookings")
+    can_customers = _can("customers.view", "view-customers")
+    can_users = _can("users.view", "view-users")
 
-    total_suppliers = _safe_count(db, Supplier) if can_suppliers else 0
-    pending_suppliers = _safe_count(db, Supplier, Supplier.approval_status.in_(PENDING_REVIEW_STATUSES)) if can_suppliers else 0
-    approved_suppliers = total_suppliers - pending_suppliers
+    supplier_query = _with_created_at_filters(db.query(Supplier), Supplier, start_date, end_date)
+    agent_query = _with_created_at_filters(db.query(Agent), Agent, start_date, end_date)
+    customer_query = _with_created_at_filters(db.query(Customer), Customer, start_date, end_date)
+    tour_query = _with_created_at_filters(db.query(Tour), Tour, start_date, end_date)
+    booking_query = _with_created_at_filters(db.query(Booking), Booking, start_date, end_date)
 
-    total_agents = _safe_count(db, Agent) if can_agents else 0
-    pending_agents = _safe_count(db, Agent, Agent.approval_status.in_(PENDING_REVIEW_STATUSES)) if can_agents else 0
-    approved_agents = total_agents - pending_agents
+    if country_id:
+        supplier_query = supplier_query.filter(Supplier.country_id == country_id)
+        agent_query = agent_query.filter(Agent.country_id == country_id)
+        customer_query = customer_query.filter(Customer.country_id == country_id)
+        tour_query = tour_query.filter(Tour.country_id == country_id)
+        booking_query = booking_query.filter(Booking.country_id == country_id)
+    if supplier_id:
+        booking_query = booking_query.filter(Booking.supplier_id == supplier_id)
+    if agent_id:
+        booking_query = booking_query.filter(Booking.agent_id == agent_id)
+    if booking_status:
+        booking_query = booking_query.filter(Booking.booking_status == booking_status.strip().lower())
 
-    total_affiliates = _safe_count(db, Affiliate) if can_affiliates else 0
-    pending_affiliates = _safe_count(db, Affiliate, Affiliate.approval_status.in_(PENDING_REVIEW_STATUSES)) if can_affiliates else 0
+    total_suppliers = _safe_query_count(supplier_query) if can_suppliers else 0
+    pending_suppliers = _safe_query_count(supplier_query.filter(_is_pending_review(Supplier.approval_status))) if can_suppliers else 0
+    approved_suppliers = _safe_query_count(supplier_query.filter(sqlfunc.upper(Supplier.approval_status) == "APPROVED")) if can_suppliers else 0
 
-    total_tours = _safe_count(db, Tour) if can_tours else 0
-    published_tours = _safe_count(db, Tour, Tour.status == "published") if can_tours else 0
+    total_agents = _safe_query_count(agent_query) if can_agents else 0
+    pending_agents = _safe_query_count(agent_query.filter(_is_pending_review(Agent.approval_status))) if can_agents else 0
+    approved_agents = _safe_query_count(agent_query.filter(sqlfunc.upper(Agent.approval_status).in_(["APPROVED", "NOT_REQUIRED"]))) if can_agents else 0
 
-    total_bookings = _safe_count(db, Booking)
-    upcoming_bookings = _safe_count(db, Booking, Booking.booking_status == "upcoming")
-    total_customers = db.query(User).count()
-    pending_admin_users = db.query(User).filter(User.approval_status == "pending").count()
+    affiliate_query = _with_created_at_filters(db.query(Affiliate), Affiliate, start_date, end_date)
+    if country_id:
+        affiliate_query = affiliate_query.filter(Affiliate.country_id == country_id)
+    total_affiliates = _safe_query_count(affiliate_query) if can_affiliates else 0
+    pending_affiliates = _safe_query_count(affiliate_query.filter(_is_pending_review(Affiliate.approval_status))) if can_affiliates else 0
 
-    total_revenue = _safe_sum(db, Payment.paid_amount, Payment.payment_status != "refunded") if can_payments else 0.0
-    pending_payments = _safe_sum(db, Payment.pending_amount, Payment.payment_status.in_(["pending", "partial"])) if can_payments else 0.0
+    total_tours = _safe_query_count(tour_query) if can_tours else 0
+    published_tours = _safe_query_count(tour_query.filter(Tour.status == "published")) if can_tours else 0
+
+    total_bookings = _safe_query_count(booking_query) if can_bookings else 0
+    upcoming_bookings = _safe_query_count(booking_query.filter(Booking.booking_status.in_([
+        "pending_payment", "payment_authorized", "pending_supplier_acceptance",
+        "confirmed", "upcoming", "ongoing",
+    ]))) if can_bookings else 0
+    total_customers = _safe_query_count(customer_query) if can_customers else 0
+
+    admin_user_query = db.query(User).filter(_is_admin_user())
+    active_admin_users = _safe_query_count(admin_user_query.filter(User.is_active == True)) if can_users else 0
+    pending_admin_users = _safe_query_count(admin_user_query.filter(_is_pending_review(User.approval_status))) if can_users else 0
+
+    payment_query = _with_created_at_filters(db.query(Payment), Payment, start_date, end_date)
+    if country_id or supplier_id or agent_id or booking_status:
+        payment_query = payment_query.join(Booking, Payment.booking_id == Booking.id)
+        if country_id:
+            payment_query = payment_query.filter(Booking.country_id == country_id)
+        if supplier_id:
+            payment_query = payment_query.filter(Booking.supplier_id == supplier_id)
+        if agent_id:
+            payment_query = payment_query.filter(Booking.agent_id == agent_id)
+        if booking_status:
+            payment_query = payment_query.filter(Booking.booking_status == booking_status.strip().lower())
+
+    total_revenue = _safe_query_sum(payment_query.filter(Payment.payment_status != "refunded"), Payment.paid_amount) if can_payments else 0.0
+    pending_payments = _safe_query_sum(payment_query.filter(Payment.payment_status.in_(["pending", "partial"])), Payment.pending_amount) if can_payments else 0.0
 
     return {
         "status": "success",
@@ -570,7 +678,7 @@ def dashboard_summary(
             "pending_affiliates": pending_affiliates,
             "total_tours": total_tours,
             "published_tours": published_tours,
-            "active_admin_users": db.query(User).filter(User.is_active == True).count(),
+            "active_admin_users": active_admin_users,
             "pending_admin_users": pending_admin_users,
             "total_revenue": total_revenue,
             "pending_payments": pending_payments,
@@ -639,13 +747,32 @@ def dashboard_charts(
 ):
     role_slug = _get_role_slug(current_user)
     filters = _filters_payload(start_date, end_date, country_id)
+    booking_filters = []
+    payment_filters = []
+    supplier_filters = []
+    agent_filters = []
+    if start_date:
+        booking_filters.append(sqlfunc.date(Booking.created_at) >= start_date)
+        payment_filters.append(sqlfunc.date(Payment.created_at) >= start_date)
+        supplier_filters.append(sqlfunc.date(Supplier.created_at) >= start_date)
+        agent_filters.append(sqlfunc.date(Agent.created_at) >= start_date)
+    if end_date:
+        booking_filters.append(sqlfunc.date(Booking.created_at) <= end_date)
+        payment_filters.append(sqlfunc.date(Payment.created_at) <= end_date)
+        supplier_filters.append(sqlfunc.date(Supplier.created_at) <= end_date)
+        agent_filters.append(sqlfunc.date(Agent.created_at) <= end_date)
+    if country_id:
+        booking_filters.append(Booking.country_id == country_id)
+        payment_filters.append(Payment.booking.has(Booking.country_id == country_id))
+        supplier_filters.append(Supplier.country_id == country_id)
+        agent_filters.append(Agent.country_id == country_id)
 
     # Supplier charts
     if role_slug == "supplier":
         supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
         sid = supplier.id if supplier else -1
 
-        booking_statuses = _booking_status_chart(db, Booking.supplier_id == sid)
+        booking_statuses = _booking_status_chart(db, Booking.supplier_id == sid, *booking_filters)
         return {
             "status": "success",
             "data": {
@@ -662,7 +789,7 @@ def dashboard_charts(
         agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
         aid = agent.id if agent else -1
 
-        booking_statuses = _booking_status_chart(db, Booking.agent_id == aid)
+        booking_statuses = _booking_status_chart(db, Booking.agent_id == aid, *booking_filters)
         return {
             "status": "success",
             "data": {
@@ -679,7 +806,7 @@ def dashboard_charts(
         customer = db.query(Customer).filter(Customer.user_id == current_user.id).first()
         cid = customer.id if customer else -1
 
-        booking_statuses = _booking_status_chart(db, Booking.customer_id == cid)
+        booking_statuses = _booking_status_chart(db, Booking.customer_id == cid, *booking_filters)
         return {
             "status": "success",
             "data": {
@@ -703,8 +830,8 @@ def dashboard_charts(
         }
 
     # Admin/Super Admin charts
-    booking_statuses = _booking_status_chart(db)
-    payment_statuses = _payment_status_chart(db)
+    booking_statuses = _booking_status_chart(db, *booking_filters)
+    payment_statuses = _payment_status_chart(db, *payment_filters)
 
     return {
         "status": "success",
@@ -713,8 +840,8 @@ def dashboard_charts(
             "dashboard_type": _get_dashboard_type(role_slug),
             "booking_status_chart": booking_statuses,
             "payment_status_chart": payment_statuses,
-            "supplier_status_chart": _supplier_status_chart(db),
-            "agent_status_chart": _agent_status_chart(db),
+            "supplier_status_chart": _supplier_status_chart(db, *supplier_filters),
+            "agent_status_chart": _agent_status_chart(db, *agent_filters),
             "monthly_booking_trend": [],
             "top_destinations": [],
         },
@@ -722,7 +849,17 @@ def dashboard_charts(
 
 
 def _booking_status_chart(db: Session, *filters):
-    statuses = ["upcoming", "ongoing", "completed", "cancelled"]
+    statuses = [
+        "pending_payment",
+        "payment_authorized",
+        "pending_supplier_acceptance",
+        "confirmed",
+        "upcoming",
+        "ongoing",
+        "completed",
+        "cancelled",
+        "declined",
+    ]
     result = []
     for status in statuses:
         try:
@@ -735,34 +872,43 @@ def _booking_status_chart(db: Session, *filters):
     return result
 
 
-def _payment_status_chart(db: Session):
+def _payment_status_chart(db: Session, *filters):
     statuses = ["paid", "partial", "pending", "failed", "refunded"]
     result = []
     for status in statuses:
         try:
-            result.append({"status": status, "count": db.query(Payment).filter(Payment.payment_status == status).count()})
+            query = db.query(Payment).filter(Payment.payment_status == status)
+            for item in filters:
+                query = query.filter(item)
+            result.append({"status": status, "count": query.count()})
         except Exception:
             result.append({"status": status, "count": 0})
     return result
 
 
-def _supplier_status_chart(db: Session):
-    statuses = ["approved", "pending", "rejected"]
+def _supplier_status_chart(db: Session, *filters):
+    statuses = ["APPROVED", "PENDING", "MORE_INFORMATION_REQUIRED", "REJECTED"]
     result = []
     for status in statuses:
         try:
-            result.append({"status": status, "count": db.query(Supplier).filter(Supplier.approval_status == status).count()})
+            query = db.query(Supplier).filter(sqlfunc.upper(Supplier.approval_status) == status)
+            for item in filters:
+                query = query.filter(item)
+            result.append({"status": status.lower(), "count": query.count()})
         except Exception:
             result.append({"status": status, "count": 0})
     return result
 
 
-def _agent_status_chart(db: Session):
-    statuses = ["approved", "pending", "rejected"]
+def _agent_status_chart(db: Session, *filters):
+    statuses = ["NOT_REQUIRED", "APPROVED", "PENDING", "REJECTED"]
     result = []
     for status in statuses:
         try:
-            result.append({"status": status, "count": db.query(Agent).filter(Agent.approval_status == status).count()})
+            query = db.query(Agent).filter(sqlfunc.upper(Agent.approval_status) == status)
+            for item in filters:
+                query = query.filter(item)
+            result.append({"status": status.lower(), "count": query.count()})
         except Exception:
             result.append({"status": status, "count": 0})
     return result
@@ -1003,22 +1149,24 @@ def dashboard_alerts(
 
     alerts = []
 
-    pending_users = db.query(User).filter(User.approval_status == "pending").count()
-    if pending_users > 0:
+    pending_users = _safe_query_count(
+        db.query(User).filter(_is_admin_user(), _is_pending_review(User.approval_status))
+    ) if _can("users.view", "view-users") else 0
+    if pending_users:
         alerts.append({"type": "warning", "message": f"{pending_users} user(s) pending approval", "action": "users"})
 
     if _can("suppliers.view", "view-suppliers"):
-        pending_suppliers = _safe_count(db, Supplier, Supplier.approval_status.in_(PENDING_REVIEW_STATUSES))
+        pending_suppliers = _safe_count(db, Supplier, _is_pending_review(Supplier.approval_status))
         if pending_suppliers > 0:
             alerts.append({"type": "warning", "message": f"{pending_suppliers} supplier approval(s) pending", "action": "suppliers"})
 
     if _can("agents.view", "view-agents"):
-        pending_agents = _safe_count(db, Agent, Agent.approval_status.in_(PENDING_REVIEW_STATUSES))
+        pending_agents = _safe_count(db, Agent, _is_pending_review(Agent.approval_status))
         if pending_agents > 0:
             alerts.append({"type": "warning", "message": f"{pending_agents} agent approval(s) pending", "action": "agents"})
 
     if _can("affiliates.view", "view-affiliates"):
-        pending_affiliates = _safe_count(db, Affiliate, Affiliate.approval_status.in_(PENDING_REVIEW_STATUSES))
+        pending_affiliates = _safe_count(db, Affiliate, _is_pending_review(Affiliate.approval_status))
         if pending_affiliates > 0:
             alerts.append({"type": "info", "message": f"{pending_affiliates} affiliate request(s) pending", "action": "affiliates"})
 

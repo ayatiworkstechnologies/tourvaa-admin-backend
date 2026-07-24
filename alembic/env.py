@@ -22,7 +22,7 @@ from app.models.permissions import Permission, RolePermission
 from app.models.roles import Role
 from app.models.sessions import LoginHistory, UserSession
 from app.models.settings import ApiSetting, AppSetting, PaymentSetting
-from app.models.suppliers import Supplier, SupplierBusinessInfo, SupplierContact, SupplierDocument, SupplierInvoicing, SupplierVehicle
+from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierBusinessInfo, SupplierContact, SupplierDocument, SupplierInvoicing, SupplierVehicle
 from app.models.tours import (
     TourAccommodationExtra,
     TourCalendar,

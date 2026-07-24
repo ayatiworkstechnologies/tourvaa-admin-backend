@@ -41,9 +41,6 @@ def agent_ctx(headers):
     agent_id = _find_agent_id_by_name(headers, name)
     assert agent_id, f"Newly registered agent {name!r} not found via admin search"
 
-    approve = requests.post(f"{BASE_URL}/agents/{agent_id}/approve", headers=headers, timeout=10)
-    assert approve.status_code == 200, approve.text
-
     login = login_with_retry(email, password)
     assert login.status_code == 200, login.text
     token = login.json()["data"]["access_token"]
@@ -56,21 +53,22 @@ def agent_headers(agent_ctx):
 
 
 # ---------------------------------------------------------------------------
-# Registration / approval gate (mirrors supplier flow)
+# Registration policy
 # ---------------------------------------------------------------------------
 
-def test_agent_login_returns_status_until_approved():
+def test_agent_can_login_without_email_or_admin_verification():
     _, email, password = _register_agent()
     resp = requests.post(f"{BASE_URL}/auth/login", json={"email": email, "password": password}, timeout=10)
     if resp.status_code == 429:
         return
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
-    assert data["account_restricted"] is True
-    assert data["account_status"] == "PENDING_ADMIN_VERIFICATION"
+    assert not data.get("account_restricted")
+    assert data["user"]["account_status"] == "ACTIVE"
+    assert data["access_token"]
 
 
-def test_agent_can_login_after_approval(agent_ctx):
+def test_agent_can_login_immediately(agent_ctx):
     assert agent_ctx["headers"]["Authorization"].startswith("Bearer ")
 
 

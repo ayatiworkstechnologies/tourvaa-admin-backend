@@ -64,10 +64,78 @@ def notify_supplier_approved(db: Session, *, supplier_id: int, supplier_name: st
     from app.config import settings
     notify_admins(db, notification_type="supplier_approved", title="Supplier Approved", message=f"Supplier '{supplier_name}' has been approved.", entity_type="supplier", entity_id=supplier_id)
     if user_id:
-        enqueue_notification(db, user_id=user_id, notification_type="supplier_approved", title="Your supplier profile is approved!", message=f"Congratulations! Your supplier profile '{supplier_name}' has been approved. You can now start receiving bookings.", entity_type="supplier", entity_id=supplier_id)
+        enqueue_notification(db, user_id=user_id, notification_type="supplier_approved", title="Supplier operations unlocked", message=f"Your supplier profile '{supplier_name}' is approved. Tour, booking, calendar and payout features are now available.", entity_type="supplier", entity_id=supplier_id)
         from app.utils.email_templates import approved_email
         login_url = f"{settings.FRONTEND_URL}/login"
-        send_templated_email(db, _user_email(db, user_id), "account_approved", {"name": supplier_name, "login_url": login_url}, "Your Tourvaa account is approved", approved_email(supplier_name, login_url))
+        send_templated_email(db, _user_email(db, user_id), "supplier_approved", {"supplier_name": supplier_name, "name": supplier_name, "login_url": login_url}, "Your Tourvaa supplier operations are unlocked", approved_email(supplier_name, login_url))
+    db.flush()
+
+
+def notify_supplier_approval_pending(db: Session, *, supplier_id: int, supplier_name: str, user_id: int):
+    enqueue_notification(
+        db,
+        user_id=user_id,
+        notification_type="supplier_approval_pending",
+        title="Supplier approval pending",
+        message="Your account is active. Complete your supplier profile and documents while Tourvaa reviews it.",
+        entity_type="supplier",
+        entity_id=supplier_id,
+    )
+    send_templated_email(
+        db,
+        _user_email(db, user_id),
+        "supplier_approval_pending",
+        {"supplier_name": supplier_name, "name": supplier_name},
+        "Your Tourvaa supplier profile is pending approval",
+        "Your account is active and your supplier profile is pending review. Sign in to complete your profile and verification documents.",
+    )
+    db.flush()
+
+
+def notify_supplier_account_status(
+    db: Session,
+    *,
+    supplier_id: int,
+    supplier_name: str,
+    account_status: str,
+    reason: str = "",
+    user_id: int | None = None,
+):
+    if not user_id:
+        return
+    from app.config import settings
+    normalized = account_status.upper()
+    reactivated = normalized == "ACTIVE"
+    title = "Supplier account reactivated" if reactivated else f"Supplier account {normalized.lower()}"
+    message = (
+        "Your supplier account is active again."
+        if reactivated
+        else f"Your supplier account is now {normalized.lower()}. {reason}".strip()
+    )
+    enqueue_notification(
+        db,
+        user_id=user_id,
+        notification_type=f"supplier_account_{normalized.lower()}",
+        title=title,
+        message=message,
+        entity_type="supplier",
+        entity_id=supplier_id,
+    )
+    login_url = f"{settings.FRONTEND_URL}/login"
+    template_key = "account_reactivated" if reactivated else "account_deactivated"
+    send_templated_email(
+        db,
+        _user_email(db, user_id),
+        template_key,
+        {
+            "name": supplier_name,
+            "supplier_name": supplier_name,
+            "reason": reason,
+            "login_url": login_url,
+        },
+        title,
+        message,
+    )
     db.flush()
 
 

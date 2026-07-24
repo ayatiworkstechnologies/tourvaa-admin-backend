@@ -15,7 +15,7 @@ from app.utils.email_templates import (
     user_created_email,
 )
 from app.utils.mailer import send_email, try_send_email
-from app.services.audit import log_audit
+from app.services.audit import AuditLog, log_audit
 from app.models.users import User, UserRole, UserStatusHistory
 from app.schemas.users import UserCreate, UserUpdate
 from app.auth.security import create_password_reset_token, hash_password
@@ -461,6 +461,91 @@ def deactivate_user(db: Session, user_id: int, reason: str, actor: User | None =
     return serialize_user(user)
 
 
+def reactivate_user(
+    db: Session,
+    user_id: int,
+    actor: User | None = None,
+    request: Request | None = None,
+):
+    """Restore a previously deactivated account without changing role approval."""
+    user = get_user_by_id(db, user_id)
+    if user.account_status == "ACTIVE" and user.is_active:
+        raise HTTPException(status_code=400, detail="User account is already active")
+
+    if user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"}:
+        if not user.password_created_at:
+            raise HTTPException(
+                status_code=400,
+                detail="Password creation must be completed before reactivation",
+            )
+        if not user.email_verified or not user.email_verified_at:
+            raise HTTPException(
+                status_code=400,
+                detail="Email verification must be completed before reactivation",
+            )
+
+    old_values = serialize_user(user)
+    old_status = user.account_status
+    user.account_status = "ACTIVE"
+    user.is_active = True
+    user.admin_verified = True
+    user.admin_verified_at = datetime.utcnow()
+    user.admin_verified_by = actor.id if actor else None
+    user.deactivated_at = None
+    user.deactivated_by = None
+    user.deactivation_reason = None
+    user.token_version += 1
+
+    role_slug = user.role.slug if user.role else ""
+    if role_slug == "customer":
+        from app.models.customers import Customer
+        profile = db.query(Customer).filter(Customer.user_id == user.id).first()
+    elif role_slug == "supplier":
+        from app.models.suppliers import Supplier
+        profile = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    elif role_slug == "agent-reseller":
+        from app.models.agents import Agent
+        profile = db.query(Agent).filter(Agent.user_id == user.id).first()
+    else:
+        profile = None
+
+    if profile:
+        profile.status = "active"
+
+    db.add(
+        UserStatusHistory(
+            user_id=user.id,
+            from_status=old_status,
+            to_status="ACTIVE",
+            reason="Reactivated by administrator",
+            changed_by=actor.id if actor else None,
+        )
+    )
+    log_audit(
+        db,
+        actor=actor,
+        action="reactivate_user",
+        entity_type="user",
+        entity_id=user.id,
+        old_values=old_values,
+        new_values=serialize_user(user),
+        request=request,
+    )
+    db.commit()
+    db.refresh(user)
+
+    login_url = f"{settings.FRONTEND_URL}/login"
+    subject, html = render_database_email(
+        db,
+        "account_reactivated",
+        {"name": user.name, "login_url": login_url},
+        "Your Tourvaa account is active again",
+        approved_email(user.name, login_url),
+    )
+    try_send_email(user.email, subject, html)
+    return serialize_user(user)
+
+
 def assign_roles_to_user(
     db: Session,
     user_id: int,
@@ -544,6 +629,81 @@ def delete_user(
         new_approval_status="rejected",
     )
     old_values = serialize_user(user)
+
+    from app.models.agents import Agent, AgentDocument
+    from app.models.affiliates import Affiliate, AffiliateDocument
+    from app.models.affiliate_tracking import AffiliatePayout
+    from app.models.bookings import Booking, BookingCommunication, BookingStatusHistory, MessageReply
+    from app.models.cancellations import CancellationRequest
+    from app.models.checkout import CheckoutSession
+    from app.models.cms import Tour
+    from app.models.customers import Customer, CustomerCancellationRequest, CustomerCommunication
+    from app.models.invoices import Invoice
+    from app.models.notifications import Notification, PushSubscription
+    from app.models.payments import Payment, PaymentTransaction
+    from app.models.suppliers import (
+        Supplier,
+        SupplierApprovalHistory,
+        SupplierDocument,
+        SupplierVehicle,
+    )
+    from app.models.supplier_ledger import SupplierPayout
+    from app.models.tour_versions import TourVersion
+    from app.models.website_cms import Blog
+
+    def nullify_reference(model, column):
+        db.query(model).filter(column == user_id).update(
+            {column.key: None},
+            synchronize_session=False,
+        )
+
+    for model, column in [
+        (User, User.admin_verified_by),
+        (User, User.deactivated_by),
+        (UserStatusHistory, UserStatusHistory.changed_by),
+        (Customer, Customer.user_id),
+        (Customer, Customer.blocked_by),
+        (CustomerCommunication, CustomerCommunication.sent_by_user_id),
+        (CustomerCancellationRequest, CustomerCancellationRequest.reviewed_by),
+        (Agent, Agent.user_id),
+        (Agent, Agent.approved_by),
+        (Agent, Agent.rejected_by),
+        (AgentDocument, AgentDocument.reviewed_by),
+        (Supplier, Supplier.user_id),
+        (Supplier, Supplier.approved_by),
+        (Supplier, Supplier.rejected_by),
+        (SupplierApprovalHistory, SupplierApprovalHistory.changed_by),
+        (SupplierVehicle, SupplierVehicle.reviewed_by),
+        (SupplierDocument, SupplierDocument.reviewed_by),
+        (Affiliate, Affiliate.user_id),
+        (Affiliate, Affiliate.approved_by),
+        (Affiliate, Affiliate.rejected_by),
+        (AffiliateDocument, AffiliateDocument.reviewed_by),
+        (AffiliatePayout, AffiliatePayout.initiated_by),
+        (CheckoutSession, CheckoutSession.user_id),
+        (Booking, Booking.created_by),
+        (Booking, Booking.booked_by_user_id),
+        (Booking, Booking.cancelled_by),
+        (BookingStatusHistory, BookingStatusHistory.changed_by_user_id),
+        (BookingCommunication, BookingCommunication.sender_user_id),
+        (MessageReply, MessageReply.sender_user_id),
+        (CancellationRequest, CancellationRequest.reviewed_by),
+        (Payment, Payment.created_by),
+        (PaymentTransaction, PaymentTransaction.created_by),
+        (Tour, Tour.created_by),
+        (Tour, Tour.updated_by),
+        (Invoice, Invoice.created_by),
+        (Notification, Notification.user_id),
+        (PushSubscription, PushSubscription.user_id),
+        (SupplierPayout, SupplierPayout.initiated_by),
+        (SupplierPayout, SupplierPayout.approved_by),
+        (TourVersion, TourVersion.submitted_by),
+        (TourVersion, TourVersion.reviewed_by),
+        (Blog, Blog.created_by),
+        (AuditLog, AuditLog.actor_user_id),
+    ]:
+        nullify_reference(model, column)
+
     db.delete(user)
     log_audit(
         db,

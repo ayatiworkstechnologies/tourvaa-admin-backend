@@ -48,11 +48,50 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "email_verification",
         "name": "Email Verification",
-        "subject": "Verify your Tourvaa email",
+        "subject": "Verify your Tourvaa email and create your password",
         "body": (
-            "Hi {{name}}, please verify your email address to complete your account setup. "
-            "This link expires in 24 hours.\n\nVerification link: {{verification_url}}"
+            "Hi {{name}}, verify your email and create your password to activate your account. "
+            "This secure single-use link expires in 24 hours.\n\nVerification link: {{verification_url}}"
         ),
+    },
+    {
+        "key": "registration_password_created",
+        "name": "Registration Password Created",
+        "subject": "Your Tourvaa account is ready to sign in",
+        "body": (
+            "Hi {{name}}, your email has been verified and your password has been created.\n\n"
+            "You can now sign in to your {{portal_name}} portal here: {{login_url}}"
+        ),
+    },
+    {
+        "key": "verification_link_expired",
+        "name": "Verification Link Expired",
+        "subject": "Your Tourvaa verification link expired",
+        "body": "Hi {{name}}, your email verification link expired. Request a new link from the Tourvaa registration page.",
+    },
+    {
+        "key": "supplier_approval_pending",
+        "name": "Supplier Approval Pending",
+        "subject": "Your Tourvaa supplier profile is pending approval",
+        "body": "Hi {{supplier_name}}, your account is active and your supplier profile is pending review. You can sign in to complete your profile and upload verification documents.",
+    },
+    {
+        "key": "supplier_approved",
+        "name": "Supplier Approved",
+        "subject": "Your Tourvaa supplier operations are unlocked",
+        "body": "Hi {{supplier_name}}, your supplier profile is approved. Tour management, bookings, calendar and payouts are now available. Sign in here: {{login_url}}",
+    },
+    {
+        "key": "account_deactivated",
+        "name": "Account Deactivated",
+        "subject": "Your Tourvaa account was deactivated",
+        "body": "Hi {{name}}, your Tourvaa account was deactivated. Reason: {{reason}}",
+    },
+    {
+        "key": "account_reactivated",
+        "name": "Account Reactivated",
+        "subject": "Your Tourvaa account is active again",
+        "body": "Hi {{name}}, your Tourvaa account was reactivated. Sign in here: {{login_url}}",
     },
     {
         "key": "booking_confirmation",
@@ -297,6 +336,7 @@ SAMPLE_VALUES = {
     "reset_url": "https://app.tourvaa.com/reset-password?token=sample",
     "set_password_url": "https://app.tourvaa.com/reset-password?token=sample",
     "verification_url": "https://app.tourvaa.com/verify-email?token=sample",
+    "portal_name": "supplier",
     "booking_code": "TVA-BKG-000123",
     "tour_name": "Kerala Backwater Escape",
     "tour_date": "2026-08-14",

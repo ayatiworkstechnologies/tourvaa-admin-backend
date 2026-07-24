@@ -17,7 +17,7 @@ class Supplier(Base):
     city_id = Column(Integer, ForeignKey("cities.id"), nullable=True, index=True)
     years_in_operation = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="inactive", nullable=False, index=True)
-    approval_status = Column(String(30), default="pending", nullable=False, index=True)
+    approval_status = Column(String(30), default="PENDING", nullable=False, index=True)
     rejection_reason = Column(String(255), nullable=True)
     admin_comments = Column(Text, nullable=True)
     pending_requirements = Column(Text, nullable=True)
@@ -38,6 +38,27 @@ class Supplier(Base):
     vehicles = relationship("SupplierVehicle", back_populates="supplier", cascade="all, delete-orphan")
     invoicing = relationship("SupplierInvoicing", back_populates="supplier", uselist=False, cascade="all, delete-orphan")
     documents = relationship("SupplierDocument", back_populates="supplier", cascade="all, delete-orphan")
+    approval_history = relationship(
+        "SupplierApprovalHistory",
+        back_populates="supplier",
+        cascade="all, delete-orphan",
+        order_by="SupplierApprovalHistory.id.desc()",
+    )
+
+
+class SupplierApprovalHistory(Base):
+    __tablename__ = "supplier_approval_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False, index=True)
+    from_status = Column(String(30), nullable=True)
+    to_status = Column(String(30), nullable=False, index=True)
+    notes = Column(Text, nullable=True)
+    changed_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    supplier = relationship("Supplier", back_populates="approval_history")
+    administrator = relationship("User", foreign_keys=[changed_by])
 
 
 class SupplierContact(Base):

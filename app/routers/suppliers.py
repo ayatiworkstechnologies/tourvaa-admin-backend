@@ -2,17 +2,17 @@ from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, Form, 
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.auth import RegisterSchema, VerifyEmailSchema
-from app.services.auth import register_user, verify_email
+from app.schemas.auth import UnifiedRegisterSchema, VerifyEmailSchema
+from app.services.auth import register_unified_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs
 from app.utils.pagination import pagination_params
 from app.utils.operations import PartialApprovalRequest, RejectRequest
-from app.models.roles import Role
 from app.models.permissions import Permission, RolePermission
 from app.schemas.suppliers import (
     DocumentReviewRequest,
     SupplierCreate,
     SupplierMarkupRequest,
+    SupplierAccountAction,
     SupplierSelfUpdate,
     SupplierUpdate,
     VehicleCreate,
@@ -30,6 +30,7 @@ from app.services.suppliers import (
     review_supplier_vehicle,
     serialize_supplier,
     submit_supplier_verification,
+    set_supplier_account_status,
     update_supplier,
     update_supplier_markup,
 )
@@ -38,24 +39,12 @@ from app.models.users import User
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
 
 
-def _registration_with_role(db: Session, data: RegisterSchema, role_slug: str):
-    role = db.query(Role).filter(Role.slug == role_slug).filter(Role.is_active == True).first()
-    if not role:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Registration role is not available")
-    return register_user(db, data.model_copy(update={"role_id": role.id}))
-
-
 @router.post("/register")
-def register_supplier(data: RegisterSchema, db: Session = Depends(get_db)):
-    user = _registration_with_role(db, data, "supplier")
-    try:
-        from app.utils.notification_triggers import notify_supplier_registered
-        notify_supplier_registered(db, supplier_id=0, supplier_name=user.name or user.email, user_id=user.id)
-        db.commit()
-    except Exception:
-        pass
-    return {"status": "success", "message": "Supplier registration received", "data": {"id": user.id, "email": user.email, "approval_status": user.approval_status}}
+def register_supplier(data: UnifiedRegisterSchema, db: Session = Depends(get_db)):
+    if data.account_type != "SUPPLIER":
+        raise HTTPException(status_code=422, detail="account_type must be SUPPLIER")
+    user = register_unified_user(db, data)
+    return {"status": "success", "message": "Verification email sent", "data": {"id": user.id, "email": user.email, "approval_status": user.approval_status, "verification_required": True}}
 
 
 @router.post("/verify-email")
@@ -71,7 +60,7 @@ def submit_verification(request: Request, db: Session = Depends(get_db), current
 
 @router.get("/pending")
 def pending_suppliers(params: dict = Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
-    return {"status": "success", **list_suppliers(db, params["page"], params["limit"], params["search"], approval_status="admin_review_pending")}
+    return {"status": "success", **list_suppliers(db, params["page"], params["limit"], params["search"], approval_status="PENDING")}
 
 
 @router.get("")
@@ -122,7 +111,6 @@ def request_my_commission(data: SupplierMarkupRequest, request: Request, db: Ses
         raise HTTPException(status_code=404, detail="Supplier profile not found")
     supplier.markup_type = data.markup_type
     supplier.markup_value = data.markup_value
-    supplier.approval_status = "admin_review_pending"
     supplier.pending_requirements = "Commission request pending admin approval"
     try:
         from app.utils.notification_triggers import notify_supplier_commission_requested
@@ -528,6 +516,7 @@ def review_vehicle(
 
 @router.post("/{supplier_id}/approve")
 @router.patch("/{supplier_id}/approve")
+@router.post("/{supplier_id}/accept")
 def approve(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
     return {"status": "success", "message": "Supplier approved successfully", "data": approve_supplier(db, supplier_id, current_user, request)}
 
@@ -535,11 +524,12 @@ def approve(supplier_id: int, request: Request, db: Session = Depends(get_db), c
 @router.post("/{supplier_id}/reject")
 @router.patch("/{supplier_id}/reject")
 def reject(supplier_id: int, data: RejectRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.reject"))):
-    return {"status": "success", "message": "Supplier rejected successfully", "data": reject_supplier(db, supplier_id, data, current_user, request)}
+    return {"status": "success", "message": "More supplier information requested", "data": reject_supplier(db, supplier_id, data, current_user, request)}
 
 
 @router.post("/{supplier_id}/partial-approve")
 @router.patch("/{supplier_id}/partial-approve")
+@router.post("/{supplier_id}/request-information")
 def partial_approve(supplier_id: int, data: PartialApprovalRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.partial_approve", "suppliers.approve"))):
     return {"status": "success", "message": "Supplier partially approved successfully", "data": partial_approve_supplier(db, supplier_id, data, current_user, request)}
 
@@ -552,3 +542,39 @@ def request_reupload(supplier_id: int, data: PartialApprovalRequest, request: Re
 @router.patch("/{supplier_id}/markup")
 def markup(supplier_id: int, data: SupplierMarkupRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.manage_markup"))):
     return {"status": "success", "message": "Supplier markup updated successfully", "data": update_supplier_markup(db, supplier_id, data, current_user, request)}
+
+
+@router.post("/{supplier_id}/deactivate")
+def deactivate_supplier(
+    supplier_id: int,
+    request: Request,
+    data: SupplierAccountAction | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("suppliers.edit", "update-suppliers")),
+):
+    reason = data.reason if data else ""
+    return {"status": "success", "message": "Supplier account deactivated", "data": set_supplier_account_status(db, supplier_id, "INACTIVE", current_user, reason=reason, request=request)}
+
+
+@router.post("/{supplier_id}/reactivate")
+def reactivate_supplier(
+    supplier_id: int,
+    request: Request,
+    data: SupplierAccountAction | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("suppliers.edit", "update-suppliers")),
+):
+    reason = data.reason if data else ""
+    return {"status": "success", "message": "Supplier account reactivated", "data": set_supplier_account_status(db, supplier_id, "ACTIVE", current_user, reason=reason, request=request)}
+
+
+@router.post("/{supplier_id}/suspend")
+def suspend_supplier(
+    supplier_id: int,
+    request: Request,
+    data: SupplierAccountAction | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("suppliers.edit", "update-suppliers")),
+):
+    reason = data.reason if data else ""
+    return {"status": "success", "message": "Supplier account suspended", "data": set_supplier_account_status(db, supplier_id, "SUSPENDED", current_user, reason=reason, request=request)}

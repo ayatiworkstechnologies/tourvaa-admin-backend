@@ -13,6 +13,7 @@ from app.services.users import (
     delete_user,
     approve_user,
     deactivate_user,
+    reactivate_user,
     send_user_password_reset,
     assign_roles_to_user,
 )
@@ -126,6 +127,25 @@ def deactivate_user_account(
     current_user: User = Depends(require_permission("update-users")),
 ):
     return {"status": "success", "message": "User deactivated successfully", "data": deactivate_user(db, user_id, data.reason, actor=current_user, request=request)}
+
+
+@router.post("/{user_id}/reactivate")
+def reactivate_user_account(
+    user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("update-users")),
+):
+    return {
+        "status": "success",
+        "message": "User reactivated successfully",
+        "data": reactivate_user(
+            db,
+            user_id,
+            actor=current_user,
+            request=request,
+        ),
+    }
 
 
 @router.post("/{user_id}/send-reset-mail")

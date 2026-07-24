@@ -2,6 +2,7 @@
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
+from app.models.customers import Customer
 
 
 class User(Base):
@@ -22,7 +23,7 @@ class User(Base):
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=True, index=True)
 
     is_active = Column(Boolean, default=True, index=True)
-    approval_status = Column(String(20), default="approved", nullable=False, index=True)
+    approval_status = Column(String(30), default="approved", nullable=False, index=True)
     user_type = Column(String(20), nullable=True, index=True)
     country_code = Column(String(8), default="", nullable=False)
     mobile_number = Column(String(20), nullable=True, unique=True, index=True)
@@ -56,6 +57,14 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    customers = relationship(
+        "Customer",
+        foreign_keys=[Customer.user_id],
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    login_history = relationship("LoginHistory", back_populates="user", cascade="all, delete-orphan")
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
 
 
 class UserStatusHistory(Base):

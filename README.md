@@ -60,18 +60,23 @@ SMTP_PORT=587
 SMTP_USERNAME=your@email.com
 SMTP_PASSWORD=your_smtp_password
 SMTP_FROM_NAME=Tourvaa
+SMTP_FROM_EMAIL=no-reply@yourdomain.com
+SMTP_REPLY_TO=support@yourdomain.com
+SMTP_USE_SSL=true
+SMTP_STARTTLS=false
+SMTP_TIMEOUT_SECONDS=20
 
 MOBILE_DEEP_LINK_URL=tourvaa://reset-password
 
 SUPER_ADMIN_NAME=Super Admin
 SUPER_ADMIN_EMAIL=admin@tourvaa.com
-SUPER_ADMIN_PASSWORD=Admin@123
+SUPER_ADMIN_PASSWORD=replace_with_a_unique_strong_password
 SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false
 
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-> **Security:** Generate a strong JWT secret with `python -c "import secrets; print(secrets.token_hex(32))"` and keep `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false` in production.
+> **Security:** Generate a strong JWT secret with `python -c "import secrets; print(secrets.token_hex(32))"`. Use a unique production super-admin password and keep `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false` after bootstrap.
 
 ### 4. Create the MySQL database
 
@@ -81,26 +86,65 @@ Create the database named in `DATABASE_URL` before running migrations.
 
 ```bash
 python -m alembic upgrade head
+python -m alembic current
 ```
+
+The current schema head is `20260724_0036`. Revision `0036` repairs verification metadata only for legacy supplier accounts that were already approved, active, and password-enabled.
+
+Seed or synchronize roles and permissions without deleting application data:
+
+```powershell
+$env:PYTHONUTF8="1"
+python -m scripts.reset_seed_admin_rbac
+```
+
+Never use `--reset` against a database containing data you need to retain.
 
 ### 6. Start the API
 
 ```bash
-uvicorn app.main:app --reload
+python -m scripts.dev_server
 ```
 
 API runs at `http://127.0.0.1:8000`. Interactive docs at `http://127.0.0.1:8000/docs`.
 
+The dev server scopes auto-reload to `app/` and `alembic/`, ignoring `venv/`, `backups/`, caches, tests, SQL dumps, and seed scripts. This prevents noisy shutdown/restart cycles while running database cleanup or seed commands. To run without reload:
+
+```bash
+python -m scripts.dev_server --no-reload
+```
+
 ---
 
-## Default Login
+## Super-admin Bootstrap
 
-Seeded automatically on first startup:
+Startup and the RBAC seed create the configured super-admin when it does not exist. Credentials come from `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`; the seed command no longer prints the password.
 
-| Field | Value |
-| --- | --- |
-| Email | `admin@tourvaa.com` |
-| Password | `Admin@123` |
+For an existing super-admin, the password is changed from configuration only when `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=true`. Keep that setting `false` in production except during an intentional, controlled password recovery.
+
+---
+
+## Email Delivery
+
+All SMTP sends go through `app/utils/mailer.py`. The mailer writes progress to `email_logs` with `sending`, `sent`, or `failed`, sends both plain-text and HTML bodies, and adds standard headers like `Date`, `Message-ID`, `Reply-To`, and `X-Mailer`.
+
+Admins can inspect recent delivery attempts through:
+
+```bash
+GET /api/email-logs?status=failed
+GET /api/email-logs?search=user@example.com
+```
+
+For production inbox delivery, configure the SMTP account and DNS for the same sender domain:
+
+- `SMTP_FROM_EMAIL` should be a real mailbox or verified sender on your domain.
+- SPF must include the SMTP provider.
+- DKIM must be enabled in the SMTP provider and published in DNS.
+- DMARC should exist for the domain, starting with `p=none` while testing.
+- `SMTP_REPLY_TO` should be a monitored support address.
+- Use `SMTP_USE_SSL=true` for port `465`, or `SMTP_USE_SSL=false` and `SMTP_STARTTLS=true` for port `587`.
+
+Code can record send progress, but inbox vs spam is ultimately decided by DNS authentication, domain reputation, message content, and recipient behavior.
 
 ---
 
@@ -157,6 +201,25 @@ All endpoints are mounted under `/api`. Full interactive reference: `/docs` (Swa
 | POST | `/verify-email` | Verify email address |
 | GET | `/login-history` | User login history |
 | POST | `/force-logout` | Force logout other sessions |
+
+### Admin user account lifecycle
+
+These endpoints require `update-users`:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/api/users/{user_id}/activate` | Complete first-time admin activation after registration requirements are satisfied |
+| POST | `/api/users/{user_id}/deactivate` | Set the account inactive, record a reason, and revoke existing sessions |
+| POST | `/api/users/{user_id}/reactivate` | Restore a previously deactivated account without changing its role or supplier operational approval |
+
+Account state is intentionally separate from supplier operational approval:
+
+- Email verification and password creation control whether a portal account is eligible for activation.
+- `account_status=ACTIVE` and `is_active=true` allow sign-in.
+- `suppliers.approval_status=APPROVED` unlocks supplier operational modules.
+- Deactivation sets both the user and role profile inactive and increments `token_version`.
+- Reactivation restores sign-in, activates the role profile, records history/audit data, and leaves supplier approval unchanged.
+- The last active super-admin cannot be deactivated.
 
 ### Self-service portals
 
@@ -238,7 +301,7 @@ Standard CRUD + approve/reject/partial-approve + block/unblock + markup/discount
 
 ## Roles & Permissions
 
-Seven built-in roles:
+Six built-in roles:
 
 | Slug | Description |
 | --- | --- |
@@ -248,7 +311,6 @@ Seven built-in roles:
 | `supplier` | Own tours and bookings only |
 | `agent-reseller` | Own bookings and clients only |
 | `customer` | Own bookings and profile only |
-| `affiliate` | Own referrals and commissions only |
 
 Permission format: `{module}.{action}` (e.g. `dashboard.view`, `bookings.view`) or legacy `view-{module}` - both supported via `expand_permission_slugs()`.
 
@@ -266,13 +328,14 @@ pip install -r requirements-dev.txt
 
 ```bash
 # Start the server first (separate terminal)
-uvicorn app.main:app --reload
+python -m scripts.dev_server
 
 # Run all tests (read-only - safe against a live DB)
 venv\Scripts\python -m pytest tests/ -v
 
-# Include destructive/write tests (creates, updates, deletes real records)
-TOURVAA_WRITE_TESTS=1 venv\Scripts\python -m pytest tests/ -v
+# Include destructive/write tests (PowerShell; creates, updates, deletes records)
+$env:TOURVAA_WRITE_TESTS="1"
+venv\Scripts\python -m pytest tests/ -v
 
 # Run a specific test file
 venv\Scripts\python -m pytest tests/test_35_customer_portal.py -v
@@ -297,9 +360,51 @@ Write/destructive tests are gated behind `TOURVAA_WRITE_TESTS=1` so a default ru
 
 - [ ] Set `JWT_SECRET_KEY` to a strong random secret (32+ chars)
 - [ ] Set `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false`
-- [ ] Change default super admin password
+- [ ] Set a unique super-admin password and verify the admin login
 - [ ] Point `DATABASE_URL` to production MySQL
-- [ ] Run `alembic upgrade head` against production before first deploy
+- [ ] Back up the database, run `alembic upgrade head`, and confirm `alembic current` reports `20260724_0036`
+- [ ] Run the RBAC seed without `--reset`
 - [ ] Configure real SMTP credentials
 - [ ] Set `ALLOWED_ORIGINS` to production frontend domains
 - [ ] Set `APP_ENV=production` and `APP_DEBUG=false`
+
+### First Production Database Cleanup
+
+Use this only when preparing an existing database for first production use. The cleanup keeps migrations, the configured active super-admin, RBAC, geo reference data, app/payment/API settings, email templates, and tour category masters. It removes transactional, portal-user, catalogue, communication, audit, and session data, then runs the RBAC seed again.
+
+1. Confirm `.env` points to the intended production database and `SUPER_ADMIN_EMAIL` belongs to the active `super-admin`.
+
+2. Apply migrations and confirm the schema is current:
+
+   ```powershell
+   python -m alembic upgrade head
+   python -m alembic current
+   ```
+
+3. Preview the cleanup plan. This is a dry run and does not change rows:
+
+   ```powershell
+   python -m scripts.prepare_live_database
+   ```
+
+4. Review the printed `PRESERVE COMPLETELY`, `PRESERVE FILTERED`, and `CLEAR` sections.
+
+5. Execute only after the dry-run inventory is approved:
+
+   ```powershell
+   python -m scripts.prepare_live_database --execute --backup --confirm PREPARE-LIVE
+   ```
+
+The execution command creates a SQL backup under `backups/` before clearing data. It fails closed unless both `--backup` and `--confirm PREPARE-LIVE` are present.
+
+After cleanup, start the API normally. Startup also seeds RBAC and email templates when the schema is ready:
+
+```powershell
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+To resync RBAC later without clearing production data:
+
+```powershell
+python -m scripts.reset_seed_admin_rbac
+```

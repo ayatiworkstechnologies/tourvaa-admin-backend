@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     SMTP_USER: str | None = None
     SMTP_PASSWORD: str | None = None
     SMTP_FROM_NAME: str = "Tourvaa"
+    SMTP_FROM_EMAIL: str | None = None
+    SMTP_REPLY_TO: str | None = None
+    SMTP_USE_SSL: bool = True
+    SMTP_STARTTLS: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 20
 
     REDIS_URL: str = ""
     SETTINGS_ENCRYPTION_KEY: str = ""

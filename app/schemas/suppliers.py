@@ -184,3 +184,13 @@ class SupplierMarkupRequest(BaseModel):
         if value not in VALUE_TYPES:
             raise ValueError("Invalid markup type")
         return value
+
+
+class SupplierAccountAction(BaseModel):
+    reason: str = Field(default="", max_length=500)
+    admin_notes: str = Field(default="", max_length=5000)
+
+    @field_validator("reason", "admin_notes")
+    @classmethod
+    def trim_action_text(cls, value: str):
+        return value.strip()

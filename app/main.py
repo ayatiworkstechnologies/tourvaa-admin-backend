@@ -25,7 +25,7 @@ from app.models.tours import (
     TourPricing, TourOptionalActivity, TourAccommodationExtra,
     TourCalendar, TourUnavailableDate, TourDiscount,
 )
-from app.models.suppliers import Supplier, SupplierContact, SupplierBusinessInfo, SupplierVehicle, SupplierInvoicing, SupplierDocument
+from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierContact, SupplierBusinessInfo, SupplierVehicle, SupplierInvoicing, SupplierDocument
 from app.models.agents import Agent, AgentContact, AgentBusinessInfo, AgentInvoicing, AgentDocument
 from app.models.affiliates import Affiliate, AffiliateMarketingInfo, AffiliateInvoicing, AffiliateDocument
 from app.seed import seed_default_roles_and_permissions
@@ -85,6 +85,7 @@ def schema_is_ready():
         "supplier_vehicles",
         "supplier_invoicing",
         "supplier_documents",
+        "supplier_approval_history",
         "agents",
         "agent_contacts",
         "agent_business_info",

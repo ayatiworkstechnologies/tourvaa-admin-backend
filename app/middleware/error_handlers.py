@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -11,6 +12,8 @@ logger = logging.getLogger(__name__)
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        if isinstance(exc.detail, dict):
+            return JSONResponse(status_code=exc.status_code, content=jsonable_encoder(exc.detail))
         return JSONResponse(
             status_code=exc.status_code,
             content={"status": "error", "message": exc.detail or "An error occurred"},
@@ -24,7 +27,7 @@ def register_error_handlers(app: FastAPI) -> None:
         message = f"{field}: {first.get('msg', 'Validation error')}" if field and field != "unknown" else first.get("msg", "Validation error")
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={"status": "error", "message": message, "detail": errors},
+            content=jsonable_encoder({"status": "error", "message": message, "detail": errors}),
         )
 
     @app.exception_handler(Exception)
