@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.services.audit import log_audit
@@ -157,7 +157,10 @@ def filter_review_query(query, model, *, search="", country_id="", status="", ap
     if status:
         query = query.filter(model.status == status.strip().lower())
     if approval_status:
-        query = query.filter(model.approval_status == approval_status.strip().lower())
+        # Compare case-insensitively: suppliers store approval_status
+        # uppercase (post-migration 20260724_0034) while agents/affiliates
+        # still store it lowercase -- this filter is shared by all three.
+        query = query.filter(func.upper(model.approval_status) == approval_status.strip().upper())
     if start_date:
         query = query.filter(model.created_at >= start_date)
     if end_date:

@@ -3,7 +3,7 @@ from math import ceil
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import log_audit
 from app.models.bookings import Booking
@@ -56,6 +56,8 @@ def _serialize_payout(row: SupplierPayout) -> dict:
         "initiator_name": row.initiator.name if row.initiator else None,
         "approved_by": row.approved_by,
         "approver_name": row.approver.name if row.approver else None,
+        "paid_by": row.paid_by,
+        "payer_name": row.payer.name if row.payer else None,
         "paid_at": row.paid_at,
         "items": [{"ledger_id": i.ledger_id, "amount": str(i.amount)} for i in row.items],
         "created_at": row.created_at,
@@ -87,7 +89,7 @@ def create_ledger_entry(db: Session, *, booking: Booking, supplier_id: int, gros
 
 
 def get_supplier_ledger(db: Session, supplier_id: int, page: int = 1, limit: int = 20, status: str = "") -> dict:
-    q = db.query(SupplierLedger).filter(SupplierLedger.supplier_id == supplier_id)
+    q = db.query(SupplierLedger).options(joinedload(SupplierLedger.supplier), joinedload(SupplierLedger.booking)).filter(SupplierLedger.supplier_id == supplier_id)
     if status:
         q = q.filter(SupplierLedger.status == status)
     q = q.order_by(SupplierLedger.id.desc())
@@ -97,7 +99,7 @@ def get_supplier_ledger(db: Session, supplier_id: int, page: int = 1, limit: int
 
 
 def list_all_ledgers(db: Session, page: int = 1, limit: int = 20, supplier_id: Optional[int] = None, status: str = "") -> dict:
-    q = db.query(SupplierLedger)
+    q = db.query(SupplierLedger).options(joinedload(SupplierLedger.supplier), joinedload(SupplierLedger.booking))
     if supplier_id:
         q = q.filter(SupplierLedger.supplier_id == supplier_id)
     if status:
@@ -112,7 +114,7 @@ def get_supplier_statement(db: Session, supplier_id: int) -> dict:
     supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
-    rows = db.query(SupplierLedger).filter(SupplierLedger.supplier_id == supplier_id).all()
+    rows = db.query(SupplierLedger).options(joinedload(SupplierLedger.supplier), joinedload(SupplierLedger.booking)).filter(SupplierLedger.supplier_id == supplier_id).all()
     total_gross = sum(money(r.gross_amount) for r in rows)
     total_commission = sum(money(r.commission_amount) for r in rows)
     total_net = sum(money(r.net_payable) for r in rows)
@@ -134,7 +136,13 @@ def get_supplier_statement(db: Session, supplier_id: int) -> dict:
 
 
 def list_payouts(db: Session, page: int = 1, limit: int = 20, supplier_id: Optional[int] = None, status: str = "") -> dict:
-    q = db.query(SupplierPayout)
+    q = db.query(SupplierPayout).options(
+        joinedload(SupplierPayout.supplier),
+        joinedload(SupplierPayout.initiator),
+        joinedload(SupplierPayout.approver),
+        joinedload(SupplierPayout.payer),
+        joinedload(SupplierPayout.items),
+    )
     if supplier_id:
         q = q.filter(SupplierPayout.supplier_id == supplier_id)
     if status:
@@ -165,8 +173,14 @@ def _is_supplier_actor(actor: User) -> bool:
 def _resolve_payout_supplier_id(db: Session, data: SupplierPayoutCreate, actor: User) -> int:
     actor_supplier_id = _actor_supplier_id(db, actor)
     if data.supplier_id:
-        if _is_supplier_actor(actor) and actor_supplier_id and data.supplier_id != actor_supplier_id:
-            raise HTTPException(status_code=403, detail="You can only request payouts for your own supplier account")
+        if _is_supplier_actor(actor):
+            # A supplier-role actor with no linked Supplier row must not fall
+            # through this guard silently -- that would let an
+            # attacker-controlled supplier_id through unchecked.
+            if not actor_supplier_id:
+                raise HTTPException(status_code=403, detail="No supplier profile is linked to this account")
+            if data.supplier_id != actor_supplier_id:
+                raise HTTPException(status_code=403, detail="You can only request payouts for your own supplier account")
         return data.supplier_id
     if _is_supplier_actor(actor) and actor_supplier_id:
         return actor_supplier_id
@@ -276,7 +290,7 @@ def mark_payout_paid(db: Session, payout_id: int, data: SupplierPayoutMarkPaid, 
         raise HTTPException(status_code=400, detail=f"Payout must be approved before marking as paid (current status: '{payout.status}')")
 
     payout.status = "paid"
-    payout.approved_by = actor.id
+    payout.paid_by = actor.id
     payout.paid_at = utcnow()
     if data.reference_number:
         payout.reference_number = data.reference_number

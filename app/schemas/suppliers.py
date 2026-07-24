@@ -1,16 +1,22 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.utils.operations import ACTIVE_STATUSES, APPROVAL_STATUSES, VALUE_TYPES
+from app.utils.operations import ACTIVE_STATUSES, VALUE_TYPES
+
+# The supplier domain was migrated (20260724_0034) onto its own canonical,
+# uppercase approval-status set -- it no longer shares the generic
+# lowercase APPROVAL_STATUSES used by agents/affiliates.
+SUPPLIER_APPROVAL_STATUSES = {"PENDING", "APPROVED", "MORE_INFORMATION_REQUIRED"}
 
 
 class SupplierCreate(BaseModel):
     supplier_name: str = Field(min_length=1, max_length=150)
     supplier_type: str = Field(default="", max_length=75)
+    user_id: int | None = None
     country_id: int | None = None
     city_id: int | None = None
     years_in_operation: int = Field(default=0, ge=0)
     status: str = Field(default="inactive", max_length=20)
-    approval_status: str = Field(default="pending", max_length=30)
+    approval_status: str = Field(default="PENDING", max_length=30)
 
     @field_validator("supplier_name", "supplier_type", "status", "approval_status")
     @classmethod
@@ -28,8 +34,8 @@ class SupplierCreate(BaseModel):
     @field_validator("approval_status")
     @classmethod
     def validate_approval_status(cls, value: str):
-        value = value.lower()
-        if value not in APPROVAL_STATUSES:
+        value = value.upper()
+        if value not in SUPPLIER_APPROVAL_STATUSES:
             raise ValueError("Invalid approval status")
         return value
 

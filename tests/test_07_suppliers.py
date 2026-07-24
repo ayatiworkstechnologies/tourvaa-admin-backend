@@ -32,8 +32,10 @@ def test_supplier_detail_404(headers):
 
 @skip_if_readonly()
 def test_create_supplier(headers, first_country_id):
+    # user_id is intentionally omitted: it's optional, but when provided must
+    # reference an existing SUPPLIER-type user (the admin account used for
+    # `headers` is not one, and would now correctly 400).
     payload = {
-        "user_id": 1,
         "supplier_name": unique("SupplierTest"),
         "supplier_type": "hotel",
         "country_id": first_country_id,

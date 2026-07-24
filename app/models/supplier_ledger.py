@@ -55,6 +55,7 @@ class SupplierPayout(Base):
     notes = Column(Text, nullable=True)
     initiated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    paid_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     paid_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -62,6 +63,7 @@ class SupplierPayout(Base):
     supplier = relationship("Supplier")
     initiator = relationship("User", foreign_keys=[initiated_by])
     approver = relationship("User", foreign_keys=[approved_by])
+    payer = relationship("User", foreign_keys=[paid_by])
     items = relationship("SupplierPayoutItem", back_populates="payout", cascade="all, delete-orphan")
 
 

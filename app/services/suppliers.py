@@ -1,4 +1,7 @@
+import logging
+
 from fastapi import HTTPException, Request
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.services.audit import log_audit
@@ -23,6 +26,30 @@ from app.schemas.suppliers import (
     VehicleReviewRequest,
 )
 from app.models.users import User
+
+logger = logging.getLogger(__name__)
+
+
+def _approval_history(item):
+    # supplier_approval_history (migration 20260724_0034) may not exist yet on
+    # every deployed database; degrade to an empty history instead of a 500
+    # until that migration has run everywhere.
+    try:
+        history_rows = list(item.approval_history)
+    except SQLAlchemyError:
+        logger.exception("Failed to load approval_history for supplier %s", item.id)
+        return []
+    return [
+        {
+            "id": history.id,
+            "from_status": history.from_status,
+            "to_status": history.to_status,
+            "notes": history.notes,
+            "changed_by": history.changed_by,
+            "created_at": history.created_at,
+        }
+        for history in history_rows
+    ]
 
 
 def _contact(item):
@@ -54,6 +81,32 @@ def _document(item):
     }
 
 
+def _serialize_vehicle(v) -> dict:
+    import json
+    photos_raw = v.vehicle_photos or ""
+    try:
+        photos = json.loads(photos_raw) if photos_raw else []
+    except Exception:
+        photos = [p for p in photos_raw.split(",") if p.strip()]
+    return {
+        "id": v.id,
+        "make": v.make or "",
+        "model": v.model or "",
+        "vehicle_type": getattr(v, "vehicle_type", "") or "",
+        "registration_number": getattr(v, "registration_number", "") or "",
+        "year": v.year,
+        "capacity": v.capacity,
+        "fitness_certificate": v.fitness_certificate or "",
+        "insurance_document": v.insurance_document or "",
+        "vehicle_photos": photos,
+        "approval_status": v.approval_status,
+        "rejection_reason": v.rejection_reason,
+        "reviewed_at": str(v.reviewed_at) if v.reviewed_at else "",
+        "reviewed_by": v.reviewed_by,
+        "created_at": str(v.created_at) if v.created_at else "",
+    }
+
+
 def serialize_supplier(item: Supplier):
     data = serialize_common_review(item, "supplier_name", "supplier_code")
     data.update(
@@ -61,30 +114,15 @@ def serialize_supplier(item: Supplier):
             "supplier_type": item.supplier_type,
             "markup_type": item.markup_type,
             "markup_value": item.markup_value,
+            "commission_request_type": item.commission_request_type,
+            "commission_request_value": item.commission_request_value,
+            "commission_request_status": item.commission_request_status,
+            "commission_requested_at": item.commission_requested_at,
+            "commission_reviewed_at": item.commission_reviewed_at,
             "contacts": relationship_list(item.contacts, _contact),
-            "vehicles": relationship_list(item.vehicles, lambda vehicle: {
-                "id": vehicle.id,
-                "make": vehicle.make,
-                "model": vehicle.model,
-                "year": vehicle.year,
-                "capacity": vehicle.capacity,
-                "fitness_certificate": vehicle.fitness_certificate,
-                "insurance_document": vehicle.insurance_document,
-                "vehicle_photos": vehicle.vehicle_photos,
-                "approval_status": vehicle.approval_status,
-            }),
+            "vehicles": relationship_list(item.vehicles, _serialize_vehicle),
             "documents": relationship_list(item.documents, _document),
-            "approval_history": [
-                {
-                    "id": history.id,
-                    "from_status": history.from_status,
-                    "to_status": history.to_status,
-                    "notes": history.notes,
-                    "changed_by": history.changed_by,
-                    "created_at": history.created_at,
-                }
-                for history in item.approval_history
-            ],
+            "approval_history": _approval_history(item),
             "business_info": {
                 "years_in_business": item.business_info.years_in_business,
                 "certificate_of_incorporation": item.business_info.certificate_of_incorporation,
@@ -132,6 +170,13 @@ def get_supplier(db: Session, supplier_id: int):
 
 
 def create_supplier(db: Session, data: SupplierCreate, actor: User, request: Request | None = None):
+    if data.user_id is not None:
+        linked_user = db.query(User).filter(User.id == data.user_id).first()
+        if not linked_user or linked_user.user_type != "SUPPLIER":
+            raise HTTPException(status_code=400, detail="user_id must reference an existing SUPPLIER account")
+        already_linked = db.query(Supplier).filter(Supplier.user_id == data.user_id).first()
+        if already_linked:
+            raise HTTPException(status_code=409, detail="This user is already linked to another supplier")
     item = Supplier(**data.model_dump())
     db.add(item)
     db.flush()
@@ -160,27 +205,27 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
             new_contact = SupplierContact(supplier_id=item.id, is_primary=True)
             db.add(new_contact)
             item.contacts.append(new_contact)
+        # contact_data only contains keys the caller explicitly set (see
+        # model_dump(exclude_unset=True) above), so an explicit null here is
+        # intentional and must be applied, not skipped.
         for k, v in contact_data.items():
-            if v is not None:
-                setattr(item.contacts[0], k, v)
-                
+            setattr(item.contacts[0], k, v)
+
     if business_data:
         if not item.business_info:
             from app.models.suppliers import SupplierBusinessInfo
             item.business_info = SupplierBusinessInfo(supplier_id=item.id)
             db.add(item.business_info)
         for k, v in business_data.items():
-            if v is not None:
-                setattr(item.business_info, k, v)
-                
+            setattr(item.business_info, k, v)
+
     if invoicing_data:
         if not item.invoicing:
             from app.models.suppliers import SupplierInvoicing
             item.invoicing = SupplierInvoicing(supplier_id=item.id)
             db.add(item.invoicing)
         for k, v in invoicing_data.items():
-            if v is not None:
-                setattr(item.invoicing, k, v)
+            setattr(item.invoicing, k, v)
                 
     log_audit(db, actor=actor, action="update_supplier", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
     db.commit()
@@ -229,13 +274,16 @@ def approve_supplier(db: Session, supplier_id: int, actor: User, request: Reques
         new_values=serialize_supplier(item),
         request=request,
     )
-    from app.utils.notification_triggers import notify_supplier_approved
-    notify_supplier_approved(
-        db,
-        supplier_id=item.id,
-        supplier_name=item.supplier_name,
-        user_id=item.user_id,
-    )
+    try:
+        from app.utils.notification_triggers import notify_supplier_approved
+        notify_supplier_approved(
+            db,
+            supplier_id=item.id,
+            supplier_name=item.supplier_name,
+            user_id=item.user_id,
+        )
+    except Exception:
+        pass
     db.commit()
     db.refresh(item)
     return serialize_supplier(item)
@@ -274,8 +322,11 @@ def partial_approve_supplier(db: Session, supplier_id: int, data: PartialApprova
         changed_by=actor.id,
     ))
     log_audit(db, actor=actor, action="request_supplier_information", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
-    from app.utils.notification_triggers import notify_supplier_reupload_requested
-    notify_supplier_reupload_requested(db, supplier_id=item.id, supplier_name=item.supplier_name, requirements=data.pending_requirements, user_id=item.user_id)
+    try:
+        from app.utils.notification_triggers import notify_supplier_reupload_requested
+        notify_supplier_reupload_requested(db, supplier_id=item.id, supplier_name=item.supplier_name, requirements=data.pending_requirements, user_id=item.user_id)
+    except Exception:
+        pass
     db.commit()
     db.refresh(item)
     return serialize_supplier(item)
@@ -325,27 +376,35 @@ def set_supplier_account_status(
         new_values={"account_status": normalized},
         request=request,
     )
-    from app.utils.notification_triggers import notify_supplier_account_status
-    notify_supplier_account_status(
-        db,
-        supplier_id=item.id,
-        supplier_name=item.supplier_name,
-        account_status=normalized,
-        reason=reason,
-        user_id=item.user_id,
-    )
+    try:
+        from app.utils.notification_triggers import notify_supplier_account_status
+        notify_supplier_account_status(
+            db,
+            supplier_id=item.id,
+            supplier_name=item.supplier_name,
+            account_status=normalized,
+            reason=reason,
+            user_id=item.user_id,
+        )
+    except Exception:
+        pass
     db.commit()
     db.refresh(item)
     return serialize_supplier(item)
 
 
 def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRequest, actor: User, request: Request | None = None):
+    # This is the ONLY place a supplier's live markup_type/markup_value may
+    # change -- self-service requests (request_supplier_commission below)
+    # only ever write to the commission_request_* staging fields.
     item = get_supplier(db, supplier_id)
     old = serialize_supplier(item)
     item.markup_type = data.markup_type
     item.markup_value = data.markup_value
-    commission_request_pending = bool(item.pending_requirements and "commission request" in item.pending_requirements.lower())
+    commission_request_pending = item.commission_request_status == "pending"
     if commission_request_pending:
+        item.commission_request_status = "approved"
+        item.commission_reviewed_at = datetime.utcnow()
         item.pending_requirements = None
         try:
             from app.utils.notification_triggers import notify_supplier_commission_approved
@@ -358,25 +417,78 @@ def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRe
     return serialize_supplier(item)
 
 
-def submit_supplier_verification(db: Session, user: User, request: Request | None = None):
+def request_supplier_commission(db: Session, user: User, data: SupplierMarkupRequest, request: Request | None = None):
+    # Self-service: a supplier may only STAGE a commission request here.
+    # The live markup_type/markup_value fields are only ever changed by an
+    # admin via update_supplier_markup above -- this function must never
+    # touch them, or a supplier could set their own commission unreviewed.
     supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier profile not found")
+    if supplier.commission_request_status == "pending":
+        raise HTTPException(status_code=400, detail="A commission request is already pending")
+    old = serialize_supplier(supplier)
+    supplier.commission_request_type = data.markup_type
+    supplier.commission_request_value = data.markup_value
+    supplier.commission_request_status = "pending"
+    supplier.commission_requested_at = datetime.utcnow()
+    supplier.commission_reviewed_at = None
+    supplier.pending_requirements = "Commission request pending admin approval"
+    log_audit(db, actor=user, action="request_supplier_commission", entity_type="supplier", entity_id=supplier.id, old_values=old, new_values=serialize_supplier(supplier), request=request)
+    try:
+        from app.utils.notification_triggers import notify_supplier_commission_requested
+        notify_supplier_commission_requested(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=user.id)
+    except Exception:
+        pass
+    db.commit()
+    db.refresh(supplier)
+    return serialize_supplier(supplier)
+
+
+def _submit_supplier_verification(db: Session, supplier: Supplier, actor: User, request: Request | None = None):
     old = serialize_supplier(supplier)
     supplier.approval_status = "PENDING"
     supplier.status = "active"
     supplier.rejection_reason = None
     supplier.pending_requirements = None
-    log_audit(db, actor=user, action="submit_supplier_verification", entity_type="supplier", entity_id=supplier.id, old_values=old, new_values=serialize_supplier(supplier), request=request)
+    log_audit(db, actor=actor, action="submit_supplier_verification", entity_type="supplier", entity_id=supplier.id, old_values=old, new_values=serialize_supplier(supplier), request=request)
     db.commit()
     db.refresh(supplier)
     try:
         from app.utils.notification_triggers import notify_supplier_submitted_verification
-        notify_supplier_submitted_verification(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, user_id=user.id)
+        notify_supplier_submitted_verification(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, user_id=supplier.user_id)
         db.commit()
     except Exception:
         pass
     return serialize_supplier(supplier)
+
+
+def submit_supplier_verification(db: Session, user: User, request: Request | None = None):
+    supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    return _submit_supplier_verification(db, supplier, user, request)
+
+
+def submit_supplier_verification_for(db: Session, supplier_id: int, actor: User, request: Request | None = None):
+    supplier = get_supplier(db, supplier_id)
+    if supplier.user_id != actor.id:
+        from app.auth.permissions import expand_permission_slugs, get_user_role_ids
+        from app.models.permissions import Permission, RolePermission
+
+        role_ids = get_user_role_ids(actor)
+        allowed_slugs = expand_permission_slugs(("suppliers.edit", "update-suppliers"))
+        allowed = (
+            db.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(RolePermission.role_id.in_(role_ids))
+            .filter(Permission.slug.in_(allowed_slugs))
+            .filter(Permission.is_active == True)
+            .first()
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Permission denied")
+    return _submit_supplier_verification(db, supplier, actor, request)
 
 
 def review_supplier_document(db: Session, supplier_id: int, document_id: int, data: DocumentReviewRequest, actor: User, request: Request | None = None):
@@ -436,10 +548,4 @@ def review_supplier_vehicle(db: Session, supplier_id: int, vehicle_id: int, data
     )
     db.commit()
     db.refresh(vehicle)
-    return {
-        "id": vehicle.id,
-        "approval_status": vehicle.approval_status,
-        "rejection_reason": vehicle.rejection_reason,
-        "reviewed_at": str(vehicle.reviewed_at) if vehicle.reviewed_at else "",
-        "reviewed_by": vehicle.reviewed_by,
-    }
+    return _serialize_vehicle(vehicle)
