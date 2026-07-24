@@ -150,6 +150,8 @@ def schema_is_ready():
         "roles": {"is_system"},
         "permissions": {"action", "is_system"},
         "customers": {"phone_country_code", "date_of_birth", "gender", "email_verified", "phone_verified"},
+        "suppliers": {"commission_request_type", "commission_request_value", "commission_request_status", "commission_requested_at", "commission_reviewed_at"},
+        "supplier_payouts": {"paid_by"},
         "users": {
             "approval_status",
             "reset_password_token",

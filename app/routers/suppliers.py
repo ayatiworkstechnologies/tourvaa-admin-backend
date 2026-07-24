@@ -20,16 +20,19 @@ from app.schemas.suppliers import (
     VehicleUpdate,
 )
 from app.services.suppliers import (
+    _serialize_vehicle,
     approve_supplier,
     create_supplier,
     get_supplier,
     list_suppliers,
     partial_approve_supplier,
     reject_supplier,
+    request_supplier_commission,
     review_supplier_document,
     review_supplier_vehicle,
     serialize_supplier,
     submit_supplier_verification,
+    submit_supplier_verification_for,
     set_supplier_account_status,
     update_supplier,
     update_supplier_markup,
@@ -105,21 +108,7 @@ def edit_my_supplier(data: SupplierSelfUpdate, request: Request, db: Session = D
 
 @router.post("/me/commission-request")
 def request_my_commission(data: SupplierMarkupRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    from app.models.suppliers import Supplier
-    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
-    if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier profile not found")
-    supplier.markup_type = data.markup_type
-    supplier.markup_value = data.markup_value
-    supplier.pending_requirements = "Commission request pending admin approval"
-    try:
-        from app.utils.notification_triggers import notify_supplier_commission_requested
-        notify_supplier_commission_requested(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=current_user.id)
-    except Exception:
-        pass
-    db.commit()
-    db.refresh(supplier)
-    return {"status": "success", "message": "Commission request submitted", "data": serialize_supplier(supplier)}
+    return {"status": "success", "message": "Commission request submitted for admin approval", "data": request_supplier_commission(db, current_user, data, request)}
 
 
 @router.get("/me/vehicles")
@@ -252,32 +241,6 @@ def delete_vehicle_photo(vehicle_id: int, photo_url: str = Query(...), db: Sessi
     return {"status": "success", "message": "Photo removed", "data": _serialize_vehicle(v)}
 
 
-def _serialize_vehicle(v) -> dict:
-    import json
-    photos_raw = v.vehicle_photos or ""
-    try:
-        photos = json.loads(photos_raw) if photos_raw else []
-    except Exception:
-        photos = [p for p in photos_raw.split(",") if p.strip()]
-    return {
-        "id": v.id,
-        "make": v.make or "",
-        "model": v.model or "",
-        "vehicle_type": getattr(v, "vehicle_type", "") or "",
-        "registration_number": getattr(v, "registration_number", "") or "",
-        "year": v.year,
-        "capacity": v.capacity,
-        "fitness_certificate": v.fitness_certificate or "",
-        "insurance_document": v.insurance_document or "",
-        "vehicle_photos": photos,
-        "approval_status": v.approval_status,
-        "rejection_reason": v.rejection_reason,
-        "reviewed_at": str(v.reviewed_at) if v.reviewed_at else "",
-        "reviewed_by": v.reviewed_by,
-        "created_at": str(v.created_at) if v.created_at else "",
-    }
-
-
 async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     from uuid import uuid4
     from app.utils.imagekit_client import upload_to_imagekit
@@ -304,7 +267,7 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
 
 @router.post("/{supplier_id}/submit-verification")
 def submit_verification_by_id(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return {"status": "success", "message": "Supplier verification submitted", "data": submit_supplier_verification(db, current_user, request)}
+    return {"status": "success", "message": "Supplier verification submitted", "data": submit_supplier_verification_for(db, supplier_id, current_user, request)}
 
 
 @router.get("/{supplier_id}")
