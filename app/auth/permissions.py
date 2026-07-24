@@ -7,9 +7,27 @@ from app.config import settings
 from app.database import get_db
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User, UserRole
+from app.models.suppliers import Supplier
 
 bearer_scheme = HTTPBearer(auto_error=False)
 ACCESS_COOKIE_NAME = "tourvaa_access"
+
+SUPPLIER_APPROVAL_ERROR = {
+    "success": False,
+    "code": "SUPPLIER_APPROVAL_REQUIRED",
+    "message": "Your supplier account must be approved before using this feature.",
+}
+
+PENDING_SUPPLIER_SAFE_API_PREFIXES = (
+    "/api/auth/",
+    "/api/dashboard/me",
+    "/api/dashboard/summary",
+    "/api/suppliers/me",
+    "/api/supplier/messages",
+    "/api/notifications",
+    "/api/profile",
+    "/api/private-documents/supplier/",
+)
 
 
 ACTION_TO_DOTTED = {
@@ -132,6 +150,31 @@ def get_current_user(
     return user
 
 
+def _is_supplier(user: User) -> bool:
+    return user.user_type == "SUPPLIER" or "supplier" in ((user.role.slug if user.role else "") or "").lower()
+
+
+def ensure_approved_supplier(db: Session, user: User) -> Supplier:
+    if not _is_supplier(user):
+        raise HTTPException(status_code=403, detail="This endpoint requires a supplier account")
+    if not user.email_verified or not user.email_verified_at:
+        raise HTTPException(status_code=403, detail=SUPPLIER_APPROVAL_ERROR)
+    if user.account_status != "ACTIVE" or not user.is_active:
+        raise HTTPException(status_code=403, detail=SUPPLIER_APPROVAL_ERROR)
+    supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
+    if not supplier or (supplier.approval_status or "").upper() != "APPROVED":
+        raise HTTPException(status_code=403, detail=SUPPLIER_APPROVAL_ERROR)
+    return supplier
+
+
+def require_approved_supplier(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Supplier:
+    """Authenticate and return the approved supplier profile for operational APIs."""
+    return ensure_approved_supplier(db, current_user)
+
+
 def get_token_user_including_inactive(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
@@ -187,9 +230,13 @@ def require_permission(permission_slug: str):
 
 def require_any_permission(*permission_slugs: str):
     def dependency(
+        request: Request,
         current_user: User = Depends(get_current_user),
         db: Session = Depends(get_db),
     ):
+        if _is_supplier(current_user) and not request.url.path.startswith(PENDING_SUPPLIER_SAFE_API_PREFIXES):
+            ensure_approved_supplier(db, current_user)
+
         role_ids = get_user_role_ids(current_user)
         allowed_slugs = expand_permission_slugs(permission_slugs)
 

@@ -5,7 +5,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.services.audit import log_audit
+from app.services.audit import AuditLog, log_audit
 from app.services.auth import build_password_reset_url
 from app.utils.email_templates import password_reset_email
 from app.utils.mailer import send_email
@@ -667,6 +667,3 @@ def send_customer_message(
     db.commit()
     db.refresh(message)
     return serialize_communication(message)
-
-
-

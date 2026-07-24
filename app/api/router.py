@@ -24,6 +24,7 @@ from app.routers.customers import router as customers_router
 from app.routers.currency import router as currency_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.email_templates import router as email_templates_router
+from app.routers.email_logs import router as email_logs_router
 from app.routers.invoices import router as invoices_router
 from app.routers.notifications import router as notifications_router
 from app.routers.payments_gateway import router as payments_gateway_router
@@ -58,6 +59,7 @@ CORE_ROUTERS = (
     settings_router,
     currency_router,
     email_templates_router,
+    email_logs_router,
     uploads_router,
     client_router,
 )

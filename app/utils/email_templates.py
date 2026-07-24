@@ -169,11 +169,21 @@ def email_verification_email(name: str, verification_url: str):
         (
             "Thanks for registering with Tourvaa.<br /><br />"
             "Use the secure button below to verify your email and create your password. "
-            "After that, your account will be sent to our team for activation.<br /><br />"
+            "After password creation, your account will be active and ready to sign in.<br /><br />"
             "<strong>For your security:</strong> this single-use link expires in 24 hours."
         ),
         "Verify Email & Create Password",
         verification_url,
+    )
+
+
+def registration_password_created_email(name: str, login_url: str):
+    return base_email(
+        "Your Tourvaa password is ready",
+        f"Hi {esc(name)},",
+        "Your email has been verified and your password has been created. You can now sign in to your Tourvaa account.",
+        "Login to Tourvaa",
+        login_url,
     )
 
 

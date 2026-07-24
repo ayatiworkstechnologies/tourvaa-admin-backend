@@ -31,12 +31,12 @@ def _find_supplier_id_by_name(admin_headers, name):
 
 @pytest.fixture(scope="module")
 def supplier_ctx(headers):
-    """headers = admin fixture from conftest, used only to approve the new supplier."""
+    """Create an active supplier fixture for portal endpoint coverage."""
     name, email, password = _register_supplier()
 
-    # New suppliers register with approval_status=email_verification_pending on both
-    # the Supplier row and the linked User, is_active=False - must be approved by an
-    # admin before they can log in at all.
+    # Production activation happens through the supplier email/password flow.
+    # This suite uses the existing admin endpoint only to prepare an authenticated
+    # supplier fixture; registration policy is tested separately.
     supplier_id = _find_supplier_id_by_name(headers, name)
     assert supplier_id, f"Newly registered supplier {name!r} not found via admin search"
 
@@ -58,7 +58,7 @@ def supplier_headers(supplier_ctx):
 # Registration / approval gate
 # ---------------------------------------------------------------------------
 
-def test_supplier_login_returns_status_until_approved():
+def test_supplier_login_returns_status_until_email_verified():
     _, email, password = _register_supplier()
     resp = requests.post(f"{BASE_URL}/auth/login", json={"email": email, "password": password}, timeout=10)
     if resp.status_code == 429:
@@ -66,7 +66,7 @@ def test_supplier_login_returns_status_until_approved():
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
     assert data["account_restricted"] is True
-    assert data["account_status"] == "PENDING_ADMIN_VERIFICATION"
+    assert data["account_status"] == "PENDING_EMAIL_VERIFICATION"
 
 
 def test_supplier_can_login_after_approval(supplier_ctx):

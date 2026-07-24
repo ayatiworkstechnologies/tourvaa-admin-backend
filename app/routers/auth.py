@@ -4,7 +4,6 @@ from app.database import get_db
 from app.auth.permissions import get_current_user, get_token_user_including_inactive, require_permission
 from app.utils.ratelimit import check_rate_limit
 from app.models.users import User
-from app.models.roles import Role
 from app.config import settings
 from app.auth.security import create_token
 
@@ -15,7 +14,6 @@ from app.schemas.auth import (
     ForgotPasswordSchema,
     LoginSchema,
     RefreshTokenSchema,
-    RegisterSchema,
     ResendVerificationSchema,
     ResetPasswordSchema,
     VerifyEmailSchema,
@@ -30,7 +28,6 @@ from app.services.auth import (
     change_registration_email,
     complete_registration,
     refresh_user_token,
-    register_user,
     register_unified_user,
     resend_registration_verification,
     reset_password,
@@ -62,27 +59,22 @@ def _clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(REFRESH_COOKIE_NAME, path="/api/auth", httponly=True, secure=secure, samesite="lax")
 
 
-def _register_with_role(role_slug: str, data: RegisterSchema, db: Session):
-    role = (
-        db.query(Role)
-        .filter(Role.slug == role_slug)
-        .filter(Role.is_active == True)
-        .first()
-    )
-    if not role:
-        raise HTTPException(status_code=400, detail="Registration role is not available")
-    return register_user(db, data.model_copy(update={"role_id": role.id}))
-
-
 def _registration_response(user: User):
-    change_token = create_token(
-        {"user_id": user.id, "token_version": user.token_version},
-        token_type="registration_change",
-        expires_minutes=30,
+    verification_required = user.account_status == "PENDING_EMAIL_VERIFICATION"
+    change_token = (
+        create_token(
+            {"user_id": user.id, "token_version": user.token_version},
+            token_type="registration_change",
+            expires_minutes=30,
+        )
+        if verification_required else ""
     )
     return {
         "status": "success",
-        "message": "User registered successfully",
+        "message": (
+            "Verification email sent. Verify your email to create your password."
+            if verification_required else "Account created successfully. You can sign in now."
+        ),
         "data": {
             "id": user.id,
             "name": user.name,
@@ -94,6 +86,7 @@ def _registration_response(user: User):
             },
             "approval_status": user.approval_status,
             "account_status": user.account_status,
+            "verification_required": verification_required,
             "registration_change_token": change_token,
         },
     }
@@ -106,18 +99,24 @@ def register(data: UnifiedRegisterSchema, db: Session = Depends(get_db)):
 
 
 @router.post("/register/customer")
-def register_customer(data: RegisterSchema, db: Session = Depends(get_db)):
-    return _registration_response(_register_with_role("customer", data, db))
+def register_customer(data: UnifiedRegisterSchema, db: Session = Depends(get_db)):
+    if data.account_type != "CUSTOMER":
+        raise HTTPException(status_code=422, detail="account_type must be CUSTOMER")
+    return _registration_response(register_unified_user(db, data))
 
 
 @router.post("/register/supplier")
-def register_supplier(data: RegisterSchema, db: Session = Depends(get_db)):
-    return _registration_response(_register_with_role("supplier", data, db))
+def register_supplier(data: UnifiedRegisterSchema, db: Session = Depends(get_db)):
+    if data.account_type != "SUPPLIER":
+        raise HTTPException(status_code=422, detail="account_type must be SUPPLIER")
+    return _registration_response(register_unified_user(db, data))
 
 
 @router.post("/register/agent")
-def register_agent(data: RegisterSchema, db: Session = Depends(get_db)):
-    return _registration_response(_register_with_role("agent-reseller", data, db))
+def register_agent(data: UnifiedRegisterSchema, db: Session = Depends(get_db)):
+    if data.account_type != "AGENT":
+        raise HTTPException(status_code=422, detail="account_type must be AGENT")
+    return _registration_response(register_unified_user(db, data))
 
 
 @router.post("/login")
@@ -289,14 +288,28 @@ def validate_verification_link(token: str = Query(default=""), db: Session = Dep
     return {"status": "success", "data": validate_registration_token(db, token)}
 
 
+@router.get("/verify-email")
+def verify_email_link(token: str = Query(default=""), db: Session = Depends(get_db)):
+    """Compatibility alias used by API clients before rendering create-password."""
+    return {"status": "success", "data": validate_registration_token(db, token)}
+
+
 @router.post("/complete-registration")
 def complete_registration_request(data: CompleteRegistrationSchema, db: Session = Depends(get_db)):
     user = complete_registration(db, data.token, data.password)
     return {
         "status": "success",
-        "message": "Password created. Your account is pending administrator verification.",
-        "data": {"account_status": user.account_status},
+        "message": "Password created. Your account is active and ready to use.",
+        "data": {
+            "account_status": user.account_status,
+            "supplier_approval_status": "PENDING" if user.user_type == "SUPPLIER" else "NOT_REQUIRED",
+        },
     }
+
+
+@router.post("/create-password")
+def create_registration_password(data: CompleteRegistrationSchema, db: Session = Depends(get_db)):
+    return complete_registration_request(data, db)
 
 
 @router.post("/resend-verification")

@@ -1,7 +1,7 @@
 ﻿from typing import Optional
 import re
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,19}$")
 STRONG_PASSWORD_PATTERN = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$")
@@ -70,6 +70,8 @@ class RegisterSchema(BaseModel):
 
 
 class UnifiedRegisterSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     account_type: str
     first_name: str = Field(min_length=1, max_length=150)
     email: EmailStr

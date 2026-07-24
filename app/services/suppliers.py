@@ -5,19 +5,16 @@ from app.services.audit import log_audit
 from app.utils.operations import (
     PartialApprovalRequest,
     RejectRequest,
-    approve_item,
     code_for,
     filter_review_query,
     get_or_404,
-    partial_approve_item,
-    reject_item,
     relationship_list,
     serialize_common_review,
     simple_paginate,
 )
 from datetime import datetime
 
-from app.models.suppliers import Supplier, SupplierDocument, SupplierVehicle
+from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierDocument, SupplierVehicle
 from app.schemas.suppliers import (
     DocumentReviewRequest,
     SupplierCreate,
@@ -77,6 +74,17 @@ def serialize_supplier(item: Supplier):
                 "approval_status": vehicle.approval_status,
             }),
             "documents": relationship_list(item.documents, _document),
+            "approval_history": [
+                {
+                    "id": history.id,
+                    "from_status": history.from_status,
+                    "to_status": history.to_status,
+                    "notes": history.notes,
+                    "changed_by": history.changed_by,
+                    "created_at": history.created_at,
+                }
+                for history in item.approval_history
+            ],
             "business_info": {
                 "years_in_business": item.business_info.years_in_business,
                 "certificate_of_incorporation": item.business_info.certificate_of_incorporation,
@@ -181,15 +189,154 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
 
 
 def approve_supplier(db: Session, supplier_id: int, actor: User, request: Request | None = None):
-    return approve_item(db, get_supplier(db, supplier_id), actor, "supplier", serialize_supplier, request)
+    item = get_supplier(db, supplier_id)
+    if not item.user or item.user.user_type != "SUPPLIER":
+        raise HTTPException(status_code=400, detail="Supplier account is invalid")
+    if not item.user.email_verified:
+        raise HTTPException(status_code=409, detail="Supplier email must be verified before approval")
+    if item.user.account_status != "ACTIVE" or not item.user.is_active:
+        raise HTTPException(status_code=409, detail="Supplier account must be active before approval")
+    if (item.approval_status or "").upper() == "APPROVED":
+        raise HTTPException(status_code=409, detail="Supplier is already approved")
+
+    old = serialize_supplier(item)
+    previous_status = item.approval_status
+    now = datetime.utcnow()
+    item.approval_status = "APPROVED"
+    item.status = "active"
+    item.approved_at = now
+    item.approved_by = actor.id
+    item.rejection_reason = None
+    item.pending_requirements = None
+    item.user.approval_status = "APPROVED"
+    item.user.admin_verified = True
+    item.user.admin_verified_at = now
+    item.user.admin_verified_by = actor.id
+    db.add(SupplierApprovalHistory(
+        supplier_id=item.id,
+        from_status=previous_status,
+        to_status="APPROVED",
+        notes="Supplier operational access approved",
+        changed_by=actor.id,
+    ))
+    log_audit(
+        db,
+        actor=actor,
+        action="approve_supplier",
+        entity_type="supplier",
+        entity_id=item.id,
+        old_values=old,
+        new_values=serialize_supplier(item),
+        request=request,
+    )
+    from app.utils.notification_triggers import notify_supplier_approved
+    notify_supplier_approved(
+        db,
+        supplier_id=item.id,
+        supplier_name=item.supplier_name,
+        user_id=item.user_id,
+    )
+    db.commit()
+    db.refresh(item)
+    return serialize_supplier(item)
 
 
 def reject_supplier(db: Session, supplier_id: int, data: RejectRequest, actor: User, request: Request | None = None):
-    return reject_item(db, get_supplier(db, supplier_id), data, actor, "supplier", serialize_supplier, request)
+    # Legacy compatibility: the corrected status model has no terminal
+    # supplier "rejected" approval state. Route old rejection requests through
+    # the actionable information-required state instead.
+    return partial_approve_supplier(
+        db,
+        supplier_id,
+        PartialApprovalRequest(
+            admin_comments=data.admin_comments,
+            pending_requirements=data.rejection_reason,
+        ),
+        actor,
+        request,
+    )
 
 
 def partial_approve_supplier(db: Session, supplier_id: int, data: PartialApprovalRequest, actor: User, request: Request | None = None):
-    return partial_approve_item(db, get_supplier(db, supplier_id), data, actor, "supplier", serialize_supplier, request)
+    item = get_supplier(db, supplier_id)
+    old = serialize_supplier(item)
+    previous_status = item.approval_status
+    item.approval_status = "MORE_INFORMATION_REQUIRED"
+    item.admin_comments = data.admin_comments
+    item.pending_requirements = data.pending_requirements
+    if item.user:
+        item.user.approval_status = "MORE_INFORMATION_REQUIRED"
+    db.add(SupplierApprovalHistory(
+        supplier_id=item.id,
+        from_status=previous_status,
+        to_status="MORE_INFORMATION_REQUIRED",
+        notes=data.pending_requirements or data.admin_comments,
+        changed_by=actor.id,
+    ))
+    log_audit(db, actor=actor, action="request_supplier_information", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
+    from app.utils.notification_triggers import notify_supplier_reupload_requested
+    notify_supplier_reupload_requested(db, supplier_id=item.id, supplier_name=item.supplier_name, requirements=data.pending_requirements, user_id=item.user_id)
+    db.commit()
+    db.refresh(item)
+    return serialize_supplier(item)
+
+
+def set_supplier_account_status(
+    db: Session,
+    supplier_id: int,
+    account_status: str,
+    actor: User,
+    *,
+    reason: str = "",
+    request: Request | None = None,
+):
+    item = get_supplier(db, supplier_id)
+    if not item.user or item.user.user_type != "SUPPLIER":
+        raise HTTPException(status_code=400, detail="Supplier account is invalid")
+    old_status = item.user.account_status
+    normalized = account_status.upper()
+    item.user.account_status = normalized
+    item.user.is_active = normalized == "ACTIVE"
+    item.status = "active" if normalized == "ACTIVE" else normalized.lower()
+    if normalized in {"INACTIVE", "SUSPENDED", "LOCKED"}:
+        item.user.deactivated_at = datetime.utcnow()
+        item.user.deactivated_by = actor.id
+        item.user.deactivation_reason = reason or normalized.title()
+        item.user.token_version += 1
+    else:
+        item.user.deactivated_at = None
+        item.user.deactivated_by = None
+        item.user.deactivation_reason = None
+    from app.models.users import UserStatusHistory
+    db.add(UserStatusHistory(
+        user_id=item.user.id,
+        from_status=old_status,
+        to_status=normalized,
+        reason=reason or f"Supplier account {normalized.lower()}",
+        changed_by=actor.id,
+    ))
+    log_audit(
+        db,
+        actor=actor,
+        action=f"{normalized.lower()}_supplier",
+        entity_type="supplier",
+        entity_id=item.id,
+        old_values={"account_status": old_status},
+        new_values={"account_status": normalized},
+        request=request,
+    )
+    from app.utils.notification_triggers import notify_supplier_account_status
+    notify_supplier_account_status(
+        db,
+        supplier_id=item.id,
+        supplier_name=item.supplier_name,
+        account_status=normalized,
+        reason=reason,
+        user_id=item.user_id,
+    )
+    db.commit()
+    db.refresh(item)
+    return serialize_supplier(item)
 
 
 def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRequest, actor: User, request: Request | None = None):
@@ -200,11 +347,6 @@ def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRe
     commission_request_pending = bool(item.pending_requirements and "commission request" in item.pending_requirements.lower())
     if commission_request_pending:
         item.pending_requirements = None
-        item.approval_status = "approved"
-        item.status = "active"
-        if item.user:
-            item.user.approval_status = "approved"
-            item.user.is_active = True
         try:
             from app.utils.notification_triggers import notify_supplier_commission_approved
             notify_supplier_commission_approved(db, supplier_id=item.id, supplier_name=item.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=item.user_id)
@@ -221,8 +363,8 @@ def submit_supplier_verification(db: Session, user: User, request: Request | Non
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier profile not found")
     old = serialize_supplier(supplier)
-    supplier.approval_status = "admin_review_pending"
-    supplier.status = "inactive"
+    supplier.approval_status = "PENDING"
+    supplier.status = "active"
     supplier.rejection_reason = None
     supplier.pending_requirements = None
     log_audit(db, actor=user, action="submit_supplier_verification", entity_type="supplier", entity_id=supplier.id, old_values=old, new_values=serialize_supplier(supplier), request=request)
