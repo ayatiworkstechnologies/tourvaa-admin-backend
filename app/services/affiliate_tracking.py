@@ -22,6 +22,34 @@ def _payout_code(payout_id: int) -> str:
     return f"AFF-PAY-{payout_id:06d}"
 
 
+def is_affiliate_user(user: Optional[User]) -> bool:
+    slug = (getattr(getattr(user, "role", None), "slug", "") or "").lower()
+    return slug == "affiliate"
+
+
+def get_actor_affiliate(db: Session, user: User) -> Affiliate:
+    aff = db.query(Affiliate).filter(Affiliate.user_id == user.id).first()
+    if not aff:
+        raise HTTPException(status_code=403, detail="Affiliate profile not found")
+    return aff
+
+
+def ensure_affiliate_access(db: Session, affiliate_id: int, user: Optional[User]) -> None:
+    """Scope affiliate-portal callers to their own affiliate_id.
+
+    Mirrors ensure_agent_customer_access's pattern: admins/staff reach this
+    via a coarse affiliates.view permission check and are not further
+    restricted here, but a logged-in affiliate is - so an affiliate can't
+    read another affiliate's links/clicks/conversions/commissions/payouts by
+    changing the affiliate_id in the URL.
+    """
+    if not is_affiliate_user(user):
+        return
+    aff = db.query(Affiliate).filter(Affiliate.user_id == user.id).first()
+    if not aff or aff.id != affiliate_id:
+        raise HTTPException(status_code=403, detail="Affiliate access denied")
+
+
 def _s_link(r: AffiliateLink) -> dict:
     return {"id": r.id, "affiliate_id": r.affiliate_id, "ref_code": r.ref_code, "destination_url": r.destination_url, "label": r.label, "is_active": r.is_active, "total_clicks": len(r.clicks), "total_conversions": len(r.conversions), "created_at": r.created_at}
 
@@ -81,9 +109,15 @@ def list_conversions(db: Session, affiliate_id: int, page: int = 1, limit: int =
     return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
+def resolve_affiliate_link(db: Session, ref_code: str) -> Optional[AffiliateLink]:
+    if not ref_code:
+        return None
+    return db.query(AffiliateLink).filter(AffiliateLink.ref_code == ref_code, AffiliateLink.is_active == True).first()
+
+
 def record_conversion(db: Session, *, ref_code: str, booking_id: int, booking_amount: Decimal, currency: str = "USD") -> Optional[AffiliateConversion]:
     """Called from booking service when a booking is confirmed and has a ref_code."""
-    link = db.query(AffiliateLink).filter(AffiliateLink.ref_code == ref_code, AffiliateLink.is_active == True).first()
+    link = resolve_affiliate_link(db, ref_code)
     if not link:
         return None
     aff = db.query(Affiliate).filter(Affiliate.id == link.affiliate_id).first()
@@ -110,6 +144,23 @@ def record_conversion(db: Session, *, ref_code: str, booking_id: int, booking_am
         status="pending",
     )
     db.add(conversion)
+    db.flush()
+    return conversion
+
+
+def reverse_conversion(db: Session, booking_id: int) -> Optional[AffiliateConversion]:
+    """Reverse a booking's affiliate commission on cancellation/refund.
+
+    A conversion already marked paid represents money that has actually left
+    the business to the affiliate - reversing the ledger row doesn't claw
+    that back automatically, so paid conversions are left alone (same
+    principle as the supplier ledger: reversal only applies to unsettled
+    commission).
+    """
+    conversion = db.query(AffiliateConversion).filter(AffiliateConversion.booking_id == booking_id).first()
+    if not conversion or conversion.status not in ("pending", "confirmed"):
+        return conversion
+    conversion.status = "reversed"
     db.flush()
     return conversion
 

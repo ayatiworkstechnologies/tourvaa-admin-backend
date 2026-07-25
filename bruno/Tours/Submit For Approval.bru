@@ -1,0 +1,26 @@
+meta {
+  name: Submit For Approval
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/tours/{{tourId}}/submit-for-approval
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+script:post-response {
+  const versionId = res.body?.data?.id;
+  if (versionId) {
+    bru.setEnvVar("tourVersionId", String(versionId));
+  }
+}
+
+docs {
+  400s unless the tour is currently draft or rejected.
+}

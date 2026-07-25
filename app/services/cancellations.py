@@ -24,6 +24,7 @@ def _serialize_request(r: CancellationRequest) -> dict:
         "id": r.id,
         "booking_id": r.booking_id,
         "booking_code": r.booking.booking_code if r.booking else None,
+        "tour_name": r.booking.tour_name if r.booking else None,
         "customer_id": r.customer_id,
         "reason": r.reason,
         "status": r.status,
@@ -105,13 +106,31 @@ def _ensure_booking_owner(booking: Booking, actor: User | None) -> None:
     raise HTTPException(status_code=403, detail="Booking access denied")
 
 
+def _prior_status_before_cancellation_request(db: Session, booking_id: int) -> str:
+    """Look up what booking_status was before this booking most recently moved
+    to cancellation_requested, so a rejected request can restore it. The
+    BOOKING_STATUS_TRANSITIONS graph is not symmetric (not every status that
+    can move *into* cancellation_requested is a valid target coming back out
+    of it), so this restores directly rather than re-validating the reverse
+    transition.
+    """
+    from app.models.bookings import BookingStatusHistory
+    row = (
+        db.query(BookingStatusHistory)
+        .filter(BookingStatusHistory.booking_id == booking_id, BookingStatusHistory.new_status == "cancellation_requested")
+        .order_by(BookingStatusHistory.id.desc())
+        .first()
+    )
+    return row.old_status if row and row.old_status else "confirmed"
+
+
 def create_request(db: Session, data: CancellationRequestCreate, actor: User, request=None) -> dict:
     booking = db.query(Booking).filter(Booking.id == data.booking_id).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
     _ensure_booking_owner(booking, actor)
-    if booking.booking_status == "cancelled":
-        raise HTTPException(status_code=400, detail="Booking is already cancelled")
+    if booking.booking_status in {"cancelled", "completed", "refunded", "cancellation_requested"}:
+        raise HTTPException(status_code=400, detail=f"This booking cannot be cancelled (current status: '{booking.booking_status}')")
 
     # Check for existing pending request
     existing = db.query(CancellationRequest).filter(CancellationRequest.booking_id == data.booking_id, CancellationRequest.status == "pending").first()
@@ -131,6 +150,21 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
         currency=booking.currency or "USD",
     )
     db.add(req)
+
+    from app.models.bookings import BookingStatusHistory
+    from app.services.bookings import _validate_booking_status_transition
+    old_status = booking.booking_status
+    _validate_booking_status_transition(old_status, "cancellation_requested")
+    booking.booking_status = "cancellation_requested"
+    db.add(BookingStatusHistory(
+        booking_id=booking.id,
+        old_status=old_status,
+        new_status="cancellation_requested",
+        changed_by_user_id=actor.id,
+        change_source=_user_role(actor),
+        reason=data.reason,
+    ))
+
     db.commit()
     db.refresh(req)
 
@@ -196,6 +230,12 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
         reason=req.reason,
     ))
 
+    try:
+        from app.services.affiliate_tracking import reverse_conversion
+        reverse_conversion(db, booking.id)
+    except Exception:
+        pass
+
     db.commit()
     db.refresh(req)
 
@@ -218,10 +258,24 @@ def reject_request(db: Session, request_id: int, data: CancellationReject, actor
     req.admin_notes = data.admin_notes
     req.reviewed_by = actor.id
     req.reviewed_at = utcnow()
+
+    booking = req.booking
+    if booking.booking_status == "cancellation_requested":
+        from app.models.bookings import BookingStatusHistory
+        restored = _prior_status_before_cancellation_request(db, booking.id)
+        booking.booking_status = restored
+        db.add(BookingStatusHistory(
+            booking_id=booking.id,
+            old_status="cancellation_requested",
+            new_status=restored,
+            changed_by_user_id=actor.id,
+            change_source="cancellation_request",
+            reason="Cancellation request rejected",
+        ))
+
     db.commit()
     db.refresh(req)
 
-    booking = req.booking
     if booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="cancellation_rejected", title="Cancellation Rejected", message=f"Your cancellation request for booking {booking.booking_code} was rejected. Reason: {data.admin_notes}", entity_type="cancellation_request", entity_id=req.id)
         db.commit()
@@ -245,6 +299,7 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
     from app.services.payments import process_refund as process_payment_refund
 
     remaining = money(req.refund_amount)
+    gateway_refund_ids: list[str] = []
     if remaining > 0:
         payments = (
             db.query(Payment)
@@ -260,15 +315,20 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
             if refundable <= 0:
                 continue
             amount = min(refundable, remaining)
-            process_payment_refund(
+            refund_result = process_payment_refund(
                 db, payment.id,
                 PaymentRefundRequest(amount=amount, reason=f"Cancellation request #{req.id}: {req.reason or 'Customer cancellation'}"),
                 actor=actor, request=request,
             )
+            if refund_result.get("gateway_refund_id"):
+                gateway_refund_ids.append(refund_result["gateway_refund_id"])
             remaining -= amount
 
     req.status = "refund_processed"
-    req.gateway_refund_id = data.gateway_refund_id
+    # Real gateway refund id(s) from the actual Stripe/PayPal call, not an
+    # admin-typed guess - falls back to whatever the caller passed in for
+    # bookings with no live-gateway payment (manual/test payments).
+    req.gateway_refund_id = ", ".join(gateway_refund_ids) if gateway_refund_ids else data.gateway_refund_id
     req.refund_processed_at = utcnow()
 
     db.commit()

@@ -1,0 +1,22 @@
+meta {
+  name: Submit Verification
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/suppliers/submit-verification
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Note: the backend currently does NOT check that any documents were
+  uploaded before allowing this to succeed - see the supplier audit
+  finding on this. Useful for confirming/regression-testing that gap,
+  or for verifying a fix once one is applied.
+}

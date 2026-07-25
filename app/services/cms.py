@@ -228,6 +228,10 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     old = _tour(item) if tour_id else None
     payload = data.model_dump()
     subcategory_ids = payload.pop("subcategory_ids", [])
+    # Status is workflow-controlled: only the publish/disable toggle
+    # (PATCH /tours/{id}/status) and the version-approval flow may change it.
+    # New tours always start as draft; existing status is left untouched here.
+    payload.pop("status", None)
 
     # Validate FK IDs exist before attempting insert
     if payload.get("supplier_id"):
@@ -245,12 +249,20 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     payload["slug"] = _unique_slug(db, Tour, payload["slug"] or payload["title"], tour_id)
     for key, value in payload.items():
         setattr(item, key, value)
+    if not tour_id:
+        item.status = "draft"
     item.updated_by = actor.id
     db.add(item)
     db.flush()
     if not item.tour_code:
         item.tour_code = code_for("TVA-TOUR", item.id)
     item.subcategory_links = [TourSubcategoryMap(subcategory_id=subcategory_id) for subcategory_id in subcategory_ids]
+    if tour_id:
+        # Editing an already-live tour's own fields is the same live-edit gap
+        # as editing its child resources (itinerary/pricing/etc.) -- pull it
+        # back into review instead of letting the change go out silently.
+        from app.services.tour_versions import maybe_resubmit_for_review
+        maybe_resubmit_for_review(db, item.id, actor)
     log_audit(db, actor=actor, action="update_tour" if tour_id else "create_tour", entity_type="tour", entity_id=item.id, old_values=old, new_values=_tour(item), request=request)
     db.commit()
     db.refresh(item)

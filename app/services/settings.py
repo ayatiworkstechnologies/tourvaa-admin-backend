@@ -196,6 +196,20 @@ def update_settings(
     request=None,
 ):
     seed_settings(db)
+    values = dict(values)
+    # "currency" (booking group) and "default_currency" (general group) are
+    # two historical keys for the same platform-wide default -- treat
+    # "currency" (the one with an actual validated dropdown in the UI) as
+    # authoritative and always mirror it onto "default_currency" so the two
+    # can never drift apart again (they previously did, see migration
+    # 20260720_0026). The whole settings form is submitted on every save, so
+    # a stale "default_currency" would otherwise silently overwrite a fresh
+    # "currency" change.
+    if values.get("currency"):
+        values["default_currency"] = values["currency"]
+    elif values.get("default_currency"):
+        values["currency"] = values["default_currency"]
+
     old_values = {
         setting.key: setting.value
         for setting in db.query(AppSetting).filter(AppSetting.key.in_(values.keys())).all()
@@ -296,6 +310,7 @@ def get_payment_settings_payload(db: Session):
         "paypal_client_id_placeholder": paypal.public_key if paypal else "",
         "paypal_secret": mask_secret(paypal_secret),
         "paypal_secret_placeholder": mask_secret(paypal_secret),
+        "paypal_webhook_id": paypal.webhook_id if paypal else "",
         "payment_surcharge_percentage": surcharge,
         "default_payment_mode": stripe.mode if stripe else (paypal.mode if paypal else "test"),
     }
@@ -329,6 +344,8 @@ def update_payment_settings_payload(
         paypal_values["secret_key"] = values["paypal_secret"]
     if values.get("paypal_secret_placeholder") is not None:
         paypal_values["secret_key"] = values["paypal_secret_placeholder"]
+    if values.get("paypal_webhook_id") is not None:
+        paypal_values["webhook_id"] = values["paypal_webhook_id"]
 
     if values.get("payment_surcharge_percentage") is not None:
         surcharge = values["payment_surcharge_percentage"]

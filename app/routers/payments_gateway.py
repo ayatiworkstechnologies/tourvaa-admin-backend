@@ -395,6 +395,8 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
 
 @router.post("/paypal/webhook")
 async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
+    from app.config import settings as app_settings
+    from app.services.payments_gateway import _load_setting
     from fastapi import HTTPException as _HTTPException
 
     payload = await request.body()
@@ -402,6 +404,24 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
         event = json.loads(payload)
     except Exception:
         raise _HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    if not isinstance(event, dict):
+        raise _HTTPException(status_code=400, detail="Invalid PayPal webhook payload")
+
+    setting = _load_setting(db, "paypal")
+    webhook_id = (setting.webhook_id if setting else "") or ""
+
+    if webhook_id:
+        paypal_gw = get_paypal(db)
+        verified = paypal_gw.verify_webhook_signature(headers=request.headers, webhook_id=webhook_id, event_body=event)
+        if not verified:
+            logger.error("PayPal webhook signature verification failed")
+            raise _HTTPException(status_code=400, detail="Webhook signature verification failed")
+    elif app_settings.APP_ENV == "production":
+        logger.critical("PayPal webhook received without a configured webhook_id -- rejecting in production")
+        raise _HTTPException(status_code=400, detail="Webhook signature verification not configured")
+    else:
+        logger.warning("PayPal webhook received without signature verification (dev mode)")
 
     event_id = event.get("id", "")
     event_type = event.get("event_type", "")

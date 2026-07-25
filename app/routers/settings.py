@@ -126,6 +126,7 @@ def list_payment_settings(
                 "is_enabled": item.is_enabled,
                 "public_key": item.public_key,
                 "secret_key": mask_secret(item.secret_key),
+                "webhook_id": item.webhook_id,
                 "surcharge_percentage": item.surcharge_percentage,
                 "mode": item.mode,
                 "created_at": item.created_at,

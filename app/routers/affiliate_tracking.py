@@ -12,12 +12,14 @@ router = APIRouter(tags=["Affiliate Tracking"])
 
 @router.post("/affiliates/{affiliate_id}/links")
 def create_link(affiliate_id: int, data: AffiliateLinkCreate, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+    service.ensure_affiliate_access(db, affiliate_id, current_user)
     result = service.create_link(db, affiliate_id=affiliate_id, data=data, actor=current_user)
     return {"status": "success", "data": result}
 
 
 @router.get("/affiliates/{affiliate_id}/links")
-def list_links(affiliate_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+def list_links(affiliate_id: int, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+    service.ensure_affiliate_access(db, affiliate_id, current_user)
     return {"status": "success", "data": service.list_links(db, affiliate_id=affiliate_id)}
 
 
@@ -32,22 +34,30 @@ def track_click(ref_code: str, request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/affiliates/{affiliate_id}/clicks")
-def list_clicks(affiliate_id: int, pagination=Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+def list_clicks(affiliate_id: int, pagination=Depends(pagination_params), db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+    service.ensure_affiliate_access(db, affiliate_id, current_user)
     return {"status": "success", **service.list_clicks(db, affiliate_id=affiliate_id, page=pagination["page"], limit=pagination["limit"])}
 
 
 @router.get("/affiliates/{affiliate_id}/conversions")
-def list_conversions(affiliate_id: int, pagination=Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+def list_conversions(affiliate_id: int, pagination=Depends(pagination_params), db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+    service.ensure_affiliate_access(db, affiliate_id, current_user)
     return {"status": "success", **service.list_conversions(db, affiliate_id=affiliate_id, page=pagination["page"], limit=pagination["limit"])}
 
 
 @router.get("/affiliates/{affiliate_id}/commissions")
-def get_commissions(affiliate_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+def get_commissions(affiliate_id: int, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+    service.ensure_affiliate_access(db, affiliate_id, current_user)
     return {"status": "success", "data": service.get_commissions(db, affiliate_id=affiliate_id)}
 
 
 @router.get("/affiliate-payouts")
-def list_payouts(pagination=Depends(pagination_params), affiliate_id: int = Query(default=0), db: Session = Depends(get_db), _=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+def list_payouts(pagination=Depends(pagination_params), affiliate_id: int = Query(default=0), db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+    if service.is_affiliate_user(current_user):
+        # Affiliates only ever see their own payouts - ignore/override
+        # whatever affiliate_id was requested, same pattern as the agent
+        # portal forcing agent_id on its own customer list.
+        affiliate_id = service.get_actor_affiliate(db, current_user).id
     return {"status": "success", **service.list_payouts(db, affiliate_id=affiliate_id or None, page=pagination["page"], limit=pagination["limit"])}
 
 

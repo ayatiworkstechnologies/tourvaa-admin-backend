@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -20,6 +20,7 @@ class Affiliate(Base):
     city_id = Column(Integer, ForeignKey("cities.id"), nullable=True, index=True)
     status = Column(String(20), default="inactive", nullable=False)
     approval_status = Column(String(30), default="pending", nullable=False, index=True)
+    commission_percentage = Column(Numeric(5, 2), default=0, nullable=False)
     rejection_reason = Column(String(255), nullable=True)
     admin_comments = Column(Text, nullable=True)
     api_link = Column(String(255), default="", nullable=False)

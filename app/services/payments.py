@@ -35,6 +35,7 @@ def serialize_payment(payment: Payment, detail: bool = False) -> dict:
         "payment_code": payment.payment_code or _payment_code(payment.id),
         "booking_id": payment.booking_id,
         "booking_code": payment.booking.booking_code if payment.booking else None,
+        "currency": payment.booking.currency if payment.booking else "USD",
         "customer_id": payment.customer_id,
         "customer_name": payment.customer.full_name if payment.customer else None,
         "customer_email": payment.customer.email if payment.customer else None,
@@ -101,6 +102,12 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
     next_status = _status_after_payment_sync(booking, booking.payment_status)
     if next_status:
         booking.booking_status = next_status
+    if booking.booking_status == "confirmed" and booking.affiliate_ref_code:
+        try:
+            from app.services.affiliate_tracking import record_conversion
+            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=money(booking.final_amount or booking.total_cost or 0), currency=booking.currency or "USD")
+        except Exception:
+            logger.warning("Affiliate conversion recording failed for booking %s", booking.id, exc_info=True)
 
 
 def _sync_customer_payment_fields(db: Session, customer: Customer) -> None:
@@ -111,8 +118,8 @@ def _sync_customer_payment_fields(db: Session, customer: Customer) -> None:
     customer.total_amount_pending = money(pending or 0)
 
 
-def _transaction(db: Session, payment: Payment, transaction_type: str, amount, actor: User | None, status: str = "success", metadata: dict | None = None):
-    db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type=transaction_type, amount=money(amount), status=status, gateway_reference=payment.gateway_payment_id or payment.transaction_id, metadata_json=metadata, created_by=actor.id if actor else None))
+def _transaction(db: Session, payment: Payment, transaction_type: str, amount, actor: User | None, status: str = "success", metadata: dict | None = None, gateway_reference: str | None = None):
+    db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type=transaction_type, amount=money(amount), status=status, gateway_reference=gateway_reference or payment.gateway_payment_id or payment.transaction_id, metadata_json=metadata, created_by=actor.id if actor else None))
 
 
 def get_payment_by_id(db: Session, payment_id: int, for_update: bool = False) -> Payment:
@@ -345,28 +352,84 @@ def update_payment_status(db: Session, payment_id: int, data: PaymentStatusUpdat
     return serialize_payment(payment, detail=True)
 
 
+def _issue_gateway_refund(db: Session, payment: Payment, amount, reason: str) -> tuple[Optional[str], Optional[str]]:
+    """Actually call out to Stripe/PayPal to refund money for gateway-captured
+    payments. Returns (gateway_refund_id, gateway_status). Manual/test
+    payments have no live gateway to call, so this returns (None, None) and
+    the caller falls back to local-only bookkeeping.
+
+    Raises HTTPException (502/400) if the live refund call fails - callers
+    must not mutate local refund state until this succeeds, so a failed
+    gateway call never desyncs local records from what actually happened
+    with the customer's money.
+    """
+    from app.services.payments_gateway import get_paypal, get_stripe
+
+    gateway = (payment.gateway or "").lower()
+    if gateway not in ("stripe", "paypal"):
+        return None, None
+
+    # Deterministic per-attempt idempotency key: a retry of the exact same
+    # refund (same payment, same balance-before, same amount) reuses the key,
+    # while a distinct subsequent partial refund gets a new one because
+    # refunded_amount has moved on.
+    idempotency_key = f"refund:{payment.id}:{money_str(payment.refunded_amount)}:{money_str(amount)}"
+
+    if gateway == "stripe":
+        if not payment.gateway_payment_id:
+            raise HTTPException(status_code=400, detail="Payment has no Stripe payment intent on record; cannot issue a gateway refund")
+        stripe = get_stripe(db)
+        result = stripe.create_refund(
+            payment_intent_id=payment.gateway_payment_id,
+            amount_cents=int(round(float(amount) * 100)),
+            reason=reason or "requested_by_customer",
+            idempotency_key=idempotency_key,
+        )
+        return result.get("id"), result.get("status")
+
+    if not payment.gateway_payment_id:
+        raise HTTPException(status_code=400, detail="Payment has no PayPal capture id on record; cannot issue a gateway refund")
+    paypal = get_paypal(db)
+    currency = (payment.booking.currency if payment.booking else None) or "USD"
+    result = paypal.create_refund(
+        capture_id=payment.gateway_payment_id,
+        amount=str(amount),
+        currency=currency,
+        note=reason or "Refund",
+        idempotency_key=idempotency_key,
+    )
+    return result.get("id"), result.get("status")
+
+
 def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     payment = get_payment_by_id(db, payment_id, for_update=True)
     max_refundable = money(payment.captured_amount or payment.paid_amount) - money(payment.refunded_amount)
     amount = money(data.amount)
     if amount > max_refundable:
         raise HTTPException(status_code=400, detail=f"Refund amount exceeds refundable balance of {money_str(max_refundable)}")
+
+    # Call the real gateway (if any) BEFORE touching local state, so a failed
+    # gateway call never leaves local records claiming money moved when it didn't.
+    gateway_refund_id, gateway_status = _issue_gateway_refund(db, payment, amount, data.reason or "")
+
     payment.refunded_amount = money(payment.refunded_amount) + amount
     if money(payment.refunded_amount) >= money(payment.captured_amount or payment.paid_amount):
         payment.payment_status = "refunded"
     else:
         payment.payment_status = "partially_refunded"
-    _transaction(db, payment, "refund", amount, actor, metadata={"reason": data.reason})
+    _transaction(db, payment, "refund", amount, actor, metadata={"reason": data.reason, "gateway_status": gateway_status}, gateway_reference=gateway_refund_id)
     if payment.booking:
         _sync_booking_payment_fields(db, payment.booking)
     from app.services.notifications import enqueue_notification, notify_admins
     notify_admins(db, notification_type="payment_refunded", title="Payment refunded", message=f"Refund processed for {payment.payment_code}", entity_type="payment", entity_id=payment.id)
     if payment.booking and payment.booking.customer and payment.booking.customer.user_id:
         enqueue_notification(db, user_id=payment.booking.customer.user_id, notification_type="payment_refunded", title="Payment refunded", message=f"Refund processed for {payment.payment_code}", entity_type="payment", entity_id=payment.id)
-    log_audit(db, actor=actor, action="process_refund", entity_type="payment", entity_id=payment.id, request=request)
+    log_audit(db, actor=actor, action="process_refund", entity_type="payment", entity_id=payment.id, new_values={"gateway_refund_id": gateway_refund_id}, request=request)
     db.commit()
     db.refresh(payment)
-    return serialize_payment(payment, detail=True)
+    result = serialize_payment(payment, detail=True)
+    result["gateway_refund_id"] = gateway_refund_id
+    return result
 
 
 def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "", actor: Optional[User] = None) -> dict:

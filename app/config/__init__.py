@@ -32,9 +32,7 @@ class Settings(BaseSettings):
     MOBILE_DEEP_LINK_URL: str = "tourvaa://reset-password"
     STORAGE_ROOT: str = "storage"
 
-    IMAGEKIT_PRIVATE_KEY: str = ""
-    IMAGEKIT_PUBLIC_KEY: str = ""
-    IMAGEKIT_URL_ENDPOINT: str = ""
+    CLOUDINARY_URL: str = ""
 
     SUPER_ADMIN_NAME: str = "Super Admin"
     SUPER_ADMIN_EMAIL: str = "admin@tourvaa.com"

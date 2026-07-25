@@ -1,0 +1,19 @@
+meta {
+  name: List Suppliers
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/suppliers?page=1&limit=20
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+assert {
+  res.status: eq 200
+}

@@ -1,0 +1,36 @@
+meta {
+  name: Create Tour
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/tours/
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "title": "Bruno Test Tour",
+    "currency": "USD",
+    "number_of_days": 3,
+    "price_start_per_person": 250
+  }
+}
+
+script:post-response {
+  const id = res.body?.data?.id;
+  if (id) {
+    bru.setEnvVar("tourId", String(id));
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.data.status: eq draft
+}

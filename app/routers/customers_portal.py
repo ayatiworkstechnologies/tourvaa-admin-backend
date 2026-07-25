@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.bookings import Booking, BookingStatusHistory
+from app.models.bookings import Booking
 from app.schemas.bookings import BookingCreate
 from app.services.bookings import calculate_booking_price, create_booking, get_booking_detail, get_bookings, serialize_booking
 from app.auth.permissions import get_current_user
 from app.utils.money import money
 from app.utils.pagination import pagination_params
 from app.models.cms import Tour
-from app.models.customers import Customer, CustomerCancellationRequest, CustomerCommunication, CustomerSavedTraveller, CustomerWishlistItem
+from app.models.customers import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerWishlistItem
 from app.schemas.customers import (
     CustomerCancellationCreate,
     CustomerManualPaymentRequest,
@@ -19,6 +19,9 @@ from app.schemas.customers import (
     CustomerProfileUpdate,
     SavedTravellerRequest,
 )
+from app.models.cancellations import CancellationRequest
+from app.schemas.cancellations import CancellationRequestCreate
+from app.services import cancellations as cancellations_service
 from app.services.customers import serialize_customer, serialize_communication
 from app.services.invoices import list_invoices
 from app.schemas.payments import PaymentCreate
@@ -68,23 +71,6 @@ def _serialize_saved_traveller(row: CustomerSavedTraveller) -> dict:
         "passport_number": row.passport_number,
         "allergies": row.allergies,
         "special_notes": row.special_notes,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-    }
-
-
-def _serialize_cancellation(row: CustomerCancellationRequest) -> dict:
-    return {
-        "id": row.id,
-        "customer_id": row.customer_id,
-        "booking_id": row.booking_id,
-        "booking_code": row.booking.booking_code if row.booking else None,
-        "tour_name": row.booking.tour_name if row.booking else None,
-        "reason": row.reason,
-        "status": row.status,
-        "admin_notes": row.admin_notes,
-        "reviewed_by": row.reviewed_by,
-        "reviewed_at": row.reviewed_at,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -225,23 +211,27 @@ def customer_booking_detail(booking_id: int, request: Request, db: Session = Dep
 
 
 @router.post("/bookings/{booking_id}/cancel")
-def request_booking_cancellation(booking_id: int, data: CustomerCancellationCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def request_booking_cancellation(booking_id: int, data: CustomerCancellationCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
     booking = db.query(Booking).filter(Booking.id == booking_id, Booking.customer_id == customer.id).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
-    if booking.booking_status in {"cancelled", "completed", "refunded"}:
-        raise HTTPException(status_code=400, detail="This booking cannot be cancelled")
-    existing = db.query(CustomerCancellationRequest).filter(CustomerCancellationRequest.booking_id == booking.id, CustomerCancellationRequest.status.in_(["requested", "under_review", "refund_processing"])).first()
+
+    existing = (
+        db.query(CancellationRequest)
+        .filter(CancellationRequest.booking_id == booking.id, CancellationRequest.status == "pending")
+        .first()
+    )
     if existing:
-        return {"status": "success", "message": "Cancellation request already exists", "data": _serialize_cancellation(existing)}
-    row = CustomerCancellationRequest(customer_id=customer.id, booking_id=booking.id, reason=data.reason, status="requested")
-    booking.cancellation_reason = data.reason
-    db.add(row)
-    db.add(BookingStatusHistory(booking_id=booking.id, old_status=booking.booking_status, new_status="cancellation_requested", changed_by_user_id=current_user.id, change_source="customer", reason=data.reason, metadata_json={"cancellation_status": "requested"}))
-    db.commit()
-    db.refresh(row)
-    return {"status": "success", "message": "Cancellation request submitted", "data": _serialize_cancellation(row)}
+        return {"status": "success", "message": "Cancellation request already exists", "data": cancellations_service._serialize_request(existing)}
+
+    result = cancellations_service.create_request(
+        db,
+        data=CancellationRequestCreate(booking_id=booking_id, reason=data.reason),
+        actor=current_user,
+        request=request,
+    )
+    return {"status": "success", "message": "Cancellation request submitted", "data": result}
 
 
 @router.post("/bookings/{booking_id}/pay")
@@ -351,11 +341,9 @@ def delete_saved_traveller(traveller_id: int, db: Session = Depends(get_db), cur
 
 
 @router.get("/cancellations")
-def customer_cancellations(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def customer_cancellations(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
-    rows = db.query(CustomerCancellationRequest).filter(CustomerCancellationRequest.customer_id == customer.id).order_by(CustomerCancellationRequest.id.desc()).all()
-    items = [_serialize_cancellation(row) for row in rows]
-    return {"status": "success", "items": items, "data": items, "total": len(items)}
+    return {"status": "success", **cancellations_service.list_requests(db, page=params["page"], limit=params["limit"], customer_id=customer.id)}
 
 
 @router.post("/bookings/calculate-price")

@@ -58,7 +58,7 @@ def _contact(item):
 
 def _document(item):
     file_path = item.file_path or ""
-    if file_path.startswith("/private-documents/") or file_path.startswith("imagekit:"):
+    if file_path.startswith("/private-documents/") or file_path.startswith("cloudinary:"):
         file_url = f"/api/private-documents/supplier/{item.id}"
     elif file_path and not file_path.startswith("http"):
         file_url = file_path if file_path.startswith("/") else "/storage/" + file_path
