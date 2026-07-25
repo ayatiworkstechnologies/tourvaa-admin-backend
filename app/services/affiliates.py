@@ -32,6 +32,7 @@ def serialize_affiliate(item: Affiliate):
         "city_name": city.city_name if city else "",
         "status": item.status,
         "approval_status": item.approval_status,
+        "commission_percentage": str(item.commission_percentage),
         "rejection_reason": item.rejection_reason,
         "admin_comments": item.admin_comments,
         "api_link": item.api_link,

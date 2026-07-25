@@ -40,6 +40,7 @@ from app.schemas.tours import (
     TourOverviewPayload,
 )
 from app.models.users import User
+from app.services.tour_versions import maybe_resubmit_for_review
 
 
 # helpers
@@ -109,6 +110,7 @@ def create_itinerary(db: Session, tour_id: int, data: ItineraryPayload, actor: U
     o = TourItinerary(tour_id=tour_id, **data.model_dump())
     db.add(o)
     log_audit(db, actor=actor, action="create_itinerary", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_itinerary(o)
@@ -119,6 +121,7 @@ def update_itinerary(db: Session, tour_id: int, itinerary_id: int, data: Itinera
     for key, value in data.model_dump().items():
         setattr(o, key, value)
     log_audit(db, actor=actor, action="update_itinerary", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_itinerary(o)
@@ -128,6 +131,7 @@ def delete_itinerary(db: Session, tour_id: int, itinerary_id: int, actor: User, 
     o = _child_or_404(db, TourItinerary, itinerary_id, tour_id, "Itinerary")
     log_audit(db, actor=actor, action="delete_itinerary", entity_type="tour", entity_id=tour_id, request=request)
     db.delete(o)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
 
 
@@ -136,11 +140,12 @@ def reorder_itineraries(db: Session, tour_id: int, data: ReorderPayload, actor: 
     for order, record_id in enumerate(data.ordered_ids):
         db.query(TourItinerary).filter(TourItinerary.id == record_id, TourItinerary.tour_id == tour_id).update({"display_order": order})
     log_audit(db, actor=actor, action="reorder_itineraries", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
 
 
 # generic list/create/update/delete for simple child models
-def _simple_crud(Model, serializer):
+def _simple_crud(Model, serializer, versioned: bool = False):
     def list_fn(db: Session, tour_id: int) -> list[dict]:
         _require_tour(db, tour_id)
         q = db.query(Model).filter(Model.tour_id == tour_id)
@@ -153,6 +158,8 @@ def _simple_crud(Model, serializer):
         o = Model(tour_id=tour_id, **data.model_dump())
         db.add(o)
         log_audit(db, actor=actor, action=action, entity_type="tour", entity_id=tour_id, request=request)
+        if versioned:
+            maybe_resubmit_for_review(db, tour_id, actor)
         db.commit()
         db.refresh(o)
         return serializer(o)
@@ -162,6 +169,8 @@ def _simple_crud(Model, serializer):
         for key, value in data.model_dump().items():
             setattr(o, key, value)
         log_audit(db, actor=actor, action=action, entity_type="tour", entity_id=tour_id, request=request)
+        if versioned:
+            maybe_resubmit_for_review(db, tour_id, actor)
         db.commit()
         db.refresh(o)
         return serializer(o)
@@ -170,6 +179,8 @@ def _simple_crud(Model, serializer):
         o = _child_or_404(db, Model, record_id, tour_id, label)
         log_audit(db, actor=actor, action=action, entity_type="tour", entity_id=tour_id, request=request)
         db.delete(o)
+        if versioned:
+            maybe_resubmit_for_review(db, tour_id, actor)
         db.commit()
 
     return list_fn, create_fn, update_fn, delete_fn
@@ -215,7 +226,7 @@ def delete_highlight(db, tour_id, rid, actor, request=None): return _delete_high
 def _ser_gallery(o: TourGalleryImage) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "image_path": o.image_path, "image_title": o.image_title, "image_alt_text": o.image_alt_text, "image_caption": o.image_caption, "image_type": o.image_type, "display_order": o.display_order, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
-_list_gallery_fn, _create_gallery_fn, _update_gallery_fn, _delete_gallery_fn = _simple_crud(TourGalleryImage, _ser_gallery)
+_list_gallery_fn, _create_gallery_fn, _update_gallery_fn, _delete_gallery_fn = _simple_crud(TourGalleryImage, _ser_gallery, versioned=True)
 
 def list_gallery(db, tour_id): return _list_gallery_fn(db, tour_id)
 def create_gallery_image(db, tour_id, data, actor, request=None): return _create_gallery_fn(db, tour_id, data, actor, "create_gallery_image", request)
@@ -283,6 +294,7 @@ def create_extension(db: Session, tour_id: int, data: ExtensionPayload, actor: U
     o = TourExtension(tour_id=tour_id, **data.model_dump())
     db.add(o)
     log_audit(db, actor=actor, action="create_extension", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_extension(o)
@@ -293,6 +305,7 @@ def update_extension(db: Session, tour_id: int, ext_id: int, data: ExtensionPayl
     for key, value in data.model_dump().items():
         setattr(o, key, value)
     log_audit(db, actor=actor, action="update_extension", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_extension(o)
@@ -302,6 +315,7 @@ def delete_extension(db: Session, tour_id: int, ext_id: int, actor: User, reques
     o = _child_or_404(db, TourExtension, ext_id, tour_id, "Extension")
     log_audit(db, actor=actor, action="delete_extension", entity_type="tour", entity_id=tour_id, request=request)
     db.delete(o)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
 
 
@@ -317,7 +331,7 @@ def _ser_pricing(o: TourPricing) -> dict:
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
-_list_pricing_fn, _create_pricing_fn, _update_pricing_fn, _delete_pricing_fn = _simple_crud(TourPricing, _ser_pricing)
+_list_pricing_fn, _create_pricing_fn, _update_pricing_fn, _delete_pricing_fn = _simple_crud(TourPricing, _ser_pricing, versioned=True)
 
 def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 def create_pricing(db, tour_id, data, actor, request=None): return _create_pricing_fn(db, tour_id, data, actor, "create_pricing", request)
@@ -393,6 +407,7 @@ def create_calendar_entry(db: Session, tour_id: int, data: CalendarPayload, acto
     o = TourCalendar(tour_id=tour_id, **data.model_dump())
     db.add(o)
     log_audit(db, actor=actor, action="create_calendar_entry", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_calendar(o)
@@ -403,6 +418,7 @@ def update_calendar_entry(db: Session, tour_id: int, cal_id: int, data: Calendar
     for key, value in data.model_dump().items():
         setattr(o, key, value)
     log_audit(db, actor=actor, action="update_calendar_entry", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_calendar(o)
@@ -412,6 +428,7 @@ def delete_calendar_entry(db: Session, tour_id: int, cal_id: int, actor: User, r
     o = _child_or_404(db, TourCalendar, cal_id, tour_id, "Calendar entry")
     log_audit(db, actor=actor, action="delete_calendar_entry", entity_type="tour", entity_id=tour_id, request=request)
     db.delete(o)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
 
 
@@ -473,6 +490,7 @@ def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: Use
     o = TourDiscount(tour_id=tour_id, **payload)
     db.add(o)
     log_audit(db, actor=actor, action="create_discount", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_discount(o)
@@ -487,6 +505,7 @@ def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPaylo
     for key, value in data.model_dump().items():
         setattr(o, key, value)
     log_audit(db, actor=actor, action="update_discount", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_discount(o)
@@ -496,6 +515,7 @@ def delete_discount(db: Session, tour_id: int, disc_id: int, actor: User, reques
     o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
     log_audit(db, actor=actor, action="delete_discount", entity_type="tour", entity_id=tour_id, request=request)
     db.delete(o)
+    maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
 
 

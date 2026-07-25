@@ -24,6 +24,7 @@ class PaymentSetting(Base):
     is_enabled = Column(Boolean, default=False, nullable=False)
     public_key = Column(Text, nullable=True)
     secret_key = Column(Text, nullable=True)
+    webhook_id = Column(String(150), nullable=True)
     surcharge_percentage = Column(String(20), default="0", nullable=False)
     mode = Column(String(20), default="test", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

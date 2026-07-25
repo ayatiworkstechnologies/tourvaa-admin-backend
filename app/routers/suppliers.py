@@ -243,7 +243,7 @@ def delete_vehicle_photo(vehicle_id: int, photo_url: str = Query(...), db: Sessi
 
 async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     from uuid import uuid4
-    from app.utils.imagekit_client import upload_to_imagekit
+    from app.utils.cloudinary_client import upload_to_cloudinary
     ALLOWED = {
         "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
         "image/webp": "webp", "image/avif": "avif", "application/pdf": "pdf",
@@ -261,7 +261,7 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     if not ext:
         return ""
     filename = f"{uuid4().hex}.{ext}"
-    uploaded = upload_to_imagekit(content, filename, folder=f"/tourvaa/{subfolder}")
+    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/{subfolder}", content_type=upload.content_type)
     return uploaded["url"]
 
 
@@ -400,13 +400,13 @@ async def upload_supplier_document(
             raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, AVIF, PDF, DOC, and DOCX files are allowed")
 
     from uuid import uuid4
-    from app.utils.imagekit_client import upload_to_imagekit
+    from app.utils.cloudinary_client import upload_to_cloudinary
     from app.models.suppliers import SupplierDocument
     from app.services.suppliers import _document
 
     filename = f"{uuid4().hex}.{extension}"
-    uploaded = upload_to_imagekit(content, filename, folder="/tourvaa/supplier-documents", is_private=True)
-    relative_path = f"imagekit:{uploaded['file_path']}"
+    uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/supplier-documents", is_private=True, content_type=file.content_type)
+    relative_path = f"cloudinary:{uploaded['resource_type']}:{uploaded['public_id']}"
 
     existing_doc = db.query(SupplierDocument).filter(
         SupplierDocument.supplier_id == supplier_id,

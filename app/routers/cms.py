@@ -19,6 +19,14 @@ def _get_actor_supplier_id(db: Session, user: User) -> int | None:
     supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
     return supplier.id if supplier else None
 
+
+def _require_approved_supplier(db: Session, supplier_id: int) -> None:
+    """Pending/more-information-required suppliers may not create or manage tours."""
+    from app.models.suppliers import Supplier
+    supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+    if not supplier or (supplier.approval_status or "").upper() != "APPROVED":
+        raise HTTPException(status_code=403, detail="Your supplier account is pending admin approval. Tour management is unavailable until approved.")
+
 router = APIRouter(tags=["CMS"])
 
 
@@ -169,6 +177,7 @@ def add_tour(
 ):
     actor_supplier_id = _get_actor_supplier_id(db, current_user)
     if actor_supplier_id:
+        _require_approved_supplier(db, actor_supplier_id)
         # Supplier-created tours must always remain attached to the caller's profile.
         data = data.model_copy(update={"supplier_id": actor_supplier_id})
     return {"status": "success", "data": save_tour(db, data, current_user, request)}
@@ -201,6 +210,7 @@ def edit_tour(tour_id: int, data: TourPayload, request: Request, db: Session = D
         raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
     # Prevent a supplier from reassigning a tour to a different supplier
     if actor_supplier_id:
+        _require_approved_supplier(db, actor_supplier_id)
         data = data.model_copy(update={"supplier_id": actor_supplier_id})
     return {"status": "success", "data": save_tour(db, data, current_user, request, tour_id)}
 
@@ -209,6 +219,9 @@ def edit_tour(tour_id: int, data: TourPayload, request: Request, db: Session = D
 def tour_status(tour_id: int, data: StatusUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.publish", "tours.disable", "tours.edit", "update-tours"))):
     tour = get_tour(db, tour_id)
     actor_supplier_id = _get_actor_supplier_id(db, current_user)
-    if actor_supplier_id and tour.supplier_id != actor_supplier_id:
-        raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
+    if actor_supplier_id:
+        # Tour status (including publishing) is managed entirely through the
+        # submit-for-approval / admin-review workflow, never set directly by
+        # a supplier -- otherwise this generic endpoint lets them bypass review.
+        raise HTTPException(status_code=403, detail="Tour status is managed through the approval workflow, not directly by suppliers")
     return {"status": "success", "data": update_status(db, Tour, _tour, tour_id, data, current_user, "tour", request)}

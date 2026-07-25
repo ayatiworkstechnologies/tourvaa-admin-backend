@@ -1,0 +1,20 @@
+meta {
+  name: Approve Supplier
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/suppliers/{{supplierId}}/approve
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Requires the admin/actor to hold suppliers.approve. Will 409 if the
+  supplier's email isn't verified or the account isn't ACTIVE.
+}

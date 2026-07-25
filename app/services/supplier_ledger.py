@@ -68,9 +68,11 @@ def _serialize_payout(row: SupplierPayout) -> dict:
 # -- ledger --
 
 
-def create_ledger_entry(db: Session, *, booking: Booking, supplier_id: int, gross_amount: Decimal, commission_percentage: Decimal) -> SupplierLedger:
+def create_ledger_entry(db: Session, *, booking: Booking, supplier_id: int, gross_amount: Decimal, commission_amount: Decimal) -> SupplierLedger:
     """Called from booking service when a booking is confirmed and assigned to a supplier."""
-    commission_amount = money((gross_amount * commission_percentage) / 100)
+    gross_amount = money(gross_amount)
+    commission_amount = money(min(commission_amount, gross_amount)) if gross_amount > 0 else money(0)
+    commission_percentage = money((commission_amount / gross_amount) * 100) if gross_amount > 0 else Decimal("0")
     net_payable = money(gross_amount - commission_amount)
     entry = SupplierLedger(
         supplier_id=supplier_id,

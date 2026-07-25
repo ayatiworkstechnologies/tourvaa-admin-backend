@@ -618,6 +618,24 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         data.booking_source = "agent"
     if data.booking_source == "agent" and not data.agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required for agent bookings")
+
+    # Affiliate attribution: never trust a raw client-supplied affiliate_id
+    # for self-service callers (customer/agent portals) - that would let
+    # anyone claim commission for any affiliate by just passing an id. Only
+    # a real, active referral link's ref_code can attach an affiliate. Admins
+    # (trusted actors) may still assign affiliate_id directly, e.g. to credit
+    # an offline referral.
+    resolved_affiliate_id = None
+    resolved_affiliate_ref_code = None
+    if data.affiliate_ref_code:
+        from app.services.affiliate_tracking import resolve_affiliate_link
+        link = resolve_affiliate_link(db, data.affiliate_ref_code)
+        if link:
+            resolved_affiliate_id = link.affiliate_id
+            resolved_affiliate_ref_code = link.ref_code
+    elif data.affiliate_id and _user_role(actor) == "admin":
+        resolved_affiliate_id = data.affiliate_id
+
     tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions = _price_booking(db, data, lock_calendar=True, consume_discount=True)
     _validate_customer_travellers(data, adults, children)
     country = db.query(Country).filter(Country.id == (data.country_id or (tour.country_id if tour else None))).first() if (data.country_id or tour) else None
@@ -635,7 +653,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     elif data.booking_source == "agent" and data.agent_payment_method == "bank_transfer":
         payment_status = "bank_transfer_pending"
     booking = Booking(
-        customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=data.affiliate_id, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
+        customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
         no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
         total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
@@ -775,6 +793,11 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
         booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
     pending_before_cancel = money(booking.amount_pending)
     _settle_cancelled_booking_payments(db, booking, actor, request, data.reason or "Cancelled by admin")
+    try:
+        from app.services.affiliate_tracking import reverse_conversion
+        reverse_conversion(db, booking.id)
+    except Exception:
+        logger.warning("Affiliate conversion reversal failed for booking %s", booking.id, exc_info=True)
     if booking.customer:
         booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
         booking.customer.total_amount_pending = max(
@@ -862,12 +885,26 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         from app.services.supplier_ledger import create_ledger_entry
         existing_ledger = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking.id).first()
         if not existing_ledger:
+            gross_amount = money(booking.final_amount or booking.total_cost or 0)
             markup_type = (booking.supplier.markup_type or "").strip().lower() if booking.supplier else ""
-            commission_percentage = money(booking.supplier.markup_value) if booking.supplier and markup_type == "percentage" else money(0)
+            markup_value = money(booking.supplier.markup_value) if booking.supplier else money(0)
+            if markup_type == "percentage":
+                commission_amount = money((gross_amount * markup_value) / 100)
+            elif markup_type == "fixed":
+                commission_amount = markup_value
+            else:
+                commission_amount = money(0)
             try:
-                create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=money(booking.final_amount or booking.total_cost or 0), commission_percentage=commission_percentage)
+                create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=gross_amount, commission_amount=commission_amount)
             except Exception as error:
                 logger.warning("Supplier ledger entry creation failed for booking %s: %s", booking.id, error)
+
+    if booking.affiliate_ref_code:
+        try:
+            from app.services.affiliate_tracking import record_conversion
+            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=money(booking.final_amount or booking.total_cost or 0), currency=booking.currency or "USD")
+        except Exception as error:
+            logger.warning("Affiliate conversion recording failed for booking %s: %s", booking.id, error)
 
     notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
     if booking.customer and booking.customer.user_id:

@@ -71,17 +71,33 @@ class StripeGateway:
             raise HTTPException(status_code=502, detail="Failed to retrieve Stripe session")
         return resp.json()
 
-    def create_refund(self, payment_intent_id: str, amount_cents: int, reason: str = "requested_by_customer") -> dict:
+    def create_refund(self, payment_intent_id: str, amount_cents: int, reason: str = "requested_by_customer", idempotency_key: Optional[str] = None) -> dict:
         payload = {
             "payment_intent": payment_intent_id,
             "amount": amount_cents,
             "reason": reason if reason in ("duplicate", "fraudulent", "requested_by_customer") else "requested_by_customer",
         }
-        resp = http_requests.post(f"{self.base_url}/refunds", data=payload, headers=self._headers(), timeout=15)
-        if resp.status_code not in (200, 201):
+        headers = self._headers()
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        last_error: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                resp = http_requests.post(f"{self.base_url}/refunds", data=payload, headers=headers, timeout=15)
+            except http_requests.exceptions.RequestException as exc:
+                last_error = exc
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            if resp.status_code in (200, 201):
+                return resp.json()
+            if resp.status_code >= 500:
+                last_error = HTTPException(status_code=502, detail="Stripe refund error: gateway unavailable")
+                time.sleep(0.5 * (attempt + 1))
+                continue
             logger.error("Stripe refund error: %s", resp.text)
             raise HTTPException(status_code=502, detail=f"Stripe refund error: {resp.json().get('error', {}).get('message', 'Unknown')}")
-        return resp.json()
+        logger.error("Stripe refund failed after retries: %s", last_error)
+        raise HTTPException(status_code=502, detail="Stripe refund failed after retries; the gateway may be temporarily unavailable")
 
     def construct_event(self, payload: bytes, sig_header: str, webhook_secret: str) -> dict:
         """Manually verify Stripe webhook signature (HMAC-SHA256)."""
@@ -158,13 +174,73 @@ class PayPalGateway:
             raise HTTPException(status_code=502, detail=f"PayPal capture error: {resp.json().get('message', 'Unknown')}")
         return resp.json()
 
-    def create_refund(self, capture_id: str, amount: str, currency: str, note: str = "Refund") -> dict:
+    def verify_webhook_signature(self, *, headers: dict, webhook_id: str, event_body: dict) -> bool:
+        """Verify a PayPal webhook via PayPal's own verify-webhook-signature
+        API (the officially recommended server-side approach - it avoids
+        having to implement certificate-chain/CRL validation ourselves).
+        Returns True only if PayPal itself confirms the signature is valid.
+        """
+        def _header(name: str) -> str:
+            # Starlette Headers are case-insensitive, but plain dicts (as used
+            # in tests) may not be - check a couple of common casings.
+            return headers.get(name) or headers.get(name.lower()) or headers.get(name.upper()) or ""
+
+        transmission_id = _header("PAYPAL-TRANSMISSION-ID")
+        transmission_time = _header("PAYPAL-TRANSMISSION-TIME")
+        transmission_sig = _header("PAYPAL-TRANSMISSION-SIG")
+        cert_url = _header("PAYPAL-CERT-URL")
+        auth_algo = _header("PAYPAL-AUTH-ALGO")
+
+        if not all([transmission_id, transmission_time, transmission_sig, cert_url, auth_algo, webhook_id]):
+            logger.error("PayPal webhook verification: missing required transmission headers or webhook_id")
+            return False
+
+        payload = {
+            "auth_algo": auth_algo,
+            "cert_url": cert_url,
+            "transmission_id": transmission_id,
+            "transmission_sig": transmission_sig,
+            "transmission_time": transmission_time,
+            "webhook_id": webhook_id,
+            "webhook_event": event_body,
+        }
+        try:
+            resp = http_requests.post(f"{self.base_url}/v1/notifications/verify-webhook-signature", json=payload, headers=self._headers(), timeout=15)
+        except Exception:
+            # Fail closed: an OAuth failure, network error, or anything else
+            # going wrong while trying to verify must never be treated as
+            # "verified" - an unverifiable webhook is a rejected webhook.
+            logger.exception("PayPal webhook verification request failed")
+            return False
+        if resp.status_code != 200:
+            logger.error("PayPal webhook verification call failed: %s", resp.text)
+            return False
+        try:
+            return resp.json().get("verification_status") == "SUCCESS"
+        except Exception:
+            logger.exception("PayPal webhook verification returned an unparsable response")
+            return False
+
+    def create_refund(self, capture_id: str, amount: str, currency: str, note: str = "Refund", idempotency_key: Optional[str] = None) -> dict:
         payload = {"amount": {"value": amount, "currency_code": currency.upper()}, "note_to_payer": note[:255]}
-        resp = http_requests.post(f"{self.base_url}/v2/payments/captures/{capture_id}/refund", json=payload, headers=self._headers(), timeout=15)
-        if resp.status_code not in (200, 201):
+        last_error: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                resp = http_requests.post(f"{self.base_url}/v2/payments/captures/{capture_id}/refund", json=payload, headers=self._headers(idempotency_key), timeout=15)
+            except http_requests.exceptions.RequestException as exc:
+                last_error = exc
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            if resp.status_code in (200, 201):
+                return resp.json()
+            if resp.status_code >= 500:
+                last_error = HTTPException(status_code=502, detail="PayPal refund error: gateway unavailable")
+                time.sleep(0.5 * (attempt + 1))
+                continue
             logger.error("PayPal refund error: %s", resp.text)
             raise HTTPException(status_code=502, detail=f"PayPal refund error: {resp.json().get('message', 'Unknown')}")
-        return resp.json()
+        logger.error("PayPal refund failed after retries: %s", last_error)
+        raise HTTPException(status_code=502, detail="PayPal refund failed after retries; the gateway may be temporarily unavailable")
 
 
 # factory functions - load from db settings

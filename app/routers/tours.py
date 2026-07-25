@@ -88,8 +88,14 @@ from app.models.users import User
 router = APIRouter(prefix="/tours", tags=["Tour Detail"])
 
 
-def _assert_supplier_owns_tour(db: Session, tour_id: int, user: User) -> None:
-    """Raises 403 if the actor is a supplier and does not own this tour."""
+def _assert_supplier_owns_tour(db: Session, tour_id: int, user: User, *, view_only: bool = False) -> None:
+    """Raises 403 if the actor is a supplier and does not own this tour.
+
+    Write operations (view_only=False, the default -- used by every
+    create/update/delete/reorder endpoint below) additionally require an
+    approved supplier account, since pending suppliers may not create or
+    manage tours.
+    """
     role_slug = (user.role.slug if user.role else "") or ""
     if "supplier" not in role_slug.lower():
         return
@@ -101,6 +107,10 @@ def _assert_supplier_owns_tour(db: Session, tour_id: int, user: User) -> None:
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     if not tour or tour.supplier_id != supplier.id:
         raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
+    if view_only:
+        return
+    if (supplier.approval_status or "").upper() != "APPROVED":
+        raise HTTPException(status_code=403, detail="Your supplier account is pending admin approval. Tour management is unavailable until approved.")
 
 VIEW = "tours.view"
 EDIT = "tours.edit"
@@ -119,7 +129,7 @@ def tour_categories(
 # overview
 @router.get("/{tour_id}/overview")
 def tour_overview(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": get_overview(db, tour_id)}
 
 
@@ -138,7 +148,7 @@ def update_tour_overview(tour_id: int, data: TourOverviewPayload, request: Reque
 # itinerary
 @router.get("/{tour_id}/itineraries")
 def tour_itineraries(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_itineraries(db, tour_id)}
 
 
@@ -150,7 +160,7 @@ def add_itinerary(tour_id: int, data: ItineraryPayload, request: Request, db: Se
 
 @router.get("/{tour_id}/itineraries/{itinerary_id}")
 def get_itinerary(tour_id: int, itinerary_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     from app.services.tours import _child_or_404, _ser_itinerary, TourItinerary
     return {"status": "success", "data": _ser_itinerary(_child_or_404(db, TourItinerary, itinerary_id, tour_id, "Itinerary"))}
 
@@ -178,7 +188,7 @@ def reorder_tour_itineraries(tour_id: int, data: ReorderPayload, request: Reques
 # inclusions
 @router.get("/{tour_id}/inclusions")
 def tour_inclusions(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_inclusions(db, tour_id)}
 
 
@@ -204,7 +214,7 @@ def remove_inclusion(tour_id: int, inclusion_id: int, request: Request, db: Sess
 # exclusions
 @router.get("/{tour_id}/exclusions")
 def tour_exclusions(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_exclusions(db, tour_id)}
 
 
@@ -230,7 +240,7 @@ def remove_exclusion(tour_id: int, exclusion_id: int, request: Request, db: Sess
 # highlights
 @router.get("/{tour_id}/highlights")
 def tour_highlights(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_highlights(db, tour_id)}
 
 
@@ -256,7 +266,7 @@ def remove_highlight(tour_id: int, highlight_id: int, request: Request, db: Sess
 # similar tours
 @router.get("/{tour_id}/similar-tours")
 def tour_similar(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_similar_tours(db, tour_id)}
 
 
@@ -276,7 +286,7 @@ def remove_similar(tour_id: int, similar_id: int, request: Request, db: Session 
 # extensions
 @router.get("/{tour_id}/extensions")
 def tour_extensions(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_extensions(db, tour_id)}
 
 
@@ -302,7 +312,7 @@ def remove_extension(tour_id: int, extension_id: int, request: Request, db: Sess
 # gallery
 @router.get("/{tour_id}/gallery")
 def tour_gallery(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_gallery(db, tour_id)}
 
 
@@ -328,7 +338,7 @@ def remove_gallery_image(tour_id: int, image_id: int, request: Request, db: Sess
 # pricing
 @router.get("/{tour_id}/pricing")
 def tour_pricing(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_pricing(db, tour_id)}
 
 
@@ -354,7 +364,7 @@ def remove_pricing(tour_id: int, pricing_id: int, request: Request, db: Session 
 # optional activities
 @router.get("/{tour_id}/optional-activities")
 def tour_activities(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_activities(db, tour_id)}
 
 
@@ -380,7 +390,7 @@ def remove_activity(tour_id: int, activity_id: int, request: Request, db: Sessio
 # accommodation extras
 @router.get("/{tour_id}/accommodation-extras")
 def tour_accommodations(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_accommodations(db, tour_id)}
 
 
@@ -406,7 +416,7 @@ def remove_accommodation(tour_id: int, extra_id: int, request: Request, db: Sess
 # calendar
 @router.get("/{tour_id}/calendar")
 def tour_calendar(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_calendar(db, tour_id)}
 
 
@@ -432,7 +442,7 @@ def remove_calendar(tour_id: int, calendar_id: int, request: Request, db: Sessio
 # unavailable dates
 @router.get("/{tour_id}/unavailable-dates")
 def tour_unavailable(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_unavailable_dates(db, tour_id)}
 
 
@@ -452,7 +462,7 @@ def remove_unavailable(tour_id: int, date_id: int, request: Request, db: Session
 # discounts
 @router.get("/{tour_id}/discounts")
 def tour_discounts(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_discounts(db, tour_id)}
 
 
@@ -478,7 +488,7 @@ def remove_discount(tour_id: int, discount_id: int, request: Request, db: Sessio
 # price calculation
 @router.post("/{tour_id}/calculate-price")
 def tour_calculate_price(tour_id: int, req: PriceCalculationRequest, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": calculate_price(db, tour_id, req)}
 
 

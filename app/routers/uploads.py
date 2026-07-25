@@ -3,7 +3,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 
 from app.auth.permissions import get_current_user
-from app.utils.imagekit_client import upload_to_imagekit
+from app.utils.cloudinary_client import upload_to_cloudinary
 from app.utils.media import detect_image_type
 from app.models.users import User
 
@@ -48,7 +48,7 @@ async def upload_profile_image(
 
     extension = ALLOWED_IMAGE_TYPES[detected_type]
     filename = f"{uuid4().hex}.{extension}"
-    uploaded = upload_to_imagekit(content, filename, folder="/tourvaa/profile-images")
+    uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/profile-images", content_type=file.content_type)
 
     return {
         "status": "success",
@@ -96,7 +96,7 @@ async def upload_admin_asset(
         raise HTTPException(status_code=400, detail="Invalid PDF file")
 
     filename = f"{uuid4().hex}.{extension}"
-    uploaded = upload_to_imagekit(content, filename, folder="/tourvaa/admin-assets")
+    uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/admin-assets", content_type=file.content_type)
 
     return {
         "status": "success",

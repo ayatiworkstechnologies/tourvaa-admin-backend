@@ -13,6 +13,7 @@ class AffiliateCreate(BaseModel):
     city_id: int | None = None
     status: str = Field(default="inactive", max_length=20)
     approval_status: str = Field(default="pending", max_length=30)
+    commission_percentage: float = Field(default=0, ge=0, le=100)
 
     @field_validator("business_type", "name", "phone", "website_url", "status", "approval_status")
     @classmethod
@@ -51,6 +52,7 @@ class AffiliateUpdate(BaseModel):
     city_id: int | None = None
     status: str | None = Field(default=None, max_length=20)
     admin_comments: str | None = Field(default=None, max_length=5000)
+    commission_percentage: float | None = Field(default=None, ge=0, le=100)
 
 
 class AffiliateApiLinkRequest(BaseModel):

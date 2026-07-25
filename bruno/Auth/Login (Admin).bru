@@ -1,0 +1,36 @@
+meta {
+  name: Login (Admin)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "identifier": "{{adminEmail}}",
+    "password": "{{adminPassword}}",
+    "client_type": "web-cookie"
+  }
+}
+
+vars:pre-request {
+  adminEmail: admin@tourvaa.com
+  adminPassword: Admin@123
+}
+
+assert {
+  res.status: eq 200
+}
+
+script:post-response {
+  const token = res.body?.data?.access_token;
+  if (token) {
+    bru.setEnvVar("accessToken", token);
+  }
+}
+​

@@ -15,6 +15,7 @@ DEFAULT_ROLES = [
     {"name": "Supplier", "slug": "supplier"},
     {"name": "Agent / Reseller", "slug": "agent-reseller"},
     {"name": "Customer", "slug": "customer"},
+    {"name": "Affiliate", "slug": "affiliate"},
 ]
 
 MODULES = [
@@ -291,6 +292,7 @@ def seed_default_roles_and_permissions(db: Session):
     supplier = roles_by_slug.get("supplier")
     agent_reseller = roles_by_slug.get("agent-reseller")
     customer = roles_by_slug.get("customer")
+    affiliate = roles_by_slug.get("affiliate")
 
     # Super admin gets every permission
     if super_admin:
@@ -437,7 +439,7 @@ def seed_default_roles_and_permissions(db: Session):
             "suppliers.view", "suppliers.edit", "suppliers.view_documents", "suppliers.request_commission",
             # Tours (create & manage own tours)
             "view-tours", "create-tours", "update-tours",
-            "tours.view", "tours.create", "tours.edit", "tours.publish",
+            "tours.view", "tours.create", "tours.edit",
             # Bookings (view & status updates for their tours)
             "view-bookings",
             "bookings.view", "bookings.update_status", "bookings.view_history", "bookings.view_payments",
@@ -530,6 +532,18 @@ def seed_default_roles_and_permissions(db: Session):
             "view-notifications",
             "notifications.view",
             # Profile
+            "view-profile", "update-profile", "profile.view",
+        ],
+
+        # ------------------------------------------------------------------
+        # Affiliate -- self-service: own referral links/clicks/conversions/
+        # commissions/payouts only (ensure_affiliate_access scopes this to
+        # the caller's own affiliate_id; payout creation stays admin-only).
+        # ------------------------------------------------------------------
+        affiliate: [
+            "view-dashboard", "dashboard.view",
+            "affiliates.view", "view-affiliates",
+            "view-notifications", "notifications.view",
             "view-profile", "update-profile", "profile.view",
         ],
     }

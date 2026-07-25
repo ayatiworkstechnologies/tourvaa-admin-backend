@@ -15,4 +15,4 @@ anthropic
 pywebpush
 reportlab
 redis
-imagekitio
+cloudinary

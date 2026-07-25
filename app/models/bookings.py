@@ -16,6 +16,7 @@ class Booking(Base):
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True, index=True)
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True, index=True)
     affiliate_id = Column(Integer, ForeignKey("affiliates.id"), nullable=True, index=True)
+    affiliate_ref_code = Column(String(60), nullable=True, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     booked_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     booking_source = Column(String(30), default="admin", nullable=False, index=True)

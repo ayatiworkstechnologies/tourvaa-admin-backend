@@ -37,6 +37,7 @@ ROLE_SLUG_TO_PORTAL = {
     "supplier": "supplier",
     "agent-reseller": "agent",
     "customer": "customer",
+    "affiliate": "affiliate",
     "super-admin": "admin",
     "admin": "admin",
 }

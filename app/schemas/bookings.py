@@ -48,6 +48,7 @@ class BookingCreate(BaseModel):
     supplier_id: Optional[int] = None
     agent_id: Optional[int] = None
     affiliate_id: Optional[int] = None
+    affiliate_ref_code: Optional[str] = Field(default=None, max_length=60)
     booking_source: str = "admin"
     country_id: Optional[int] = None
     city_id: Optional[int] = None

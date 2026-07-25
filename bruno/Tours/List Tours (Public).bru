@@ -1,0 +1,19 @@
+meta {
+  name: List Tours (Public)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/public/tours?page=1&limit=12
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  No auth required. Only ever returns tours where status == "published".
+}

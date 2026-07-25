@@ -14,14 +14,14 @@ from sqlalchemy.orm import Session
 from app.config import get_private_docs_root
 from app.database import get_db
 from app.auth.permissions import get_current_user, get_user_role_ids, expand_permission_slugs
-from app.utils.imagekit_client import get_private_file_url
+from app.utils.cloudinary_client import get_private_file_url
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User
 
 router = APIRouter(prefix="/private-documents", tags=["Private Documents"])
 
 _PRIVATE_PREFIX = "/private-documents/"
-_IMAGEKIT_PREFIX = "imagekit:"
+_CLOUDINARY_PREFIX = "cloudinary:"
 
 
 def _resolve_path(file_path: str):
@@ -33,9 +33,9 @@ def _resolve_path(file_path: str):
 
 def _serve_document(doc):
     """Return a response for a document's file_path, whichever backend stored it."""
-    if doc.file_path.startswith(_IMAGEKIT_PREFIX):
-        imagekit_path = doc.file_path.removeprefix(_IMAGEKIT_PREFIX)
-        return RedirectResponse(get_private_file_url(imagekit_path))
+    if doc.file_path.startswith(_CLOUDINARY_PREFIX):
+        resource_type, _, public_id = doc.file_path.removeprefix(_CLOUDINARY_PREFIX).partition(":")
+        return RedirectResponse(get_private_file_url(public_id, resource_type or "image"))
 
     if not doc.file_path.startswith(_PRIVATE_PREFIX):
         raise HTTPException(status_code=404, detail="Document not available via this endpoint")

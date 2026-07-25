@@ -1,0 +1,27 @@
+meta {
+  name: Upload Document
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/suppliers/{{supplierId}}/documents
+  body: multipartForm
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:multipart-form {
+  document_type: identity_proof
+  file: @file()
+}
+
+docs {
+  Set the `file` field's value by picking a real file in Bruno's UI
+  (click the field, choose "file" type, browse to a JPG/PNG/PDF).
+  document_type must be one of: company_registration, trade_license,
+  tax_certificate, identity_proof, bank_details.
+}

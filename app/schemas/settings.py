@@ -14,6 +14,7 @@ class PaymentSettingUpdate(BaseModel):
     is_enabled: Optional[bool] = None
     public_key: Optional[str] = None
     secret_key: Optional[str] = None
+    webhook_id: Optional[str] = None
     surcharge_percentage: Optional[str] = None
     mode: Optional[str] = None
 
@@ -48,6 +49,7 @@ class PaymentSettingsUpdate(BaseModel):
     paypal_client_id_placeholder: Optional[str] = None
     paypal_secret: Optional[str] = None
     paypal_secret_placeholder: Optional[str] = None
+    paypal_webhook_id: Optional[str] = None
     payment_surcharge_percentage: Optional[str] = None
     default_payment_mode: Optional[str] = None
 
