@@ -2,10 +2,12 @@
 Public API - no authentication required.
 Serves tour listing and detail for the public website.
 """
+import html as html_escape
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import or_
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -31,6 +33,40 @@ from app.models.tours import (
 router = APIRouter(tags=["Public"])
 
 PAGE_SIZE = 12
+
+
+class ContactMessageRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=150)
+    email: EmailStr
+    phone: str = Field(default="", max_length=30)
+    enquiry_type: str = Field(default="General enquiry", max_length=50)
+    subject: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=5000)
+
+
+@router.post("/contact")
+def submit_contact_message(data: ContactMessageRequest, db: Session = Depends(get_db)):
+    from app.models.settings import AppSetting
+    from app.utils.mailer import try_send_email
+
+    setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
+    support_email = (setting.value if setting and setting.value else "") or "support@tourvaa.com"
+
+    esc = html_escape.escape
+    body = (
+        f"<p><strong>New enquiry from the Tourvaa website contact form</strong></p>"
+        f"<p><strong>Name:</strong> {esc(data.name)}</p>"
+        f"<p><strong>Email:</strong> {esc(data.email)}</p>"
+        f"<p><strong>Phone:</strong> {esc(data.phone) or '-'}</p>"
+        f"<p><strong>Enquiry type:</strong> {esc(data.enquiry_type)}</p>"
+        f"<p><strong>Subject:</strong> {esc(data.subject)}</p>"
+        f"<p><strong>Message:</strong><br/>{esc(data.message).replace(chr(10), '<br/>')}</p>"
+    )
+    sent = try_send_email(support_email, f"New enquiry: {data.subject}", body)
+    if not sent:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=502, detail="Could not send your message right now. Please try again or email us directly.")
+    return {"status": "success", "message": "Your enquiry has been sent."}
 
 
 def _ser_overview(o: TourOverview):
@@ -307,7 +343,15 @@ def public_subcategories(db: Session = Depends(get_db), category: str = Query(de
 @router.get("/countries")
 def public_countries(db: Session = Depends(get_db)):
     countries = db.query(Country).filter(Country.status == "active").order_by(Country.country_name.asc()).all()
-    return {"status": "success", "items": [_country(c) for c in countries]}
+    counts = dict(
+        db.query(Tour.country_id, func.count(Tour.id))
+        .filter(Tour.status == "published")
+        .group_by(Tour.country_id)
+        .all()
+    )
+    items = [{**_country(c), "tour_count": counts.get(c.id, 0)} for c in countries]
+    items.sort(key=lambda item: (-item["tour_count"], item["country_name"]))
+    return {"status": "success", "items": items}
 
 
 @router.get("/cities")
