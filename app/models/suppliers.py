@@ -49,6 +49,12 @@ class Supplier(Base):
         cascade="all, delete-orphan",
         order_by="SupplierApprovalHistory.id.desc()",
     )
+    commission_requests = relationship(
+        "SupplierCommissionRequest",
+        back_populates="supplier",
+        cascade="all, delete-orphan",
+        order_by="SupplierCommissionRequest.id.desc()",
+    )
 
 
 class SupplierApprovalHistory(Base):
@@ -64,6 +70,22 @@ class SupplierApprovalHistory(Base):
 
     supplier = relationship("Supplier", back_populates="approval_history")
     administrator = relationship("User", foreign_keys=[changed_by])
+
+
+class SupplierCommissionRequest(Base):
+    __tablename__ = "supplier_commission_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False, index=True)
+    markup_type = Column(String(20), nullable=False)
+    markup_value = Column(Float, nullable=False)
+    status = Column(String(20), default="pending", nullable=False, index=True)
+    requested_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    supplier = relationship("Supplier", back_populates="commission_requests")
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
 
 
 class SupplierContact(Base):

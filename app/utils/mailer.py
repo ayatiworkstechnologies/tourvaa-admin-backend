@@ -20,12 +20,68 @@ class EmailSendResult:
     error: str = ""
 
 
-def _smtp_user() -> str | None:
-    return settings.SMTP_USERNAME or settings.SMTP_USER
+@dataclass(frozen=True)
+class _SmtpConfig:
+    host: str | None
+    port: int
+    username: str | None
+    password: str | None
+    from_name: str
+    from_email: str | None
+    reply_to: str | None
+    use_ssl: bool
+    use_starttls: bool
+    timeout_seconds: int
 
 
-def _from_email() -> str | None:
-    return settings.SMTP_FROM_EMAIL or _smtp_user()
+def _env_smtp_config() -> _SmtpConfig:
+    return _SmtpConfig(
+        host=settings.SMTP_HOST,
+        port=settings.SMTP_PORT,
+        username=settings.SMTP_USERNAME or settings.SMTP_USER,
+        password=settings.SMTP_PASSWORD,
+        from_name=settings.SMTP_FROM_NAME,
+        from_email=settings.SMTP_FROM_EMAIL,
+        reply_to=settings.SMTP_REPLY_TO,
+        use_ssl=settings.SMTP_USE_SSL,
+        use_starttls=settings.SMTP_STARTTLS,
+        timeout_seconds=settings.SMTP_TIMEOUT_SECONDS,
+    )
+
+
+def _effective_smtp_config() -> _SmtpConfig:
+    """DB-backed SMTP settings (Settings > Email/SMTP) take effect when
+    explicitly enabled; otherwise fall back to the env-var config exactly as
+    before. Any failure reading the DB (table not migrated yet, connection
+    issue) silently falls back to env vars rather than breaking outbound
+    email -- same "degrade gracefully" approach used for approval_history."""
+    try:
+        from app.database import SessionLocal
+        from app.models.settings import SmtpSetting
+        from app.utils.crypto import decrypt_secret
+
+        db = SessionLocal()
+        try:
+            row = db.query(SmtpSetting).first()
+            if row and row.is_enabled and row.host:
+                return _SmtpConfig(
+                    host=row.host,
+                    port=row.port,
+                    username=row.username or None,
+                    password=decrypt_secret(row.password or "") or None,
+                    from_name=row.from_name,
+                    from_email=row.from_email or None,
+                    reply_to=row.reply_to or None,
+                    use_ssl=row.use_ssl,
+                    use_starttls=row.use_starttls,
+                    timeout_seconds=row.timeout_seconds,
+                )
+        finally:
+            db.close()
+    except Exception as error:
+        logger.debug("Could not load DB SMTP settings, using env config: %s", error)
+
+    return _env_smtp_config()
 
 
 def _domain_from_email(email: str) -> str:
@@ -91,24 +147,24 @@ def _update_email_log(log_id: int | None, status: str, error_message: str = "") 
         logger.debug("Could not update email log %s: %s", log_id, error)
 
 
-def _build_message(to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None) -> tuple[EmailMessage, str]:
-    smtp_user = _smtp_user()
-    from_email = _from_email()
+def _build_message(config: _SmtpConfig, to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None) -> tuple[EmailMessage, str]:
+    smtp_user = config.username
+    from_email = config.from_email or smtp_user
 
-    if not settings.SMTP_HOST or not smtp_user or not settings.SMTP_PASSWORD or not from_email:
+    if not config.host or not smtp_user or not config.password or not from_email:
         raise RuntimeError("SMTP configuration is incomplete")
 
     message_id = make_msgid(domain=_domain_from_email(from_email))
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = formataddr((settings.SMTP_FROM_NAME, from_email))
+    message["From"] = formataddr((config.from_name, from_email))
     message["To"] = to_email
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = message_id
     message["X-Mailer"] = "Tourvaa SMTP"
     message["X-Auto-Response-Suppress"] = "All"
 
-    reply_to = settings.SMTP_REPLY_TO or from_email
+    reply_to = config.reply_to or from_email
     if reply_to:
         message["Reply-To"] = reply_to
 
@@ -127,28 +183,29 @@ def send_email(to_email: str, subject: str, html: str, attachments: list[tuple[s
     message_id = ""
 
     try:
-        message, message_id = _build_message(to_email, subject, html, attachments)
-        smtp_user = _smtp_user() or ""
+        config = _effective_smtp_config()
+        message, message_id = _build_message(config, to_email, subject, html, attachments)
+        smtp_user = config.username or ""
 
-        if settings.SMTP_USE_SSL:
+        if config.use_ssl:
             with smtplib.SMTP_SSL(
-                settings.SMTP_HOST,
-                settings.SMTP_PORT,
-                timeout=settings.SMTP_TIMEOUT_SECONDS,
+                config.host,
+                config.port,
+                timeout=config.timeout_seconds,
             ) as smtp:
-                smtp.login(smtp_user, settings.SMTP_PASSWORD)
+                smtp.login(smtp_user, config.password)
                 smtp.send_message(message)
         else:
             with smtplib.SMTP(
-                settings.SMTP_HOST,
-                settings.SMTP_PORT,
-                timeout=settings.SMTP_TIMEOUT_SECONDS,
+                config.host,
+                config.port,
+                timeout=config.timeout_seconds,
             ) as smtp:
                 smtp.ehlo()
-                if settings.SMTP_STARTTLS:
+                if config.use_starttls:
                     smtp.starttls()
                     smtp.ehlo()
-                smtp.login(smtp_user, settings.SMTP_PASSWORD)
+                smtp.login(smtp_user, config.password)
                 smtp.send_message(message)
 
         _update_email_log(log_id, "sent")

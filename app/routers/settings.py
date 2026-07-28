@@ -12,6 +12,7 @@ from app.schemas.settings import (
     PaymentSettingUpdate,
     PaymentSettingsUpdate,
     SettingsBulkUpdate,
+    SmtpSettingsUpdate,
     SystemSettingsUpdate,
 )
 from app.services.settings import (
@@ -20,12 +21,14 @@ from app.services.settings import (
     get_payment_settings,
     get_payment_settings_payload,
     get_settings,
+    get_smtp_settings_payload,
     get_system_settings,
     mask_secret,
     update_api_settings_payload,
     update_api_setting,
     update_payment_settings_payload,
     update_payment_setting,
+    update_smtp_settings_payload,
     update_system_settings,
     update_settings,
 )
@@ -256,3 +259,30 @@ def save_api_setting(
         raise HTTPException(status_code=404, detail="API setting not found")
 
     return {"status": "success", "message": "API setting updated", "data": setting}
+
+
+@router.get("/smtp")
+def smtp_settings_summary(
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-settings")),
+):
+    return {"status": "success", "data": get_smtp_settings_payload(db)}
+
+
+@router.put("/smtp")
+def save_smtp_settings(
+    data: SmtpSettingsUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("update-settings")),
+):
+    return {
+        "status": "success",
+        "message": "SMTP settings updated successfully",
+        "data": update_smtp_settings_payload(
+            db,
+            data.model_dump(exclude_unset=True),
+            actor=current_user,
+            request=request,
+        ),
+    }

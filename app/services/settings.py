@@ -2,11 +2,12 @@ from sqlalchemy.orm import Session
 
 from app.utils.crypto import decrypt_secret, encrypt_secret
 from app.services.audit import log_audit
-from app.models.settings import ApiSetting, AppSetting, PaymentSetting
+from app.models.settings import ApiSetting, AppSetting, PaymentSetting, SmtpSetting
 from app.models.users import User
 
 _PAYMENT_SECRET_FIELDS = {"secret_key"}
 _API_SECRET_FIELDS = {"api_key", "api_secret"}
+_SMTP_SECRET_FIELDS = {"password"}
 
 
 DEFAULT_SETTINGS = [
@@ -413,3 +414,94 @@ def update_api_settings_payload(
         update_api_setting(db, api_name, update_values, actor=actor, request=request)
 
     return get_api_settings_payload(db)
+
+
+def get_or_create_smtp_settings(db: Session) -> SmtpSetting:
+    setting = db.query(SmtpSetting).first()
+    if not setting:
+        setting = SmtpSetting()
+        db.add(setting)
+        db.commit()
+        db.refresh(setting)
+    return setting
+
+
+def get_smtp_settings_payload(db: Session):
+    setting = get_or_create_smtp_settings(db)
+    password = decrypt_secret(setting.password or "")
+    return {
+        "is_enabled": setting.is_enabled,
+        "host": setting.host or "",
+        "port": setting.port,
+        "username": setting.username or "",
+        "password": mask_secret(password),
+        "password_placeholder": mask_secret(password),
+        "from_name": setting.from_name,
+        "from_email": setting.from_email or "",
+        "reply_to": setting.reply_to or "",
+        "use_ssl": setting.use_ssl,
+        "use_starttls": setting.use_starttls,
+        "timeout_seconds": setting.timeout_seconds,
+    }
+
+
+_SMTP_FIELD_MAP = {
+    "is_enabled": "is_enabled",
+    "host": "host",
+    "port": "port",
+    "username": "username",
+    "password": "password",
+    "password_placeholder": "password",
+    "from_name": "from_name",
+    "from_email": "from_email",
+    "reply_to": "reply_to",
+    "use_ssl": "use_ssl",
+    "use_starttls": "use_starttls",
+    "timeout_seconds": "timeout_seconds",
+}
+
+
+def update_smtp_settings_payload(
+    db: Session,
+    values: dict[str, str | bool | int | None],
+    actor: User | None = None,
+    request=None,
+):
+    setting = get_or_create_smtp_settings(db)
+
+    old_values = {column: getattr(setting, column) for column in set(_SMTP_FIELD_MAP.values())}
+
+    for incoming_key, column in _SMTP_FIELD_MAP.items():
+        if incoming_key not in values or values[incoming_key] is None:
+            continue
+        value = values[incoming_key]
+        if column in _SMTP_SECRET_FIELDS:
+            # Blank/omitted password means "keep the existing value" -- the
+            # masked placeholder returned by GET is never round-tripped back
+            # in as the real secret (same contract as payment/api settings).
+            if isinstance(value, str) and value.strip():
+                setattr(setting, column, encrypt_secret(value.strip()))
+            continue
+        setattr(setting, column, value.strip() if isinstance(value, str) else value)
+
+    safe_old_values = {
+        k: (mask_secret(decrypt_secret(v or "")) if k in _SMTP_SECRET_FIELDS else v)
+        for k, v in old_values.items()
+    }
+    safe_new_values = {
+        k: (mask_secret(v) if k in _SMTP_SECRET_FIELDS and isinstance(v, str) else v)
+        for k, v in values.items()
+    }
+    log_audit(
+        db,
+        actor=actor,
+        action="update_smtp_settings",
+        entity_type="smtp_setting",
+        entity_id=setting.id,
+        old_values=safe_old_values,
+        new_values=safe_new_values,
+        request=request,
+    )
+    db.commit()
+    db.refresh(setting)
+    return get_smtp_settings_payload(db)

@@ -343,7 +343,28 @@ def serialize_extension(e: BookingExtension) -> dict:
 
 
 def serialize_communication(c: BookingCommunication) -> dict:
-    return {"id": c.id, "booking_id": c.booking_id, "sender_user_id": c.sender_user_id, "sender_type": c.sender_type, "message_type": c.message_type, "subject": c.subject, "message": c.message, "visibility": c.visibility, "created_at": c.created_at}
+    return {
+        "id": c.id,
+        "booking_id": c.booking_id,
+        "sender_user_id": c.sender_user_id,
+        "sender_type": c.sender_type,
+        "message_type": c.message_type,
+        "subject": c.subject,
+        "message": c.message,
+        "visibility": c.visibility,
+        "created_at": c.created_at,
+        "replies": [
+            {
+                "id": r.id,
+                "communication_id": r.communication_id,
+                "sender_user_id": r.sender_user_id,
+                "sender_type": r.sender_type,
+                "message": r.message,
+                "created_at": r.created_at,
+            }
+            for r in c.replies
+        ],
+    }
 
 
 def get_booking_by_id(db: Session, booking_id: int, for_update: bool = False) -> Booking:

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, Form, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -22,11 +23,15 @@ from app.schemas.suppliers import (
 from app.services.suppliers import (
     _serialize_vehicle,
     approve_supplier,
+    bulk_approve_suppliers,
+    bulk_reject_suppliers,
     create_supplier,
+    export_suppliers_directory,
     get_supplier,
     list_suppliers,
     partial_approve_supplier,
     reject_supplier,
+    reject_supplier_commission_request,
     request_supplier_commission,
     review_supplier_document,
     review_supplier_vehicle,
@@ -64,6 +69,28 @@ def submit_verification(request: Request, db: Session = Depends(get_db), current
 @router.get("/pending")
 def pending_suppliers(params: dict = Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
     return {"status": "success", **list_suppliers(db, params["page"], params["limit"], params["search"], approval_status="PENDING")}
+
+
+@router.get("/export")
+def export_suppliers_endpoint(db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    rows = export_suppliers_directory(db)
+    buffer = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    else:
+        buffer.write("No suppliers to export\n")
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="suppliers-directory.csv"'},
+    )
 
 
 @router.get("")
@@ -244,10 +271,12 @@ def delete_vehicle_photo(vehicle_id: int, photo_url: str = Query(...), db: Sessi
 async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     from uuid import uuid4
     from app.utils.cloudinary_client import upload_to_cloudinary
+    from app.utils.media import detect_image_type
     ALLOWED = {
         "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
         "image/webp": "webp", "image/avif": "avif", "application/pdf": "pdf",
     }
+    IMAGE_EXT_BY_SIGNATURE = {"jpeg": "jpg", "png": "png", "webp": "webp", "avif": "avif"}
     content = await upload.read()
     if not content:
         return ""
@@ -259,6 +288,13 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
                 ext = e
                 break
     if not ext:
+        return ""
+    # Verify the file's actual signature matches the claimed extension --
+    # an extension/content-type alone can be spoofed.
+    if ext in IMAGE_EXT_BY_SIGNATURE.values():
+        if IMAGE_EXT_BY_SIGNATURE.get(detect_image_type(content) or "") != ext:
+            return ""
+    elif ext == "pdf" and not content.startswith(b"%PDF"):
         return ""
     filename = f"{uuid4().hex}.{ext}"
     uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/{subfolder}", content_type=upload.content_type)
@@ -399,6 +435,18 @@ async def upload_supplier_document(
         else:
             raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, AVIF, PDF, DOC, and DOCX files are allowed")
 
+    # Verify the file's actual signature matches the claimed extension --
+    # an extension/content-type alone can be spoofed. DOC/DOCX (zip/OLE
+    # containers) have no simple single-signature check here, so they're
+    # left to extension/content-type validation only.
+    from app.utils.media import detect_image_type
+    image_ext_by_signature = {"jpeg": "jpg", "png": "png", "webp": "webp", "avif": "avif"}
+    if extension in image_ext_by_signature.values():
+        if image_ext_by_signature.get(detect_image_type(content) or "") != extension:
+            raise HTTPException(status_code=400, detail="Invalid image file")
+    elif extension == "pdf" and not content.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+
     from uuid import uuid4
     from app.utils.cloudinary_client import upload_to_cloudinary
     from app.models.suppliers import SupplierDocument
@@ -477,6 +525,27 @@ def review_vehicle(
     }
 
 
+class BulkApproveRequest(BaseModel):
+    supplier_ids: list[int]
+
+
+class BulkRejectRequest(BaseModel):
+    supplier_ids: list[int]
+    rejection_reason: str
+    admin_comments: str = ""
+
+
+@router.post("/bulk-approve")
+def bulk_approve(data: BulkApproveRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
+    return {"status": "success", "message": "Bulk approval processed", "data": bulk_approve_suppliers(db, data.supplier_ids, current_user, request)}
+
+
+@router.post("/bulk-reject")
+def bulk_reject(data: BulkRejectRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.reject"))):
+    reject_data = RejectRequest(rejection_reason=data.rejection_reason, admin_comments=data.admin_comments)
+    return {"status": "success", "message": "Bulk rejection processed", "data": bulk_reject_suppliers(db, data.supplier_ids, reject_data, current_user, request)}
+
+
 @router.post("/{supplier_id}/approve")
 @router.patch("/{supplier_id}/approve")
 @router.post("/{supplier_id}/accept")
@@ -505,6 +574,11 @@ def request_reupload(supplier_id: int, data: PartialApprovalRequest, request: Re
 @router.patch("/{supplier_id}/markup")
 def markup(supplier_id: int, data: SupplierMarkupRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.manage_markup"))):
     return {"status": "success", "message": "Supplier markup updated successfully", "data": update_supplier_markup(db, supplier_id, data, current_user, request)}
+
+
+@router.post("/{supplier_id}/commission-request/reject")
+def reject_commission_request(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.manage_markup"))):
+    return {"status": "success", "message": "Commission request rejected", "data": reject_supplier_commission_request(db, supplier_id, current_user, request)}
 
 
 @router.post("/{supplier_id}/deactivate")

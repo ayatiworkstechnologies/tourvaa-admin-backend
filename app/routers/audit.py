@@ -1,6 +1,6 @@
 from math import ceil
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.audit import AuditLog
@@ -12,12 +12,31 @@ alias_router = APIRouter(prefix="/audit-logs", tags=["Activity Logs"])
 
 
 def serialize_log(row: AuditLog) -> dict:
-    return {"id": row.id, "actor_user_id": row.actor_user_id, "action": row.action, "entity_type": row.entity_type, "entity_id": row.entity_id, "old_values": row.old_values, "new_values": row.new_values, "ip_address": row.ip_address, "user_agent": row.user_agent, "created_at": row.created_at}
+    details = ""
+    if row.new_values:
+        details = ", ".join(f"{k}={v}" for k, v in row.new_values.items())
+    elif row.old_values:
+        details = ", ".join(f"{k}={v}" for k, v in row.old_values.items())
+    return {
+        "id": row.id,
+        "actor_user_id": row.actor_user_id,
+        "user_name": row.actor.name if row.actor else None,
+        "user_email": row.actor.email if row.actor else None,
+        "action": row.action,
+        "entity_type": row.entity_type,
+        "entity_id": row.entity_id,
+        "old_values": row.old_values,
+        "new_values": row.new_values,
+        "details": details,
+        "ip_address": row.ip_address,
+        "user_agent": row.user_agent,
+        "created_at": row.created_at,
+    }
 
 @router.get("")
 @router.get("/")
 def activity_logs(params: dict = Depends(pagination_params), entity_type: str = Query(default=""), action: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("activity_logs.view"))):
-    query = db.query(AuditLog)
+    query = db.query(AuditLog).options(joinedload(AuditLog.actor))
     if entity_type: query = query.filter(AuditLog.entity_type == entity_type)
     if action: query = query.filter(AuditLog.action == action)
     query = query.order_by(AuditLog.id.desc())
@@ -26,7 +45,7 @@ def activity_logs(params: dict = Depends(pagination_params), entity_type: str = 
 
 @router.get("/export")
 def export_logs(db: Session = Depends(get_db), _=Depends(require_any_permission("activity_logs.export", "activity_logs.view"))):
-    return {"status": "success", "data": [serialize_log(row) for row in db.query(AuditLog).order_by(AuditLog.id.desc()).limit(500).all()]}
+    return {"status": "success", "data": [serialize_log(row) for row in db.query(AuditLog).options(joinedload(AuditLog.actor)).order_by(AuditLog.id.desc()).limit(500).all()]}
 
 
 alias_router.add_api_route("", activity_logs, methods=["GET"])

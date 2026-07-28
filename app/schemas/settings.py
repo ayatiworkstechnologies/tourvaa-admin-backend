@@ -63,3 +63,18 @@ class ApiSettingsUpdate(BaseModel):
     sms_api_placeholder: Optional[str] = None
     brightlane_external_link: Optional[str] = None
     brightlane_external_link_placeholder: Optional[str] = None
+
+
+class SmtpSettingsUpdate(BaseModel):
+    is_enabled: Optional[bool] = None
+    host: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    password_placeholder: Optional[str] = None
+    from_name: Optional[str] = None
+    from_email: Optional[str] = None
+    reply_to: Optional[str] = None
+    use_ssl: Optional[bool] = None
+    use_starttls: Optional[bool] = None
+    timeout_seconds: Optional[int] = None

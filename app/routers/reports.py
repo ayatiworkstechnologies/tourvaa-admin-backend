@@ -1,10 +1,12 @@
 import csv
 import io
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -18,12 +20,26 @@ from app.utils.money import money_str, utcnow
 from app.models.customers import Customer
 from app.models.invoices import Invoice
 from app.models.payments import Payment
+from app.models.reports import ReportSchedule
 from app.models.suppliers import Supplier
 from app.models.users import User
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
+logger = logging.getLogger(__name__)
 
 PERIODS = {"day", "week", "month", "quarter", "half_year", "year", "custom", "all"}
+
+
+def _scheduled_report_count(db: Session) -> int:
+    # report_schedules (migration 20260728_0050) may not exist yet on every
+    # deployed database; degrade to 0 instead of a 500 until that migration
+    # has run everywhere.
+    try:
+        return db.query(func.count(ReportSchedule.id)).filter(ReportSchedule.is_active == True).scalar() or 0  # noqa: E712
+    except SQLAlchemyError:
+        logger.exception("Failed to count report schedules")
+        return 0
 
 
 def _report_role(actor: User | None) -> str:
@@ -295,6 +311,60 @@ def exports(
     )
 
 
+def _serialize_schedule(row: ReportSchedule) -> dict:
+    return {
+        "id": row.id,
+        "report_type": row.report_type,
+        "cadence": row.cadence,
+        "recipient_emails": row.recipient_emails,
+        "is_active": row.is_active,
+        "created_by": row.created_by,
+        "created_at": row.created_at,
+    }
+
+
+class ReportScheduleCreate(BaseModel):
+    report_type: str
+    cadence: str = "weekly"
+    recipient_emails: str
+
+
+@router.get("/schedule")
+def list_report_schedules(db: Session = Depends(get_db), _=Depends(require_any_permission("reports.view"))):
+    rows = db.query(ReportSchedule).order_by(ReportSchedule.id.desc()).all()
+    return {"status": "success", "data": [_serialize_schedule(row) for row in rows]}
+
+
+@router.post("/schedule")
+def create_report_schedule(data: ReportScheduleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.export", "reports.view"))):
+    if data.report_type not in REPORT_FETCHERS:
+        raise HTTPException(status_code=400, detail=f"Unknown report '{data.report_type}'. Valid options: {sorted(REPORT_FETCHERS)}")
+    row = ReportSchedule(
+        report_type=data.report_type,
+        cadence=data.cadence,
+        recipient_emails=data.recipient_emails,
+        created_by=current_user.id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "status": "success",
+        "message": "Schedule saved. Delivery is not yet automated -- this stores the configuration for when scheduled execution is added.",
+        "data": _serialize_schedule(row),
+    }
+
+
+@router.delete("/schedule/{schedule_id}")
+def delete_report_schedule(schedule_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("reports.export", "reports.view"))):
+    row = db.query(ReportSchedule).filter(ReportSchedule.id == schedule_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "success", "message": "Schedule deleted"}
+
+
 @router.get("/snapshot")
 def snapshot(db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.view"))):
     _require_admin_report(current_user)
@@ -390,7 +460,7 @@ def snapshot(db: Session = Depends(get_db), current_user: User = Depends(require
             },
             "meta": {
                 "report_types": len(REPORT_FETCHERS),
-                "scheduled": 0,
+                "scheduled": _scheduled_report_count(db),
                 "total_exports": db.query(func.count(AuditLog.id)).filter(AuditLog.entity_type == "report", AuditLog.action == "export_report").scalar() or 0,
             },
             "recent_exports": recent_exports,

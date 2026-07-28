@@ -345,3 +345,47 @@ def delete_faq(db: Session, faq_id: int) -> bool:
     db.delete(faq)
     db.commit()
     return True
+
+
+def list_chat_sessions(db: Session, page: int, limit: int):
+    from math import ceil
+    from sqlalchemy import func as sqlfunc
+
+    message_count = (
+        db.query(ChatMessage.session_id, sqlfunc.count(ChatMessage.id).label("message_count"))
+        .group_by(ChatMessage.session_id)
+        .subquery()
+    )
+    query = (
+        db.query(ChatSession, message_count.c.message_count)
+        .outerjoin(message_count, message_count.c.session_id == ChatSession.id)
+        .order_by(ChatSession.id.desc())
+    )
+    total = query.count()
+    rows = query.offset((page - 1) * limit).limit(limit).all()
+    items = [
+        {
+            "id": session.id,
+            "session_key": session.session_key,
+            "user_name": session.user_name,
+            "user_email": session.user_email,
+            "message_count": count or 0,
+            "created_at": session.created_at,
+        }
+        for session, count in rows
+    ]
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+
+
+def get_chat_session_messages(db: Session, session_id: int) -> list[dict]:
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.id.asc())
+        .all()
+    )
+    return [
+        {"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at}
+        for m in messages
+    ]
+    return True

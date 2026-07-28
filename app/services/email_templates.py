@@ -377,3 +377,16 @@ def preview_template(db: Session, template_id: int) -> dict:
     )
 
     return {"subject": subject, "html": html, "variables": variables}
+
+
+def send_test_email(db: Session, template_id: int, to_email: str) -> dict:
+    """Send the sample-data preview of a template to a real address for delivery testing."""
+    from app.utils.mailer import send_email
+
+    preview = preview_template(db, template_id)
+    try:
+        result = send_email(to_email, preview["subject"], preview["html"])
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"Could not send test email: {error}")
+
+    return {"sent": True, "to": to_email, "message_id": result.message_id}

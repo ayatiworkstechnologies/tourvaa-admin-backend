@@ -1,7 +1,7 @@
 from math import ceil
 from uuid import uuid4
 from fastapi import HTTPException, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.utils.money import utcnow
 from app.models.sessions import UserSession
@@ -9,7 +9,19 @@ from app.models.users import User
 
 
 def serialize_session(s: UserSession) -> dict:
-    return {"id": s.id, "user_id": s.user_id, "session_id": s.session_id, "ip_address": s.ip_address, "user_agent": s.user_agent, "status": s.status, "revoked_at": s.revoked_at, "last_seen_at": s.last_seen_at, "created_at": s.created_at}
+    return {
+        "id": s.id,
+        "user_id": s.user_id,
+        "user_name": s.user.name if s.user else None,
+        "user_email": s.user.email if s.user else None,
+        "session_id": s.session_id,
+        "ip_address": s.ip_address,
+        "user_agent": s.user_agent,
+        "status": s.status,
+        "revoked_at": s.revoked_at,
+        "last_seen_at": s.last_seen_at,
+        "created_at": s.created_at,
+    }
 
 
 def create_session(db: Session, user: User, request: Request | None = None):
@@ -20,7 +32,7 @@ def create_session(db: Session, user: User, request: Request | None = None):
 
 
 def list_sessions(db: Session, page: int = 1, limit: int = 20, user_id: int | None = None):
-    query = db.query(UserSession)
+    query = db.query(UserSession).options(joinedload(UserSession.user))
     if user_id:
         query = query.filter(UserSession.user_id == user_id)
     query = query.order_by(UserSession.id.desc())
