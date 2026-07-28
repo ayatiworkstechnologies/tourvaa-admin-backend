@@ -42,3 +42,22 @@ class ApiSetting(Base):
     is_enabled = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SmtpSetting(Base):
+    __tablename__ = "smtp_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    is_enabled = Column(Boolean, default=False, nullable=False)
+    host = Column(String(255), nullable=True)
+    port = Column(Integer, default=465, nullable=False)
+    username = Column(String(255), nullable=True)
+    password = Column(Text, nullable=True)
+    from_name = Column(String(150), default="Tourvaa", nullable=False)
+    from_email = Column(String(255), nullable=True)
+    reply_to = Column(String(255), nullable=True)
+    use_ssl = Column(Boolean, default=True, nullable=False)
+    use_starttls = Column(Boolean, default=False, nullable=False)
+    timeout_seconds = Column(Integer, default=20, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

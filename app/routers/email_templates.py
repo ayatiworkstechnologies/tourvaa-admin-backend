@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -11,8 +12,13 @@ from app.services.email_templates import (
     get_template,
     get_templates,
     preview_template,
+    send_test_email,
     update_template,
 )
+
+
+class SendTestEmailRequest(BaseModel):
+    to_email: EmailStr
 
 router = APIRouter(prefix="/email-templates", tags=["Email Templates"])
 
@@ -74,6 +80,20 @@ def edit_template(
         "status": "success",
         "message": "Email template updated successfully",
         "data": update_template(db, template_id, data),
+    }
+
+
+@router.post("/{template_id}/test")
+def send_test(
+    template_id: int,
+    data: SendTestEmailRequest,
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("update-email")),
+):
+    return {
+        "status": "success",
+        "message": "Test email sent",
+        "data": send_test_email(db, template_id, data.to_email),
     }
 
 

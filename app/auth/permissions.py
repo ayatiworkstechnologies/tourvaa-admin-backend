@@ -1,6 +1,6 @@
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+from jose import ExpiredSignatureError, JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -104,6 +104,8 @@ def _decode_token(token: str) -> dict:
 
     try:
         return jwt.decode(token, secret, algorithms=[settings.JWT_ALGORITHM])
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
     except JWTError:
         # If the portal-specific secret fails and portal was set, also reject immediately.
         # If no portal claim, try the main secret (backwards compat for old tokens).

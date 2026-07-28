@@ -75,12 +75,13 @@ def _live_usd_rates() -> tuple[dict[str, Decimal], str | None]:
     return rates, str(rate_date) if rate_date else None
 
 
-def get_usd_rates() -> dict[str, object]:
+def get_usd_rates(force: bool = False) -> dict[str, object]:
     now = datetime.now(timezone.utc)
-    with _cache_lock:
-        expires_at = _cache.get("expires_at")
-        if isinstance(expires_at, datetime) and expires_at > now:
-            return dict(_cache)
+    if not force:
+        with _cache_lock:
+            expires_at = _cache.get("expires_at")
+            if isinstance(expires_at, datetime) and expires_at > now:
+                return dict(_cache)
     try:
         live_rates, rate_date = _live_usd_rates()
         rates = {**FALLBACK_USD_RATES, **live_rates}

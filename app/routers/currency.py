@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.services.currency import BASE_CURRENCY, convert_amount, currency_for_country, rates_for
+from app.auth.permissions import require_permission
+from app.services.currency import BASE_CURRENCY, convert_amount, currency_for_country, get_usd_rates, rates_for
 
 router = APIRouter(prefix="/currency", tags=["Currency"])
 
@@ -12,6 +13,16 @@ router = APIRouter(prefix="/currency", tags=["Currency"])
 @router.get("/rates")
 def currency_rates(base: str = Query(default=BASE_CURRENCY)):
     return {"status": "success", "data": rates_for(base)}
+
+
+@router.get("/admin/rates")
+def admin_currency_rates(_=Depends(require_permission("view-settings"))):
+    return {"status": "success", "data": get_usd_rates()}
+
+
+@router.post("/admin/refresh")
+def admin_refresh_currency_rates(_=Depends(require_permission("update-settings"))):
+    return {"status": "success", "message": "Exchange rates refreshed", "data": get_usd_rates(force=True)}
 
 
 @router.get("/convert")

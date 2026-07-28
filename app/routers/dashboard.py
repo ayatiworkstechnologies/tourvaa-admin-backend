@@ -230,6 +230,7 @@ def _safe_query_count(query):
     try:
         return query.count()
     except Exception:
+        logger.exception("Dashboard stat query failed, returning 0")
         return 0
 
 
@@ -237,6 +238,7 @@ def _safe_query_sum(query, column):
     try:
         return float(query.with_entities(sqlfunc.coalesce(sqlfunc.sum(column), 0)).scalar() or 0)
     except Exception:
+        logger.exception("Dashboard stat sum query failed, returning 0")
         return 0.0
 
 

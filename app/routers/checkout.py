@@ -1,14 +1,25 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.services import checkout as service
 from app.schemas.checkout import CheckoutConfirm, CheckoutStart, CheckoutUpdate
-from app.auth.permissions import get_current_user
+from app.auth.permissions import get_current_user, require_any_permission
+from app.utils.pagination import pagination_params
 
 router = APIRouter(prefix="/checkout", tags=["Checkout"])
+
+
+@router.get("/admin/sessions")
+def admin_list_checkout_sessions(
+    params: dict = Depends(pagination_params),
+    status: str = Query(default=""),
+    db: Session = Depends(get_db),
+    _=Depends(require_any_permission("bookings.view", "view-bookings")),
+):
+    return {"status": "success", **service.list_sessions(db, page=params["page"], limit=params["limit"], status=status)}
 
 
 def _optional_user(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):

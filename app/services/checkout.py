@@ -47,6 +47,34 @@ def _serialize(s: CheckoutSession) -> dict:
     }
 
 
+def list_sessions(db: Session, page: int = 1, limit: int = 20, status: str = "") -> dict:
+    from math import ceil
+
+    query = db.query(CheckoutSession)
+    if status:
+        query = query.filter(CheckoutSession.status == status)
+    query = query.order_by(CheckoutSession.id.desc())
+    total = query.count()
+    rows = query.offset((page - 1) * limit).limit(limit).all()
+    items = [
+        {
+            "id": row.id,
+            "session_key": row.session_key,
+            "user_id": row.user_id,
+            "customer_id": row.customer_id,
+            "tour_id": row.tour_id,
+            "step": row.step,
+            "status": row.status,
+            "booking_id": row.booking_id,
+            "expires_at": row.expires_at,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+        for row in rows
+    ]
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+
+
 def start_session(db: Session, body: CheckoutStart, current_user: Optional[User]) -> dict:
     # If a session_key was provided (guest resumed after login), reuse that session
     if body.session_key:

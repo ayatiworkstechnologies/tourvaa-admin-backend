@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.auth.permissions import require_any_permission
+from app.utils.pagination import pagination_params
 from app.utils.ratelimit import check_rate_limit
 from app.schemas.chatbot import (
     ChatMessageRequest,
@@ -69,3 +70,22 @@ def admin_delete_faq(
 ):
     if not service.delete_faq(db, faq_id):
         raise HTTPException(status_code=404, detail="FAQ not found")
+
+
+# admin chat session viewing
+@router.get("/admin/sessions")
+def admin_list_sessions(
+    params: dict = Depends(pagination_params),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_any_permission("chatbot.view", "view-chatbot")),
+):
+    return {"status": "success", **service.list_chat_sessions(db, params["page"], params["limit"])}
+
+
+@router.get("/admin/sessions/{session_id}/messages")
+def admin_session_messages(
+    session_id: int,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_any_permission("chatbot.view", "view-chatbot")),
+):
+    return {"status": "success", "data": service.get_chat_session_messages(db, session_id)}

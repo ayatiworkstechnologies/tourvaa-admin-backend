@@ -1,4 +1,8 @@
+import csv
+import io
+
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -73,7 +77,22 @@ def list_bookings(
 
 @router.get("/export")
 def export_bookings_endpoint(db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.export", "bookings.view"))):
-    return {"status": "success", "data": export_bookings(db, current_user)}
+    rows = export_bookings(db, current_user)
+
+    buffer = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    else:
+        buffer.write("No bookings to export\n")
+    buffer.seek(0)
+
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="bookings-export.csv"'},
+    )
 
 @router.get("/upcoming")
 def upcoming_bookings(db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
@@ -177,6 +196,16 @@ def supplier_start(booking_id: int, request: Request, data: SupplierDecisionRequ
 @supplier_router.patch("/{booking_id}/cancel")
 def supplier_cancel(booking_id: int, data: BookingCancelRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
     return {"status": "success", "message": "Booking cancelled", "data": supplier_cancel_booking(db, booking_id, data.reason or "Cancelled by supplier", current_user, request)}
+
+
+@supplier_router.post("/{booking_id}/communications")
+def supplier_create_communication(booking_id: int, data: BookingCommunicationCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
+    return {"status": "success", "data": add_communication(db, booking_id, data, current_user, request)}
+
+
+@supplier_router.post("/communications/{communication_id}/replies")
+def supplier_reply_communication(communication_id: int, data: MessageReplyCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
+    return {"status": "success", "data": add_communication_reply(db, communication_id, data.message, current_user, request)}
 
 
 @supplier_router.patch("/{booking_id}/postpone")
