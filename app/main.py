@@ -47,6 +47,7 @@ from app.models.website_cms import (
     PromotionalPopup, ExternalLink, SitemapEntry,
 )
 from app.models.cancellations import CancellationRequest, RefundRule
+from app.models.reviews import TourReview
 from app.models.booking_calendar import BookingCalendarEvent
 from app.models.affiliate_tracking import AffiliateLink, AffiliateClick, AffiliateConversion, AffiliatePayout
 
@@ -135,6 +136,7 @@ def schema_is_ready():
         "cms_sitemap_entries",
         "cancellation_requests",
         "refund_rules",
+        "tour_reviews",
         "booking_calendar_events",
         "affiliate_links",
         "affiliate_clicks",

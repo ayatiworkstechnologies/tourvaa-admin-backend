@@ -59,8 +59,13 @@ def test_payments_are_internal_ledger_not_gateway_webhooks():
     payment_service = (backend_dir / "app" / "services" / "payments.py").read_text(encoding="utf-8")
 
     assert "/webhook" not in payment_router.lower()
-    assert "stripe." not in payment_service.lower()
-    assert "paypal" not in payment_service.lower()
+    # The ledger service is allowed to delegate real gateway refunds to
+    # app.services.payments_gateway (get_stripe/get_paypal) - it must not
+    # talk to the gateways' raw HTTP endpoints itself or handle their webhooks.
+    assert "api.stripe.com" not in payment_service.lower()
+    assert "api.paypal.com" not in payment_service.lower()
+    assert "/webhook" not in payment_service.lower()
+    assert "payments_gateway" in payment_service
 
 
 class _FakeUserQuery:
@@ -119,13 +124,17 @@ def test_verify_email_rejects_expired_registration_token():
 def test_auth_router_exposes_spec_registration_routes():
     backend_dir = Path(__file__).resolve().parents[1]
     auth_router = (backend_dir / "app" / "routers" / "auth.py").read_text(encoding="utf-8")
+    # The account_type -> role-slug mapping lives in register_unified_user()
+    # (app/services/auth.py) now, not the router - the router just wires the
+    # three endpoints and forwards to that shared service function.
+    auth_service = (backend_dir / "app" / "services" / "auth.py").read_text(encoding="utf-8")
 
     assert '@router.post("/register/customer")' in auth_router
     assert '@router.post("/register/supplier")' in auth_router
     assert '@router.post("/register/agent")' in auth_router
-    assert '"customer"' in auth_router
-    assert '"supplier"' in auth_router
-    assert '"agent-reseller"' in auth_router
+    assert '"customer"' in auth_service
+    assert '"supplier"' in auth_service
+    assert '"agent-reseller"' in auth_service
 
 
 def test_auth_router_exposes_spec_session_routes():

@@ -12,15 +12,17 @@ treated as valid here; only 5xx is a real failure.
 import pytest
 import requests
 
-from tests.conftest import BASE_URL, unique, skip_if_readonly, login_with_retry
+from tests.conftest import BASE_URL, unique, unique_phone, skip_if_readonly, login_with_retry, create_active_account
 
 
 def _register_agent():
+    """Real self-registration via HTTP - stays PENDING_EMAIL_VERIFICATION."""
     name = f"Portal Test Agent {unique('n')}"
     email = f"{unique('agt')}@example.com"
     password = "Agent@1234"
     resp = requests.post(f"{BASE_URL}/auth/register/agent", json={
-        "name": name, "email": email, "phone": "+919876522222", "password": password,
+        "account_type": "AGENT", "first_name": name, "email": email,
+        "country_code": "+91", "mobile_number": unique_phone()[3:], "accepted_terms": True,
     }, timeout=10)
     assert resp.status_code in (200, 201), resp.text
     return name, email, password
@@ -36,10 +38,17 @@ def _find_agent_id_by_name(admin_headers, name):
 
 @pytest.fixture(scope="module")
 def agent_ctx(headers):
-    name, email, password = _register_agent()
+    # Real self-registration requires clicking an emailed verification link
+    # before a password exists - can't be driven by a black-box HTTP test.
+    # Created already-active directly; unlike suppliers, agents have no
+    # separate admin-approval gate, so this is immediately usable.
+    name = f"Portal Test Agent {unique('n')}"
+    email = f"{unique('agt')}@example.com"
+    password = "Agent@1234"
+    create_active_account("agent-reseller", "AGENT", name, email, unique_phone(), password)
 
     agent_id = _find_agent_id_by_name(headers, name)
-    assert agent_id, f"Newly registered agent {name!r} not found via admin search"
+    assert agent_id, f"Newly created agent {name!r} not found via admin search"
 
     login = login_with_retry(email, password)
     assert login.status_code == 200, login.text
@@ -57,7 +66,15 @@ def agent_headers(agent_ctx):
 # ---------------------------------------------------------------------------
 
 def test_agent_can_login_without_email_or_admin_verification():
-    _, email, password = _register_agent()
+    # Unlike suppliers, agents have no separate admin-approval gate - once the
+    # account itself is active (see agent_ctx: real self-registration requires
+    # clicking an emailed link first, which this black-box test can't drive),
+    # login succeeds immediately with no additional restriction.
+    name = f"Portal Test Agent {unique('n')}"
+    email = f"{unique('agt')}@example.com"
+    password = "Agent@1234"
+    create_active_account("agent-reseller", "AGENT", name, email, unique_phone(), password)
+
     resp = requests.post(f"{BASE_URL}/auth/login", json={"email": email, "password": password}, timeout=10)
     if resp.status_code == 429:
         return

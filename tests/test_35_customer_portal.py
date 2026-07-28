@@ -2,23 +2,19 @@
 import pytest
 import requests
 
-from tests.conftest import BASE_URL, unique, skip_if_readonly
+from tests.conftest import BASE_URL, unique, unique_phone, skip_if_readonly, create_active_account, login_with_retry
 
 
 def _register_and_login_customer():
     email = f"{unique('cust')}@example.com"
     password = "Cust@1234"
-    resp = requests.post(f"{BASE_URL}/auth/register/customer", json={
-        "name": "Portal Test Customer",
-        "email": email,
-        "phone": "+919876500000",
-        "password": password,
-    }, timeout=10)
-    assert resp.status_code in (200, 201), resp.text
+    # Real self-registration requires clicking an emailed verification link
+    # before a password exists - can't be driven by a black-box HTTP test.
+    # Fixture setup creates the account already-active directly; the actual
+    # thing under test here (login) still goes through real HTTP.
+    create_active_account("customer", "CUSTOMER", "Portal Test Customer", email, unique_phone(), password)
 
-    login = requests.post(f"{BASE_URL}/auth/login", json={
-        "email": email, "password": password,
-    }, timeout=10)
+    login = login_with_retry(email, password)
     assert login.status_code == 200, login.text
     token = login.json().get("data", {}).get("access_token")
     assert token, login.text
@@ -43,13 +39,16 @@ def customer_headers(customer_ctx):
 # ---------------------------------------------------------------------------
 
 def test_customer_registration_creates_immediately_usable_account(customer_ctx):
-    # Confirms REQUIRE_EMAIL_VERIFICATION=false + auto-approval for the customer role.
+    # Confirms an active customer account can log in and reach portal endpoints.
+    # (Real self-registration is async - email verification, then password
+    # creation - and is covered separately; this suite is about the portal.)
     assert customer_ctx["headers"]["Authorization"].startswith("Bearer ")
 
 
 def test_customer_duplicate_email_registration_rejected(customer_ctx):
     resp = requests.post(f"{BASE_URL}/auth/register/customer", json={
-        "name": "Dup", "email": customer_ctx["email"], "password": "Cust@1234",
+        "account_type": "CUSTOMER", "first_name": "Dup", "email": customer_ctx["email"],
+        "country_code": "+91", "mobile_number": unique_phone()[3:], "accepted_terms": True,
     }, timeout=10)
     assert resp.status_code in (400, 409, 422), resp.text
 

@@ -33,6 +33,7 @@ class Booking(Base):
     no_of_adults = Column(Integer, default=1, nullable=False)
     no_of_children = Column(Integer, default=0, nullable=False)
     no_of_infants = Column(Integer, default=0, nullable=False)
+    no_of_rooms = Column(Integer, nullable=True)
     adults_count = Column(Integer, default=1, nullable=False)
     children_count = Column(Integer, default=0, nullable=False)
     total_travellers = Column(Integer, default=1, nullable=False)

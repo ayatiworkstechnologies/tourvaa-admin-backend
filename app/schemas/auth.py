@@ -137,6 +137,37 @@ class LoginSchema(BaseModel):
         return (self.identifier or self.email or "").strip().lower()
 
 
+class OtpRequestSchema(BaseModel):
+    email: EmailStr
+    redirect: Optional[str] = None
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr):
+        return str(value).strip().lower()
+
+
+class OtpVerifySchema(BaseModel):
+    email: EmailStr
+    code: str
+    client_type: Optional[str] = "web"
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr):
+        return str(value).strip().lower()
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str):
+        value = value.strip()
+        if not value.isdigit() or len(value) != 6:
+            raise ValueError("Enter the 6-digit verification code")
+        return value
+
+
 class ForgotPasswordSchema(BaseModel):
     email: EmailStr
     client_type: Optional[str] = "web"

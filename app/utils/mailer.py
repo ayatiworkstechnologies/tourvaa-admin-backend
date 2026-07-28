@@ -91,7 +91,7 @@ def _update_email_log(log_id: int | None, status: str, error_message: str = "") 
         logger.debug("Could not update email log %s: %s", log_id, error)
 
 
-def _build_message(to_email: str, subject: str, html: str) -> tuple[EmailMessage, str]:
+def _build_message(to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None) -> tuple[EmailMessage, str]:
     smtp_user = _smtp_user()
     from_email = _from_email()
 
@@ -114,15 +114,20 @@ def _build_message(to_email: str, subject: str, html: str) -> tuple[EmailMessage
 
     message.set_content(_plain_text_from_html(html))
     message.add_alternative(html, subtype="html")
+
+    for filename, data, subtype in attachments or []:
+        maintype = "application"
+        message.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+
     return message, message_id
 
 
-def send_email(to_email: str, subject: str, html: str) -> EmailSendResult:
+def send_email(to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None) -> EmailSendResult:
     log_id = _create_email_log(to_email, subject, "sending")
     message_id = ""
 
     try:
-        message, message_id = _build_message(to_email, subject, html)
+        message, message_id = _build_message(to_email, subject, html, attachments)
         smtp_user = _smtp_user() or ""
 
         if settings.SMTP_USE_SSL:
@@ -156,9 +161,9 @@ def send_email(to_email: str, subject: str, html: str) -> EmailSendResult:
         raise
 
 
-def try_send_email(to_email: str, subject: str, html: str) -> bool:
+def try_send_email(to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None) -> bool:
     try:
-        send_email(to_email, subject, html)
+        send_email(to_email, subject, html, attachments)
         return True
     except Exception:
         return False

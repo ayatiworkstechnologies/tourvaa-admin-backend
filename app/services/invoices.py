@@ -207,7 +207,15 @@ def email_invoice_to_customer(db: Session, invoice_id: int, email: str | None, a
 <p>Amount Due: <b>{inv.currency} {money_str(inv.amount_due)}</b></p>
 <p>Thank you for booking with Tourvaa.</p>
 """
-    try_send_email(recipient, subject, body)
+    attachments = []
+    if inv.pdf_path:
+        import os
+        from app.config import get_storage_root
+        fs_path = str(get_storage_root()) + inv.pdf_path.replace("/storage", "")
+        if os.path.exists(fs_path):
+            with open(fs_path, "rb") as pdf_file:
+                attachments.append((f"{inv.invoice_number}.pdf", pdf_file.read(), "pdf"))
+    try_send_email(recipient, subject, body, attachments)
     inv.status = "emailed"
     inv.emailed_at = utcnow()
     db.add(EmailLog(recipient_email=recipient, subject=subject, template_key="invoice_emailed", entity_type="invoice", entity_id=inv.id, status="sent", sent_at=utcnow()))

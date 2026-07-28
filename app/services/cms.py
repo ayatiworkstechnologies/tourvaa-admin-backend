@@ -42,6 +42,8 @@ def _tour(item: Tour):
         "currency": item.currency,
         "country_id": item.country_id,
         "country_name": item.country.country_name if item.country else "",
+        "state_id": item.state_id,
+        "state_name": item.state.state_name if item.state else "",
         "city_id": item.city_id,
         "city_name": item.city.city_name if item.city else "",
         "category_id": item.category_id,
@@ -52,14 +54,37 @@ def _tour(item: Tour):
         "finish_location": item.finish_location,
         "number_of_days": item.number_of_days,
         "number_of_hours": item.number_of_hours,
+        "number_of_nights": item.number_of_nights,
+        "max_group_size": item.max_group_size,
+        "min_booking_size": item.min_booking_size,
+        "tour_language": item.tour_language,
+        "suitable_age_range": item.suitable_age_range,
+        "tour_visibility": item.tour_visibility,
+        "featured": item.featured,
         "short_description": item.short_description,
         "long_description": item.long_description,
+        "pricing_type": item.pricing_type,
+        "offer_price": item.offer_price,
+        "infant_price": item.infant_price,
+        "single_supplement": item.single_supplement,
+        "tax_percentage": item.tax_percentage,
+        "service_fee": item.service_fee,
+        "booking_deposit": item.booking_deposit,
+        "balance_payment_deadline_days": item.balance_payment_deadline_days,
+        "requires_supplier_confirmation": item.requires_supplier_confirmation,
         "seo_title": item.seo_title,
         "seo_description": item.seo_description,
         "seo_keywords": item.seo_keywords,
+        "focus_keyword": item.focus_keyword,
+        "canonical_url": item.canonical_url,
+        "open_graph_image": item.open_graph_image,
+        "search_visibility": item.search_visibility,
         "image_alt_text": item.image_alt_text,
         "banner_image": item.banner_image,
         "map_image": item.map_image,
+        "mobile_cover_image": item.mobile_cover_image,
+        "tour_video_url": item.tour_video_url,
+        "brochure_pdf": item.brochure_pdf,
         "status": item.status,
         "created_by": item.created_by,
         "updated_by": item.updated_by,
@@ -239,6 +264,8 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
         get_or_404(db, Supplier, payload["supplier_id"], "Supplier")
     if payload.get("country_id"):
         get_or_404(db, Country, payload["country_id"], "Country")
+    if payload.get("state_id"):
+        get_or_404(db, State, payload["state_id"], "State")
     if payload.get("city_id"):
         get_or_404(db, City, payload["city_id"], "City")
     if payload.get("category_id"):

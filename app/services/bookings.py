@@ -157,6 +157,24 @@ def _booking_seat_count(booking: Booking) -> int:
     return max(0, int(adults or 0) + int(children or 0))
 
 
+def _similar_tours_for_email(db: Session, tour_id: int | None, limit: int = 3) -> list[dict]:
+    """{title, url} pairs for a declined booking's email - same TourSimilar
+    linkage public.py's tour detail page already uses."""
+    if not tour_id:
+        return []
+    from app.models.tours import TourSimilar
+    from app.schemas.cms import slugify
+
+    links = db.query(TourSimilar).filter(TourSimilar.tour_id == tour_id).limit(limit).all()
+    results = []
+    for link in links:
+        st = db.query(Tour).filter(Tour.id == link.similar_tour_id, Tour.status == "published").first()
+        if st:
+            country_slug = slugify(st.country.country_name if st.country else "worldwide")
+            results.append({"title": st.title, "url": f"{settings.FRONTEND_URL}/tours/{country_slug}/{st.slug}"})
+    return results
+
+
 def _settle_cancelled_booking_payments(
     db: Session,
     booking: Booking,
@@ -244,6 +262,7 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
         "no_of_adults": booking.no_of_adults,
         "no_of_children": booking.no_of_children,
         "no_of_infants": booking.no_of_infants,
+        "no_of_rooms": booking.no_of_rooms,
         "adults_count": booking.adults_count,
         "children_count": booking.children_count,
         "total_travellers": booking.total_travellers,
@@ -655,7 +674,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     booking = Booking(
         customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
-        no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
+        no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, no_of_rooms=data.no_of_rooms, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
         total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
         booking_status=booking_status, supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status=payment_status, payment_type=data.payment_type, agent_payment_method=data.agent_payment_method if data.booking_source == "agent" else None, agent_reference=data.agent_reference if data.booking_source == "agent" else None, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
     )
@@ -827,7 +846,11 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
     supplier = db.query(Supplier).filter(Supplier.id == data.supplier_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
-    if booking.booking_status in {"completed", "cancelled", "declined", "refunded"}:
+    # "declined" is intentionally NOT in this blocking set: a declined booking
+    # is reassignable to another supplier by design - BOOKING_STATUS_TRANSITIONS
+    # explicitly allows declined -> pending_supplier_assignment. Only genuinely
+    # terminal states block reassignment.
+    if booking.booking_status in {"completed", "cancelled", "refunded"}:
         raise HTTPException(status_code=409, detail="A supplier cannot be assigned to a closed booking")
     old_values = serialize_booking(booking)
     booking.supplier_id = data.supplier_id
@@ -972,13 +995,14 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
     if booking.customer and booking.customer.email:
         from app.utils.email_templates import booking_declined_email
         login_url = f"{settings.FRONTEND_URL}/tours"
+        similar_tours = _similar_tours_for_email(db, booking.tour_id)
         _send_booking_email(
             db, "booking_declined",
             {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
              "reason": data.reason or "Declined by supplier", "login_url": login_url,
              "button_text": "Browse tours", "button_url": login_url},
             f"Booking declined - {booking.booking_code}",
-            booking_declined_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.reason or "Declined by supplier", login_url),
+            booking_declined_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.reason or "Declined by supplier", login_url, similar_tours),
             booking.customer.email,
         )
 

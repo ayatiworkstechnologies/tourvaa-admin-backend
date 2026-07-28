@@ -77,7 +77,8 @@ def _derive_booking_status(net_paid, final_amount) -> str:
 
 
 def _status_after_payment_sync(booking: Booking, payment_status: str) -> str | None:
-    """Return a booking status change without bypassing supplier acceptance."""
+    """Return a booking status change without bypassing supplier acceptance
+    (unless the tour opted out via requires_supplier_confirmation=False)."""
     if payment_status != "paid" or booking.booking_status not in {
         "pending_payment",
         "draft",
@@ -85,7 +86,9 @@ def _status_after_payment_sync(booking: Booking, payment_status: str) -> str | N
         "pending_supplier_acceptance",
     }:
         return None
-    if booking.supplier_id and booking.supplier_acceptance_status != "accepted":
+    tour = getattr(booking, "tour", None)
+    needs_supplier_confirmation = not tour or tour.requires_supplier_confirmation
+    if booking.supplier_id and booking.supplier_acceptance_status != "accepted" and needs_supplier_confirmation:
         return "pending_supplier_acceptance"
     return "confirmed"
 

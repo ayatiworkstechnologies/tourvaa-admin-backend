@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.cms import City, Country, Tour, TourCategory, TourSubcategory
+from app.models.cancellations import RefundRule
 from app.services.cms import _category, _city, _country, _subcategory, _tour
+from app.services.reviews import get_review_stats, list_tour_reviews
 from app.schemas.cms import slugify
 from app.models.tours import (
     TourAccommodationExtra,
@@ -69,6 +71,24 @@ def submit_contact_message(data: ContactMessageRequest, db: Session = Depends(ge
     return {"status": "success", "message": "Your enquiry has been sent."}
 
 
+class NewsletterSubscribeRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/newsletter/subscribe")
+def subscribe_newsletter(data: NewsletterSubscribeRequest, db: Session = Depends(get_db)):
+    from app.models.settings import AppSetting
+    from app.utils.mailer import try_send_email
+
+    setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
+    support_email = (setting.value if setting and setting.value else "") or "support@tourvaa.com"
+
+    esc = html_escape.escape
+    body = f"<p><strong>New newsletter signup from the Tourvaa website</strong></p><p><strong>Email:</strong> {esc(data.email)}</p>"
+    try_send_email(support_email, "New newsletter signup", body)
+    return {"status": "success", "message": "You're subscribed! Watch your inbox for travel inspiration."}
+
+
 def _ser_overview(o: TourOverview):
     return {
         "duration_text": o.duration_text,
@@ -77,12 +97,20 @@ def _ser_overview(o: TourOverview):
         "group_size": o.group_size,
         "tour_type": o.tour_type,
         "physical_rating": o.physical_rating,
+        "why_choose_this_tour": o.why_choose_this_tour,
+        "ideal_for": o.ideal_for,
+        "best_season": o.best_season,
+        "tour_pace": o.tour_pace,
+        "transportation_summary": o.transportation_summary,
+        "accommodation_summary": o.accommodation_summary,
+        "meal_summary": o.meal_summary,
     }
 
 
-def _public_tour(item: Tour, departures: list[TourCalendar] | None = None):
+def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, review_stats: dict[int, dict] | None = None):
     country_name = item.country.country_name if item.country else ""
     country_slug = slugify(country_name or "worldwide")
+    stats = (review_stats or {}).get(item.id)
     return {
         "id": item.id,
         "tour_code": item.tour_code,
@@ -110,6 +138,8 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None):
             }
             for departure in (departures or [])
         ],
+        "rating_average": stats["average"] if stats else None,
+        "rating_count": stats["count"] if stats else 0,
     }
 
 
@@ -217,13 +247,14 @@ def public_tours(
         for departure in upcoming:
             if len(departure_map[departure.tour_id]) < 3:
                 departure_map[departure.tour_id].append(departure)
+    review_stats = get_review_stats(db, tour_ids)
     return {
         "status": "success",
         "total": total,
         "page": page,
         "limit": limit,
         "total_pages": max(1, (total + limit - 1) // limit),
-        "items": [_public_tour(t, departure_map.get(t.id)) for t in tours],
+        "items": [_public_tour(t, departure_map.get(t.id), review_stats) for t in tours],
         "filters_applied": {
             "search": search,
             "country": country,
@@ -243,7 +274,8 @@ def public_tours(
 @router.get("/tours/featured")
 def featured_tours(db: Session = Depends(get_db), limit: int = Query(default=6, le=20)):
     tours = db.query(Tour).filter(Tour.status == "published").order_by(Tour.id.desc()).limit(limit).all()
-    return {"status": "success", "items": [_public_tour(t) for t in tours]}
+    review_stats = get_review_stats(db, [t.id for t in tours])
+    return {"status": "success", "items": [_public_tour(t, review_stats=review_stats) for t in tours]}
 
 
 @router.get("/tours/{country_slug}/{tour_slug}")
@@ -286,6 +318,20 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     discounts = db.query(TourDiscount).filter(TourDiscount.tour_id == tour_id, TourDiscount.status == "active").all()
     calendar = db.query(TourCalendar).filter(TourCalendar.tour_id == tour_id).order_by(TourCalendar.tour_date.asc()).all()
     similar_links = db.query(TourSimilar).filter(TourSimilar.tour_id == tour_id).all()
+    tour_refund_rules = (
+        db.query(RefundRule)
+        .filter(RefundRule.tour_id == tour_id)
+        .order_by(RefundRule.days_before_tour_min.desc())
+        .all()
+    )
+    refund_rules = tour_refund_rules or (
+        db.query(RefundRule)
+        .filter(RefundRule.tour_id.is_(None))
+        .order_by(RefundRule.days_before_tour_min.desc())
+        .all()
+    )
+    review_stats = get_review_stats(db, [tour_id])
+    reviews = list_tour_reviews(db, tour_id)
 
     similar_tours = []
     for link in similar_links:
@@ -296,7 +342,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     return {
         "status": "success",
         "data": {
-            **_public_tour(tour),
+            **_public_tour(tour, review_stats=review_stats),
             "long_description": tour.long_description,
             "start_location": tour.start_location,
             "finish_location": tour.finish_location,
@@ -304,19 +350,47 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "image_alt_text": tour.image_alt_text,
             "seo_title": tour.seo_title,
             "seo_description": tour.seo_description,
+            "booking_deposit": tour.booking_deposit or None,
+            "balance_payment_deadline_days": tour.balance_payment_deadline_days,
             "overview": _ser_overview(overview) if overview else None,
-            "itineraries": [{"day": i.day_number, "title": i.day_title, "description": i.long_description or i.short_description or "", "accommodation": "", "meals": ""} for i in itineraries],
+            "itineraries": [
+                {
+                    "day": i.day_number,
+                    "title": i.day_title,
+                    "description": i.long_description or i.short_description or "",
+                    "location": i.location_name or "",
+                    "accommodation": i.accommodation or "",
+                    "meals": i.meals_included or "",
+                    "transport": i.transport_type or "",
+                    "start_time": i.start_time or "",
+                    "end_time": i.end_time or "",
+                    "travel_distance": i.travel_distance or "",
+                    "travel_duration": i.travel_duration or "",
+                    "important_notes": i.important_notes or "",
+                }
+                for i in itineraries
+            ],
             "highlights": [{"text": h.title} for h in highlights],
             "inclusions": [{"text": i.title} for i in inclusions],
             "exclusions": [{"text": e.title} for e in exclusions],
             "gallery": [{"image_url": g.image_path, "alt_text": g.image_alt_text, "is_banner": g.image_type == "banner"} for g in gallery],
             "pricing": [{"persons_from": p.passenger_from, "persons_to": p.passenger_to, "price_per_person": float(p.final_price), "currency": p.currency} for p in pricing],
-            "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD"} for a in activities],
-            "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None} for a in accommodations],
-            "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None} for e in extensions],
+            "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other"} for a in activities],
+            "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade"} for a in accommodations],
+            "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other"} for e in extensions],
             "discounts": [{"label": d.discount_name, "discount_type": d.discount_type, "value": float(d.discount_value), "valid_from": str(d.start_date) if d.start_date else None, "valid_to": str(d.end_date) if d.end_date else None} for d in discounts],
             "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": max(0, c.available_seats - c.booked_seats), "status": c.status} for c in calendar],
             "similar_tours": similar_tours,
+            "cancellation_policy": [
+                {
+                    "days_before_min": r.days_before_tour_min,
+                    "days_before_max": r.days_before_tour_max,
+                    "refund_percentage": float(r.refund_percentage),
+                    "description": r.description or "",
+                }
+                for r in refund_rules
+            ],
+            "reviews": reviews,
         },
     }
 

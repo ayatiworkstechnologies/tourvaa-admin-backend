@@ -12,6 +12,7 @@ from app.utils.email_templates import (
     password_changed_email,
     password_reset_email,
     email_verification_email,
+    otp_login_email,
     registration_password_created_email,
 )
 from app.utils.mailer import send_email, try_send_email
@@ -27,9 +28,11 @@ from app.models.sessions import LoginHistory
 from app.services.sessions import create_session
 from app.utils.media import existing_storage_path
 from app.auth.security import (
+    create_otp_code,
     create_password_reset_token,
     create_token,
     get_portal_for_role,
+    hash_otp_code,
     hash_password,
     hash_reset_token,
     verify_password,
@@ -365,8 +368,8 @@ def complete_registration(db: Session, token: str, password: str):
             user_id=user.id,
         )
     db.commit()
-    login_url = build_portal_login_url(user)
     try:
+        login_url = build_portal_login_url(user)
         subject, html = render_database_email(
             db,
             "registration_password_created",
@@ -605,6 +608,14 @@ def login_user(db: Session, data, request=None):
     if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Email verification is required before login")
 
+    return _finalize_login(db, user, data, request=request)
+
+
+def _finalize_login(db: Session, user: User, data, request=None):
+    """Shared tail of login_user()/verify_otp_and_login(): issue tokens, start a
+    session, and record history/audit. `data` only needs .client_type/.device_id/
+    .device_name (LoginSchema and OtpVerifySchema both satisfy this)."""
+    email = user.email
     auth_user = get_auth_user_payload(db, user)
     role_slug = auth_user["role"]["slug"]
     portal = get_portal_for_role(role_slug)
@@ -687,6 +698,104 @@ def login_user(db: Session, data, request=None):
         "session_id": session.session_id if session else None,
         "user": auth_user,
     }
+
+
+def request_otp(db: Session, data):
+    """Send a login OTP to the given email, creating a not-yet-active customer
+    account if none exists (mirrors register_unified_user's create-now,
+    activate-on-verification shape). Email-only for now - no SMS provider is
+    wired into this backend."""
+    email = data.email
+
+    user = db.query(User).filter(User.email == email).first()
+    if user and user.user_type != "CUSTOMER":
+        raise HTTPException(status_code=400, detail="This email is registered under a different account type. Please use the standard login.")
+
+    code, code_hash = create_otp_code()
+    now = datetime.utcnow()
+
+    if not user:
+        role = db.query(Role).filter(Role.slug == "customer", Role.is_active == True).first()
+        if not role:
+            raise HTTPException(status_code=400, detail="Customer accounts are not available right now.")
+        name = email.split("@", 1)[0]
+        user = User(
+            name=name,
+            email=email,
+            password=None,
+            role_id=role.id,
+            user_type="CUSTOMER",
+            is_active=False,
+            approval_status="NOT_REQUIRED",
+            account_status="PENDING_OTP_VERIFICATION",
+        )
+        db.add(user)
+        db.flush()
+        db.add(UserRole(user_id=user.id, role_id=role.id))
+        db.add(Customer(user_id=user.id, first_name=name, last_name="", full_name=name, email=email, status="inactive", email_verified=False))
+        db.add(UserStatusHistory(user_id=user.id, to_status=user.account_status, reason="OTP login started"))
+
+    user.otp_code_hash = code_hash
+    user.otp_expires_at = now + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
+    user.otp_attempts = 0
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    subject, html = render_database_email(
+        db,
+        "otp_login",
+        {"name": user.name, "email": user.email, "code": code},
+        "Your Tourvaa verification code",
+        otp_login_email(user.name, code),
+    )
+    try_send_email(user.email, subject, html)
+    return {"email": email, "expires_in_minutes": settings.OTP_EXPIRE_MINUTES}
+
+
+def verify_otp_and_login(db: Session, data, request=None):
+    email = data.email
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not user.otp_code_hash or not user.otp_expires_at:
+        raise HTTPException(status_code=400, detail="Request a new verification code.")
+
+    if user.otp_expires_at < datetime.utcnow():
+        user.otp_code_hash = None
+        user.otp_expires_at = None
+        user.otp_attempts = 0
+        db.commit()
+        raise HTTPException(status_code=400, detail="This code has expired. Request a new one.")
+
+    if hash_otp_code(data.code) != user.otp_code_hash:
+        user.otp_attempts = (user.otp_attempts or 0) + 1
+        if user.otp_attempts >= settings.OTP_MAX_ATTEMPTS:
+            user.otp_code_hash = None
+            user.otp_expires_at = None
+            user.otp_attempts = 0
+            db.commit()
+            raise HTTPException(status_code=400, detail="Too many incorrect attempts. Request a new code.")
+        db.commit()
+        remaining = settings.OTP_MAX_ATTEMPTS - user.otp_attempts
+        raise HTTPException(status_code=400, detail=f"Incorrect code. {remaining} attempt{'s' if remaining != 1 else ''} left.")
+
+    user.otp_code_hash = None
+    user.otp_expires_at = None
+    user.otp_attempts = 0
+
+    if user.account_status == "PENDING_OTP_VERIFICATION":
+        user.account_status = "ACTIVE"
+        user.is_active = True
+        user.email_verified = True
+        user.email_verified_at = datetime.utcnow()
+        db.add(UserStatusHistory(user_id=user.id, from_status="PENDING_OTP_VERIFICATION", to_status="ACTIVE", reason="OTP verified"))
+        customer = db.query(Customer).filter(Customer.user_id == user.id).first()
+        if customer:
+            customer.status = "active"
+            customer.email_verified = True
+    db.commit()
+    db.refresh(user)
+
+    return _finalize_login(db, user, data, request=request)
 
 
 def refresh_user_token(db: Session, user: User, client_type: str | None = "web", device_id: str | None = None):

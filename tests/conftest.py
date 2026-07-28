@@ -24,6 +24,12 @@ def unique(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+def unique_phone(country_code: str = "+91") -> str:
+    """A syntactically valid, collision-free phone number for test fixtures."""
+    digits = str(uuid.uuid4().int)[:9]
+    return f"{country_code}{digits}"
+
+
 def get_admin_token() -> str:
     resp = login_with_retry(ADMIN_EMAIL, ADMIN_PASSWORD, attempts=12, backoff=6.0)
     assert resp.status_code == 200, f"Login failed: {resp.text}"
@@ -55,6 +61,58 @@ def login_with_retry(email: str, password: str, attempts: int = 6, backoff: floa
         last = resp
         time.sleep(backoff)
     return last
+
+
+def create_active_account(role_slug: str, user_type: str, name: str, email: str, phone: str, password: str):
+    """Create an already-ACTIVE user (+ profile row) directly in the DB.
+
+    Real self-registration (`register_unified_user`) requires clicking a
+    one-way-hashed email verification link before a password can even be set -
+    the raw token only ever exists in the outgoing email, so a black-box HTTP
+    test can't drive that flow end-to-end. This bypasses registration entirely
+    for FIXTURE SETUP only; the actual behavior under test (login, portal
+    endpoints, approval endpoints, etc.) still goes through real HTTP against
+    BASE_URL exactly as before.
+    """
+    import app.main  # noqa: F401 - ensures every model is registered before mapper configuration
+    from datetime import datetime
+    from app.database import SessionLocal
+    from app.models.users import User, UserRole
+    from app.models.roles import Role
+    from app.models.customers import Customer
+    from app.models.suppliers import Supplier
+    from app.models.agents import Agent
+    from app.auth.security import hash_password
+
+    db = SessionLocal()
+    try:
+        role = db.query(Role).filter(Role.slug == role_slug, Role.is_active == True).first()
+        assert role, f"Role {role_slug!r} is not seeded"
+        user = User(
+            name=name, email=email, phone=phone, country_code="+91", mobile_number=phone,
+            # hash_password() (not hash_password_plain()) matches every other
+            # test in this suite, which POSTs the raw password directly to
+            # /auth/login - same convention as the seeded super-admin account.
+            password=hash_password(password), role_id=role.id, user_type=user_type,
+            is_active=True, approval_status="NOT_REQUIRED",
+            email_verified=True, email_verified_at=datetime.utcnow(), account_status="ACTIVE",
+        )
+        db.add(user)
+        db.flush()
+        db.add(UserRole(user_id=user.id, role_id=role.id))
+        if role_slug == "customer":
+            db.add(Customer(user_id=user.id, first_name=name, last_name="", full_name=name, email=email, phone=phone, status="active", email_verified=True))
+        elif role_slug == "supplier":
+            # Left un-approved on purpose - test_36 exercises the real
+            # POST /suppliers/{id}/approve endpoint against this fixture.
+            db.add(Supplier(user_id=user.id, supplier_name=name, status="inactive", approval_status="PENDING"))
+        elif role_slug == "agent-reseller":
+            db.add(Agent(user_id=user.id, agent_name=name, status="active", approval_status="NOT_REQUIRED"))
+        db.commit()
+        db.refresh(user)
+        return user
+    finally:
+        db.close()
 
 
 @pytest.fixture(scope="session")
