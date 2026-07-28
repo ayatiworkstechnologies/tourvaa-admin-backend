@@ -1,6 +1,7 @@
 ﻿from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -24,6 +25,7 @@ from app.schemas.cancellations import CancellationRequestCreate
 from app.services import cancellations as cancellations_service
 from app.services.customers import serialize_customer, serialize_communication
 from app.services.invoices import list_invoices
+from app.services.itinerary import download_itinerary_pdf
 from app.schemas.payments import PaymentCreate
 from app.services.payments import create_payment, get_customer_payments
 from app.models.users import User
@@ -208,6 +210,12 @@ def create_customer_booking(payload: dict, request: Request, db: Session = Depen
 def customer_booking_detail(booking_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _current_customer(db, current_user)
     return {"status": "success", "data": get_booking_detail(db, booking_id, actor=current_user, request=request)}
+
+
+@router.get("/bookings/{booking_id}/itinerary")
+def customer_booking_itinerary(booking_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    fs_path, filename = download_itinerary_pdf(db, booking_id, current_user)
+    return FileResponse(path=fs_path, filename=filename, media_type="application/pdf")
 
 
 @router.post("/bookings/{booking_id}/cancel")

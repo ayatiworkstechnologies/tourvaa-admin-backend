@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import app.main  # noqa: F401 - ensures every model is registered before mapper configuration
 from app.models.agents import Agent
 from app.models.customers import Customer
 from app.models.suppliers import Supplier

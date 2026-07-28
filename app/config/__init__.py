@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     ADMIN_JWT_SECRET_KEY: str = ""
     REQUIRE_EMAIL_VERIFICATION: bool = False
     EMAIL_VERIFICATION_EXPIRE_MINUTES: int = 1440
+    OTP_EXPIRE_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 5
 
     FRONTEND_URL: str = ""
     API_BASE_URL: str = "http://127.0.0.1:8000"

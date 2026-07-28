@@ -11,6 +11,7 @@ CALENDAR_STATUSES = {"available", "unavailable", "sold_out", "blocked"}
 DISCOUNT_TYPES = {"percentage", "fixed"}
 DISCOUNT_SCOPES = {"tour", "all_tours", "category", "country"}
 PRICE_TYPES = {"per_person", "per_booking"}
+ADDON_CATEGORIES = {"pickup", "room_upgrade", "dining", "insurance", "extra_activity", "additional_night", "meal", "visa_assistance", "other"}
 
 
 # overview
@@ -22,6 +23,13 @@ class TourOverviewPayload(BaseModel):
     tour_type: str = Field(default="", max_length=100)
     physical_rating: str = Field(default="easy", max_length=20)
     overview_icon_data: list[dict[str, Any]] | None = None
+    why_choose_this_tour: str = Field(default="")
+    ideal_for: str = Field(default="")
+    best_season: str = Field(default="", max_length=150)
+    tour_pace: str = Field(default="", max_length=50)
+    transportation_summary: str = Field(default="")
+    accommodation_summary: str = Field(default="")
+    meal_summary: str = Field(default="")
 
     @field_validator("physical_rating")
     @classmethod
@@ -39,6 +47,14 @@ class ItineraryPayload(BaseModel):
     short_description: str = Field(default="")
     long_description: str = Field(default="")
     activities: str = Field(default="")
+    accommodation: str = Field(default="", max_length=255)
+    start_time: str = Field(default="", max_length=20)
+    end_time: str = Field(default="", max_length=20)
+    travel_distance: str = Field(default="", max_length=100)
+    travel_duration: str = Field(default="", max_length=100)
+    transport_type: str = Field(default="", max_length=100)
+    meals_included: str = Field(default="", max_length=150)
+    important_notes: str = Field(default="")
     image: str = Field(default="", max_length=255)
     image_alt_text: str = Field(default="", max_length=180)
     display_order: int = Field(default=0, ge=0)
@@ -103,8 +119,16 @@ class ExtensionPayload(BaseModel):
     extension_title: str = Field(default="", max_length=255)
     extension_note: str = Field(default="")
     extra_price: float = Field(default=0.0, ge=0)
+    category: str = Field(default="other", max_length=30)
     display_order: int = Field(default=0, ge=0)
     status: str = Field(default="active", max_length=20)
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str):
+        if v not in ADDON_CATEGORIES:
+            raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
+        return v
 
     @field_validator("status")
     @classmethod
@@ -173,7 +197,15 @@ class OptionalActivityPayload(BaseModel):
     description: str = Field(default="")
     price_per_person: float = Field(default=0.0, ge=0)
     image: str = Field(default="", max_length=255)
+    category: str = Field(default="other", max_length=30)
     status: str = Field(default="active", max_length=20)
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str):
+        if v not in ADDON_CATEGORIES:
+            raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
+        return v
 
     @field_validator("status")
     @classmethod
@@ -189,6 +221,7 @@ class AccommodationExtraPayload(BaseModel):
     description: str = Field(default="")
     extra_price: float = Field(default=0.0, ge=0)
     price_type: str = Field(default="per_person", max_length=20)
+    category: str = Field(default="room_upgrade", max_length=30)
     is_default: bool = False
     status: str = Field(default="active", max_length=20)
 
@@ -197,6 +230,13 @@ class AccommodationExtraPayload(BaseModel):
     def validate_price_type(cls, v: str):
         if v not in PRICE_TYPES:
             raise ValueError(f"price_type must be one of {PRICE_TYPES}")
+        return v
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str):
+        if v not in ADDON_CATEGORIES:
+            raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
         return v
 
     @field_validator("status")

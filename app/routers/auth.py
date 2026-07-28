@@ -13,6 +13,8 @@ from app.schemas.auth import (
     ChangeRegistrationEmailSchema,
     ForgotPasswordSchema,
     LoginSchema,
+    OtpRequestSchema,
+    OtpVerifySchema,
     RefreshTokenSchema,
     ResendVerificationSchema,
     ResetPasswordSchema,
@@ -29,11 +31,13 @@ from app.services.auth import (
     complete_registration,
     refresh_user_token,
     register_unified_user,
+    request_otp,
     resend_registration_verification,
     reset_password,
     validate_reset_token,
     validate_registration_token,
     verify_email,
+    verify_otp_and_login,
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -129,6 +133,19 @@ def login(request: Request, response: Response, data: LoginSchema, db: Session =
         "message": "Account status returned" if result.get("account_restricted") else "Login successful",
         "data": result
     }
+
+
+@router.post("/otp/request")
+def otp_request(request: Request, data: OtpRequestSchema, db: Session = Depends(get_db)):
+    check_rate_limit(request, "otp-request", max_calls=5, window_seconds=300)
+    return {"status": "success", "message": "Verification code sent.", "data": request_otp(db, data)}
+
+
+@router.post("/otp/verify")
+def otp_verify(request: Request, response: Response, data: OtpVerifySchema, db: Session = Depends(get_db)):
+    check_rate_limit(request, "otp-verify", max_calls=10, window_seconds=300)
+    result = _set_auth_cookies(response, verify_otp_and_login(db, data, request=request), expose_access_token=data.client_type != "web-cookie")
+    return {"status": "success", "message": "Login successful", "data": result}
 
 
 @router.get("/account-status")

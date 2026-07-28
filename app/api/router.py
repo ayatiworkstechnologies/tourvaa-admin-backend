@@ -34,6 +34,7 @@ from app.routers.private_documents import router as private_documents_router
 from app.routers.profile import router as profile_router
 from app.routers.public import router as public_router
 from app.routers.reports import router as reports_router
+from app.routers.reviews import router as reviews_router
 from app.routers.roles import router as roles_router
 from app.routers.sessions import router as sessions_router
 from app.routers.settings import router as settings_router
@@ -105,6 +106,7 @@ OPERATIONS_ROUTERS = (
     booking_calendar_router,
     affiliate_tracking_router,
     private_documents_router,
+    reviews_router,
 )
 
 ADMIN_ALIAS_ROUTERS = (

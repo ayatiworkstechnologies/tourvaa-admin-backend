@@ -177,6 +177,18 @@ def email_verification_email(name: str, verification_url: str):
     )
 
 
+def otp_login_email(name: str, code: str):
+    return base_email(
+        "Your Tourvaa verification code",
+        f"Hi {esc(name)},",
+        (
+            "Use the code below to continue your booking. It expires in 10 minutes - "
+            "if you didn't request this, you can safely ignore this email.<br /><br />"
+            f"<div style=\"margin:18px 0;font-size:32px;font-weight:800;letter-spacing:8px;color:#123024;\">{esc(code)}</div>"
+        ),
+    )
+
+
 def registration_password_created_email(name: str, login_url: str):
     return base_email(
         "Your Tourvaa password is ready",
@@ -246,7 +258,14 @@ def booking_cancelled_email(name: str, booking_code: str, tour_name: str, reason
     )
 
 
-def booking_declined_email(name: str, booking_code: str, tour_name: str, reason: str, login_url: str):
+def booking_declined_email(name: str, booking_code: str, tour_name: str, reason: str, login_url: str, similar_tours: list[dict] | None = None):
+    similar_html = ""
+    if similar_tours:
+        rows = "".join(
+            f'<li style="margin:6px 0;"><a href="{esc(t["url"])}" style="color:#2F9FE9;text-decoration:none;font-weight:600;">{esc(t["title"])}</a></li>'
+            for t in similar_tours
+        )
+        similar_html = f'<br /><br /><strong>You might also like:</strong><ul style="margin:8px 0 0;padding-left:20px;">{rows}</ul>'
     return base_email(
         "Booking declined by supplier",
         f"Hi {esc(name)},",
@@ -254,6 +273,7 @@ def booking_declined_email(name: str, booking_code: str, tour_name: str, reason:
             f"Unfortunately your booking <strong>{esc(booking_code)}</strong> for <strong>{esc(tour_name)}</strong> was declined by the supplier.<br /><br />"
             f"Reason: {esc(reason) or 'Declined by supplier'}<br /><br />"
             "Any authorized payment has been released. Please browse other available tours or contact our support team."
+            f"{similar_html}"
         ),
         "Browse tours",
         login_url,

@@ -2,18 +2,18 @@
 import pytest
 import requests
 
-from tests.conftest import BASE_URL, unique, skip_if_readonly, login_with_retry
+from tests.conftest import BASE_URL, unique, unique_phone, skip_if_readonly, login_with_retry, create_active_account
 
 
 def _register_supplier():
+    """Real self-registration via HTTP - stays PENDING_EMAIL_VERIFICATION,
+    used by the one test that specifically checks that gate."""
     name = f"Portal Test Supplier {unique('n')}"
     email = f"{unique('sup')}@example.com"
     password = "Supp@1234"
     resp = requests.post(f"{BASE_URL}/auth/register/supplier", json={
-        "name": name,
-        "email": email,
-        "phone": "+919876511111",
-        "password": password,
+        "account_type": "SUPPLIER", "first_name": name, "email": email,
+        "country_code": "+91", "mobile_number": unique_phone()[3:], "accepted_terms": True,
     }, timeout=10)
     assert resp.status_code in (200, 201), resp.text
     return name, email, password
@@ -31,14 +31,22 @@ def _find_supplier_id_by_name(admin_headers, name):
 
 @pytest.fixture(scope="module")
 def supplier_ctx(headers):
-    """Create an active supplier fixture for portal endpoint coverage."""
-    name, email, password = _register_supplier()
+    """Create an active supplier fixture for portal endpoint coverage.
 
-    # Production activation happens through the supplier email/password flow.
-    # This suite uses the existing admin endpoint only to prepare an authenticated
-    # supplier fixture; registration policy is tested separately.
+    approve_supplier() requires the linked User to already be email_verified
+    and ACTIVE before it will approve the Supplier row - that only happens for
+    real users after they click the emailed verification link and set a
+    password, which a black-box HTTP test can't drive. Fixture setup creates
+    the User already-active directly (Supplier left un-approved on purpose),
+    then exercises the real POST /suppliers/{id}/approve endpoint below.
+    """
+    name = f"Portal Test Supplier {unique('n')}"
+    email = f"{unique('sup')}@example.com"
+    password = "Supp@1234"
+    create_active_account("supplier", "SUPPLIER", name, email, unique_phone(), password)
+
     supplier_id = _find_supplier_id_by_name(headers, name)
-    assert supplier_id, f"Newly registered supplier {name!r} not found via admin search"
+    assert supplier_id, f"Newly created supplier {name!r} not found via admin search"
 
     approve = requests.post(f"{BASE_URL}/suppliers/{supplier_id}/approve", headers=headers, timeout=10)
     assert approve.status_code == 200, approve.text
@@ -59,14 +67,14 @@ def supplier_headers(supplier_ctx):
 # ---------------------------------------------------------------------------
 
 def test_supplier_login_returns_status_until_email_verified():
+    # A freshly self-registered account has no password yet (one gets set only
+    # after clicking the emailed verification link and completing
+    # registration) - login must fail outright, not "succeed but restricted".
     _, email, password = _register_supplier()
     resp = requests.post(f"{BASE_URL}/auth/login", json={"email": email, "password": password}, timeout=10)
     if resp.status_code == 429:
         return
-    assert resp.status_code == 200, resp.text
-    data = resp.json()["data"]
-    assert data["account_restricted"] is True
-    assert data["account_status"] == "PENDING_EMAIL_VERIFICATION"
+    assert resp.status_code == 401, resp.text
 
 
 def test_supplier_can_login_after_approval(supplier_ctx):

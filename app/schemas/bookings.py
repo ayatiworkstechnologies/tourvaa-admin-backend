@@ -61,6 +61,7 @@ class BookingCreate(BaseModel):
     no_of_adults: int = Field(default=1, ge=0)
     no_of_children: int = Field(default=0, ge=0)
     no_of_infants: int = Field(default=0, ge=0)
+    no_of_rooms: Optional[int] = Field(default=None, ge=1)
     adults_count: Optional[int] = Field(default=None, ge=0)
     children_count: Optional[int] = Field(default=None, ge=0)
     currency: str = "USD"

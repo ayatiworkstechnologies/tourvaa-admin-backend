@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -105,20 +105,47 @@ class Tour(Base):
     price_start_per_person = Column(Float, default=0, nullable=False)
     currency = Column(String(10), default="USD", nullable=False)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True, index=True)
+    state_id = Column(Integer, ForeignKey("states.id"), nullable=True, index=True)
     city_id = Column(Integer, ForeignKey("cities.id"), nullable=True, index=True)
     category_id = Column(Integer, ForeignKey("tour_categories.id"), nullable=True, index=True)
     start_location = Column(String(150), default="", nullable=False)
     finish_location = Column(String(150), default="", nullable=False)
     number_of_days = Column(Integer, default=1, nullable=False)
     number_of_hours = Column(Integer, nullable=True)
+    number_of_nights = Column(Integer, nullable=True)
+    max_group_size = Column(Integer, nullable=True)
+    min_booking_size = Column(Integer, nullable=True)
+    tour_language = Column(String(100), nullable=True)
+    suitable_age_range = Column(String(100), nullable=True)
+    tour_visibility = Column(String(20), default="public", nullable=False)
+    featured = Column(Boolean, default=False, nullable=False)
     short_description = Column(Text, default="", nullable=False)
     long_description = Column(Text, default="", nullable=False)
+    pricing_type = Column(String(20), default="per_person", nullable=False)
+    offer_price = Column(Float, default=0, nullable=False)
+    infant_price = Column(Float, default=0, nullable=False)
+    single_supplement = Column(Float, default=0, nullable=False)
+    tax_percentage = Column(Float, default=0, nullable=False)
+    service_fee = Column(Float, default=0, nullable=False)
+    booking_deposit = Column(Float, default=0, nullable=False)
+    balance_payment_deadline_days = Column(Integer, nullable=True)
+    # When True (default - preserves today's behavior for every existing tour),
+    # a paid booking with an assigned supplier still waits on supplier
+    # acceptance before confirming. When False, payment alone confirms it.
+    requires_supplier_confirmation = Column(Boolean, default=True, nullable=False)
     seo_title = Column(String(180), default="", nullable=False)
     seo_description = Column(String(255), default="", nullable=False)
     seo_keywords = Column(String(255), default="", nullable=False)
+    focus_keyword = Column(String(180), nullable=True)
+    canonical_url = Column(String(500), nullable=True)
+    open_graph_image = Column(String(255), nullable=True)
+    search_visibility = Column(Boolean, default=True, nullable=False)
     image_alt_text = Column(String(180), default="", nullable=False)
     banner_image = Column(String(255), default="", nullable=False)
     map_image = Column(String(255), default="", nullable=False)
+    mobile_cover_image = Column(String(255), nullable=True)
+    tour_video_url = Column(String(500), nullable=True)
+    brochure_pdf = Column(String(255), nullable=True)
     status = Column(String(20), default="draft", nullable=False, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -127,6 +154,7 @@ class Tour(Base):
 
     supplier = relationship("Supplier")
     country = relationship("Country")
+    state = relationship("State")
     city = relationship("City")
     category = relationship("TourCategory")
     subcategory_links = relationship("TourSubcategoryMap", cascade="all, delete-orphan")

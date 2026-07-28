@@ -78,3 +78,13 @@ def create_password_reset_token():
 
 def hash_reset_token(token: str):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_otp_code():
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    return code, code_hash
+
+
+def hash_otp_code(code: str):
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()

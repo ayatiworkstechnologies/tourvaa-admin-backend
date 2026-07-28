@@ -63,6 +63,10 @@ def _ser_overview(o: TourOverview) -> dict:
         "end_location": o.end_location, "group_size": o.group_size,
         "tour_type": o.tour_type, "physical_rating": o.physical_rating,
         "overview_icon_data": o.overview_icon_data,
+        "why_choose_this_tour": o.why_choose_this_tour, "ideal_for": o.ideal_for,
+        "best_season": o.best_season, "tour_pace": o.tour_pace,
+        "transportation_summary": o.transportation_summary,
+        "accommodation_summary": o.accommodation_summary, "meal_summary": o.meal_summary,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
@@ -94,7 +98,12 @@ def _ser_itinerary(i: TourItinerary) -> dict:
         "id": i.id, "tour_id": i.tour_id, "day_number": i.day_number,
         "day_title": i.day_title, "location_name": i.location_name,
         "short_description": i.short_description, "long_description": i.long_description,
-        "activities": i.activities, "image": i.image, "image_alt_text": i.image_alt_text,
+        "activities": i.activities, "accommodation": i.accommodation,
+        "start_time": i.start_time, "end_time": i.end_time,
+        "travel_distance": i.travel_distance, "travel_duration": i.travel_duration,
+        "transport_type": i.transport_type, "meals_included": i.meals_included,
+        "important_notes": i.important_notes,
+        "image": i.image, "image_alt_text": i.image_alt_text,
         "display_order": i.display_order, "status": i.status,
         "created_at": i.created_at, "updated_at": i.updated_at,
     }
@@ -278,7 +287,7 @@ def _ser_extension(o: TourExtension) -> dict:
         "id": o.id, "tour_id": o.tour_id, "extension_tour_id": o.extension_tour_id,
         "extension_tour_title": o.extension_tour.title if o.extension_tour else "",
         "extension_title": o.extension_title, "extension_note": o.extension_note,
-        "extra_price": o.extra_price, "display_order": o.display_order, "status": o.status,
+        "extra_price": o.extra_price, "category": o.category, "display_order": o.display_order, "status": o.status,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
@@ -341,7 +350,7 @@ def delete_pricing(db, tour_id, rid, actor, request=None): return _delete_pricin
 
 # optional activity
 def _ser_activity(o: TourOptionalActivity) -> dict:
-    return {"id": o.id, "tour_id": o.tour_id, "activity_name": o.activity_name, "description": o.description, "price_per_person": o.price_per_person, "image": o.image, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
+    return {"id": o.id, "tour_id": o.tour_id, "activity_name": o.activity_name, "description": o.description, "price_per_person": o.price_per_person, "image": o.image, "category": o.category, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
 _list_activities_fn, _create_activity_fn, _update_activity_fn, _delete_activity_fn = _simple_crud(TourOptionalActivity, _ser_activity)
 
@@ -353,7 +362,7 @@ def delete_activity(db, tour_id, rid, actor, request=None): return _delete_activ
 
 # accommodation extra
 def _ser_accommodation(o: TourAccommodationExtra) -> dict:
-    return {"id": o.id, "tour_id": o.tour_id, "accommodation_name": o.accommodation_name, "description": o.description, "extra_price": o.extra_price, "price_type": o.price_type, "is_default": bool(o.is_default), "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
+    return {"id": o.id, "tour_id": o.tour_id, "accommodation_name": o.accommodation_name, "description": o.description, "extra_price": o.extra_price, "price_type": o.price_type, "category": o.category, "is_default": bool(o.is_default), "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
 
 def list_accommodations(db: Session, tour_id: int) -> list[dict]:
