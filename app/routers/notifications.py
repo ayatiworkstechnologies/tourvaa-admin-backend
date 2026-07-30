@@ -54,8 +54,11 @@ def notifications(
 
 
 @router.patch("/mark-all-read")
-def mark_all_read_route(user_id: int = Query(...), db: Session = Depends(get_db), current_user=Depends(require_any_permission("notifications.view"))):
-    updated = mark_all_read(db, user_id, actor=current_user)
+def mark_all_read_route(user_id: int = Query(default=0), db: Session = Depends(get_db), current_user=Depends(require_any_permission("notifications.view"))):
+    # user_id=0/omitted: an admin marks every user's notifications as read;
+    # a non-admin caller is always scoped to their own regardless (enforced
+    # in the service).
+    updated = mark_all_read(db, user_id or None, actor=current_user)
     return {"status": "success", "data": {"updated": updated}}
 
 @router.post("")

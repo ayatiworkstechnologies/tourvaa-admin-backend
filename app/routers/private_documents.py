@@ -101,3 +101,59 @@ def get_agent_document(
         raise HTTPException(status_code=403, detail="Permission denied")
 
     return _serve_document(doc)
+
+
+def _serve_cloudinary_marker(raw: str):
+    """Serve a raw stored value that may be a cloudinary:<type>:<id> marker,
+    a legacy public URL, or a legacy /storage path - covers vehicle files
+    uploaded before and after the privacy fix (see _vehicle_file_url)."""
+    if not raw:
+        raise HTTPException(status_code=404, detail="File not found")
+    if raw.startswith(_CLOUDINARY_PREFIX):
+        resource_type, _, public_id = raw.removeprefix(_CLOUDINARY_PREFIX).partition(":")
+        return RedirectResponse(get_private_file_url(public_id, resource_type or "image"))
+    if raw.startswith("http"):
+        return RedirectResponse(raw)
+    raise HTTPException(status_code=404, detail="File not available via this endpoint")
+
+
+def _get_owned_vehicle(db: Session, vehicle_id: int, current_user: User):
+    from app.models.suppliers import Supplier, SupplierVehicle
+
+    vehicle = db.query(SupplierVehicle).filter(SupplierVehicle.id == vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    supplier = db.query(Supplier).filter(Supplier.id == vehicle.supplier_id).first()
+    is_owner = supplier and supplier.user_id == current_user.id
+    if not is_owner and not _has_admin_permission(db, current_user, "suppliers.view_documents", "suppliers.view", "view-suppliers"):
+        raise HTTPException(status_code=403, detail="Permission denied")
+    return vehicle
+
+
+@router.get("/vehicle/{vehicle_id}/{field}")
+def get_vehicle_document(
+    vehicle_id: int,
+    field: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if field not in ("fitness_certificate", "insurance_document"):
+        raise HTTPException(status_code=404, detail="Unknown vehicle document field")
+    vehicle = _get_owned_vehicle(db, vehicle_id, current_user)
+    return _serve_cloudinary_marker(getattr(vehicle, field) or "")
+
+
+@router.get("/vehicle/{vehicle_id}/photo/{index}")
+def get_vehicle_photo(
+    vehicle_id: int,
+    index: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    import json
+
+    vehicle = _get_owned_vehicle(db, vehicle_id, current_user)
+    photos = json.loads(vehicle.vehicle_photos) if vehicle.vehicle_photos else []
+    if index < 0 or index >= len(photos):
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return _serve_cloudinary_marker(photos[index])

@@ -32,12 +32,13 @@ def public_faqs(db: Session = Depends(get_db)):
 
 
 # admin faq management
-@router.get("/admin/faqs", response_model=list[FAQResponse])
+@router.get("/admin/faqs")
 def admin_list_faqs(
+    params: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
     _: object = Depends(require_any_permission("chatbot.view", "view-chatbot")),
 ):
-    return service.list_faqs(db, include_inactive=True)
+    return {"status": "success", **service.list_faqs_paginated(db, page=params["page"], limit=params["limit"], search=params["search"], include_inactive=True)}
 
 
 @router.post("/admin/faqs", response_model=FAQResponse, status_code=201)

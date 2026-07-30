@@ -384,8 +384,9 @@ def send_test_email(db: Session, template_id: int, to_email: str) -> dict:
     from app.utils.mailer import send_email
 
     preview = preview_template(db, template_id)
+    template = get_template(db, template_id)
     try:
-        result = send_email(to_email, preview["subject"], preview["html"])
+        result = send_email(to_email, preview["subject"], preview["html"], template_key=f"test:{template.key}")
     except Exception as error:
         raise HTTPException(status_code=502, detail=f"Could not send test email: {error}")
 

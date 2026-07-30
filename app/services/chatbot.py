@@ -1,7 +1,7 @@
 import logging
 import secrets
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -317,6 +317,21 @@ def list_faqs(db: Session, include_inactive: bool = False) -> list[ChatFAQ]:
     if not include_inactive:
         q = q.filter(ChatFAQ.is_active == True)
     return q.order_by(ChatFAQ.sort_order, ChatFAQ.id).all()
+
+
+def list_faqs_paginated(db: Session, page: int = 1, limit: int = 20, search: str = "", include_inactive: bool = True) -> dict:
+    from app.utils.pagination import paginated_response
+
+    q = db.query(ChatFAQ)
+    if not include_inactive:
+        q = q.filter(ChatFAQ.is_active == True)
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        q = q.filter(func.lower(ChatFAQ.question).like(pattern))
+    q = q.order_by(ChatFAQ.sort_order, ChatFAQ.id)
+    total = q.count()
+    items = q.offset((page - 1) * limit).limit(limit).all()
+    return paginated_response(items=items, total=total, page=page, limit=limit)
 
 
 def create_faq(db: Session, data: FAQCreate) -> ChatFAQ:

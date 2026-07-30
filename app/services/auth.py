@@ -205,7 +205,7 @@ def send_email_verification(db: Session, user: User, token: str, redirect: str |
         "Verify your Tourvaa email and create your password",
         email_verification_email(user.name, verification_url),
     )
-    try_send_email(user.email, subject, html)
+    try_send_email(user.email, subject, html, template_key="email_verification")
 
 
 def register_unified_user(db: Session, data):
@@ -384,7 +384,7 @@ def complete_registration(db: Session, token: str, password: str):
             "Your Tourvaa account is ready to sign in",
             registration_password_created_email(user.name, login_url),
         )
-        try_send_email(user.email, subject, html)
+        try_send_email(user.email, subject, html, template_key="registration_password_created")
     except Exception as exc:
         logger.warning("Password-created login email failed for user id=%s: %s", user.id, exc)
     return user
@@ -749,7 +749,7 @@ def request_otp(db: Session, data):
         "Your Tourvaa verification code",
         otp_login_email(user.name, code),
     )
-    try_send_email(user.email, subject, html)
+    try_send_email(user.email, subject, html, template_key="otp_login")
     return {"email": email, "expires_in_minutes": settings.OTP_EXPIRE_MINUTES}
 
 
@@ -959,6 +959,7 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web"):
             user.email,
             subject,
             html,
+            template_key="password_reset",
         )
     except Exception as error:
         logger.warning("Password reset email failed for user id=%s: %s", user.id, error)
@@ -1007,7 +1008,7 @@ def reset_password(db: Session, token: str, password: str):
             "Your Tourvaa password was changed",
             password_changed_email(user.name, login_url),
         )
-        try_send_email(user.email, subject, html)
+        try_send_email(user.email, subject, html, template_key="password_changed")
     except Exception as exc:
         logger.warning("Password changed email failed for user id=%s: %s", user.id, exc)
 

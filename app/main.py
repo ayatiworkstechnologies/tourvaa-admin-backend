@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
@@ -214,6 +215,33 @@ def run_seed():
         logger.warning(
             "Database schema is not ready; skipping seed. Run `python -m alembic upgrade head` before starting the API."
         )
+
+# How often to sweep for, and how long to wait before expiring, unpaid
+# bookings that would otherwise hold their TourCalendar seats forever.
+BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS = 15 * 60
+BOOKING_EXPIRY_HOLD_MINUTES = 60
+
+
+async def _expire_stale_bookings_loop():
+    from app.services.bookings import expire_stale_pending_bookings
+
+    while True:
+        await asyncio.sleep(BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS)
+        try:
+            db = SessionLocal()
+            try:
+                # Run the blocking DB work off the event loop thread.
+                await asyncio.to_thread(expire_stale_pending_bookings, db, BOOKING_EXPIRY_HOLD_MINUTES)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Stale booking expiry sweep failed")
+
+
+@app.on_event("startup")
+async def start_background_jobs():
+    if schema_is_ready():
+        asyncio.create_task(_expire_stale_bookings_loop())
 
 setup_cors(app)
 

@@ -122,6 +122,27 @@ def _document(item):
     }
 
 
+def _vehicle_file_url(vehicle_id: int, raw: str, field: str, index: int | None = None) -> str:
+    """Resolve a stored vehicle file value to a browser-usable URL.
+
+    New uploads are stored as a "cloudinary:<type>:<id>" marker (private,
+    authenticated delivery) and proxied through private_documents.py so a
+    fresh signed URL is generated per access - same pattern as
+    SupplierDocument (see _document() above). Pre-existing rows uploaded
+    before this file's privacy fix may still hold a plain public URL or a
+    legacy /storage/ path; those are returned unchanged for backward
+    compatibility.
+    """
+    if not raw:
+        return ""
+    if raw.startswith("cloudinary:"):
+        suffix = f"/photo/{index}" if index is not None else f"/{field}"
+        return f"/api/private-documents/vehicle/{vehicle_id}{suffix}"
+    if raw.startswith("http") or raw.startswith("/"):
+        return raw
+    return "/storage/" + raw
+
+
 def _serialize_vehicle(v) -> dict:
     import json
     photos_raw = v.vehicle_photos or ""
@@ -137,9 +158,9 @@ def _serialize_vehicle(v) -> dict:
         "registration_number": getattr(v, "registration_number", "") or "",
         "year": v.year,
         "capacity": v.capacity,
-        "fitness_certificate": v.fitness_certificate or "",
-        "insurance_document": v.insurance_document or "",
-        "vehicle_photos": photos,
+        "fitness_certificate": _vehicle_file_url(v.id, v.fitness_certificate or "", "fitness_certificate"),
+        "insurance_document": _vehicle_file_url(v.id, v.insurance_document or "", "insurance_document"),
+        "vehicle_photos": [_vehicle_file_url(v.id, p, "photo", index=i) for i, p in enumerate(photos)],
         "approval_status": v.approval_status,
         "rejection_reason": v.rejection_reason,
         "reviewed_at": str(v.reviewed_at) if v.reviewed_at else "",

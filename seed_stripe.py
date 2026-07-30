@@ -9,8 +9,11 @@ from app.database import SessionLocal
 from app.models.settings import PaymentSetting
 from app.utils.crypto import encrypt_secret
 
-STRIPE_PUBLIC  = os.environ["STRIPE_PUBLISHABLE_KEY"]
-STRIPE_SECRET  = os.environ["STRIPE_SECRET_KEY"]
+STRIPE_PUBLIC = os.environ.get("STRIPE_PUBLISHABLE_KEY")
+STRIPE_SECRET = os.environ.get("STRIPE_SECRET_KEY")
+if not STRIPE_PUBLIC or not STRIPE_SECRET:
+    print("Error: set STRIPE_PUBLISHABLE_KEY and STRIPE_SECRET_KEY environment variables before running this script.")
+    sys.exit(1)
 
 db = SessionLocal()
 try:

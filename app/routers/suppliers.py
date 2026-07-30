@@ -251,7 +251,7 @@ async def upload_vehicle_photos(
 
 
 @router.delete("/me/vehicles/{vehicle_id}/photos")
-def delete_vehicle_photo(vehicle_id: int, photo_url: str = Query(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_vehicle_photo(vehicle_id: int, photo_index: int = Query(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.suppliers import Supplier, SupplierVehicle
     import json
     supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
@@ -261,7 +261,12 @@ def delete_vehicle_photo(vehicle_id: int, photo_url: str = Query(...), db: Sessi
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     photos: list[str] = json.loads(v.vehicle_photos) if v.vehicle_photos else []
-    photos = [p for p in photos if p != photo_url]
+    # Removed by index, not by URL: photos are now private-storage markers
+    # proxied through a resolved, non-stable delivery URL (see
+    # _vehicle_file_url), so the client can no longer identify a photo by
+    # matching the exact stored value.
+    if 0 <= photo_index < len(photos):
+        photos.pop(photo_index)
     v.vehicle_photos = json.dumps(photos)
     db.commit()
     db.refresh(v)
@@ -297,8 +302,13 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     elif ext == "pdf" and not content.startswith(b"%PDF"):
         return ""
     filename = f"{uuid4().hex}.{ext}"
-    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/{subfolder}", content_type=upload.content_type)
-    return uploaded["url"]
+    # Vehicle fitness certs/insurance docs/photos are supplier business
+    # documents, same sensitivity class as KYC documents - upload them
+    # privately (authenticated Cloudinary delivery) and store the same
+    # "cloudinary:<resource_type>:<public_id>" marker used for
+    # SupplierDocument, rather than a permanently-public URL.
+    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/{subfolder}", is_private=True, content_type=upload.content_type)
+    return f"cloudinary:{uploaded['resource_type']}:{uploaded['public_id']}"
 
 
 @router.post("/{supplier_id}/submit-verification")

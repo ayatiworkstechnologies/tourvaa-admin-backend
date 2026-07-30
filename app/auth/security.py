@@ -8,25 +8,18 @@ from app.config import settings
 password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def _sha256_hex(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def hash_password(received: str) -> str:
-    """Store bcrypt of the SHA-256 hex that the frontend sends."""
+    """Bcrypt-hash a password. The frontend sends the plaintext password
+    field directly over TLS (there is no client-side pre-hash step - an
+    earlier design called for one, but it was never wired up on the
+    frontend, and every seed script / test in this repo already relies on
+    this function receiving plaintext), so this is simply bcrypt(plaintext)."""
     return password_context.hash(received)
 
 
-def hash_password_plain(plain: str) -> str:
-    """Hash a plaintext password (e.g. from seed scripts) the same way the frontend would."""
-    return password_context.hash(_sha256_hex(plain))
-
-
 def verify_password(received: str, stored_hash: str) -> bool:
-    """
-    Verify the value received from the frontend against the stored bcrypt hash.
-    Frontend always sends sha256(plaintext); stored hash is bcrypt(sha256(plaintext)).
-    """
+    """Verify the value received from the frontend (plaintext, over TLS)
+    against the stored bcrypt hash."""
     try:
         return password_context.verify(received, stored_hash)
     except Exception:

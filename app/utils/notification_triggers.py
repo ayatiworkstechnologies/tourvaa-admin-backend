@@ -21,7 +21,7 @@ def send_templated_email(db: Session, to_email: str | None, key: str, values: di
     from app.utils.mailer import try_send_email
     try:
         subject, html = render_database_email(db, key, values, fallback_subject, fallback_html)
-        try_send_email(to_email, subject, html)
+        try_send_email(to_email, subject, html, template_key=key)
     except Exception as exc:
         logger.warning("Templated email %s to %s failed: %s", key, to_email, exc)
 

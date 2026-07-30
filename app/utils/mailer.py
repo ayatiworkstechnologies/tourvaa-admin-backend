@@ -99,7 +99,7 @@ def _plain_text_from_html(html: str) -> str:
     return text.strip() or "Please view this email in an HTML email client."
 
 
-def _create_email_log(to_email: str, subject: str, status: str, error_message: str = "") -> int | None:
+def _create_email_log(to_email: str, subject: str, status: str, error_message: str = "", template_key: str = "smtp") -> int | None:
     try:
         from app.database import SessionLocal
         from app.models.bookings import EmailLog
@@ -109,7 +109,7 @@ def _create_email_log(to_email: str, subject: str, status: str, error_message: s
             row = EmailLog(
                 recipient_email=to_email,
                 subject=subject,
-                template_key="smtp",
+                template_key=template_key or "smtp",
                 entity_type="email",
                 status=status,
                 error_message=error_message or None,
@@ -178,8 +178,8 @@ def _build_message(config: _SmtpConfig, to_email: str, subject: str, html: str, 
     return message, message_id
 
 
-def send_email(to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None) -> EmailSendResult:
-    log_id = _create_email_log(to_email, subject, "sending")
+def send_email(to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None, template_key: str = "smtp") -> EmailSendResult:
+    log_id = _create_email_log(to_email, subject, "sending", template_key=template_key)
     message_id = ""
 
     try:
@@ -218,9 +218,9 @@ def send_email(to_email: str, subject: str, html: str, attachments: list[tuple[s
         raise
 
 
-def try_send_email(to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None) -> bool:
+def try_send_email(to_email: str, subject: str, html: str, attachments: list[tuple[str, bytes, str]] | None = None, template_key: str = "smtp") -> bool:
     try:
-        send_email(to_email, subject, html, attachments)
+        send_email(to_email, subject, html, attachments, template_key=template_key)
         return True
     except Exception:
         return False

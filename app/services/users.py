@@ -238,6 +238,15 @@ def create_user(
     if data.role_id is not None:
         validate_role(db, data.role_id)
 
+    # This admin-created-user flow issues TWO independent tokens on purpose:
+    # `token`/`token_hash` below become the real reset_password_token the
+    # user must click to set their own password. The second, separate
+    # create_password_reset_token() call a few lines down is thrown away
+    # except for its raw value, which is hashed straight into `password` -
+    # i.e. the account's initial password is a random value nobody knows
+    # and nobody can log in with directly; the only way in is via the reset
+    # link. Do not "simplify" this to reuse `token` for both - that would
+    # make the initial password recoverable from the emailed reset link.
     token, token_hash = create_password_reset_token()
     user = User(
         name=data.name.strip(),
@@ -281,7 +290,7 @@ def create_user(
         "Your Tourvaa account is ready",
         user_created_email(user.name, user.email, reset_url),
     )
-    try_send_email(user.email, subject, html)
+    try_send_email(user.email, subject, html, template_key="user_created")
 
     return serialize_user(user)
 
@@ -423,7 +432,7 @@ def approve_user(
         "Your Tourvaa account is active",
         approved_email(user.name, login_url),
     )
-    try_send_email(user.email, subject, html)
+    try_send_email(user.email, subject, html, template_key="account_approved")
 
     return serialize_user(user)
 
@@ -457,7 +466,7 @@ def deactivate_user(db: Session, user_id: int, reason: str, actor: User | None =
     log_audit(db, actor=actor, action="deactivate_user", entity_type="user", entity_id=user.id, old_values=old_values, new_values=serialize_user(user), request=request)
     db.commit()
     db.refresh(user)
-    try_send_email(user.email, "Your Tourvaa account is inactive", base_email("Account deactivated", f"Hi {esc(user.name)},", f"Your Tourvaa account has been deactivated.<br /><br />Reason: {esc(reason)}"))
+    try_send_email(user.email, "Your Tourvaa account is inactive", base_email("Account deactivated", f"Hi {esc(user.name)},", f"Your Tourvaa account has been deactivated.<br /><br />Reason: {esc(reason)}"), template_key="account_deactivated")
     return serialize_user(user)
 
 
@@ -542,7 +551,7 @@ def reactivate_user(
         "Your Tourvaa account is active again",
         approved_email(user.name, login_url),
     )
-    try_send_email(user.email, subject, html)
+    try_send_email(user.email, subject, html, template_key="account_reactivated")
     return serialize_user(user)
 
 
@@ -606,6 +615,7 @@ def send_user_password_reset(db: Session, user_id: int):
         user.email,
         "Reset your Tourvaa password",
         password_reset_email(user.name, reset_url),
+        template_key="password_reset",
     )
 
     return serialize_user(user)
