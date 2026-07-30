@@ -58,14 +58,17 @@ def list_notifications(
     return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
-def mark_all_read(db: Session, user_id: int, actor: "User | None" = None) -> int:
+def mark_all_read(db: Session, user_id: int | None, actor: "User | None" = None) -> int:
     if not _is_admin(actor):
+        # Non-admins can only ever mark their own notifications, regardless
+        # of what user_id (if any) was requested.
         user_id = actor.id
-    updated = (
-        db.query(Notification)
-        .filter(Notification.user_id == user_id, Notification.is_read == 0)
-        .update({"is_read": 1, "read_at": utcnow()}, synchronize_session=False)
-    )
+    query = db.query(Notification).filter(Notification.is_read == 0)
+    if user_id:
+        query = query.filter(Notification.user_id == user_id)
+    # user_id omitted by an admin means "mark every user's notifications as
+    # read" - a genuine platform-wide action, not scoped to one account.
+    updated = query.update({"is_read": 1, "read_at": utcnow()}, synchronize_session=False)
     db.commit()
     return updated
 

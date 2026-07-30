@@ -62,6 +62,10 @@ def list_payouts(pagination=Depends(pagination_params), affiliate_id: int = Quer
 
 
 @router.post("/affiliate-payouts")
-def create_payout(data: AffiliatePayoutCreate, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.approve", "view-affiliates"))):
+def create_payout(data: AffiliatePayoutCreate, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.approve"))):
+    # Payout creation is admin-only (it immediately marks conversions paid),
+    # so this intentionally does NOT accept "view-affiliates" - a plain
+    # affiliate role only holds affiliates.view/view-affiliates and must not
+    # be able to create a payout for any affiliate_id, including their own.
     result = service.create_payout(db, data=data, actor=current_user)
     return {"status": "success", "message": "Affiliate payout created", "data": result}

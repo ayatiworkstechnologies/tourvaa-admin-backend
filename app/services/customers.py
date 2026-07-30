@@ -544,6 +544,7 @@ def reset_customer_password(
             user.email,
             "Reset your Tourvaa password",
             password_reset_email(user.name, reset_url),
+            template_key="password_reset",
         )
         email_status = "sent"
     except Exception:
@@ -650,7 +651,7 @@ def send_customer_message(
     db.flush()
 
     try:
-        send_email(customer.email, data.subject, data.message)
+        send_email(customer.email, data.subject, data.message, template_key="customer_communication")
         message.email_status = "sent"
     except Exception:
         message.email_status = "failed"

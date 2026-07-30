@@ -215,7 +215,7 @@ def email_invoice_to_customer(db: Session, invoice_id: int, email: str | None, a
         if os.path.exists(fs_path):
             with open(fs_path, "rb") as pdf_file:
                 attachments.append((f"{inv.invoice_number}.pdf", pdf_file.read(), "pdf"))
-    try_send_email(recipient, subject, body, attachments)
+    try_send_email(recipient, subject, body, attachments, template_key="invoice_emailed")
     inv.status = "emailed"
     inv.emailed_at = utcnow()
     db.add(EmailLog(recipient_email=recipient, subject=subject, template_key="invoice_emailed", entity_type="invoice", entity_id=inv.id, status="sent", sent_at=utcnow()))

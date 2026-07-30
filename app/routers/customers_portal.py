@@ -269,17 +269,13 @@ def customer_invoices(params: dict = Depends(pagination_params), db: Session = D
 
 @router.get("/invoices/{invoice_id}/download")
 def customer_invoice_download(invoice_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    customer = _current_customer(db, current_user)
-    result = list_invoices(db, page=1, limit=1, customer_id=customer.id)
-    invoice = next((item for item in result["items"] if item["id"] == invoice_id), None)
-    if not invoice:
-        from app.models.invoices import Invoice
-        inv = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.customer_id == customer.id).first()
-        if not inv:
-            raise HTTPException(status_code=404, detail="Invoice not found")
-        from app.services.invoices import serialize_invoice
-        invoice = serialize_invoice(inv, detail=True)
-    return {"status": "success", "data": invoice}
+    # Serve the actual PDF (not the invoice's JSON representation) - reuses
+    # the same helper and access check as the admin/agent/supplier download
+    # route in routers/invoices.py, so ownership is still enforced (a
+    # customer can only download their own invoice).
+    from app.services.invoices import download_invoice_pdf
+    fs_path, filename = download_invoice_pdf(db, invoice_id, current_user)
+    return FileResponse(path=fs_path, filename=filename, media_type="application/pdf")
 
 
 @router.get("/messages")

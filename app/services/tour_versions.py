@@ -11,6 +11,13 @@ from app.models.tour_versions import TourVersion
 from app.schemas.tour_versions import TourVersionReject
 from app.models.users import User
 
+# Positive allow-list of tour statuses a submit-for-approval call may start
+# from, named/structured the same way BOOKING_STATUS_TRANSITIONS is in
+# bookings.py - a tour only has one real transition point today (submit),
+# so this is a flat set rather than a full from-status -> allowed-next-statuses
+# graph, but the intent (explicit allow-list, not an implicit block-list) matches.
+TOUR_SUBMITTABLE_STATUSES = {"draft", "rejected"}
+
 
 def _serialize(v: TourVersion) -> dict:
     return {
@@ -104,7 +111,7 @@ def submit_for_approval(db: Session, tour_id: int, actor: User, request=None) ->
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     if not tour:
         raise HTTPException(status_code=404, detail="Tour not found")
-    if tour.status not in ("draft", "rejected"):
+    if tour.status not in TOUR_SUBMITTABLE_STATUSES:
         raise HTTPException(status_code=400, detail=f"Tour must be in draft or rejected status to submit for approval (current: '{tour.status}')")
 
     version = _stage_pending_version(db, tour, actor)

@@ -22,6 +22,7 @@ from app.services.bookings import (
     add_communication,
     add_communication_reply,
     calculate_booking_price,
+    expire_stale_pending_bookings,
     export_bookings,
     get_payment_link,
     assign_supplier,
@@ -97,6 +98,19 @@ def export_bookings_endpoint(db: Session = Depends(get_db), current_user: User =
 @router.get("/upcoming")
 def upcoming_bookings(db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
     return {"status": "success", **get_upcoming_bookings(db, current_user)}
+
+
+@router.post("/expire-stale")
+def expire_stale_bookings_endpoint(
+    older_than_minutes: int = Query(default=60, ge=5, le=10080),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("bookings.update_status", "bookings.edit", "update-bookings")),
+):
+    """Manual/cron-triggerable release of unpaid booking holds. Also run
+    automatically on a timer - see app.main's startup event - this exists
+    so an operator or external scheduler can trigger it on demand too."""
+    expired_ids = expire_stale_pending_bookings(db, older_than_minutes=older_than_minutes)
+    return {"status": "success", "message": f"Expired {len(expired_ids)} stale booking(s)", "data": {"expired_booking_ids": expired_ids}}
 
 
 @router.post("/calculate-price")

@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import Optional
 
@@ -43,7 +43,7 @@ def _send_booking_email(db, key: str, values: dict, fallback_subject: str, fallb
     from app.utils.mailer import try_send_email
     try:
         subject, html = render_database_email(db, key, values, fallback_subject, fallback_html)
-        try_send_email(to_email, subject, html)
+        try_send_email(to_email, subject, html, template_key=key)
     except Exception as exc:
         logger.warning("Booking email %s to %s failed: %s", key, to_email, exc)
 
@@ -479,6 +479,16 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     slab = None
     if data.tour_id:
         slab = db.query(TourPricing).filter(TourPricing.tour_id == data.tour_id, TourPricing.status == "active", TourPricing.passenger_from <= seat_travellers, TourPricing.passenger_to >= seat_travellers).first()
+        if not slab:
+            # Tours priced via slabs must have a slab covering the requested
+            # traveller count. Falling back silently here used to price
+            # adults off the tour's starting price and children at 0 -
+            # i.e. free children - for any count outside every defined
+            # band. If the tour has slabs configured at all, treat an
+            # out-of-range count as a hard error instead of guessing.
+            has_any_slab = db.query(TourPricing.id).filter(TourPricing.tour_id == data.tour_id, TourPricing.status == "active").first() is not None
+            if has_any_slab:
+                raise HTTPException(status_code=400, detail=f"No pricing available for {seat_travellers} traveller(s) on this tour. Please choose a different traveller count or contact support.")
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
     adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
     child_unit = money(slab.child_price if slab else 0)
@@ -838,6 +848,11 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
         reverse_conversion(db, booking.id)
     except Exception:
         logger.warning("Affiliate conversion reversal failed for booking %s", booking.id, exc_info=True)
+    try:
+        from app.services.supplier_ledger import reverse_ledger_entry
+        reverse_ledger_entry(db, booking.id)
+    except Exception:
+        logger.warning("Supplier ledger reversal failed for booking %s", booking.id, exc_info=True)
     if booking.customer:
         booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
         booking.customer.total_amount_pending = max(
@@ -860,6 +875,50 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
         )
 
     return serialize_booking(booking, detail=True)
+
+
+def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> list[int]:
+    """Release the calendar hold on bookings that never got paid.
+
+    A booking that reaches pending_payment (or pending_credit_approval /
+    pending_supplier_assignment, all of which sit "before payment" per
+    BOOKING_STATUS_TRANSITIONS) and is then abandoned would otherwise hold
+    its TourCalendar seats forever - nothing else in the codebase ever
+    revisits an unpaid booking. This is meant to be run periodically (see
+    the background loop registered in app.main) and can also be triggered
+    on demand via POST /bookings/expire-stale.
+
+    Returns the list of booking ids that were expired.
+    """
+    cutoff = utcnow() - timedelta(minutes=older_than_minutes)
+    stale_statuses = ("pending_payment", "pending_credit_approval", "pending_supplier_assignment")
+    candidates = (
+        db.query(Booking)
+        .filter(Booking.booking_status.in_(stale_statuses))
+        .filter(Booking.created_at < cutoff)
+        .with_for_update()
+        .all()
+    )
+    expired_ids: list[int] = []
+    for booking in candidates:
+        reason = f"Automatically cancelled - no payment received within {older_than_minutes} minutes of booking"
+        _set_status(db, booking, "cancelled", None, "system", reason)
+        booking.cancellation_reason = reason
+        booking.cancelled_at = utcnow()
+        if booking.calendar:
+            booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
+        if booking.customer:
+            booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
+            booking.customer.total_amount_pending = max(money(0), money(booking.customer.total_amount_pending or 0) - money(booking.amount_pending))
+        if booking.customer and booking.customer.user_id:
+            from app.services.notifications import enqueue_notification
+            enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_expired", title="Booking hold expired", message=f"Your booking {booking.booking_code} was automatically cancelled because payment wasn't completed in time.", entity_type="booking", entity_id=booking.id)
+        expired_ids.append(booking.id)
+
+    if expired_ids:
+        db.commit()
+        logger.info("Expired %d stale pending booking(s): %s", len(expired_ids), expired_ids)
+    return expired_ids
 
 
 def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, actor: User, request: Request | None = None) -> dict:
@@ -1114,6 +1173,16 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
     if booking.calendar:
         booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
     _settle_cancelled_booking_payments(db, booking, actor, request, reason)
+    try:
+        from app.services.affiliate_tracking import reverse_conversion
+        reverse_conversion(db, booking.id)
+    except Exception:
+        logger.warning("Affiliate conversion reversal failed for booking %s", booking.id, exc_info=True)
+    try:
+        from app.services.supplier_ledger import reverse_ledger_entry
+        reverse_ledger_entry(db, booking.id)
+    except Exception:
+        logger.warning("Supplier ledger reversal failed for booking %s", booking.id, exc_info=True)
     if booking.customer:
         booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
         booking.customer.total_amount_pending = max(

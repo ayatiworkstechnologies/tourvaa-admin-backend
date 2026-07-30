@@ -90,6 +90,46 @@ def create_ledger_entry(db: Session, *, booking: Booking, supplier_id: int, gros
     return entry
 
 
+def reverse_ledger_entry(db: Session, booking_id: int) -> Optional[SupplierLedger]:
+    """Reverse a booking's supplier-ledger payable on cancellation/refund.
+
+    Mirrors affiliate_tracking.reverse_conversion's policy: money that has
+    already actually left the business (status "paid") is left untouched -
+    reversing the row doesn't claw payouts back automatically. A row that's
+    "reserved" inside a payout that has been approved but not yet marked
+    paid also isn't safe to silently zero out here, because
+    mark_payout_paid() applies the payout item's own snapshot amount
+    regardless of the ledger row's current state - clearing it here would
+    just get silently re-applied when that payout is marked paid. Both
+    cases are flagged in the entry's notes for manual reconciliation
+    instead of being auto-adjusted.
+
+    Only "pending"/"partial" rows (not yet claimed by any payout) are safe
+    to reverse automatically - those get their outstanding balance zeroed
+    and moved to a terminal "refunded" status so they're excluded from
+    future payout selection.
+    """
+    entry = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking_id).with_for_update().first()
+    if not entry:
+        return None
+
+    if entry.status == "paid":
+        entry.notes = ((entry.notes or "") + f" | Booking cancelled/refunded after supplier was already paid {entry.amount_paid} {entry.currency} - needs manual reconciliation.").strip(" |")
+        db.flush()
+        return entry
+
+    if entry.status == "reserved":
+        entry.notes = ((entry.notes or "") + " | Booking cancelled/refunded while this entry was reserved in a pending payout - needs manual reconciliation before that payout is marked paid.").strip(" |")
+        db.flush()
+        return entry
+
+    entry.amount_pending = Decimal("0")
+    entry.status = "refunded"
+    entry.notes = ((entry.notes or "") + " | Reversed: underlying booking was cancelled/refunded.").strip(" |")
+    db.flush()
+    return entry
+
+
 def get_supplier_ledger(db: Session, supplier_id: int, page: int = 1, limit: int = 20, status: str = "") -> dict:
     q = db.query(SupplierLedger).options(joinedload(SupplierLedger.supplier), joinedload(SupplierLedger.booking)).filter(SupplierLedger.supplier_id == supplier_id)
     if status:
@@ -224,6 +264,8 @@ def create_payout(db: Session, data: SupplierPayoutCreate, actor: User, request=
             raise HTTPException(status_code=400, detail=f"Ledger entry {row.id} is already fully paid")
         if row.status == "reserved":
             raise HTTPException(status_code=400, detail=f"Ledger entry {row.id} is already included in another pending payout")
+        if row.status == "refunded":
+            raise HTTPException(status_code=400, detail=f"Ledger entry {row.id} was reversed (booking cancelled/refunded) and is not payable")
 
     available_total = money(sum(r.amount_pending for r in ledger_rows))
     if data.amount is not None and available_total < money(data.amount):

@@ -235,6 +235,11 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
         reverse_conversion(db, booking.id)
     except Exception:
         pass
+    try:
+        from app.services.supplier_ledger import reverse_ledger_entry
+        reverse_ledger_entry(db, booking.id)
+    except Exception:
+        pass
 
     db.commit()
     db.refresh(req)

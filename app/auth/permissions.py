@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User, UserRole
 from app.models.suppliers import Supplier
+from app.models.agents import Agent
 
 bearer_scheme = HTTPBearer(auto_error=False)
 ACCESS_COOKIE_NAME = "tourvaa_access"
@@ -16,6 +17,12 @@ SUPPLIER_APPROVAL_ERROR = {
     "success": False,
     "code": "SUPPLIER_APPROVAL_REQUIRED",
     "message": "Your supplier account must be approved before using this feature.",
+}
+
+AGENT_APPROVAL_ERROR = {
+    "success": False,
+    "code": "AGENT_APPROVAL_REQUIRED",
+    "message": "Your agent account must be approved before using this feature.",
 }
 
 PENDING_SUPPLIER_SAFE_API_PREFIXES = (
@@ -27,6 +34,18 @@ PENDING_SUPPLIER_SAFE_API_PREFIXES = (
     "/api/notifications",
     "/api/profile",
     "/api/private-documents/supplier/",
+)
+
+PENDING_AGENT_SAFE_API_PREFIXES = (
+    "/api/auth/",
+    "/api/dashboard/me",
+    "/api/dashboard/summary",
+    "/api/agents/me",
+    "/api/agents/document-requirements",
+    "/api/agent/messages",
+    "/api/notifications",
+    "/api/profile",
+    "/api/private-documents/agent/",
 )
 
 
@@ -177,6 +196,26 @@ def require_approved_supplier(
     return ensure_approved_supplier(db, current_user)
 
 
+def _is_agent(user: User) -> bool:
+    return user.user_type == "AGENT" or "agent" in ((user.role.slug if user.role else "") or "").lower()
+
+
+def ensure_approved_agent(db: Session, user: User) -> Agent:
+    """Block agent operational access (e.g. creating bookings) until the
+    agent's business profile has cleared admin review - mirrors
+    ensure_approved_supplier. Agent approval_status uses lower-case values
+    (admin_review_pending / documents_pending / profile_incomplete /
+    partial_approved / approved), unlike suppliers' upper-case ones."""
+    if not _is_agent(user):
+        raise HTTPException(status_code=403, detail="This endpoint requires an agent account")
+    if user.account_status != "ACTIVE" or not user.is_active:
+        raise HTTPException(status_code=403, detail=AGENT_APPROVAL_ERROR)
+    agent = db.query(Agent).filter(Agent.user_id == user.id).first()
+    if not agent or (agent.approval_status or "").lower() != "approved":
+        raise HTTPException(status_code=403, detail=AGENT_APPROVAL_ERROR)
+    return agent
+
+
 def get_token_user_including_inactive(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
@@ -238,6 +277,8 @@ def require_any_permission(*permission_slugs: str):
     ):
         if _is_supplier(current_user) and not request.url.path.startswith(PENDING_SUPPLIER_SAFE_API_PREFIXES):
             ensure_approved_supplier(db, current_user)
+        if _is_agent(current_user) and not request.url.path.startswith(PENDING_AGENT_SAFE_API_PREFIXES):
+            ensure_approved_agent(db, current_user)
 
         role_ids = get_user_role_ids(current_user)
         allowed_slugs = expand_permission_slugs(permission_slugs)

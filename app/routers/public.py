@@ -64,7 +64,7 @@ def submit_contact_message(data: ContactMessageRequest, db: Session = Depends(ge
         f"<p><strong>Subject:</strong> {esc(data.subject)}</p>"
         f"<p><strong>Message:</strong><br/>{esc(data.message).replace(chr(10), '<br/>')}</p>"
     )
-    sent = try_send_email(support_email, f"New enquiry: {data.subject}", body)
+    sent = try_send_email(support_email, f"New enquiry: {data.subject}", body, template_key="contact_enquiry")
     if not sent:
         from fastapi import HTTPException
         raise HTTPException(status_code=502, detail="Could not send your message right now. Please try again or email us directly.")
@@ -85,7 +85,7 @@ def subscribe_newsletter(data: NewsletterSubscribeRequest, db: Session = Depends
 
     esc = html_escape.escape
     body = f"<p><strong>New newsletter signup from the Tourvaa website</strong></p><p><strong>Email:</strong> {esc(data.email)}</p>"
-    try_send_email(support_email, "New newsletter signup", body)
+    try_send_email(support_email, "New newsletter signup", body, template_key="newsletter_signup")
     return {"status": "success", "message": "You're subscribed! Watch your inbox for travel inspiration."}
 
 
