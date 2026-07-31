@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.cms import City, Country, Tour, TourCategory, TourSubcategory
 from app.models.cancellations import RefundRule
+from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.services.cms import _category, _city, _country, _subcategory, _tour
 from app.services.reviews import get_review_stats, list_tour_reviews
 from app.schemas.cms import slugify
@@ -51,6 +52,17 @@ def submit_contact_message(data: ContactMessageRequest, db: Session = Depends(ge
     from app.models.settings import AppSetting
     from app.utils.mailer import try_send_email
 
+    message = ContactMessage(
+        name=data.name,
+        email=str(data.email),
+        phone=data.phone or None,
+        enquiry_type=data.enquiry_type,
+        subject=data.subject,
+        message=data.message,
+    )
+    db.add(message)
+    db.commit()
+
     setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
     support_email = (setting.value if setting and setting.value else "") or "support@tourvaa.com"
 
@@ -64,10 +76,7 @@ def submit_contact_message(data: ContactMessageRequest, db: Session = Depends(ge
         f"<p><strong>Subject:</strong> {esc(data.subject)}</p>"
         f"<p><strong>Message:</strong><br/>{esc(data.message).replace(chr(10), '<br/>')}</p>"
     )
-    sent = try_send_email(support_email, f"New enquiry: {data.subject}", body, template_key="contact_enquiry")
-    if not sent:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=502, detail="Could not send your message right now. Please try again or email us directly.")
+    try_send_email(support_email, f"New enquiry: {data.subject}", body, template_key="contact_enquiry")
     return {"status": "success", "message": "Your enquiry has been sent."}
 
 
@@ -80,11 +89,21 @@ def subscribe_newsletter(data: NewsletterSubscribeRequest, db: Session = Depends
     from app.models.settings import AppSetting
     from app.utils.mailer import try_send_email
 
+    email = str(data.email).strip().lower()
+    existing = db.query(NewsletterSubscriber).filter(NewsletterSubscriber.email == email).first()
+    if existing:
+        if not existing.is_active:
+            existing.is_active = True
+            db.commit()
+    else:
+        db.add(NewsletterSubscriber(email=email))
+        db.commit()
+
     setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
     support_email = (setting.value if setting and setting.value else "") or "support@tourvaa.com"
 
     esc = html_escape.escape
-    body = f"<p><strong>New newsletter signup from the Tourvaa website</strong></p><p><strong>Email:</strong> {esc(data.email)}</p>"
+    body = f"<p><strong>New newsletter signup from the Tourvaa website</strong></p><p><strong>Email:</strong> {esc(email)}</p>"
     try_send_email(support_email, "New newsletter signup", body, template_key="newsletter_signup")
     return {"status": "success", "message": "You're subscribed! Watch your inbox for travel inspiration."}
 

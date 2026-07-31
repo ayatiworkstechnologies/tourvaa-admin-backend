@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 from fastapi import HTTPException, Request
@@ -8,6 +9,8 @@ from app.models.agents import Agent, AgentBusinessInfo, AgentContact, AgentDocum
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentUpdate
 from app.utils.operations import PartialApprovalRequest, RejectRequest, approve_item, code_for, filter_review_query, get_or_404, partial_approve_item, reject_item, relationship_list, serialize_common_review, simple_paginate
 from app.models.users import User
+
+logger = logging.getLogger(__name__)
 
 
 AGENT_DOCUMENT_TYPES = {
@@ -45,7 +48,6 @@ def _document(item):
         "mime_type": item.mime_type,
         "status": item.status,
         "rejection_reason": item.rejection_reason,
-        "notes": item.rejection_reason,
         "uploaded_at": item.uploaded_at,
         "reviewed_at": item.reviewed_at,
         "reviewed_by": item.reviewed_by,
@@ -106,6 +108,65 @@ def list_agents(db: Session, page: int, limit: int, search: str = "", country_id
 
 def get_agent(db: Session, agent_id: int):
     return get_or_404(db, Agent, agent_id, "Agent")
+
+
+def export_agents_directory(db: Session) -> list[dict]:
+    agents = (
+        db.query(Agent)
+        .options(
+            joinedload(Agent.country),
+            joinedload(Agent.city),
+            selectinload(Agent.contacts),
+            selectinload(Agent.documents),
+        )
+        .order_by(Agent.id.desc())
+        .all()
+    )
+    rows = []
+    for item in agents:
+        primary_contact = next((c for c in item.contacts if c.is_primary), item.contacts[0] if item.contacts else None)
+        rows.append({
+            "agent_code": item.agent_code,
+            "agent_name": item.agent_name,
+            "agent_type": item.agent_type,
+            "country": item.country.country_name if item.country else "",
+            "city": item.city.city_name if item.city else "",
+            "status": item.status,
+            "approval_status": item.approval_status,
+            "years_in_operation": item.years_in_operation,
+            "contact_name": primary_contact.contact_name if primary_contact else "",
+            "contact_email": primary_contact.email if primary_contact else "",
+            "contact_phone": primary_contact.phone if primary_contact else "",
+            "documents_count": len(item.documents),
+            "discount_type": item.discount_type,
+            "discount_value": item.discount_value,
+            "created_at": item.created_at,
+        })
+    return rows
+
+
+def bulk_approve_agents(db: Session, agent_ids: list[int], actor: User, request: Request | None = None) -> list[dict]:
+    results = []
+    for agent_id in agent_ids:
+        try:
+            approve_agent(db, agent_id, actor, request)
+            results.append({"id": agent_id, "ok": True})
+        except HTTPException as error:
+            db.rollback()
+            results.append({"id": agent_id, "ok": False, "error": error.detail})
+    return results
+
+
+def bulk_reject_agents(db: Session, agent_ids: list[int], data: RejectRequest, actor: User, request: Request | None = None) -> list[dict]:
+    results = []
+    for agent_id in agent_ids:
+        try:
+            reject_agent(db, agent_id, data, actor, request)
+            results.append({"id": agent_id, "ok": True})
+        except HTTPException as error:
+            db.rollback()
+            results.append({"id": agent_id, "ok": False, "error": error.detail})
+    return results
 
 
 def create_agent(db: Session, data: AgentCreate, actor: User, request: Request | None = None):
@@ -250,7 +311,7 @@ def submit_agent_verification(db: Session, user: User, request: Request | None =
         from app.utils.notification_triggers import notify_agent_submitted_verification
         notify_agent_submitted_verification(db, agent_id=agent.id, agent_name=agent.agent_name, user_id=user.id)
     except Exception:
-        pass
+        logger.exception("Failed to send agent submitted-verification notification for agent_id=%s", agent.id)
     db.commit()
     db.refresh(agent)
     return serialize_agent(agent)

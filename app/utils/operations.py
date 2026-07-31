@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from math import ceil
 from typing import Any
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.services.audit import log_audit
 from app.models.users import User, UserStatusHistory
+
+logger = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = {"active", "inactive", "suspended", "blocked"}
 APPROVAL_STATUSES = {
@@ -221,7 +224,7 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
         elif entity_type == "agent":
             notify_agent_approved(db, agent_id=item.id, agent_name=name, user_id=user_id)
     except Exception:
-        pass
+        logger.exception("Failed to send %s approval notification for id=%s", entity_type, item.id)
     db.commit()
     db.refresh(item)
     return serializer(item)
@@ -254,7 +257,7 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
         elif entity_type == "agent":
             notify_agent_rejected(db, agent_id=item.id, agent_name=name, rejection_reason=reason, user_id=user_id)
     except Exception:
-        pass
+        logger.exception("Failed to send %s rejection notification for id=%s", entity_type, item.id)
     db.commit()
     db.refresh(item)
     return serializer(item)
@@ -283,7 +286,7 @@ def partial_approve_item(db: Session, item, data: PartialApprovalRequest, actor:
         elif entity_type == "agent":
             notify_agent_changes_requested(db, agent_id=item.id, agent_name=name, requirements=data.pending_requirements, user_id=user_id)
     except Exception:
-        pass
+        logger.exception("Failed to send %s partial-approval notification for id=%s", entity_type, item.id)
     db.commit()
     db.refresh(item)
     return serializer(item)

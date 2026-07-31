@@ -1,4 +1,4 @@
-"""add customer week 5 fields
+"""add customer address and booking stat fields
 
 Revision ID: 20260616_0009
 Revises: 20260616_0008

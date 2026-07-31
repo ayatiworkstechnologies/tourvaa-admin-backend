@@ -8,6 +8,7 @@ from app.database import Base
 
 from app.models.admin_modules import AdminModule
 from app.models.affiliates import Affiliate, AffiliateDocument, AffiliateInvoicing, AffiliateMarketingInfo
+from app.models.agent_ledger import AgentLedger, AgentPayout, AgentPayoutItem
 from app.models.agents import Agent, AgentBusinessInfo, AgentContact, AgentDocument, AgentInvoicing
 from app.models.audit import AuditLog
 from app.models.bookings import Booking, BookingAccommodation, BookingCommunication, BookingExtension, BookingOptionalActivity, BookingStatusHistory, BookingTraveller, EmailLog, MessageReply
@@ -19,6 +20,7 @@ from app.models.invoices import Invoice, InvoiceItem
 from app.models.notifications import Notification, NotificationLog, PushSubscription
 from app.models.payments import Payment, PaymentHold, PaymentTransaction
 from app.models.permissions import Permission, RolePermission
+from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.models.roles import Role
 from app.models.sessions import LoginHistory, UserSession
 from app.models.settings import ApiSetting, AppSetting, PaymentSetting

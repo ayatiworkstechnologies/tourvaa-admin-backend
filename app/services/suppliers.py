@@ -254,8 +254,8 @@ def export_suppliers_directory(db: Session) -> list[dict]:
             "supplier_code": item.supplier_code,
             "supplier_name": item.supplier_name,
             "supplier_type": item.supplier_type,
-            "country": item.country.name if item.country else "",
-            "city": item.city.name if item.city else "",
+            "country": item.country.country_name if item.country else "",
+            "city": item.city.city_name if item.city else "",
             "status": item.status,
             "approval_status": item.approval_status,
             "years_in_operation": item.years_in_operation,
@@ -385,7 +385,7 @@ def approve_supplier(db: Session, supplier_id: int, actor: User, request: Reques
             user_id=item.user_id,
         )
     except Exception:
-        pass
+        logger.exception("Failed to send supplier approval notification for supplier_id=%s", item.id)
     db.commit()
     db.refresh(item)
     return serialize_supplier(item)
@@ -452,7 +452,7 @@ def partial_approve_supplier(db: Session, supplier_id: int, data: PartialApprova
         from app.utils.notification_triggers import notify_supplier_reupload_requested
         notify_supplier_reupload_requested(db, supplier_id=item.id, supplier_name=item.supplier_name, requirements=data.pending_requirements, user_id=item.user_id)
     except Exception:
-        pass
+        logger.exception("Failed to send supplier reupload-requested notification for supplier_id=%s", item.id)
     db.commit()
     db.refresh(item)
     return serialize_supplier(item)
@@ -513,7 +513,7 @@ def set_supplier_account_status(
             user_id=item.user_id,
         )
     except Exception:
-        pass
+        logger.exception("Failed to send supplier account-status notification for supplier_id=%s", item.id)
     db.commit()
     db.refresh(item)
     return serialize_supplier(item)
@@ -541,7 +541,7 @@ def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRe
             from app.utils.notification_triggers import notify_supplier_commission_approved
             notify_supplier_commission_approved(db, supplier_id=item.id, supplier_name=item.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=item.user_id)
         except Exception:
-            pass
+            logger.exception("Failed to send supplier commission-approved notification for supplier_id=%s", item.id)
     log_audit(db, actor=actor, action="update_supplier_markup", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
     db.commit()
     db.refresh(item)
@@ -588,7 +588,7 @@ def request_supplier_commission(db: Session, user: User, data: SupplierMarkupReq
         from app.utils.notification_triggers import notify_supplier_commission_requested
         notify_supplier_commission_requested(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=user.id)
     except Exception:
-        pass
+        logger.exception("Failed to send supplier commission-requested notification for supplier_id=%s", supplier.id)
     # Committed on its own so the core commission-request flow (above) can
     # never be broken by the history table (migration 20260728_0049) being
     # unavailable on a given deployment -- see _find_pending_commission_request.
@@ -624,7 +624,7 @@ def _submit_supplier_verification(db: Session, supplier: Supplier, actor: User, 
         notify_supplier_submitted_verification(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, user_id=supplier.user_id)
         db.commit()
     except Exception:
-        pass
+        logger.exception("Failed to send supplier submitted-verification notification for supplier_id=%s", supplier.id)
     return serialize_supplier(supplier)
 
 

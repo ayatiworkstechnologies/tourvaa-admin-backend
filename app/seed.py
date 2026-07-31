@@ -37,6 +37,7 @@ MODULES = [
     ("cancellations", "Cancellations"),
     ("payments", "Payments"),
     ("supplier_ledger", "Supplier Ledger"),
+    ("agent_ledger", "Agent Ledger"),
     ("reports", "Reports"),
     ("invoices", "Invoices"),
     ("notifications", "Notifications"),
@@ -104,7 +105,7 @@ EMAIL_TEMPLATE_GRANULAR_PERMISSIONS = [
 
 DEFAULT_PERMISSIONS.extend(EMAIL_TEMPLATE_GRANULAR_PERMISSIONS)
 
-# Dashboard-only granular permissions -- no overlap with WEEK_11_15_PERMISSIONS slugs
+# Dashboard-only granular permissions -- no overlap with BOOKING_LIFECYCLE_PERMISSIONS slugs
 DASHBOARD_PERMISSIONS = [
     {"name": "View Dashboard", "slug": "dashboard.view", "module": "dashboard", "action": "get"},
     {"name": "View Dashboard Summary", "slug": "dashboard.summary", "module": "dashboard", "action": "get"},
@@ -137,11 +138,12 @@ OPERATIONAL_PERMISSIONS = [
     ("subcategories", "Sub-Categories", ["view", "create", "edit", "disable"]),
     ("tours", "Tours", ["view", "create", "edit", "publish", "disable"]),
     ("supplier_ledger", "Supplier Ledger", ["view", "create_payout", "approve", "mark_paid", "export"]),
+    ("agent_ledger", "Agent Ledger", ["view", "create_payout", "approve", "mark_paid", "export"]),
     ("website_cms", "Website CMS", ["view", "create", "edit", "delete"]),
 ]
 
 # Booking lifecycle, financial, and system module granular permissions
-WEEK_11_15_PERMISSIONS = [
+BOOKING_LIFECYCLE_PERMISSIONS = [
     ("bookings", "Bookings", [
         "view", "create", "edit", "update_status", "assign_supplier",
         "cancel", "view_travellers", "view_payments", "view_history", "export",
@@ -158,7 +160,7 @@ WEEK_11_15_PERMISSIONS = [
     ("sessions", "Sessions", ["view", "revoke", "force_logout"]),
 ]
 
-for module, label, actions in WEEK_11_15_PERMISSIONS:
+for module, label, actions in BOOKING_LIFECYCLE_PERMISSIONS:
     for action in actions:
         DEFAULT_PERMISSIONS.append({
             "name": f"{action.replace('_', ' ').title()} {label}",
@@ -308,13 +310,13 @@ def seed_default_roles_and_permissions(db: Session):
         for module, _label, actions in OPERATIONAL_PERMISSIONS
         for action in actions
     ]
-    _all_week = [
+    _all_booking_lifecycle = [
         f"{module}.{action}"
-        for module, _label, actions in WEEK_11_15_PERMISSIONS
+        for module, _label, actions in BOOKING_LIFECYCLE_PERMISSIONS
         for action in actions
     ]
-    _week_no_system = [
-        s for s in _all_week
+    _booking_lifecycle_no_system = [
+        s for s in _all_booking_lifecycle
         if not s.endswith(".manage_settings") and not s.endswith(".force_logout")
     ]
 
@@ -355,6 +357,9 @@ def seed_default_roles_and_permissions(db: Session):
             # Supplier Ledger (base + granular)
             "view-supplier_ledger", "create-supplier_ledger", "update-supplier_ledger",
             "supplier_ledger.view", "supplier_ledger.create_payout", "supplier_ledger.approve", "supplier_ledger.mark_paid",
+            # Agent Ledger (base + granular)
+            "view-agent_ledger", "create-agent_ledger", "update-agent_ledger",
+            "agent_ledger.view", "agent_ledger.create_payout", "agent_ledger.approve", "agent_ledger.mark_paid",
             # Reports / Invoices (base)
             "view-reports", "view-invoices",
             # Notifications (base)
@@ -371,7 +376,7 @@ def seed_default_roles_and_permissions(db: Session):
             # All operational granular permissions
             *_all_operational,
             # All booking-lifecycle / financial / system granular permissions
-            *_all_week,
+            *_all_booking_lifecycle,
         ],
 
         # ------------------------------------------------------------------
@@ -405,6 +410,8 @@ def seed_default_roles_and_permissions(db: Session):
             "view-payments", "payments.summary",
             # Supplier Ledger (view only)
             "view-supplier_ledger", "supplier_ledger.view",
+            # Agent Ledger (view only)
+            "view-agent_ledger", "agent_ledger.view",
             # Reports / Invoices (base)
             "view-reports", "view-invoices",
             # Notifications (base)
@@ -424,8 +431,8 @@ def seed_default_roles_and_permissions(db: Session):
             "view-profile", "update-profile", "profile.view",
             # All operational granular permissions
             *_all_operational,
-            # Week granular -- exclude system-only actions
-            *_week_no_system,
+            # Booking-lifecycle granular -- exclude system-only actions
+            *_booking_lifecycle_no_system,
         ],
 
         # ------------------------------------------------------------------
@@ -503,6 +510,9 @@ def seed_default_roles_and_permissions(db: Session):
             # Notifications
             "view-notifications",
             "notifications.view",
+            # Agent Ledger (view own payouts)
+            "view-agent_ledger",
+            "agent_ledger.view", "agent_ledger.create_payout",
             # Profile
             "view-profile", "update-profile", "profile.view",
         ],

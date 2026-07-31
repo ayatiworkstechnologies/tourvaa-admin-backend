@@ -1,4 +1,4 @@
-"""week 6 8 operations cms
+"""operations directory and tour CMS schema
 
 Revision ID: 20260616_0008
 Revises: 20260615_0007

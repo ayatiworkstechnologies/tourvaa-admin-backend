@@ -160,7 +160,6 @@ class TourGalleryImage(Base):
     tour = relationship("Tour")
 
 
-# week 10
 class TourPricing(Base):
     __tablename__ = "tour_pricing"
 

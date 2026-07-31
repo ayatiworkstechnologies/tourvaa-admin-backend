@@ -90,7 +90,7 @@ def test_every_role_starts_email_verification(monkeypatch, account_type, role_sl
     profile = next(item for item in added if isinstance(item, profile_model))
     assert profile.status == "inactive"
     if isinstance(profile, Agent):
-        assert profile.approval_status == "NOT_REQUIRED"
+        assert profile.approval_status == "pending"
     if isinstance(profile, Supplier):
         assert profile.approval_status == "PENDING"
     send_verification.assert_called_once_with(db, user, "raw-token", None)
