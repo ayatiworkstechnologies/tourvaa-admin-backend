@@ -31,6 +31,13 @@ def agent_customer_filter(db: Session, agent: Agent, actor_user_id: int):
     return or_(Customer.id.in_(booked_customer_ids), Customer.id.in_(created_customer_ids))
 
 
+def ensure_agent_account_access(db: Session, agent_id: int, user: User | None) -> None:
+    if not is_agent_user(user):
+        return
+    if get_actor_agent(db, user).id != agent_id:
+        raise HTTPException(status_code=403, detail="You can only access your own agent account")
+
+
 def ensure_agent_customer_access(db: Session, customer_id: int, user: User | None) -> None:
     if not is_agent_user(user):
         return

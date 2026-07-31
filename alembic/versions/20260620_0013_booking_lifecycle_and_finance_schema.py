@@ -1,4 +1,4 @@
-"""Week 11-15 operations modules
+"""booking lifecycle, payments, invoicing, and notifications schema
 
 Revision ID: 20260620_0013
 Revises: 20260618_0012

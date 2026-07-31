@@ -129,8 +129,7 @@ def record_conversion(db: Session, *, ref_code: str, booking_id: int, booking_am
     if existing:
         return existing
 
-    # Try common commission field names; default to 0 if not present
-    commission_pct = Decimal(str(getattr(aff, "commission_value", None) or getattr(aff, "commission_percentage", None) or 0))
+    commission_pct = Decimal(str(aff.commission_percentage or 0))
     commission_amount = money((money(booking_amount) * commission_pct) / 100)
 
     conversion = AffiliateConversion(

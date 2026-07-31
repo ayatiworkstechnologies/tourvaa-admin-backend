@@ -256,7 +256,7 @@ def register_unified_user(db: Session, data):
     elif role_slug == "supplier":
         db.add(Supplier(user_id=user.id, supplier_name=user.name, status="inactive", approval_status="PENDING"))
     else:
-        db.add(Agent(user_id=user.id, agent_name=user.name, status="inactive", approval_status="NOT_REQUIRED"))
+        db.add(Agent(user_id=user.id, agent_name=user.name, status="inactive", approval_status="pending"))
 
     log_audit(
         db,
@@ -326,7 +326,7 @@ def complete_registration(db: Session, token: str, password: str):
     agent = db.query(Agent).filter(Agent.user_id == user.id).first()
     if agent:
         agent.status = "active"
-        agent.approval_status = "NOT_REQUIRED"
+        agent.approval_status = "pending"
         agent.approved_at = None
         agent.rejection_reason = None
 

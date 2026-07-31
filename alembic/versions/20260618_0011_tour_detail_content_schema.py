@@ -1,4 +1,4 @@
-"""Week 9+10 tour detail tables
+"""tour detail content schema (itinerary, pricing, gallery, calendar)
 
 Revision ID: 20260618_0011
 Revises: 20260617_0010

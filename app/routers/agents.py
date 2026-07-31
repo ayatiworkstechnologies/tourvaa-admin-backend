@@ -3,17 +3,35 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.agents import Agent
+from pydantic import BaseModel
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentSelfUpdate, AgentUpdate
-from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, create_agent, get_agent, list_agents, partial_approve_agent, reject_agent, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
+from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, list_agents, partial_approve_agent, reject_agent, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
 from app.schemas.auth import UnifiedRegisterSchema, VerifyEmailSchema
 from app.services.auth import register_unified_user, verify_email
-from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs
+from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs, _is_agent
 from app.utils.pagination import pagination_params
 from app.utils.operations import PartialApprovalRequest, RejectRequest
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
+
+
+def _require_agent_owner_or_permission(db: Session, current_user: User, agent: Agent, *permission_slugs: str):
+    if agent.user_id == current_user.id:
+        return
+    role_ids = get_user_role_ids(current_user)
+    allowed_slugs = expand_permission_slugs(permission_slugs)
+    allowed = (
+        db.query(Permission)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .filter(RolePermission.role_id.in_(role_ids))
+        .filter(Permission.slug.in_(allowed_slugs))
+        .filter(Permission.is_active == True)
+        .first()
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Permission denied")
 
 
 @router.post("/register")
@@ -32,12 +50,36 @@ def verify_agent_email(data: VerifyEmailSchema, db: Session = Depends(get_db)):
 
 @router.post("/submit-verification")
 def submit_verification(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if not _is_agent(current_user):
+        raise HTTPException(status_code=403, detail="This endpoint requires an agent account")
     return {"status": "success", "message": "Agent verification submitted", "data": submit_agent_verification(db, current_user, request)}
 
 
 @router.get("/pending")
 def pending_agents(params: dict = Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission("agents.view", "view-agents"))):
     return {"status": "success", **list_agents(db, params["page"], params["limit"], params["search"], approval_status="admin_review_pending")}
+
+
+@router.get("/export")
+def export_agents_endpoint(db: Session = Depends(get_db), _=Depends(require_any_permission("agents.view", "view-agents"))):
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    rows = export_agents_directory(db)
+    buffer = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    else:
+        buffer.write("No agents to export\n")
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="agents-directory.csv"'},
+    )
 
 
 @router.get("")
@@ -97,20 +139,7 @@ def request_my_commission(data: AgentDiscountRequest, request: Request, db: Sess
 @router.get("/{agent_id}")
 def agent_detail(agent_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     agent = get_agent(db, agent_id)
-    if agent.user_id != current_user.id:
-        role_ids = get_user_role_ids(current_user)
-        allowed_slugs = expand_permission_slugs(("agents.view", "view-agents"))
-        allowed = (
-            db.query(Permission)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .filter(RolePermission.role_id.in_(role_ids))
-            .filter(Permission.slug.in_(allowed_slugs))
-            .filter(Permission.is_active == True)
-            .first()
-        )
-        if not allowed:
-            raise HTTPException(status_code=403, detail="Permission denied")
-
+    _require_agent_owner_or_permission(db, current_user, agent, "agents.view", "view-agents")
     return {"status": "success", "data": serialize_agent(agent)}
 
 
@@ -118,38 +147,14 @@ def agent_detail(agent_id: int, db: Session = Depends(get_db), current_user: Use
 @router.patch("/{agent_id}")
 def edit_agent(agent_id: int, data: AgentUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     agent = get_agent(db, agent_id)
-    if agent.user_id != current_user.id:
-        role_ids = get_user_role_ids(current_user)
-        allowed_slugs = expand_permission_slugs(("agents.edit", "update-agents"))
-        allowed = (
-            db.query(Permission)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .filter(RolePermission.role_id.in_(role_ids))
-            .filter(Permission.slug.in_(allowed_slugs))
-            .filter(Permission.is_active == True)
-            .first()
-        )
-        if not allowed:
-            raise HTTPException(status_code=403, detail="Permission denied")
+    _require_agent_owner_or_permission(db, current_user, agent, "agents.edit", "update-agents")
     return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent_id, data, current_user, request)}
 
 
 @router.get("/{agent_id}/documents")
 def get_agent_documents(agent_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     agent = get_agent(db, agent_id)
-    if agent.user_id != current_user.id:
-        role_ids = get_user_role_ids(current_user)
-        allowed_slugs = expand_permission_slugs(("agents.view", "view-agents"))
-        allowed = (
-            db.query(Permission)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .filter(RolePermission.role_id.in_(role_ids))
-            .filter(Permission.slug.in_(allowed_slugs))
-            .filter(Permission.is_active == True)
-            .first()
-        )
-        if not allowed:
-            raise HTTPException(status_code=403, detail="Permission denied")
+    _require_agent_owner_or_permission(db, current_user, agent, "agents.view", "view-agents")
 
     from app.models.agents import AgentDocument
     from app.services.agents import _document
@@ -167,19 +172,7 @@ async def upload_agent_document(
     current_user: User = Depends(get_current_user),
 ):
     agent = get_agent(db, agent_id)
-    if agent.user_id != current_user.id:
-        role_ids = get_user_role_ids(current_user)
-        allowed_slugs = expand_permission_slugs(("agents.edit", "update-agents"))
-        allowed = (
-            db.query(Permission)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .filter(RolePermission.role_id.in_(role_ids))
-            .filter(Permission.slug.in_(allowed_slugs))
-            .filter(Permission.is_active == True)
-            .first()
-        )
-        if not allowed:
-            raise HTTPException(status_code=403, detail="Permission denied")
+    _require_agent_owner_or_permission(db, current_user, agent, "agents.edit", "update-agents")
 
     document_type = document_type.strip().lower()
     if document_type not in AGENT_DOCUMENT_TYPES:
@@ -287,6 +280,27 @@ def review_document(
         "message": f"Document {data.status} successfully",
         "data": review_agent_document(db, agent_id, document_id, data, current_user, request),
     }
+
+
+class BulkApproveAgentsRequest(BaseModel):
+    agent_ids: list[int]
+
+
+class BulkRejectAgentsRequest(BaseModel):
+    agent_ids: list[int]
+    rejection_reason: str
+    admin_comments: str = ""
+
+
+@router.post("/bulk-approve")
+def bulk_approve(data: BulkApproveAgentsRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.approve"))):
+    return {"status": "success", "message": "Bulk approval processed", "data": bulk_approve_agents(db, data.agent_ids, current_user, request)}
+
+
+@router.post("/bulk-reject")
+def bulk_reject(data: BulkRejectAgentsRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.reject"))):
+    reject_data = RejectRequest(rejection_reason=data.rejection_reason, admin_comments=data.admin_comments)
+    return {"status": "success", "message": "Bulk rejection processed", "data": bulk_reject_agents(db, data.agent_ids, reject_data, current_user, request)}
 
 
 @router.post("/{agent_id}/approve")

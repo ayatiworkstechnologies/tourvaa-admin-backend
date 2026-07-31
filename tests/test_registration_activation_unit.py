@@ -80,7 +80,7 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     if profile_model is Customer:
         assert selected_profile.email_verified is True
     elif profile_model is Agent:
-        assert selected_profile.approval_status == "NOT_REQUIRED"
+        assert selected_profile.approval_status == "pending"
     else:
         assert selected_profile.approval_status == "PENDING"
     history = next(

@@ -734,6 +734,22 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         enqueue_notification(db, user_id=customer.user_id, notification_type="booking_created", title="Booking created", message=f"Your booking {booking.booking_code} was created", entity_type="booking", entity_id=booking.id)
     if booking.supplier and booking.supplier.user_id:
         enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New booking assigned", message=f"Booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
+
+    if booking.agent_id and booking.agent:
+        from app.services.agent_ledger import create_ledger_entry
+        discount_type = (booking.agent.discount_type or "").strip().lower()
+        discount_value = money(booking.agent.discount_value or 0)
+        if discount_type == "percentage":
+            commission_amount = money((customer_selling_price * discount_value) / 100)
+        elif discount_type == "fixed":
+            commission_amount = discount_value
+        else:
+            commission_amount = money(0)
+        try:
+            create_ledger_entry(db, booking=booking, agent_id=booking.agent_id, gross_amount=customer_selling_price, commission_amount=commission_amount)
+        except Exception as error:
+            logger.warning("Agent ledger entry creation failed for booking %s: %s", booking.id, error)
+
     db.commit()
     db.refresh(booking)
 
@@ -853,6 +869,11 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
         reverse_ledger_entry(db, booking.id)
     except Exception:
         logger.warning("Supplier ledger reversal failed for booking %s", booking.id, exc_info=True)
+    try:
+        from app.services.agent_ledger import reverse_ledger_entry as reverse_agent_ledger_entry
+        reverse_agent_ledger_entry(db, booking.id)
+    except Exception:
+        logger.warning("Agent ledger reversal failed for booking %s", booking.id, exc_info=True)
     if booking.customer:
         booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
         booking.customer.total_amount_pending = max(
@@ -873,6 +894,10 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
             booking_cancelled_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.reason or "Cancelled", login_url),
             booking.customer.email,
         )
+
+    if booking.agent and booking.agent.user_id:
+        from app.services.notifications import enqueue_notification
+        enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_cancelled", title="Booking cancelled", message=f"Booking {booking.booking_code} was cancelled: {data.reason or 'Cancelled'}", entity_type="booking", entity_id=booking.id)
 
     return serialize_booking(booking, detail=True)
 
@@ -913,6 +938,15 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
         if booking.customer and booking.customer.user_id:
             from app.services.notifications import enqueue_notification
             enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_expired", title="Booking hold expired", message=f"Your booking {booking.booking_code} was automatically cancelled because payment wasn't completed in time.", entity_type="booking", entity_id=booking.id)
+        if booking.agent and booking.agent.user_id:
+            from app.services.notifications import enqueue_notification
+            enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_expired", title="Booking hold expired", message=f"Booking {booking.booking_code} was automatically cancelled because payment wasn't completed in time.", entity_type="booking", entity_id=booking.id)
+        if booking.agent_id:
+            try:
+                from app.services.agent_ledger import reverse_ledger_entry as reverse_agent_ledger_entry
+                reverse_agent_ledger_entry(db, booking.id)
+            except Exception:
+                logger.warning("Agent ledger reversal failed for booking %s", booking.id, exc_info=True)
         expired_ids.append(booking.id)
 
     if expired_ids:
@@ -1183,6 +1217,11 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
         reverse_ledger_entry(db, booking.id)
     except Exception:
         logger.warning("Supplier ledger reversal failed for booking %s", booking.id, exc_info=True)
+    try:
+        from app.services.agent_ledger import reverse_ledger_entry as reverse_agent_ledger_entry
+        reverse_agent_ledger_entry(db, booking.id)
+    except Exception:
+        logger.warning("Agent ledger reversal failed for booking %s", booking.id, exc_info=True)
     if booking.customer:
         booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
         booking.customer.total_amount_pending = max(

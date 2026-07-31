@@ -238,10 +238,31 @@ async def _expire_stale_bookings_loop():
             logger.exception("Stale booking expiry sweep failed")
 
 
+# Cadences are daily/weekly/monthly at the coarsest, so a check every hour
+# is frequent enough to catch a due schedule promptly without polling hard.
+REPORT_SCHEDULE_SWEEP_INTERVAL_SECONDS = 60 * 60
+
+
+async def _report_schedule_loop():
+    from app.services.reports import run_due_report_schedules
+
+    while True:
+        await asyncio.sleep(REPORT_SCHEDULE_SWEEP_INTERVAL_SECONDS)
+        try:
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(run_due_report_schedules, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Report schedule sweep failed")
+
+
 @app.on_event("startup")
 async def start_background_jobs():
     if schema_is_ready():
         asyncio.create_task(_expire_stale_bookings_loop())
+        asyncio.create_task(_report_schedule_loop())
 
 setup_cors(app)
 

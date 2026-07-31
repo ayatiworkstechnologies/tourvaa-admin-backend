@@ -98,6 +98,16 @@ class AgentUpdate(BaseModel):
     def trim_optional_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
 
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str | None):
+        if value is None:
+            return value
+        value = value.lower()
+        if value not in ACTIVE_STATUSES:
+            raise ValueError("Invalid agent status")
+        return value
+
 
 class AgentSelfUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")

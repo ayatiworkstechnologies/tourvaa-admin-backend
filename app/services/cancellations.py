@@ -1,3 +1,4 @@
+import logging
 from datetime import timezone
 from decimal import Decimal
 from math import ceil
@@ -17,6 +18,8 @@ from app.utils.money import money, utcnow
 from app.models.customers import Customer
 from app.services.notifications import enqueue_notification, notify_admins
 from app.models.users import User
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_request(r: CancellationRequest) -> dict:
@@ -234,12 +237,12 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
         from app.services.affiliate_tracking import reverse_conversion
         reverse_conversion(db, booking.id)
     except Exception:
-        pass
+        logger.exception("Failed to reverse affiliate conversion for booking_id=%s", booking.id)
     try:
         from app.services.supplier_ledger import reverse_ledger_entry
         reverse_ledger_entry(db, booking.id)
     except Exception:
-        pass
+        logger.exception("Failed to reverse supplier ledger entry for booking_id=%s", booking.id)
 
     db.commit()
     db.refresh(req)

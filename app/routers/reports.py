@@ -320,6 +320,7 @@ def _serialize_schedule(row: ReportSchedule) -> dict:
         "is_active": row.is_active,
         "created_by": row.created_by,
         "created_at": row.created_at,
+        "last_run_at": row.last_run_at,
     }
 
 
@@ -350,7 +351,7 @@ def create_report_schedule(data: ReportScheduleCreate, db: Session = Depends(get
     db.refresh(row)
     return {
         "status": "success",
-        "message": "Schedule saved. Delivery is not yet automated -- this stores the configuration for when scheduled execution is added.",
+        "message": f"Schedule saved. The report will be emailed to the listed recipients {data.cadence}.",
         "data": _serialize_schedule(row),
     }
 
