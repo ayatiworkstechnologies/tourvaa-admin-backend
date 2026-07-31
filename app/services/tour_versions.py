@@ -1,6 +1,7 @@
 from math import ceil
 
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.services.audit import log_audit
@@ -47,7 +48,7 @@ def _tour_snapshot(db: Session, tour: Tour) -> dict:
         list_itineraries,
         list_pricing,
     )
-    return {
+    snapshot = {
         "title": tour.title,
         "slug": tour.slug,
         "subtitle": tour.subtitle,
@@ -79,6 +80,11 @@ def _tour_snapshot(db: Session, tour: Tour) -> dict:
         "discounts": list_discounts(db, tour.id),
         "extensions": list_extensions(db, tour.id),
     }
+    # The child-list serializers above return raw datetime/date/Decimal
+    # values straight from the ORM; jsonable_encoder converts everything to
+    # JSON-safe primitives before this dict is written to the JSON column
+    # (a plain json.dumps() there would otherwise crash on datetime).
+    return jsonable_encoder(snapshot)
 
 
 def _stage_pending_version(db: Session, tour: Tour, actor: User) -> TourVersion:
