@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 PHYSICAL_RATINGS = {"easy", "moderate", "hard"}
 ITEM_STATUSES = {"active", "inactive"}
@@ -298,6 +298,12 @@ class DiscountPayload(BaseModel):
         if v not in DISCOUNT_SCOPES:
             raise ValueError(f"discount_scope must be one of {DISCOUNT_SCOPES}")
         return v
+
+    @model_validator(mode="after")
+    def validate_percentage_bound(self) -> "DiscountPayload":
+        if self.discount_type == "percentage" and self.discount_value > 100:
+            raise ValueError("A percentage discount_value cannot exceed 100")
+        return self
 
 
 class GlobalDiscountPayload(DiscountPayload):

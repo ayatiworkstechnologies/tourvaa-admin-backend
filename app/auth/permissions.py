@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models.permissions import Permission, RolePermission
+from app.models.sessions import UserSession
 from app.models.users import User, UserRole
 from app.models.suppliers import Supplier
 from app.models.agents import Agent
@@ -142,6 +143,21 @@ def _request_token(request: Request, credentials: HTTPAuthorizationCredentials |
     return token
 
 
+def _ensure_session_active(db: Session, payload: dict) -> None:
+    """Reject a token whose originating UserSession has been revoked/expired.
+
+    Tokens issued before session_id was added to the claims (or where session
+    tracking failed at login) have no session_id - those fall back to the
+    token_version check that ran before this, same as always.
+    """
+    session_id = payload.get("session_id")
+    if not session_id:
+        return
+    session = db.query(UserSession).filter(UserSession.session_id == session_id).first()
+    if session and session.status != "active":
+        raise HTTPException(status_code=401, detail="Session has been revoked")
+
+
 def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
@@ -161,6 +177,8 @@ def get_current_user(
 
     if token_version is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Token has expired")
+
+    _ensure_session_active(db, payload)
 
     if user.account_status != "ACTIVE" or not user.is_active:
         raise HTTPException(status_code=403, detail="User is not approved")
@@ -227,6 +245,7 @@ def get_token_user_including_inactive(
     user = db.query(User).filter(User.id == payload.get("user_id")).first()
     if not user or payload.get("token_version") != user.token_version:
         raise HTTPException(status_code=401, detail="Session invalidated")
+    _ensure_session_active(db, payload)
     return user
 
 def require_portal(expected_portal: str):
@@ -256,6 +275,7 @@ def require_portal(expected_portal: str):
             raise HTTPException(status_code=401, detail="Invalid user")
         if token_version is None or token_version != user.token_version:
             raise HTTPException(status_code=401, detail="Token has expired")
+        _ensure_session_active(db, payload)
         if user.account_status != "ACTIVE" or not user.is_active:
             raise HTTPException(status_code=403, detail="User is not approved")
         if user.role and not user.role.is_active:

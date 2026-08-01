@@ -111,9 +111,15 @@ def _check_redis(r, bucket: str, max_calls: int, window_seconds: int) -> None:
 # public api
 
 def _client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
+    # X-Forwarded-For is only trustworthy when requests actually pass through
+    # a proxy that sets it - otherwise any direct caller can set an arbitrary
+    # value per request to get a fresh rate-limit bucket every time.
+    from app.config import settings
+
+    if settings.TRUST_PROXY_HEADERS:
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 

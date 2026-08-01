@@ -186,13 +186,31 @@ def get_commissions(db: Session, affiliate_id: int) -> dict:
 # payouts
 
 def create_payout(db: Session, data: AffiliatePayoutCreate, actor: User) -> dict:
-    conversions = db.query(AffiliateConversion).filter(
-        AffiliateConversion.id.in_(data.conversion_ids),
-        AffiliateConversion.affiliate_id == data.affiliate_id,
-        AffiliateConversion.status.in_(["pending", "confirmed"]),
-    ).all()
-    if not conversions:
-        raise HTTPException(status_code=404, detail="No payable conversions found")
+    if not data.conversion_ids:
+        raise HTTPException(status_code=400, detail="No conversions specified")
+
+    # Lock the requested rows before deciding what's payable so two
+    # concurrent payout requests for the same conversions can't both read
+    # them as "pending" and each create a payout - the second transaction
+    # blocks here until the first commits, then sees the now-"paid" status
+    # and rejects instead of double-paying.
+    conversions = (
+        db.query(AffiliateConversion)
+        .filter(
+            AffiliateConversion.id.in_(data.conversion_ids),
+            AffiliateConversion.affiliate_id == data.affiliate_id,
+        )
+        .with_for_update()
+        .all()
+    )
+    found_ids = {c.id for c in conversions}
+    missing_ids = sorted(set(data.conversion_ids) - found_ids)
+    if missing_ids:
+        raise HTTPException(status_code=404, detail=f"Conversions not found for this affiliate: {missing_ids}")
+
+    unpayable_ids = sorted(c.id for c in conversions if c.status not in ("pending", "confirmed"))
+    if unpayable_ids:
+        raise HTTPException(status_code=409, detail=f"Conversions already paid or reversed: {unpayable_ids}")
 
     total = money(sum(r.commission_amount for r in conversions))
     payout = AffiliatePayout(

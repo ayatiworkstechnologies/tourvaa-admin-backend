@@ -194,7 +194,7 @@ def list_requests(db: Session, page: int = 1, limit: int = 20, status: str = "",
 
 
 def approve_request(db: Session, request_id: int, data: CancellationApprove, actor: User, request=None) -> dict:
-    req = db.query(CancellationRequest).filter(CancellationRequest.id == request_id).first()
+    req = db.query(CancellationRequest).filter(CancellationRequest.id == request_id).with_for_update().first()
     if not req:
         raise HTTPException(status_code=404, detail="Cancellation request not found")
     if req.status != "pending":
@@ -256,7 +256,7 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
 
 
 def reject_request(db: Session, request_id: int, data: CancellationReject, actor: User, request=None) -> dict:
-    req = db.query(CancellationRequest).filter(CancellationRequest.id == request_id).first()
+    req = db.query(CancellationRequest).filter(CancellationRequest.id == request_id).with_for_update().first()
     if not req:
         raise HTTPException(status_code=404, detail="Cancellation request not found")
     if req.status != "pending":

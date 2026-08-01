@@ -211,8 +211,9 @@ def refresh_token(
     data: RefreshTokenSchema | None = None,
     db: Session = Depends(get_db),
 ):
-    from jose import jwt as jose_jwt, JWTError
+    from jose import jwt as jose_jwt, JWTError, ExpiredSignatureError
     from app.config import settings as _settings
+    from app.models.sessions import UserSession
 
     token = request.cookies.get(REFRESH_COOKIE_NAME, "")
     if not token:
@@ -230,13 +231,9 @@ def refresh_token(
             portal = None
         secret = _settings.get_portal_secret(portal) if portal else _settings.JWT_SECRET_KEY
 
-        # Decode without expiry check so an expired token can still be refreshed
-        payload = jose_jwt.decode(
-            token,
-            secret,
-            algorithms=[_settings.JWT_ALGORITHM],
-            options={"verify_exp": False},
-        )
+        payload = jose_jwt.decode(token, secret, algorithms=[_settings.JWT_ALGORITHM])
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh session expired. Please log in again.")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
     if request.cookies.get(REFRESH_COOKIE_NAME) and payload.get("token_type") != "refresh":
@@ -244,6 +241,7 @@ def refresh_token(
 
     user_id = payload.get("user_id")
     token_version = payload.get("token_version")
+    session_id = payload.get("session_id")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -252,6 +250,10 @@ def refresh_token(
         raise HTTPException(status_code=401, detail="Session invalidated. Please log in again.")
     if user.account_status != "ACTIVE" or not user.is_active:
         raise HTTPException(status_code=403, detail="Account is not active")
+    if session_id:
+        session = db.query(UserSession).filter(UserSession.session_id == session_id).first()
+        if session and session.status != "active":
+            raise HTTPException(status_code=401, detail="Session has been revoked")
 
     refresh_data = data or RefreshTokenSchema()
     result = _set_auth_cookies(response, refresh_user_token(
@@ -259,6 +261,7 @@ def refresh_token(
         user,
         client_type=refresh_data.client_type,
         device_id=refresh_data.device_id,
+        session_id=session_id,
     ), expose_access_token=refresh_data.client_type != "web-cookie")
     return {
         "status": "success",

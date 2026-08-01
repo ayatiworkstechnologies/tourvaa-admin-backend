@@ -8,7 +8,12 @@ LIVE_FRONTEND_URL = "https://tourvaa.vercel.app"
 
 class Settings(BaseSettings):
     APP_NAME: str = "Tourvaa Backend"
-    APP_ENV: str = "development"
+    # Fail closed: a deployment that forgets to set APP_ENV in its
+    # environment should get production's stricter payment/webhook
+    # verification behavior, not development's permissive fallbacks.
+    # Local/dev workflows are unaffected - .env and .env.example both set
+    # APP_ENV=development explicitly.
+    APP_ENV: str = "production"
     APP_DEBUG: bool = True
 
     DATABASE_URL: str
@@ -31,6 +36,10 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = ""
     API_BASE_URL: str = "http://127.0.0.1:8000"
     ALLOWED_ORIGINS: str = "*"
+    # Only trust X-Forwarded-For for rate-limiting when requests genuinely
+    # pass through a proxy that sets it - otherwise it's a header any direct
+    # caller can spoof to dodge rate limits.
+    TRUST_PROXY_HEADERS: bool = False
     MOBILE_DEEP_LINK_URL: str = "tourvaa://reset-password"
     STORAGE_ROOT: str = "storage"
 

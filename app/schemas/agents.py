@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.utils.operations import ACTIVE_STATUSES, APPROVAL_STATUSES, VALUE_TYPES
 
@@ -138,6 +138,12 @@ class AgentDiscountRequest(BaseModel):
         if value not in VALUE_TYPES:
             raise ValueError("Invalid discount type")
         return value
+
+    @model_validator(mode="after")
+    def validate_percentage_bound(self) -> "AgentDiscountRequest":
+        if self.discount_type == "percentage" and self.discount_value > 100:
+            raise ValueError("A percentage discount_value cannot exceed 100")
+        return self
 
 
 class AgentDocumentReviewRequest(BaseModel):
