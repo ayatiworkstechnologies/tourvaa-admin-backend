@@ -620,17 +620,16 @@ def _finalize_login(db: Session, user: User, data, request=None):
     role_slug = auth_user["role"]["slug"]
     portal = get_portal_for_role(role_slug)
 
-    token = create_token({
-        "user_id": user.id,
-        "email": user.email,
-        "role": role_slug,
-        "portal": portal,
-        "client_type": data.client_type or "web",
-        "device_id": data.device_id,
-        "token_version": user.token_version,
-    }, portal=portal)
-
     if user.account_status != "ACTIVE" or not user.is_active:
+        token = create_token({
+            "user_id": user.id,
+            "email": user.email,
+            "role": role_slug,
+            "portal": portal,
+            "client_type": data.client_type or "web",
+            "device_id": data.device_id,
+            "token_version": user.token_version,
+        }, portal=portal)
         _record_login_history(db, data=data, email=email, status="restricted", user=user, failure_reason=user.account_status, request=request)
         db.commit()
         if user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"}:
@@ -648,7 +647,17 @@ def _finalize_login(db: Session, user: User, data, request=None):
             "user": auth_user,
         }
 
-    refresh_token = create_token({
+    # Session is created before the tokens so its session_id can be embedded
+    # as a token claim - that's what lets a single "revoke this session"
+    # action (see services/sessions.revoke_session) actually invalidate the
+    # token, instead of only marking a UserSession row for display purposes.
+    try:
+        session = create_session(db, user, request=request)
+    except Exception as error:
+        logger.warning("Login session tracking failed for user %s: %s", user.id, error)
+        session = None
+
+    token_claims = {
         "user_id": user.id,
         "email": user.email,
         "role": role_slug,
@@ -656,10 +665,17 @@ def _finalize_login(db: Session, user: User, data, request=None):
         "client_type": data.client_type or "web",
         "device_id": data.device_id,
         "token_version": user.token_version,
-    }, portal=portal, token_type="refresh", expires_minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60)
+        "session_id": session.session_id if session else None,
+    }
+    token = create_token(token_claims, portal=portal)
+    refresh_token = create_token(
+        token_claims,
+        portal=portal,
+        token_type="refresh",
+        expires_minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60,
+    )
 
-    try:
-        session = create_session(db, user, request=request)
+    if session:
         _record_login_history(
             db,
             data=data,
@@ -669,9 +685,6 @@ def _finalize_login(db: Session, user: User, data, request=None):
             session_id=session.session_id,
             request=request,
         )
-    except Exception as error:
-        logger.warning("Login session tracking failed for user %s: %s", user.id, error)
-        session = None
 
     log_audit(
         db,
@@ -798,11 +811,11 @@ def verify_otp_and_login(db: Session, data, request=None):
     return _finalize_login(db, user, data, request=request)
 
 
-def refresh_user_token(db: Session, user: User, client_type: str | None = "web", device_id: str | None = None):
+def refresh_user_token(db: Session, user: User, client_type: str | None = "web", device_id: str | None = None, session_id: str | None = None):
     auth_user = get_auth_user_payload(db, user)
     role_slug = auth_user["role"]["slug"]
     portal = get_portal_for_role(role_slug)
-    token = create_token({
+    token_claims = {
         "user_id": user.id,
         "email": user.email,
         "role": role_slug,
@@ -810,16 +823,15 @@ def refresh_user_token(db: Session, user: User, client_type: str | None = "web",
         "client_type": client_type or "web",
         "device_id": device_id,
         "token_version": user.token_version,
-    }, portal=portal)
-    refresh_token = create_token({
-        "user_id": user.id,
-        "email": user.email,
-        "role": role_slug,
-        "portal": portal,
-        "client_type": client_type or "web",
-        "device_id": device_id,
-        "token_version": user.token_version,
-    }, portal=portal, token_type="refresh", expires_minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60)
+        "session_id": session_id,
+    }
+    token = create_token(token_claims, portal=portal)
+    refresh_token = create_token(
+        token_claims,
+        portal=portal,
+        token_type="refresh",
+        expires_minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60,
+    )
 
     return {
         "access_token": token,

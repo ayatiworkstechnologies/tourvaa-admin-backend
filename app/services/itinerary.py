@@ -3,7 +3,7 @@ import os
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import get_storage_root
+from app.config import get_private_docs_root
 from app.models.bookings import Booking
 from app.models.tours import TourItinerary
 from app.models.users import User
@@ -34,7 +34,7 @@ def download_itinerary_pdf(db: Session, booking_id: int, actor: User) -> tuple[s
     if not days:
         raise HTTPException(status_code=404, detail="No itinerary is available for this tour yet")
 
-    storage = get_storage_root().joinpath("itineraries")
+    storage = get_private_docs_root().joinpath("itineraries")
     storage.mkdir(parents=True, exist_ok=True)
     filename = f"{booking.booking_code or booking.id}-itinerary.pdf"
     pdf_path = storage.joinpath(filename)

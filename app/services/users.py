@@ -178,6 +178,18 @@ def sync_user_roles(db: Session, user: User, role_ids: list[int]):
     return roles
 
 
+def _ensure_actor_can_grant_role(db: Session, role_id: int | None, user: User, actor: User | None) -> None:
+    """Only a super admin may hand out the super-admin role - otherwise
+    anyone holding update-users could grant themselves or another account
+    super-admin power. No-op if the target isn't newly becoming a super
+    admin (already was one, or the new role isn't super-admin)."""
+    if role_id is None or is_super_admin(user):
+        return
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if role and role.slug == "super-admin" and not (actor and is_super_admin(actor)):
+        raise HTTPException(status_code=403, detail="Only a super admin can grant the super admin role")
+
+
 def is_super_admin(user: User):
     if user.role and user.role.slug == "super-admin":
         return True
@@ -236,7 +248,9 @@ def create_user(
         raise HTTPException(status_code=400, detail="Email already exists")
 
     if data.role_id is not None:
-        validate_role(db, data.role_id)
+        selected_role = validate_role(db, data.role_id)
+        if selected_role.slug == "super-admin" and not (actor and is_super_admin(actor)):
+            raise HTTPException(status_code=403, detail="Only a super admin can grant the super admin role")
 
     # This admin-created-user flow issues TWO independent tokens on purpose:
     # `token`/`token_hash` below become the real reset_password_token the
@@ -337,6 +351,7 @@ def update_user(
     new_role_id = None
     if data.role_id is not None:
         validate_role(db, data.role_id)
+        _ensure_actor_can_grant_role(db, data.role_id, user, actor)
         ensure_not_removing_last_super_admin(db, user, new_role_id=data.role_id)
         if user.role_id != data.role_id:
             user.token_version += 1
@@ -569,15 +584,17 @@ def assign_roles_to_user(
 
     old_values = serialize_user(user)
     new_primary_role_id = role_ids[0]
+    grants_super_admin = (
+        db.query(Role)
+        .filter(Role.id.in_(role_ids))
+        .filter(Role.slug == "super-admin")
+        .first()
+    )
     if is_super_admin(user):
-        keeps_super_admin = (
-            db.query(Role)
-            .filter(Role.id.in_(role_ids))
-            .filter(Role.slug == "super-admin")
-            .first()
-        )
-        if not keeps_super_admin and count_active_super_admins(db) <= 1:
+        if not grants_super_admin and count_active_super_admins(db) <= 1:
             raise HTTPException(status_code=400, detail="Cannot remove the last active super admin")
+    elif grants_super_admin and not (actor and is_super_admin(actor)):
+        raise HTTPException(status_code=403, detail="Only a super admin can grant the super admin role")
 
     roles = sync_user_roles(db, user, role_ids)
 

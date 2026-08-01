@@ -275,6 +275,8 @@ app.mount("/storage", StaticFiles(directory=str(storage_root)), name="storage")
 private_docs_root = storage_root.parent / "private-docs"
 private_docs_root.joinpath("supplier-documents").mkdir(parents=True, exist_ok=True)
 private_docs_root.joinpath("agent-documents").mkdir(parents=True, exist_ok=True)
+private_docs_root.joinpath("invoices").mkdir(parents=True, exist_ok=True)
+private_docs_root.joinpath("itineraries").mkdir(parents=True, exist_ok=True)
 
 register_api_routes(app)
 

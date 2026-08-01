@@ -16,3 +16,4 @@ pywebpush
 reportlab
 redis
 cloudinary
+bleach

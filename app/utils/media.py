@@ -1,6 +1,7 @@
+from pathlib import Path
 from urllib.parse import urlparse
 
-from app.config import get_storage_root
+from app.config import get_storage_root, get_private_docs_root
 
 
 def detect_image_type(content: bytes) -> str | None:
@@ -51,3 +52,20 @@ def existing_storage_path(value: str | None):
         return value
 
     return ""
+
+
+def resolve_private_docs_path(file_path: str | None, prefix: str) -> Path | None:
+    """Convert a stored '<prefix>...' marker to an absolute filesystem path
+    under the private docs root, refusing to resolve outside that root
+    (e.g. via a '../' segment)."""
+    if not file_path or not file_path.startswith(prefix):
+        return None
+
+    relative = file_path[len(prefix):]
+    root = get_private_docs_root().resolve()
+    candidate = (root / relative).resolve()
+
+    if candidate != root and root not in candidate.parents:
+        return None
+
+    return candidate

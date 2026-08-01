@@ -3,7 +3,7 @@
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.config import get_storage_root
+from app.config import get_private_docs_root
 from app.services.audit import log_audit
 from app.models.bookings import Booking, EmailLog
 from app.utils.money import money, money_str, utcnow
@@ -137,7 +137,7 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
     db.flush()
     inv.invoice_number = _invoice_number(inv.id)
     db.add(InvoiceItem(invoice_id=inv.id, item_type="booking", description=f"Booking {booking.booking_code or booking.id} - {booking.tour_name or 'Tour'}", quantity=1, unit_price=subtotal, tax_amount=gst, total_price=total))
-    storage = get_storage_root().joinpath("invoices")
+    storage = get_private_docs_root().joinpath("invoices")
     storage.mkdir(parents=True, exist_ok=True)
     pdf_path = storage.joinpath(f"{inv.invoice_number}.pdf")
     invoice_data = _build_invoice_pdf_data(
@@ -146,7 +146,7 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
     )
     from app.utils.invoices_pdf import generate_pdf
     generate_pdf(pdf_path, invoice_data)
-    inv.pdf_path = f"/storage/invoices/{inv.invoice_number}.pdf"
+    inv.pdf_path = f"/private-docs/invoices/{inv.invoice_number}.pdf"
     from app.services.notifications import enqueue_notification, notify_admins
     notify_admins(db, notification_type="invoice_generated", title="Invoice generated", message=f"Invoice {inv.invoice_number} was generated", entity_type="invoice", entity_id=inv.id)
     if booking.customer and booking.customer.user_id:
@@ -162,7 +162,7 @@ def regenerate_invoice_pdf(db: Session, invoice_id: int, actor: User, request: R
     booking = inv.booking
     if not booking:
         raise HTTPException(status_code=400, detail="Invoice has no associated booking")
-    storage = get_storage_root().joinpath("invoices")
+    storage = get_private_docs_root().joinpath("invoices")
     storage.mkdir(parents=True, exist_ok=True)
     pdf_path = storage.joinpath(f"{inv.invoice_number}.pdf")
     payment = db.query(Payment).filter(Payment.id == inv.payment_id).first() if inv.payment_id else None
@@ -172,7 +172,7 @@ def regenerate_invoice_pdf(db: Session, invoice_id: int, actor: User, request: R
     )
     from app.utils.invoices_pdf import generate_pdf
     generate_pdf(pdf_path, invoice_data)
-    inv.pdf_path = f"/storage/invoices/{inv.invoice_number}.pdf"
+    inv.pdf_path = f"/private-docs/invoices/{inv.invoice_number}.pdf"
     log_audit(db, actor=actor, action="regenerate_invoice_pdf", entity_type="invoice", entity_id=inv.id, request=request)
     db.commit()
     db.refresh(inv)
@@ -181,15 +181,14 @@ def regenerate_invoice_pdf(db: Session, invoice_id: int, actor: User, request: R
 
 def download_invoice_pdf(db: Session, invoice_id: int, actor: User | None = None) -> tuple[str, str]:
     """Returns (file_system_path, filename) for FileResponse."""
-    from app.config import get_storage_root
+    from app.utils.media import resolve_private_docs_path
     inv = get_invoice(db, invoice_id, actor)
     if not inv.pdf_path:
         raise HTTPException(status_code=404, detail="PDF not yet generated for this invoice")
-    fs_path = str(get_storage_root()) + inv.pdf_path.replace("/storage", "")
-    import os
-    if not os.path.exists(fs_path):
+    fs_path = resolve_private_docs_path(inv.pdf_path, "/private-docs/")
+    if not fs_path or not fs_path.exists():
         raise HTTPException(status_code=404, detail="PDF file not found on server - please regenerate")
-    return fs_path, f"{inv.invoice_number}.pdf"
+    return str(fs_path), f"{inv.invoice_number}.pdf"
 
 
 def email_invoice_to_customer(db: Session, invoice_id: int, email: str | None, actor: User, request: Request | None = None):
@@ -209,10 +208,9 @@ def email_invoice_to_customer(db: Session, invoice_id: int, email: str | None, a
 """
     attachments = []
     if inv.pdf_path:
-        import os
-        from app.config import get_storage_root
-        fs_path = str(get_storage_root()) + inv.pdf_path.replace("/storage", "")
-        if os.path.exists(fs_path):
+        from app.utils.media import resolve_private_docs_path
+        fs_path = resolve_private_docs_path(inv.pdf_path, "/private-docs/")
+        if fs_path and fs_path.exists():
             with open(fs_path, "rb") as pdf_file:
                 attachments.append((f"{inv.invoice_number}.pdf", pdf_file.read(), "pdf"))
     try_send_email(recipient, subject, body, attachments, template_key="invoice_emailed")
@@ -226,7 +224,7 @@ def email_invoice_to_customer(db: Session, invoice_id: int, email: str | None, a
 
 
 def mark_invoice_emailed(db: Session, invoice_id: int, data: InvoiceEmailRequest, actor: User, request: Request | None = None):
-    inv = get_invoice(db, invoice_id)
+    inv = get_invoice(db, invoice_id, actor)
     inv.status = "emailed"
     inv.emailed_at = utcnow()
     db.add(EmailLog(recipient_email=data.email or "", subject=f"Invoice {inv.invoice_number}", template_key="invoice_sent", entity_type="invoice", entity_id=inv.id, status="sent", sent_at=utcnow()))

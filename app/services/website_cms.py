@@ -1,6 +1,7 @@
 from math import ceil
 from typing import Optional
 
+import bleach
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,40 @@ def _get_or_404(db, model, item_id: int, label: str):
     if not obj:
         raise HTTPException(status_code=404, detail=f"{label} not found")
     return obj
+
+
+# Rich-text fields (blog/policy/popup content) get sanitized at write time,
+# not just escaped - these are meant to render as real HTML on the public
+# site, so anyone holding a CMS edit permission (not necessarily
+# super-admin) could otherwise plant stored XSS for every site visitor.
+_ALLOWED_HTML_TAGS = [
+    "p", "br", "strong", "b", "em", "i", "u", "s",
+    "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6",
+    "blockquote", "a", "img", "span", "div", "table", "thead",
+    "tbody", "tr", "th", "td", "hr", "figure", "figcaption",
+]
+_ALLOWED_HTML_ATTRS = {
+    "a": ["href", "title", "target", "rel"],
+    "img": ["src", "alt", "title", "width", "height"],
+    "span": ["class"],
+    "div": ["class"],
+    "table": ["class"],
+    "td": ["colspan", "rowspan"],
+    "th": ["colspan", "rowspan"],
+}
+_ALLOWED_HTML_PROTOCOLS = ["http", "https", "mailto"]
+
+
+def _sanitize_html(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return value
+    return bleach.clean(
+        value,
+        tags=_ALLOWED_HTML_TAGS,
+        attributes=_ALLOWED_HTML_ATTRS,
+        protocols=_ALLOWED_HTML_PROTOCOLS,
+        strip=True,
+    )
 
 
 # serializers
@@ -153,6 +188,7 @@ def list_blogs(db, page, limit, active_only=False):
 
 def create_blog(db, data: BlogPayload):
     d = data.model_dump()
+    d["content"] = _sanitize_html(d.get("content"))
     if not d.get("slug"):
         d["slug"] = _slugify_blog(data.title)
     if data.status == "published" and not d.get("published_at"):
@@ -161,6 +197,8 @@ def create_blog(db, data: BlogPayload):
 
 def update_blog(db, item_id, data: BlogPayload):
     d = data.model_dump(exclude_unset=True)
+    if "content" in d:
+        d["content"] = _sanitize_html(d.get("content"))
     if d.get("status") == "published":
         blog = db.query(Blog).filter(Blog.id == item_id).first()
         if blog and not blog.published_at:
@@ -203,13 +241,14 @@ def get_policy_by_slug(db, slug: str):
     return _s_policy(obj)
 
 def upsert_policy(db, data: PolicyPayload):
+    content = _sanitize_html(data.content)
     obj = db.query(CmsPolicy).filter(CmsPolicy.slug == data.slug).first()
     if obj:
         obj.title = data.title
-        obj.content = data.content
+        obj.content = content
         obj.last_updated = utcnow()
     else:
-        obj = CmsPolicy(slug=data.slug, title=data.title, content=data.content, last_updated=utcnow())
+        obj = CmsPolicy(slug=data.slug, title=data.title, content=content, last_updated=utcnow())
         db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -218,8 +257,16 @@ def upsert_policy(db, data: PolicyPayload):
 # promotional popups
 
 def list_popups(db, page, limit, active_only=False): return _list(db, PromotionalPopup, _s_popup, page, limit, active_only)
-def create_popup(db, data: PopupPayload): return _create(db, PromotionalPopup, data.model_dump(), _s_popup)
-def update_popup(db, item_id, data: PopupPayload): return _update(db, PromotionalPopup, item_id, data.model_dump(exclude_unset=True), _s_popup, "Popup")
+def create_popup(db, data: PopupPayload):
+    d = data.model_dump()
+    d["content"] = _sanitize_html(d.get("content"))
+    return _create(db, PromotionalPopup, d, _s_popup)
+
+def update_popup(db, item_id, data: PopupPayload):
+    d = data.model_dump(exclude_unset=True)
+    if "content" in d:
+        d["content"] = _sanitize_html(d.get("content"))
+    return _update(db, PromotionalPopup, item_id, d, _s_popup, "Popup")
 def delete_popup(db, item_id): _delete(db, PromotionalPopup, item_id, "Popup")
 
 # external links

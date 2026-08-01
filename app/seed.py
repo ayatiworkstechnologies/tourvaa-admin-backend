@@ -1,11 +1,15 @@
-﻿from sqlalchemy.orm import Session
+﻿import logging
 
-from app.config import settings
+from sqlalchemy.orm import Session
+
+from app.config import settings, Settings
 from app.models.admin_modules import AdminModule
 from app.models.permissions import Permission, RolePermission
 from app.models.roles import Role
 from app.models.users import User, UserRole
 from app.auth.security import hash_password
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_ROLES = [
@@ -204,6 +208,13 @@ def assign_user_role_if_missing(db: Session, user: User, role: Role):
 def seed_super_admin_user(db: Session, role: Role | None):
     if not role:
         return
+
+    default_password = Settings.model_fields["SUPER_ADMIN_PASSWORD"].default
+    if settings.APP_ENV.lower() == "production" and settings.SUPER_ADMIN_PASSWORD == default_password:
+        logger.warning(
+            "SUPER_ADMIN_PASSWORD is still the default value in a production environment - "
+            "set a real password via the SUPER_ADMIN_PASSWORD env var."
+        )
 
     email = settings.SUPER_ADMIN_EMAIL.strip().lower()
     user = db.query(User).filter(User.email == email).first()

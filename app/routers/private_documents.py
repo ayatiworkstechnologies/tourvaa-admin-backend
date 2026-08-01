@@ -11,10 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.config import get_private_docs_root
 from app.database import get_db
 from app.auth.permissions import get_current_user, get_user_role_ids, expand_permission_slugs
 from app.utils.cloudinary_client import get_private_file_url
+from app.utils.media import resolve_private_docs_path
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User
 
@@ -22,13 +22,6 @@ router = APIRouter(prefix="/private-documents", tags=["Private Documents"])
 
 _PRIVATE_PREFIX = "/private-documents/"
 _CLOUDINARY_PREFIX = "cloudinary:"
-
-
-def _resolve_path(file_path: str):
-    """Convert a /private-documents/... DB path to an absolute filesystem path."""
-    # Strip the /private-documents/ prefix, then resolve under private_docs_root
-    relative = file_path.removeprefix("/private-documents/")
-    return get_private_docs_root() / relative
 
 
 def _serve_document(doc):
@@ -40,8 +33,10 @@ def _serve_document(doc):
     if not doc.file_path.startswith(_PRIVATE_PREFIX):
         raise HTTPException(status_code=404, detail="Document not available via this endpoint")
 
-    abs_path = _resolve_path(doc.file_path)
-    if not abs_path.exists():
+    # resolve_private_docs_path refuses to resolve outside private_docs_root
+    # (e.g. via a '../' segment in a malformed/legacy file_path value).
+    abs_path = resolve_private_docs_path(doc.file_path, _PRIVATE_PREFIX)
+    if not abs_path or not abs_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
 
     media_type = doc.mime_type or mimetypes.guess_type(str(abs_path))[0] or "application/octet-stream"

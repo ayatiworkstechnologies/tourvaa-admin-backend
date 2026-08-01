@@ -5,7 +5,7 @@ Serves tour listing and detail for the public website.
 import html as html_escape
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.services.cms import _category, _city, _country, _subcategory, _tour
 from app.services.reviews import get_review_stats, list_tour_reviews
 from app.schemas.cms import slugify
+from app.utils.ratelimit import check_rate_limit
 from app.models.tours import (
     TourAccommodationExtra,
     TourCalendar,
@@ -48,7 +49,8 @@ class ContactMessageRequest(BaseModel):
 
 
 @router.post("/contact")
-def submit_contact_message(data: ContactMessageRequest, db: Session = Depends(get_db)):
+def submit_contact_message(request: Request, data: ContactMessageRequest, db: Session = Depends(get_db)):
+    check_rate_limit(request, "contact", max_calls=5, window_seconds=300)
     from app.models.settings import AppSetting
     from app.utils.mailer import try_send_email
 
@@ -85,7 +87,8 @@ class NewsletterSubscribeRequest(BaseModel):
 
 
 @router.post("/newsletter/subscribe")
-def subscribe_newsletter(data: NewsletterSubscribeRequest, db: Session = Depends(get_db)):
+def subscribe_newsletter(request: Request, data: NewsletterSubscribeRequest, db: Session = Depends(get_db)):
+    check_rate_limit(request, "newsletter-subscribe", max_calls=5, window_seconds=300)
     from app.models.settings import AppSetting
     from app.utils.mailer import try_send_email
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -18,6 +18,16 @@ from app.services.tours import (
 )
 
 router = APIRouter(prefix="/client", tags=["Client"])
+
+
+def _ensure_published(db: Session, tour_id: int) -> None:
+    """Sub-resource endpoints below only exist to be called for a tour that's
+    already publicly visible - mirrors the check public_tour_detail does
+    inline, so draft/pending-approval/rejected tour content (itineraries,
+    gallery, pricing, ...) can't be pulled by guessing a tour_id."""
+    tour = get_tour(db, tour_id)
+    if tour.status != "published":
+        raise HTTPException(status_code=404, detail="Tour not found")
 
 
 @router.get("/config")
@@ -80,42 +90,52 @@ def public_tour_detail(tour_id: int, db: Session = Depends(get_db)):
 
 @router.get("/tours/{tour_id}/overview")
 def public_tour_overview(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": get_overview(db, tour_id)}
 
 @router.get("/tours/{tour_id}/itineraries")
 def public_tour_itineraries(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": list_itineraries(db, tour_id)}
 
 @router.get("/tours/{tour_id}/inclusions")
 def public_tour_inclusions(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": list_inclusions(db, tour_id)}
 
 @router.get("/tours/{tour_id}/exclusions")
 def public_tour_exclusions(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": list_exclusions(db, tour_id)}
 
 @router.get("/tours/{tour_id}/highlights")
 def public_tour_highlights(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": list_highlights(db, tour_id)}
 
 @router.get("/tours/{tour_id}/similar-tours")
 def public_tour_similar_tours(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": list_similar_tours(db, tour_id)}
 
 @router.get("/tours/{tour_id}/gallery")
 def public_tour_gallery(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": list_gallery(db, tour_id)}
 
 @router.get("/tours/{tour_id}/optional-activities")
 def public_tour_activities(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": list_activities(db, tour_id)}
 
 @router.get("/tours/{tour_id}/calendar")
 def public_tour_calendar(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     return {"status": "success", "data": list_calendar(db, tour_id)}
 
 @router.get("/tours/{tour_id}/pricing")
 def public_tour_pricing(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
     # Strip internal cost/margin fields (supplier_price, markup_type, markup_value)
     # before returning pricing slabs to unauthenticated public clients.
     rows = list_pricing(db, tour_id)

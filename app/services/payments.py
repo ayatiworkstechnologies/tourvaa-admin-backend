@@ -217,6 +217,9 @@ def create_payment(db: Session, data: PaymentCreate, actor: Optional[User] = Non
         raise HTTPException(status_code=400, detail="Customer does not match booking")
     paid = money(data.paid_amount)
     total = money(data.total_amount)
+    outstanding = money(booking.amount_pending if booking.amount_pending is not None else booking.final_amount or 0)
+    if paid > outstanding:
+        raise HTTPException(status_code=400, detail=f"Paid amount cannot exceed the booking's outstanding balance of {outstanding:.2f}")
     payment = Payment(booking_id=data.booking_id, customer_id=data.customer_id, created_by=actor.id if actor else None, payment_method=data.payment_method, payment_type=data.payment_type, gateway=data.gateway, gateway_payment_id=data.gateway_payment_id, gateway_order_id=data.gateway_order_id, idempotency_key=data.idempotency_key, total_amount=total, authorized_amount=money(0), captured_amount=paid, paid_amount=paid, pending_amount=max(money(0), total - paid), gst_amount=money(data.gst_amount), surcharge_amount=money(data.surcharge_amount), refunded_amount=money(0), payment_status=_derive_booking_status(paid, total), transaction_id=data.transaction_id, payment_date=data.payment_date, notes=data.notes)
     db.add(payment)
     db.flush()
@@ -244,6 +247,9 @@ def authorize_payment(db: Session, data: PaymentAuthorize, actor: Optional[User]
     if existing:
         return serialize_payment(existing, detail=True)
     amount = money(data.amount)
+    outstanding = money(booking.amount_pending if booking.amount_pending is not None else booking.final_amount or booking.total_cost or 0)
+    if amount > outstanding:
+        raise HTTPException(status_code=400, detail=f"Authorization amount cannot exceed the booking's outstanding balance of {outstanding:.2f}")
     payment = Payment(booking_id=booking.id, customer_id=booking.customer_id, created_by=actor.id if actor else None, payment_method=data.payment_method, payment_type=data.payment_type, gateway=data.gateway, gateway_payment_id=data.gateway_payment_id, gateway_order_id=data.gateway_order_id, idempotency_key=data.idempotency_key, total_amount=money(booking.final_amount or booking.total_cost), authorized_amount=amount, captured_amount=money(0), paid_amount=money(0), pending_amount=money(booking.final_amount or booking.total_cost), payment_status="authorized", notes=data.notes)
     db.add(payment)
     db.flush()

@@ -2,10 +2,12 @@ from fastapi import HTTPException, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.auth.permissions import get_user_role_ids
 from app.models.roles import Role
 from app.models.permissions import Permission, RolePermission
 from app.schemas.roles import RoleCreate, RoleUpdate
 from app.services.audit import log_audit
+from app.services.auth import get_user_permissions
 from app.models.users import User
 
 
@@ -164,6 +166,8 @@ def assign_permissions_to_role(
     actor: User | None = None,
     request: Request | None = None,
 ):
+    from app.services.users import is_super_admin
+
     role = get_role(db, role_id)
     unique_permission_ids = sorted(set(permission_ids))
     found_permissions = (
@@ -184,6 +188,30 @@ def assign_permissions_to_role(
                 "invalid_ids": invalid_ids,
             },
         )
+
+    actor_is_super_admin = bool(actor) and is_super_admin(actor)
+
+    # Only a super admin may touch the super-admin role's own permission set -
+    # otherwise a lower-tier "update-roles" holder could strip or repurpose
+    # the one role that grants super-admin-equivalent power.
+    if role.slug == "super-admin" and not actor_is_super_admin:
+        raise HTTPException(status_code=403, detail="Only a super admin can modify the super admin role's permissions")
+
+    # Nobody can hand out a permission they don't themselves hold - closes
+    # the self-escalation path where an actor pads their own role with
+    # permissions beyond what they were granted.
+    if not actor_is_super_admin:
+        actor_role_ids = get_user_role_ids(actor) if actor else []
+        actor_permission_slugs = {p["slug"] for p in get_user_permissions(db, actor_role_ids)} if actor_role_ids else set()
+        ungranted = sorted({permission.slug for permission in found_permissions} - actor_permission_slugs)
+        if ungranted:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "Cannot grant permissions you do not have",
+                    "permissions": ungranted,
+                },
+            )
 
     old_permissions = [permission.slug for permission in get_role_permissions(db, role_id)]
 

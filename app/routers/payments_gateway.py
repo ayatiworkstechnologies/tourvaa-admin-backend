@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -77,21 +78,37 @@ def _ensure_booking_payment_access(booking: Booking, current_user) -> None:
     raise HTTPException(status_code=403, detail="Booking access denied")
 
 
-def _booking_or_404(db: Session, booking_id: int) -> Booking:
-    b = db.query(Booking).filter(Booking.id == booking_id).first()
+def _booking_or_404(db: Session, booking_id: int, for_update: bool = False) -> Booking:
+    query = db.query(Booking).filter(Booking.id == booking_id)
+    if for_update:
+        query = query.with_for_update()
+    b = query.first()
     if not b:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Booking not found")
     return b
 
 
-def _validate_payment_request(booking: Booking, amount: Decimal, current_user) -> Decimal:
+def _pending_gateway_payments_total(db: Session, booking_id: int) -> Decimal:
+    """Sum of payments already created for this booking whose gateway
+    session/order is still pending confirmation - subtracted from the
+    outstanding balance so two concurrent checkout attempts can't each
+    create a full-balance session for the same booking."""
+    total = (
+        db.query(func.coalesce(func.sum(Payment.total_amount), 0))
+        .filter(Payment.booking_id == booking_id, Payment.payment_status == "pending")
+        .scalar()
+    )
+    return money(total or 0)
+
+
+def _validate_payment_request(booking: Booking, amount: Decimal, current_user, already_pending: Decimal = Decimal("0")) -> Decimal:
     _ensure_booking_payment_access(booking, current_user)
     if booking.booking_status in {"cancelled", "declined", "completed", "refunded"}:
         raise HTTPException(status_code=409, detail="This booking is not eligible for payment")
 
     requested = money(amount)
-    outstanding = money(booking.amount_pending or 0)
+    outstanding = money(money(booking.amount_pending or 0) - money(already_pending))
     if requested <= 0:
         raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
     if outstanding <= 0:
@@ -143,8 +160,8 @@ def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gate
 
 @router.post("/stripe/create-session")
 def stripe_create_session(body: StripeSessionRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    booking = _booking_or_404(db, body.booking_id)
-    amount = _validate_payment_request(booking, body.amount, current_user)
+    booking = _booking_or_404(db, body.booking_id, for_update=True)
+    amount = _validate_payment_request(booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
     currency = _validate_payment_currency(booking, body.currency)
     stripe = get_stripe(db)
     amount_cents = int(amount * 100)
@@ -321,8 +338,8 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
 
 @router.post("/paypal/create-order")
 def paypal_create_order(body: PayPalOrderRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    booking = _booking_or_404(db, body.booking_id)
-    amount = _validate_payment_request(booking, body.amount, current_user)
+    booking = _booking_or_404(db, body.booking_id, for_update=True)
+    amount = _validate_payment_request(booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
     currency = _validate_payment_currency(booking, body.currency)
     paypal = get_paypal(db)
     amount_str = f"{amount:.2f}"
