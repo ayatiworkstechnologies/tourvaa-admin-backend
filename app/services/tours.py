@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import log_audit
 from app.models.cms import Tour
+from app.models.suppliers import Supplier
 from app.utils.operations import get_or_404
 from app.models.tours import (
     TourAccommodationExtra,
@@ -336,15 +337,86 @@ def _ser_pricing(o: TourPricing) -> dict:
         "adult_price": o.adult_price, "child_price": o.child_price,
         "supplier_price": o.supplier_price, "markup_type": o.markup_type,
         "markup_value": o.markup_value, "final_price": o.final_price,
+        "supplier_final_adult_price": o.supplier_final_adult_price,
+        "supplier_final_child_price": o.supplier_final_child_price,
+        "admin_markup_type": o.admin_markup_type,
+        "admin_markup_value": o.admin_markup_value,
+        "storefront_adult_price": o.storefront_adult_price,
+        "storefront_child_price": o.storefront_child_price,
         "currency": o.currency, "status": o.status,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
-_list_pricing_fn, _create_pricing_fn, _update_pricing_fn, _delete_pricing_fn = _simple_crud(TourPricing, _ser_pricing, versioned=True)
+
+def _apply_markup(markup_type: str, markup_value: float, base: float) -> float:
+    if markup_type == "percentage":
+        return round(base * (1 + markup_value / 100), 2)
+    return round(base + markup_value, 2)
+
+
+def _is_supplier_actor(db: Session, actor: User) -> bool:
+    return db.query(Supplier.id).filter(Supplier.user_id == actor.id).first() is not None
+
+
+def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User) -> None:
+    # markup_type/markup_value always mirror the tour's supplier commission --
+    # never trust the client for these, whether the actor is the supplier or
+    # an admin editing on their behalf.
+    tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    supplier = db.query(Supplier).filter(Supplier.id == tour.supplier_id).first() if tour and tour.supplier_id else None
+    o.markup_type = supplier.markup_type if supplier and supplier.markup_type else "percentage"
+    o.markup_value = supplier.markup_value if supplier else 0.0
+
+    o.supplier_final_adult_price = _apply_markup(o.markup_type, o.markup_value, o.adult_price)
+    o.supplier_final_child_price = _apply_markup(o.markup_type, o.markup_value, o.child_price)
+    o.final_price = o.supplier_final_adult_price
+
+    # admin_markup_type/admin_markup_value can only be set by an admin --
+    # a supplier saving/editing a slab never changes Tourvaa's own markup.
+    if not _is_supplier_actor(db, actor):
+        o.admin_markup_type = data.admin_markup_type
+        o.admin_markup_value = data.admin_markup_value
+
+    o.storefront_adult_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.supplier_final_adult_price)
+    o.storefront_child_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.supplier_final_child_price)
+
+
+_list_pricing_fn, _, _, _delete_pricing_fn = _simple_crud(TourPricing, _ser_pricing, versioned=True)
 
 def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
-def create_pricing(db, tour_id, data, actor, request=None): return _create_pricing_fn(db, tour_id, data, actor, "create_pricing", request)
-def update_pricing(db, tour_id, rid, data, actor, request=None): return _update_pricing_fn(db, tour_id, rid, data, actor, "update_pricing", "Pricing slab", request)
+
+# Only these are ever taken verbatim from the client payload -- markup_type,
+# markup_value, final_price, admin_markup_type, admin_markup_value, and every
+# supplier_final_*/storefront_* field are exclusively computed in
+# _apply_pricing_computation, so a supplier (or a crafted request) can never
+# smuggle in Tourvaa's markup or a hand-picked final price.
+_PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "child_price", "supplier_price", "currency", "status")
+
+
+def create_pricing(db: Session, tour_id: int, data: PricingPayload, actor: User, request: Request | None = None) -> dict:
+    _require_tour(db, tour_id)
+    o = TourPricing(tour_id=tour_id, **{key: getattr(data, key) for key in _PRICING_CLIENT_FIELDS})
+    _apply_pricing_computation(db, tour_id, o, data, actor)
+    db.add(o)
+    log_audit(db, actor=actor, action="create_pricing", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
+    db.commit()
+    db.refresh(o)
+    return _ser_pricing(o)
+
+
+def update_pricing(db: Session, tour_id: int, rid: int, data: PricingPayload, actor: User, request: Request | None = None) -> dict:
+    o = _child_or_404(db, TourPricing, rid, tour_id, "Pricing slab")
+    for key in _PRICING_CLIENT_FIELDS:
+        setattr(o, key, getattr(data, key))
+    _apply_pricing_computation(db, tour_id, o, data, actor)
+    log_audit(db, actor=actor, action="update_pricing", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
+    db.commit()
+    db.refresh(o)
+    return _ser_pricing(o)
+
+
 def delete_pricing(db, tour_id, rid, actor, request=None): return _delete_pricing_fn(db, tour_id, rid, actor, "delete_pricing", "Pricing slab", request)
 
 

@@ -170,9 +170,21 @@ class TourPricing(Base):
     adult_price = Column(Float, nullable=False)
     child_price = Column(Float, default=0.0, nullable=False)
     supplier_price = Column(Float, default=0.0, nullable=False)
+    # markup_type/markup_value are the supplier's commission, mirrored from
+    # Supplier.markup_type/markup_value at save time -- never client-set.
     markup_type = Column(String(20), default="percentage", nullable=False)
     markup_value = Column(Float, default=0.0, nullable=False)
     final_price = Column(Float, nullable=False)
+    supplier_final_adult_price = Column(Float, nullable=True)
+    supplier_final_child_price = Column(Float, nullable=True)
+    # admin_markup_type/admin_markup_value are Tourvaa's own markup on top of
+    # the supplier-final price, editable by admins only.
+    admin_markup_type = Column(String(20), default="percentage", nullable=False)
+    admin_markup_value = Column(Float, default=0.0, nullable=False)
+    # storefront_adult_price/storefront_child_price are what bookings.py
+    # actually charges -- the true customer-facing price.
+    storefront_adult_price = Column(Float, nullable=True)
+    storefront_child_price = Column(Float, nullable=True)
     currency = Column(String(10), default="USD", nullable=False)
     status = Column(String(20), default="active", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -61,7 +61,7 @@ def process_refund(
 
 @router.get("/refund-rules")
 def list_rules(tour_id: int = Query(default=0), db: Session = Depends(get_db), _=Depends(require_any_permission("tours.view", "view-tours"))):
-    return service.list_rules(db, tour_id=tour_id or None)
+    return {"status": "success", "data": service.list_rules(db, tour_id=tour_id or None)}
 
 
 @router.post("/refund-rules")
