@@ -490,8 +490,8 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             if has_any_slab:
                 raise HTTPException(status_code=400, detail=f"No pricing available for {seat_travellers} traveller(s) on this tour. Please choose a different traveller count or contact support.")
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
-    adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
-    child_unit = money(slab.child_price if slab else 0)
+    adult_unit = money((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else (tour.price_start_per_person if tour else 0))
+    child_unit = money((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0)
     base_amount = money(adult_unit * adults + child_unit * children)
 
     activity_rows = []
@@ -644,8 +644,8 @@ def _validate_customer_travellers(data: BookingCreate, adults: int, children: in
             raise HTTPException(status_code=400, detail="Every traveller must have an age")
         if row.traveller_type == "adult" and not 12 <= row.age <= 120:
             raise HTTPException(status_code=400, detail="Adult traveller age must be between 12 and 120")
-        if row.traveller_type == "child" and not 2 <= row.age <= 11:
-            raise HTTPException(status_code=400, detail="Child traveller age must be between 2 and 11")
+        if row.traveller_type == "child" and not 3 <= row.age <= 11:
+            raise HTTPException(status_code=400, detail="Child traveller age must be between 3 and 11")
 
 
 def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:

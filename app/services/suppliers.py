@@ -567,28 +567,56 @@ def reject_supplier_commission_request(db: Session, supplier_id: int, actor: Use
 
 
 def request_supplier_commission(db: Session, user: User, data: SupplierMarkupRequest, request: Request | None = None):
-    # Self-service: a supplier may only STAGE a commission request here.
-    # The live markup_type/markup_value fields are only ever changed by an
-    # admin via update_supplier_markup above -- this function must never
-    # touch them, or a supplier could set their own commission unreviewed.
+    # Self-service: the admin-fixed markup_type/markup_value is a floor a
+    # supplier may never go below. Raising it (same type, value >= floor)
+    # applies immediately with no review; anything else (a decrease, or a
+    # change of markup_type, which can't be compared against the floor)
+    # still goes through the commission_request_* staging + admin approval
+    # in update_supplier_markup above.
     supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier profile not found")
     if supplier.commission_request_status == "pending":
         raise HTTPException(status_code=400, detail="A commission request is already pending")
+
+    floor_type = supplier.markup_type
+    floor_value = supplier.markup_value or 0
+    has_floor = bool(floor_type)
+    same_type = not has_floor or data.markup_type == floor_type
+    if same_type and data.markup_value < floor_value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Commission value cannot be lower than the {floor_value:g}% fixed by admin.",
+        )
+
     old = serialize_supplier(supplier)
+    is_increase = same_type and data.markup_value >= floor_value
+
     supplier.commission_request_type = data.markup_type
     supplier.commission_request_value = data.markup_value
-    supplier.commission_request_status = "pending"
     supplier.commission_requested_at = datetime.utcnow()
-    supplier.commission_reviewed_at = None
-    supplier.pending_requirements = "Commission request pending admin approval"
+
+    if is_increase:
+        supplier.markup_type = data.markup_type
+        supplier.markup_value = data.markup_value
+        supplier.commission_request_status = "approved"
+        supplier.commission_reviewed_at = datetime.utcnow()
+        supplier.pending_requirements = None
+    else:
+        supplier.commission_request_status = "pending"
+        supplier.commission_reviewed_at = None
+        supplier.pending_requirements = "Commission request pending admin approval"
+
     log_audit(db, actor=user, action="request_supplier_commission", entity_type="supplier", entity_id=supplier.id, old_values=old, new_values=serialize_supplier(supplier), request=request)
     try:
-        from app.utils.notification_triggers import notify_supplier_commission_requested
-        notify_supplier_commission_requested(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=user.id)
+        if is_increase:
+            from app.utils.notification_triggers import notify_supplier_commission_approved
+            notify_supplier_commission_approved(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=user.id)
+        else:
+            from app.utils.notification_triggers import notify_supplier_commission_requested
+            notify_supplier_commission_requested(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=user.id)
     except Exception:
-        logger.exception("Failed to send supplier commission-requested notification for supplier_id=%s", supplier.id)
+        logger.exception("Failed to send supplier commission notification for supplier_id=%s", supplier.id)
     # Committed on its own so the core commission-request flow (above) can
     # never be broken by the history table (migration 20260728_0049) being
     # unavailable on a given deployment -- see _find_pending_commission_request.
@@ -599,7 +627,8 @@ def request_supplier_commission(db: Session, user: User, data: SupplierMarkupReq
             supplier_id=supplier.id,
             markup_type=data.markup_type,
             markup_value=data.markup_value,
-            status="pending",
+            status=supplier.commission_request_status,
+            reviewed_at=supplier.commission_reviewed_at,
         ))
         db.commit()
     except SQLAlchemyError:

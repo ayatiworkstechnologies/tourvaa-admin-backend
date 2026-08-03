@@ -129,7 +129,7 @@ def _ser_overview(o: TourOverview):
     }
 
 
-def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, review_stats: dict[int, dict] | None = None):
+def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, review_stats: dict[int, dict] | None = None, overview: TourOverview | None = None):
     country_name = item.country.country_name if item.country else ""
     country_slug = slugify(country_name or "worldwide")
     stats = (review_stats or {}).get(item.id)
@@ -162,6 +162,9 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, revie
         ],
         "rating_average": stats["average"] if stats else None,
         "rating_count": stats["count"] if stats else 0,
+        "start_location": overview.start_location if overview and overview.start_location else None,
+        "end_location": overview.end_location if overview and overview.end_location else None,
+        "group_size": overview.group_size if overview and overview.group_size else None,
     }
 
 
@@ -270,13 +273,14 @@ def public_tours(
             if len(departure_map[departure.tour_id]) < 3:
                 departure_map[departure.tour_id].append(departure)
     review_stats = get_review_stats(db, tour_ids)
+    overview_map = {o.tour_id: o for o in db.query(TourOverview).filter(TourOverview.tour_id.in_(tour_ids))} if tour_ids else {}
     return {
         "status": "success",
         "total": total,
         "page": page,
         "limit": limit,
         "total_pages": max(1, (total + limit - 1) // limit),
-        "items": [_public_tour(t, departure_map.get(t.id), review_stats) for t in tours],
+        "items": [_public_tour(t, departure_map.get(t.id), review_stats, overview_map.get(t.id)) for t in tours],
         "filters_applied": {
             "search": search,
             "country": country,
@@ -296,8 +300,10 @@ def public_tours(
 @router.get("/tours/featured")
 def featured_tours(db: Session = Depends(get_db), limit: int = Query(default=6, le=20)):
     tours = db.query(Tour).filter(Tour.status == "published").order_by(Tour.id.desc()).limit(limit).all()
-    review_stats = get_review_stats(db, [t.id for t in tours])
-    return {"status": "success", "items": [_public_tour(t, review_stats=review_stats) for t in tours]}
+    tour_ids = [t.id for t in tours]
+    review_stats = get_review_stats(db, tour_ids)
+    overview_map = {o.tour_id: o for o in db.query(TourOverview).filter(TourOverview.tour_id.in_(tour_ids))} if tour_ids else {}
+    return {"status": "success", "items": [_public_tour(t, review_stats=review_stats, overview=overview_map.get(t.id)) for t in tours]}
 
 
 @router.get("/tours/{country_slug}/{tour_slug}")
@@ -420,7 +426,15 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
 @router.get("/categories")
 def public_categories(db: Session = Depends(get_db)):
     cats = db.query(TourCategory).filter(TourCategory.status == "active").order_by(TourCategory.category_name.asc()).all()
-    return {"status": "success", "items": [_category(c) for c in cats]}
+    counts = dict(
+        db.query(Tour.category_id, func.count(Tour.id))
+        .filter(Tour.status == "published")
+        .group_by(Tour.category_id)
+        .all()
+    )
+    items = [{**_category(c), "tour_count": counts.get(c.id, 0)} for c in cats]
+    items.sort(key=lambda item: (-item["tour_count"], item["category_name"]))
+    return {"status": "success", "items": items}
 
 
 @router.get("/subcategories")
@@ -458,4 +472,12 @@ def public_cities(db: Session = Depends(get_db), country: str = Query(default=""
         if c:
             q = q.filter(City.country_id == c.id)
     cities = q.order_by(City.city_name.asc()).all()
-    return {"status": "success", "items": [_city(c) for c in cities]}
+    counts = dict(
+        db.query(Tour.city_id, func.count(Tour.id))
+        .filter(Tour.status == "published")
+        .group_by(Tour.city_id)
+        .all()
+    )
+    items = [{**_city(c), "tour_count": counts.get(c.id, 0)} for c in cities]
+    items.sort(key=lambda item: (-item["tour_count"], item["city_name"]))
+    return {"status": "success", "items": items}
