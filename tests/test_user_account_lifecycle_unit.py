@@ -1,4 +1,3 @@
-from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -6,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.services import users as user_service
+from app.utils.money import utcnow
 
 
 def inactive_supplier(**overrides):
@@ -16,13 +16,13 @@ def inactive_supplier(**overrides):
         "user_type": "SUPPLIER",
         "account_status": "INACTIVE",
         "is_active": False,
-        "password_created_at": datetime.utcnow(),
+        "password_created_at": utcnow(),
         "email_verified": True,
-        "email_verified_at": datetime.utcnow(),
+        "email_verified_at": utcnow(),
         "admin_verified": True,
-        "admin_verified_at": datetime.utcnow(),
+        "admin_verified_at": utcnow(),
         "admin_verified_by": 1,
-        "deactivated_at": datetime.utcnow(),
+        "deactivated_at": utcnow(),
         "deactivated_by": 1,
         "deactivation_reason": "Paused",
         "token_version": 3,

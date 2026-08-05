@@ -1,3 +1,5 @@
+from datetime import timezone
+
 from fastapi import HTTPException, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -86,11 +88,34 @@ def _tour(item: Tour):
         "tour_video_url": item.tour_video_url,
         "brochure_pdf": item.brochure_pdf,
         "status": item.status,
+        # Set only while item.status stays "published" during an in-review
+        # edit (see tour_versions._stage_pending_version) -- the frontend
+        # uses this to show "Unpublished Changes"/"Repricing Required"
+        # instead of a plain Published badge, without the tour ever
+        # actually leaving the public site mid-review.
+        "pending_review_kind": _pending_review_kind(item),
         "created_by": item.created_by,
         "updated_by": item.updated_by,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
+
+
+def _pending_review_kind(item: Tour) -> str | None:
+    if item.status != "published" or not item.id:
+        return None
+    from app.models.tour_versions import TourVersion
+    from sqlalchemy.orm import object_session
+    session = object_session(item)
+    if session is None:
+        return None
+    pending = (
+        session.query(TourVersion)
+        .filter(TourVersion.tour_id == item.id, TourVersion.status == "pending_approval")
+        .order_by(TourVersion.version_number.desc())
+        .first()
+    )
+    return pending.change_kind if pending else None
 
 
 def _unique_slug(db: Session, model, slug: str, current_id: int | None = None):
@@ -251,12 +276,39 @@ def get_tour(db: Session, tour_id: int):
 def save_tour(db: Session, data: TourPayload, actor: User, request: Request | None = None, tour_id: int | None = None):
     item = get_tour(db, tour_id) if tour_id else Tour(created_by=actor.id)
     old = _tour(item) if tour_id else None
+
+    if tour_id and data.expected_updated_at is not None and item.updated_at is not None:
+        expected = data.expected_updated_at
+        current = item.updated_at
+        # Normalize both to naive UTC before comparing -- MySQL's
+        # DateTime(timezone=True) columns round-trip as naive here, while a
+        # client-submitted ISO string with a UTC offset parses as tz-aware.
+        if expected.tzinfo is not None:
+            expected = expected.astimezone(timezone.utc).replace(tzinfo=None)
+        if current.tzinfo is not None:
+            current = current.astimezone(timezone.utc).replace(tzinfo=None)
+        if abs((current - expected).total_seconds()) > 0.001:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "This tour was updated by another user. Reload the latest changes before saving.",
+                    "current_updated_at": item.updated_at.isoformat(),
+                    "current_updated_by": item.updated_by,
+                    "submitted_expected_at": data.expected_updated_at.isoformat(),
+                },
+            )
+
     payload = data.model_dump()
+    payload.pop("expected_updated_at", None)
     subcategory_ids = payload.pop("subcategory_ids", [])
     # Status is workflow-controlled: only the publish/disable toggle
     # (PATCH /tours/{id}/status) and the version-approval flow may change it.
     # New tours always start as draft; existing status is left untouched here.
     payload.pop("status", None)
+    # Price From is system-calculated from the lowest approved Supplier
+    # Pricing slab (see services.tours.recalculate_price_start) -- never a
+    # client-editable marketing field, so any submitted value is ignored.
+    payload.pop("price_start_per_person", None)
 
     # Validate FK IDs exist before attempting insert
     if payload.get("supplier_id"):

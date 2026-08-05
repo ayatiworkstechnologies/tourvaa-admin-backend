@@ -7,12 +7,13 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.services.audit import log_audit
 from app.models.bookings import Booking
 from app.models.cancellations import CancellationRequest, RefundRule
 from app.schemas.cancellations import (
     CancellationApprove, CancellationReject, CancellationRequestCreate,
-    ProcessRefundBody, RefundRuleCreate,
+    ProcessRefundBody, RefundRuleCreate, RefundRuleUpdate,
 )
 from app.utils.money import money, utcnow
 from app.models.customers import Customer
@@ -177,6 +178,31 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="cancellation_requested", title="Cancellation Request Received", message=f"Your cancellation request for booking {booking.booking_code} has been received. Estimated refund: {refund_amount} {req.currency}.", entity_type="cancellation_request", entity_id=req.id)
     db.commit()
 
+    if booking.customer and booking.customer.email:
+        from app.utils.email_templates import cancellation_requested_email
+        from app.utils.notification_triggers import send_templated_email
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        send_templated_email(
+            db, booking.customer.email, "cancellation_requested",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "refund_amount": refund_amount, "currency": req.currency, "login_url": login_url,
+             "button_text": "View booking", "button_url": login_url},
+            f"Cancellation request received - {booking.booking_code}",
+            cancellation_requested_email(booking.customer.full_name, booking.booking_code, booking.tour_name, refund_amount, req.currency, login_url),
+        )
+
+    from app.utils.email_templates import admin_booking_event_email
+    from app.utils.notification_triggers import email_admins
+    admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
+    admin_detail = f"Customer requested cancellation for booking {booking.booking_code}. Estimated refund: {refund_amount} {req.currency}."
+    email_admins(
+        db, "admin_booking_event",
+        {"event_title": "Cancellation requested", "detail": admin_detail, "booking_code": booking.booking_code,
+         "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "View booking", "button_url": admin_url},
+        f"Cancellation requested - {booking.booking_code}",
+        admin_booking_event_email("Cancellation requested", admin_detail, booking.booking_code, booking.tour_name, admin_url),
+    )
+
     log_audit(db, actor=actor, action="create_cancellation_request", entity_type="cancellation_request", entity_id=req.id, new_values={"booking_id": data.booking_id, "refund_percentage": str(refund_pct)}, request=request)
     return _serialize_request(req)
 
@@ -251,6 +277,19 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="cancellation_approved", title="Cancellation Approved", message=f"Your cancellation request for booking {booking.booking_code} has been approved. Refund: {req.refund_amount} {req.currency}", entity_type="cancellation_request", entity_id=req.id)
         db.commit()
 
+    if booking.customer and booking.customer.email:
+        from app.utils.email_templates import cancellation_approved_email
+        from app.utils.notification_triggers import send_templated_email
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        send_templated_email(
+            db, booking.customer.email, "cancellation_approved",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "refund_amount": req.refund_amount, "currency": req.currency, "login_url": login_url,
+             "button_text": "View booking", "button_url": login_url},
+            f"Cancellation approved - {booking.booking_code}",
+            cancellation_approved_email(booking.customer.full_name, booking.booking_code, booking.tour_name, req.refund_amount, req.currency, login_url),
+        )
+
     log_audit(db, actor=actor, action="approve_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": "approved", "refund_amount": str(req.refund_amount)}, request=request)
     return _serialize_request(req)
 
@@ -287,6 +326,19 @@ def reject_request(db: Session, request_id: int, data: CancellationReject, actor
     if booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="cancellation_rejected", title="Cancellation Rejected", message=f"Your cancellation request for booking {booking.booking_code} was rejected. Reason: {data.admin_notes}", entity_type="cancellation_request", entity_id=req.id)
         db.commit()
+
+    if booking.customer and booking.customer.email:
+        from app.utils.email_templates import cancellation_rejected_email
+        from app.utils.notification_triggers import send_templated_email
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        send_templated_email(
+            db, booking.customer.email, "cancellation_rejected",
+            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "reason": data.admin_notes or "", "login_url": login_url,
+             "button_text": "View booking", "button_url": login_url},
+            f"Cancellation request rejected - {booking.booking_code}",
+            cancellation_rejected_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.admin_notes or "", login_url),
+        )
 
     log_audit(db, actor=actor, action="reject_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": "rejected"}, request=request)
     return _serialize_request(req)
@@ -364,9 +416,29 @@ def list_rules(db: Session, tour_id: Optional[int] = None) -> list:
 def create_rule(db: Session, data: RefundRuleCreate, actor: User, request=None) -> dict:
     rule = RefundRule(**data.model_dump())
     db.add(rule)
+    db.flush()
+    log_audit(db, actor=actor, action="create_refund_rule", entity_type="refund_rule", entity_id=rule.id, new_values=data.model_dump(), request=request)
+    if rule.tour_id:
+        from app.services.tour_versions import maybe_resubmit_for_review
+        maybe_resubmit_for_review(db, rule.tour_id, actor)
     db.commit()
     db.refresh(rule)
-    log_audit(db, actor=actor, action="create_refund_rule", entity_type="refund_rule", entity_id=rule.id, new_values=data.model_dump(), request=request)
+    return _serialize_rule(rule)
+
+
+def update_rule(db: Session, rule_id: int, data: RefundRuleUpdate, actor: User, request=None) -> dict:
+    rule = db.query(RefundRule).filter(RefundRule.id == rule_id).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Refund rule not found")
+    old_values = _serialize_rule(rule)
+    for key, value in data.model_dump().items():
+        setattr(rule, key, value)
+    log_audit(db, actor=actor, action="update_refund_rule", entity_type="refund_rule", entity_id=rule_id, old_values=old_values, new_values=data.model_dump(), request=request)
+    if rule.tour_id:
+        from app.services.tour_versions import maybe_resubmit_for_review
+        maybe_resubmit_for_review(db, rule.tour_id, actor)
+    db.commit()
+    db.refresh(rule)
     return _serialize_rule(rule)
 
 
@@ -374,6 +446,10 @@ def delete_rule(db: Session, rule_id: int, actor: User, request=None):
     rule = db.query(RefundRule).filter(RefundRule.id == rule_id).first()
     if not rule:
         raise HTTPException(status_code=404, detail="Refund rule not found")
+    tour_id = rule.tour_id
     db.delete(rule)
-    db.commit()
     log_audit(db, actor=actor, action="delete_refund_rule", entity_type="refund_rule", entity_id=rule_id, request=request)
+    if tour_id:
+        from app.services.tour_versions import maybe_resubmit_for_review
+        maybe_resubmit_for_review(db, tour_id, actor)
+    db.commit()

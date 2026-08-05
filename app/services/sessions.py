@@ -59,7 +59,8 @@ def force_logout_user(db: Session, user_id: int):
     user.token_version = (user.token_version or 0) + 1
     db.query(UserSession).filter(UserSession.user_id == user_id, UserSession.status == "active").update({"status": "revoked", "revoked_at": utcnow()})
     db.commit()
-    return {"user_id": user_id, "revoked": True}
+    db.refresh(user)
+    return {"user_id": user_id, "token_version": user.token_version, "revoked": True}
 
 
 def list_login_history(db: Session, page: int = 1, limit: int = 20, user_id: int | None = None, status: str = ""):

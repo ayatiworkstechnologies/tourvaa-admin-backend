@@ -2,12 +2,12 @@ import logging
 import re
 import smtplib
 from dataclasses import dataclass
-from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from html import unescape
 
 from app.config import settings
+from app.utils.money import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ def _create_email_log(to_email: str, subject: str, status: str, error_message: s
                 entity_type="email",
                 status=status,
                 error_message=error_message or None,
-                sent_at=datetime.utcnow() if status == "sent" else None,
+                sent_at=utcnow() if status == "sent" else None,
             )
             db.add(row)
             db.commit()
@@ -139,7 +139,7 @@ def _update_email_log(log_id: int | None, status: str, error_message: str = "") 
             if row:
                 row.status = status
                 row.error_message = error_message or None
-                row.sent_at = datetime.utcnow() if status == "sent" else row.sent_at
+                row.sent_at = utcnow() if status == "sent" else row.sent_at
                 db.commit()
         finally:
             db.close()

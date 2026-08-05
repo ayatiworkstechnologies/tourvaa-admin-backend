@@ -75,7 +75,7 @@ def create_active_account(role_slug: str, user_type: str, name: str, email: str,
     BASE_URL exactly as before.
     """
     import app.main  # noqa: F401 - ensures every model is registered before mapper configuration
-    from datetime import datetime
+    from app.utils.money import utcnow
     from app.database import SessionLocal
     from app.models.users import User, UserRole
     from app.models.roles import Role
@@ -95,7 +95,7 @@ def create_active_account(role_slug: str, user_type: str, name: str, email: str,
             # /auth/login - same convention as the seeded super-admin account.
             password=hash_password(password), role_id=role.id, user_type=user_type,
             is_active=True, approval_status="NOT_REQUIRED",
-            email_verified=True, email_verified_at=datetime.utcnow(), account_status="ACTIVE",
+            email_verified=True, email_verified_at=utcnow(), account_status="ACTIVE",
         )
         db.add(user)
         db.flush()

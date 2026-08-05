@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime
 from math import ceil
 from typing import Any
 
@@ -10,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.services.audit import log_audit
 from app.models.users import User, UserStatusHistory
+from app.utils.money import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
     old = serializer(item)
     item.approval_status = "approved"
     item.status = "active"
-    item.approved_at = datetime.utcnow()
+    item.approved_at = utcnow()
     item.approved_by = actor.id
     item.rejection_reason = None
     
@@ -208,7 +208,7 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
             user.is_active = True
             user.account_status = "ACTIVE"
             user.admin_verified = True
-            user.admin_verified_at = datetime.utcnow()
+            user.admin_verified_at = utcnow()
             user.admin_verified_by = actor.id
             if old_account_status != "ACTIVE":
                 db.add(UserStatusHistory(user_id=user.id, from_status=old_account_status, to_status="ACTIVE", reason=f"{entity_type.title()} profile approved", changed_by=actor.id))
@@ -236,7 +236,7 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
     item.status = "inactive"
     item.rejection_reason = data.rejection_reason
     item.admin_comments = data.admin_comments
-    item.rejected_at = datetime.utcnow()
+    item.rejected_at = utcnow()
     item.rejected_by = actor.id
     
     user_id = _entity_user_id(item)

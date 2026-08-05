@@ -41,7 +41,7 @@ from app.schemas.tours import (
     TourOverviewPayload,
 )
 from app.models.users import User
-from app.services.tour_versions import maybe_resubmit_for_review
+from app.services.tour_versions import mark_repricing_required, maybe_resubmit_for_review
 
 
 # helpers
@@ -358,7 +358,7 @@ def _is_supplier_actor(db: Session, actor: User) -> bool:
     return db.query(Supplier.id).filter(Supplier.user_id == actor.id).first() is not None
 
 
-def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User) -> None:
+def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
     # markup_type/markup_value always mirror the tour's supplier commission --
     # never trust the client for these, whether the actor is the supplier or
     # an admin editing on their behalf.
@@ -373,15 +373,28 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
 
     # admin_markup_type/admin_markup_value can only be set by an admin --
     # a supplier saving/editing a slab never changes Tourvaa's own markup.
-    if not _is_supplier_actor(db, actor):
+    is_supplier = _is_supplier_actor(db, actor)
+    if not is_supplier:
         o.admin_markup_type = data.admin_markup_type
         o.admin_markup_value = data.admin_markup_value
+
+    # A supplier editing an existing slab on a tour that's already been
+    # through at least one approval must not change what the storefront
+    # charges immediately -- freeze storefront_adult_price/child_price at
+    # their last-approved values and leave them for an admin to recompute
+    # via mark_repricing_required / approve_version's recalculation step.
+    # New slabs and admin edits still compute immediately: a brand-new slab
+    # has no existing public price to protect, and an admin has direct
+    # authority over Tourvaa's own pricing.
+    freeze = is_update and is_supplier and tour and tour.status in ("active", "published", "repricing_required")
+    if freeze:
+        return
 
     o.storefront_adult_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.supplier_final_adult_price)
     o.storefront_child_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.supplier_final_child_price)
 
 
-_list_pricing_fn, _, _, _delete_pricing_fn = _simple_crud(TourPricing, _ser_pricing, versioned=True)
+_list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
 
 def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 
@@ -391,15 +404,65 @@ def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 # _apply_pricing_computation, so a supplier (or a crafted request) can never
 # smuggle in Tourvaa's markup or a hand-picked final price.
 _PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "child_price", "supplier_price", "currency", "status")
+_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement",)
+
+
+def _actor_role_slug(actor: User) -> str:
+    return actor.role.slug if getattr(actor, "role", None) and actor.role.slug else "unknown"
+
+
+def _pricing_field_diff(before: dict, o: TourPricing, actor: User, change_reason: str) -> tuple[dict, dict]:
+    """Per-field old/new values for the audit trail (section 34.B), instead
+    of a single opaque new_values=whole-payload blob."""
+    after = {field: getattr(o, field, None) for field in _PRICING_AUDIT_FIELDS if hasattr(o, field)}
+    changed_fields = [f for f in after if before.get(f) != after.get(f)]
+    old_values = {"changed_fields": changed_fields, **{f: before.get(f) for f in changed_fields}}
+    new_values = {
+        "changed_fields": changed_fields,
+        "changed_by_role": _actor_role_slug(actor),
+        "change_reason": change_reason or None,
+        **{f: after.get(f) for f in changed_fields},
+    }
+    return old_values, new_values
+
+
+def recalculate_price_start(db: Session, tour_id: int) -> None:
+    """Price From (Tour.price_start_per_person) is never client-editable --
+    it's always the lowest currently active, approved (storefront) adult
+    selling price, recomputed here whenever pricing changes or is approved."""
+    tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    if not tour:
+        return
+    lowest = (
+        db.query(TourPricing)
+        .filter(TourPricing.tour_id == tour_id, TourPricing.status == "active", TourPricing.storefront_adult_price.isnot(None))
+        .order_by(TourPricing.storefront_adult_price.asc())
+        .first()
+    )
+    tour.price_start_per_person = lowest.storefront_adult_price if lowest else 0.0
 
 
 def create_pricing(db: Session, tour_id: int, data: PricingPayload, actor: User, request: Request | None = None) -> dict:
     _require_tour(db, tour_id)
-    o = TourPricing(tour_id=tour_id, **{key: getattr(data, key) for key in _PRICING_CLIENT_FIELDS})
-    _apply_pricing_computation(db, tour_id, o, data, actor)
+    # admin_markup_type/value have a column-level default, but that's only
+    # applied by SQLAlchemy at flush/INSERT time -- reading them off a
+    # freshly-constructed, not-yet-flushed object (as _apply_pricing_
+    # computation does immediately below) gives None, not the column
+    # default, which crashes _apply_markup's arithmetic for a supplier
+    # actor (the branch that would otherwise set them from the payload is
+    # only taken for admins). Seed them explicitly so both roles see a
+    # real value regardless of flush timing.
+    o = TourPricing(tour_id=tour_id, admin_markup_type="percentage", admin_markup_value=0.0, **{key: getattr(data, key) for key in _PRICING_CLIENT_FIELDS})
+    _apply_pricing_computation(db, tour_id, o, data, actor, is_update=False)
     db.add(o)
-    log_audit(db, actor=actor, action="create_pricing", entity_type="tour", entity_id=tour_id, request=request)
-    maybe_resubmit_for_review(db, tour_id, actor)
+    db.flush()
+    recalculate_price_start(db, tour_id)
+    log_audit(
+        db, actor=actor, action="create_pricing", entity_type="tour_pricing", entity_id=o.id,
+        new_values={"tour_id": tour_id, "changed_by_role": _actor_role_slug(actor), **{f: getattr(o, f, None) for f in _PRICING_AUDIT_FIELDS}},
+        request=request,
+    )
+    mark_repricing_required(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_pricing(o)
@@ -407,17 +470,27 @@ def create_pricing(db: Session, tour_id: int, data: PricingPayload, actor: User,
 
 def update_pricing(db: Session, tour_id: int, rid: int, data: PricingPayload, actor: User, request: Request | None = None) -> dict:
     o = _child_or_404(db, TourPricing, rid, tour_id, "Pricing slab")
+    before = {field: getattr(o, field, None) for field in _PRICING_AUDIT_FIELDS if hasattr(o, field)}
     for key in _PRICING_CLIENT_FIELDS:
         setattr(o, key, getattr(data, key))
-    _apply_pricing_computation(db, tour_id, o, data, actor)
-    log_audit(db, actor=actor, action="update_pricing", entity_type="tour", entity_id=tour_id, request=request)
-    maybe_resubmit_for_review(db, tour_id, actor)
+    _apply_pricing_computation(db, tour_id, o, data, actor, is_update=True)
+    recalculate_price_start(db, tour_id)
+    old_values, new_values = _pricing_field_diff(before, o, actor, data.change_reason)
+    log_audit(db, actor=actor, action="update_pricing", entity_type="tour_pricing", entity_id=o.id, old_values=old_values, new_values=new_values, request=request)
+    mark_repricing_required(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_pricing(o)
 
 
-def delete_pricing(db, tour_id, rid, actor, request=None): return _delete_pricing_fn(db, tour_id, rid, actor, "delete_pricing", "Pricing slab", request)
+def delete_pricing(db: Session, tour_id: int, rid: int, actor: User, request: Request | None = None) -> None:
+    o = _child_or_404(db, TourPricing, rid, tour_id, "Pricing slab")
+    old_values = {f: getattr(o, f, None) for f in _PRICING_AUDIT_FIELDS if hasattr(o, f)}
+    log_audit(db, actor=actor, action="delete_pricing", entity_type="tour_pricing", entity_id=o.id, old_values=old_values, new_values={"changed_by_role": _actor_role_slug(actor)}, request=request)
+    db.delete(o)
+    recalculate_price_start(db, tour_id)
+    mark_repricing_required(db, tour_id, actor)
+    db.commit()
 
 
 # optional activity

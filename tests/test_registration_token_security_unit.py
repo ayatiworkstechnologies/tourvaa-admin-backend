@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.services import auth
+from app.utils.money import utcnow
 
 
 def token_user(**overrides):
@@ -16,7 +17,7 @@ def token_user(**overrides):
         "user_type": "CUSTOMER",
         "account_status": "PENDING_EMAIL_VERIFICATION",
         "email_verification_token": "old-hash",
-        "email_verification_expires_at": datetime.utcnow() + timedelta(minutes=10),
+        "email_verification_expires_at": utcnow() + timedelta(minutes=10),
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -29,7 +30,7 @@ def db_returning(user):
 
 
 def test_expired_verification_token_is_rejected(monkeypatch):
-    user = token_user(email_verification_expires_at=datetime.utcnow() - timedelta(seconds=1))
+    user = token_user(email_verification_expires_at=utcnow() - timedelta(seconds=1))
     monkeypatch.setattr(auth, "hash_reset_token", lambda _token: "old-hash")
     with pytest.raises(HTTPException, match="Invalid or expired verification link"):
         auth._registration_token_user(db_returning(user), "raw-token")

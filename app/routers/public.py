@@ -299,7 +299,24 @@ def public_tours(
 
 @router.get("/tours/featured")
 def featured_tours(db: Session = Depends(get_db), limit: int = Query(default=6, le=20)):
-    tours = db.query(Tour).filter(Tour.status == "published").order_by(Tour.id.desc()).limit(limit).all()
+    # Tours an admin actually marked Featured come first; if there aren't
+    # enough of those yet, fill the rest with the most recently published
+    # tours so this section (and the homepage sections built from it)
+    # isn't empty before any admin has used the Featured toggle.
+    featured = (
+        db.query(Tour)
+        .filter(Tour.status == "published", Tour.featured == True)  # noqa: E712
+        .order_by(Tour.id.desc())
+        .limit(limit)
+        .all()
+    )
+    tours = featured
+    if len(tours) < limit:
+        exclude_ids = [t.id for t in tours]
+        fallback_query = db.query(Tour).filter(Tour.status == "published")
+        if exclude_ids:
+            fallback_query = fallback_query.filter(Tour.id.notin_(exclude_ids))
+        tours = tours + fallback_query.order_by(Tour.id.desc()).limit(limit - len(tours)).all()
     tour_ids = [t.id for t in tours]
     review_stats = get_review_stats(db, tour_ids)
     overview_map = {o.tour_id: o for o in db.query(TourOverview).filter(TourOverview.tour_id.in_(tour_ids))} if tour_ids else {}

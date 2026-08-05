@@ -55,6 +55,19 @@ class Booking(Base):
     amount_paid = Column(Numeric(12, 2), default=0, nullable=False)
     amount_pending = Column(Numeric(12, 2), default=0, nullable=False)
 
+    # Pricing/currency snapshot at the moment of booking -- kept even if the
+    # tour's pricing, commission, or exchange rates change later, so a
+    # booking can always be traced back to exactly what was charged and why.
+    pricing_slab_id = Column(Integer, ForeignKey("tour_pricing.id"), nullable=True)
+    supplier_price = Column(Numeric(12, 2), nullable=True)
+    supplier_currency = Column(String(10), nullable=True)
+    tourvaa_selling_price = Column(Numeric(12, 2), nullable=True)
+    display_currency = Column(String(10), nullable=True)
+    exchange_rate = Column(Numeric(14, 6), nullable=True)
+    exchange_rate_source = Column(String(30), nullable=True)
+    exchange_rate_captured_at = Column(DateTime(timezone=True), nullable=True)
+    converted_customer_amount = Column(Numeric(12, 2), nullable=True)
+
     booking_status = Column(String(30), default="draft", nullable=False, index=True)
     supplier_acceptance_status = Column(String(30), default="not_assigned", nullable=False, index=True)
     payment_status = Column(String(30), default="unpaid", nullable=False, index=True)

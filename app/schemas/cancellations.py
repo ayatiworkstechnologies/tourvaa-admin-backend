@@ -26,6 +26,13 @@ class RefundRuleCreate(BaseModel):
     description: Optional[str] = None
 
 
+class RefundRuleUpdate(BaseModel):
+    days_before_tour_min: int
+    days_before_tour_max: Optional[int] = None
+    refund_percentage: Decimal
+    description: Optional[str] = None
+
+
 class ProcessRefundBody(BaseModel):
     gateway: str = "manual"
     gateway_refund_id: Optional[str] = None

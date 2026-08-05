@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from app.utils.money import utcnow
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -258,7 +258,7 @@ def update_agent_discount(db: Session, agent_id: int, data: AgentDiscountRequest
     item.discount_value = data.discount_value
     if item.commission_request_status == "pending":
         item.commission_request_status = "approved"
-        item.commission_reviewed_at = datetime.utcnow()
+        item.commission_reviewed_at = utcnow()
     log_audit(db, actor=actor, action="update_agent_discount", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)
@@ -275,7 +275,7 @@ def request_agent_commission(db: Session, user: User, data: AgentDiscountRequest
     item.commission_request_type = data.discount_type
     item.commission_request_value = data.discount_value
     item.commission_request_status = "pending"
-    item.commission_requested_at = datetime.utcnow()
+    item.commission_requested_at = utcnow()
     item.commission_reviewed_at = None
     log_audit(db, actor=user, action="request_agent_commission", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
@@ -338,7 +338,7 @@ def review_agent_document(
     old = _document(document)
     document.status = data.status
     document.rejection_reason = data.rejection_reason if data.status == "rejected" else None
-    document.reviewed_at = datetime.utcnow()
+    document.reviewed_at = utcnow()
     document.reviewed_by = actor.id
     agent = get_agent(db, agent_id)
     if data.status == "rejected":

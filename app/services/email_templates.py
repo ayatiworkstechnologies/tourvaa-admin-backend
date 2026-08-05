@@ -170,6 +170,85 @@ DEFAULT_EMAIL_TEMPLATES = [
     },
 
     {
+        "key": "admin_booking_event",
+        "name": "Admin Booking Event",
+        "subject": "{{event_title}} - {{booking_code}}",
+        "body": (
+            "{{detail}}\n\n"
+            "Booking ID: {{booking_code}}\n"
+            "Tour: {{tour_name}}\n\n"
+            "View booking: {{admin_url}}"
+        ),
+    },
+    {
+        "key": "booking_cancelled_supplier",
+        "name": "Booking Cancelled (Supplier)",
+        "subject": "Booking cancelled - {{booking_code}}",
+        "body": (
+            "Booking {{booking_code}} for {{tour_name}} has been cancelled and is no longer on your schedule.\n\n"
+            "Reason: {{reason}}\n\n"
+            "No further action is needed from you for this booking.\n\nView supplier portal: {{portal_url}}"
+        ),
+    },
+    {
+        "key": "refund_processed",
+        "name": "Refund Processed",
+        "subject": "Refund processed - {{booking_code}}",
+        "body": (
+            "We have processed a refund for booking {{booking_code}}.\n\n"
+            "Tour: {{tour_name}}\n"
+            "Refund amount: {{currency}} {{amount}}\n\n"
+            "The refund should reflect in your original payment method within a few business days.\n\nView booking: {{login_url}}"
+        ),
+    },
+    {
+        "key": "cancellation_requested",
+        "name": "Cancellation Requested",
+        "subject": "Cancellation request received - {{booking_code}}",
+        "body": (
+            "We received your cancellation request for booking {{booking_code}} ({{tour_name}}).\n\n"
+            "Estimated refund: {{currency}} {{refund_amount}}\n\n"
+            "Our team will review this shortly and notify you once it's approved.\n\nView booking: {{login_url}}"
+        ),
+    },
+    {
+        "key": "cancellation_approved",
+        "name": "Cancellation Approved",
+        "subject": "Cancellation approved - {{booking_code}}",
+        "body": (
+            "Your cancellation request for booking {{booking_code}} ({{tour_name}}) has been approved.\n\n"
+            "Refund amount: {{currency}} {{refund_amount}}\n\n"
+            "We'll email you again once the refund has been processed.\n\nView booking: {{login_url}}"
+        ),
+    },
+    {
+        "key": "cancellation_rejected",
+        "name": "Cancellation Rejected",
+        "subject": "Cancellation request rejected - {{booking_code}}",
+        "body": (
+            "Your cancellation request for booking {{booking_code}} ({{tour_name}}) was not approved.\n\n"
+            "Reason: {{reason}}\n\n"
+            "Your booking remains active. Contact our support team if you have questions.\n\nView booking: {{login_url}}"
+        ),
+    },
+    {
+        "key": "new_booking_admin",
+        "name": "New Booking Created (Admin)",
+        "subject": "New booking created - {{booking_code}}",
+        "body": (
+            "A customer just created a new booking on Tourvaa.\n\n"
+            "Booking ID: {{booking_code}}\n"
+            "Tour: {{tour_name}}\n"
+            "Date: {{tour_date}}\n"
+            "Customer: {{customer_name}}\n"
+            "Supplier: {{supplier_name}}\n"
+            "Adults: {{adults}}\n"
+            "Total: {{currency}} {{total}}\n\n"
+            "Let the assigned supplier know if they haven't accepted it yet, or reassign the booking from the admin panel.\n\n"
+            "View booking: {{admin_url}}"
+        ),
+    },
+    {
         "key": "supplier_submitted_verification",
         "name": "Supplier Submitted Verification",
         "subject": "Supplier profile submitted for review",
@@ -350,6 +429,10 @@ SAMPLE_VALUES = {
     "supplier_name": "Ayatiworks Technologies",
     "agent_name": "Riverside Travel Partners",
     "portal_url": "https://app.tourvaa.com/admin/bookings/123",
+    "admin_url": "https://app.tourvaa.com/admin/bookings/123",
+    "event_title": "Supplier accepted booking",
+    "detail": "Supplier accepted booking TVA-BKG-000123.",
+    "refund_amount": "624.50",
     "markup_type": "percentage",
     "markup_value": "12",
     "pending_requirements": "Updated business license document",

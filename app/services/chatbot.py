@@ -5,13 +5,25 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.chatbot import ChatFAQ, ChatMessage, ChatSession
+from app.models.chatbot import ChatEmbedding, ChatFAQ, ChatMessage, ChatSession
 from app.schemas.chatbot import FAQCreate, FAQUpdate
 from app.models.cms import Tour
+from app.services import rag
 
 logger = logging.getLogger(__name__)
 
 HISTORY_WINDOW = 10
+
+# RAG index is built lazily on first use per worker process, then kept in
+# sync incrementally by the FAQ CRUD hooks below and the admin reindex
+# endpoint (POST /chatbot/admin/reindex) after bulk tour changes.
+_rag_bootstrap_done = False
+
+BOOKING_INFO_PHRASES = (
+    "my booking", "my bookings", "my trip", "my order", "my reservation",
+    "booking status", "my payment", "amount pending", "my invoice",
+    "when do i travel", "my upcoming",
+)
 
 
 def _normalise(value: str) -> str:
@@ -24,21 +36,69 @@ def _keyword_score(message: str, *texts: str | None) -> int:
     return sum(1 for word in words if word in haystack)
 
 
-def _build_system_prompt(faqs: list[ChatFAQ]) -> str:
+def _ensure_rag_indexed(db: Session) -> None:
+    """Bootstrap the vector index once per process if it has never been built."""
+    global _rag_bootstrap_done
+    if _rag_bootstrap_done:
+        return
+    try:
+        if db.query(ChatEmbedding).count() == 0:
+            logger.info("chat_embeddings is empty; running initial RAG index build")
+            rag.reindex_all(db)
+    except Exception:
+        logger.exception("RAG bootstrap indexing failed; continuing with keyword fallback")
+    finally:
+        _rag_bootstrap_done = True
+
+
+def _wants_booking_info(user_message: str) -> bool:
+    msg = _normalise(user_message)
+    return any(phrase in msg for phrase in BOOKING_INFO_PHRASES)
+
+
+def _get_customer_bookings_context(db: Session, customer_id: int) -> str:
+    from app.models.bookings import Booking
+
+    bookings = (
+        db.query(Booking)
+        .filter(Booking.customer_id == customer_id)
+        .order_by(Booking.id.desc())
+        .limit(5)
+        .all()
+    )
+    if not bookings:
+        return "This logged-in customer has no bookings yet."
+
+    lines = []
+    for b in bookings:
+        travel_date = b.tour_date or (b.tour_start_date.date().isoformat() if b.tour_start_date else "TBD")
+        total = b.final_amount or b.total_cost or 0
+        lines.append(
+            f"- Booking {b.booking_code or ('#' + str(b.id))}: {b.tour_name or 'Tour'}, "
+            f"travel date {travel_date}, status: {b.booking_status}, payment: {b.payment_status}, "
+            f"total: {b.currency} {total}, pending: {b.currency} {b.amount_pending or 0}."
+        )
+    return "\n".join(lines)
+
+
+def _build_system_prompt(faq_snippets: list[str], tour_snippets: list[str], booking_context: str | None) -> str:
     base = (
         "You are a friendly and knowledgeable travel assistant for Tourvaa, "
         "a premium tour and travel booking platform. "
-        "Help customers with questions about tours, bookings, destinations, pricing, and policies. "
-        "Be concise, warm, and helpful. If you do not know something specific, encourage the customer "
-        "to contact the Tourvaa support team.\n\n"
+        "Ground your answers in the retrieved context below when it is relevant. If the context does not "
+        "cover the question, answer briefly from general travel knowledge and encourage the customer to "
+        "contact the Tourvaa support team for anything account-specific. Be concise, warm, and helpful.\n\n"
     )
-    if not faqs:
-        return base
-
-    faq_block = "Below are common questions and answers you should use when relevant:\n\n"
-    for faq in faqs:
-        faq_block += f"Q: {faq.question}\nA: {faq.answer}\n\n"
-    return base + faq_block
+    if faq_snippets:
+        base += "Relevant FAQs (retrieved for this question):\n\n" + "\n\n".join(faq_snippets) + "\n\n"
+    if tour_snippets:
+        base += "Relevant Tourvaa tours (retrieved for this question):\n\n" + "\n\n".join(tour_snippets) + "\n\n"
+    if booking_context:
+        base += (
+            "The customer is logged in. Only use the following when they ask about their own "
+            "bookings -- never invent or guess booking details:\n\n" + booking_context + "\n\n"
+        )
+    return base
 
 
 def _faq_fallback(user_message: str, faqs: list[ChatFAQ]) -> str | None:
@@ -56,6 +116,18 @@ def _faq_fallback(user_message: str, faqs: list[ChatFAQ]) -> str | None:
 
 
 def _search_tours(db: Session, user_message: str) -> list[Tour]:
+    # Semantic search first (true RAG); fall back to keyword ILIKE matching
+    # when the index is unavailable or the query has no strong matches, so
+    # tour lookup never regresses even if embedding indexing has an issue.
+    matches = rag.semantic_search(db, user_message, ["tour"], top_k=4)
+    if matches:
+        ids = [m["source_id"] for m in matches]
+        found = db.query(Tour).filter(Tour.id.in_(ids), Tour.status == "published").all()
+        by_id = {t.id: t for t in found}
+        ordered = [by_id[i] for i in ids if i in by_id]
+        if ordered:
+            return ordered
+
     msg = _normalise(user_message)
     words = [word for word in msg.split() if len(word) > 2]
     query = db.query(Tour).filter(Tour.status == "published")
@@ -253,7 +325,9 @@ def get_active_faqs(db: Session) -> list[ChatFAQ]:
     )
 
 
-def get_chat_reply(db: Session, session_key: str | None, user_message: str) -> tuple[str, str, str | None, dict | None]:
+def get_chat_reply(
+    db: Session, session_key: str | None, user_message: str, customer_id: int | None = None
+) -> tuple[str, str, str | None, dict | None]:
     session = get_or_create_session(db, session_key)
 
     is_booking_command = any(user_message.strip().startswith(p) for p in BOOKING_PREFIXES)
@@ -275,8 +349,25 @@ def get_chat_reply(db: Session, session_key: str | None, user_message: str) -> t
         db.commit()
         return reply_text, session.session_key, action_type, action_data
 
+    _ensure_rag_indexed(db)
+
     faqs = get_active_faqs(db)
-    system_prompt = _build_system_prompt(faqs)
+
+    faq_matches = rag.semantic_search(db, user_message, ["faq"], top_k=3)
+    faq_snippets = [m["content"] for m in faq_matches]
+    if not faq_snippets:
+        # Index empty/no strong match yet -- fall back to the small full FAQ set
+        # rather than answering with zero grounding.
+        faq_snippets = [f"Q: {f.question}\nA: {f.answer}" for f in faqs]
+
+    tour_matches = rag.semantic_search(db, user_message, ["tour"], top_k=4)
+    tour_snippets = [m["content"] for m in tour_matches]
+
+    booking_context = None
+    if customer_id and _wants_booking_info(user_message):
+        booking_context = _get_customer_bookings_context(db, customer_id)
+
+    system_prompt = _build_system_prompt(faq_snippets, tour_snippets, booking_context)
 
     history = (
         db.query(ChatMessage)
@@ -339,6 +430,7 @@ def create_faq(db: Session, data: FAQCreate) -> ChatFAQ:
     db.add(faq)
     db.commit()
     db.refresh(faq)
+    rag.index_faq(db, faq)
     return faq
 
 
@@ -350,6 +442,7 @@ def update_faq(db: Session, faq_id: int, data: FAQUpdate) -> ChatFAQ | None:
         setattr(faq, field, value)
     db.commit()
     db.refresh(faq)
+    rag.index_faq(db, faq)
     return faq
 
 
@@ -359,6 +452,7 @@ def delete_faq(db: Session, faq_id: int) -> bool:
         return False
     db.delete(faq)
     db.commit()
+    rag.delete_embedding(db, "faq", faq_id)
     return True
 
 

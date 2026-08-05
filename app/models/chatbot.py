@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -40,3 +40,25 @@ class ChatMessage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     session = relationship("ChatSession", back_populates="messages")
+
+
+class ChatEmbedding(Base):
+    """Vector index for RAG retrieval.
+
+    MySQL has no native vector type, so the embedding is stored as a JSON
+    array of floats and similarity is computed in Python (see
+    app/services/embeddings.py). This is fine at the data volumes a single
+    tour catalog + FAQ set produce; if that ever changes, swap the storage
+    and `semantic_search` implementation without touching callers.
+    """
+
+    __tablename__ = "chat_embeddings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_type = Column(String(20), nullable=False, index=True)  # tour | faq
+    source_id = Column(Integer, nullable=False, index=True)
+    content_text = Column(Text, nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    embedding = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

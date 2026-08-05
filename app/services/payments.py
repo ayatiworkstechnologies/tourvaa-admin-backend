@@ -21,6 +21,44 @@ def _payment_code(payment_id: int) -> str:
     return f"PAY-{payment_id:06d}"
 
 
+def _email_customer_payment_received(db: Session, payment: Payment, amount) -> None:
+    booking = payment.booking
+    customer = booking.customer if booking else None
+    if not (booking and customer and customer.email):
+        return
+    from app.config import settings
+    from app.utils.email_templates import payment_received_email
+    from app.utils.notification_triggers import send_templated_email
+    login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+    send_templated_email(
+        db, customer.email, "payment_received",
+        {"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+         "currency": booking.currency, "amount": amount, "login_url": login_url,
+         "button_text": "View booking", "button_url": login_url},
+        f"Payment received - {booking.booking_code}",
+        payment_received_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
+    )
+
+
+def _email_customer_refund_processed(db: Session, payment: Payment, amount) -> None:
+    booking = payment.booking
+    customer = booking.customer if booking else None
+    if not (booking and customer and customer.email):
+        return
+    from app.config import settings
+    from app.utils.email_templates import refund_processed_email
+    from app.utils.notification_triggers import send_templated_email
+    login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+    send_templated_email(
+        db, customer.email, "refund_processed",
+        {"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+         "currency": booking.currency, "amount": amount, "login_url": login_url,
+         "button_text": "View booking", "button_url": login_url},
+        f"Refund processed - {booking.booking_code}",
+        refund_processed_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
+    )
+
+
 def serialize_transaction(row: PaymentTransaction) -> dict:
     return {"id": row.id, "payment_id": row.payment_id, "booking_id": row.booking_id, "transaction_type": row.transaction_type, "amount": money_str(row.amount), "status": row.status, "gateway_reference": row.gateway_reference, "metadata": row.metadata_json, "created_at": row.created_at}
 
@@ -236,6 +274,7 @@ def create_payment(db: Session, data: PaymentCreate, actor: Optional[User] = Non
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="payment_success", title="Payment recorded", message=f"Payment {payment.payment_code} was recorded", entity_type="payment", entity_id=payment.id)
     db.commit()
     db.refresh(payment)
+    _email_customer_payment_received(db, payment, paid)
     return serialize_payment(payment, detail=True)
 
 
@@ -304,6 +343,7 @@ def capture_payment(db: Session, payment_id: int, data: PaymentCapture, actor: O
         generate_invoice(db, InvoiceGenerateRequest(booking_id=payment.booking_id, payment_id=payment.id), actor, request)
     except Exception as error:
         logger.warning("Invoice generation after payment capture failed for payment %s: %s", payment.id, error)
+    _email_customer_payment_received(db, payment, amount)
     return serialize_payment(payment, detail=True)
 
 
@@ -436,6 +476,7 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
     log_audit(db, actor=actor, action="process_refund", entity_type="payment", entity_id=payment.id, new_values={"gateway_refund_id": gateway_refund_id}, request=request)
     db.commit()
     db.refresh(payment)
+    _email_customer_refund_processed(db, payment, amount)
     result = serialize_payment(payment, detail=True)
     result["gateway_refund_id"] = gateway_refund_id
     return result

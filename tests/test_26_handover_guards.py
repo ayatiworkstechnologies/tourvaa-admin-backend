@@ -1,5 +1,5 @@
 import subprocess
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +10,7 @@ from app.schemas.auth import RegisterSchema, ResetPasswordSchema
 from app.schemas.users import UserCreate
 from app.services.auth import verify_email
 from app.auth.security import hash_reset_token
+from app.utils.money import utcnow
 
 
 VALID_USER = {
@@ -95,7 +96,7 @@ def test_verify_email_consumes_valid_registration_token():
     token = "registration-token"
     user = SimpleNamespace(
         email_verification_token=hash_reset_token(token),
-        email_verification_expires_at=datetime.utcnow() + timedelta(minutes=5),
+        email_verification_expires_at=utcnow() + timedelta(minutes=5),
         email_verified_at=None,
     )
     db = _FakeDb(user)
@@ -111,7 +112,7 @@ def test_verify_email_rejects_expired_registration_token():
     token = "expired-token"
     user = SimpleNamespace(
         email_verification_token=hash_reset_token(token),
-        email_verification_expires_at=datetime.utcnow() - timedelta(minutes=5),
+        email_verification_expires_at=utcnow() - timedelta(minutes=5),
         email_verified_at=None,
     )
     db = _FakeDb(user)
