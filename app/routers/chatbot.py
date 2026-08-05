@@ -1,8 +1,11 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth.permissions import require_any_permission
+from app.auth.permissions import ACCESS_COOKIE_NAME, _decode_token, require_any_permission
+from app.models.customers import Customer
 from app.utils.pagination import pagination_params
 from app.utils.ratelimit import check_rate_limit
 from app.schemas.chatbot import (
@@ -13,8 +16,34 @@ from app.schemas.chatbot import (
     FAQUpdate,
 )
 from app.services import chatbot as service
+from app.services import rag
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
+
+
+def _resolve_customer_id(request: Request, db: Session) -> int | None:
+    """Best-effort caller identification for /chat. Never raises -- an
+    anonymous visitor and a logged-in customer hit the same public endpoint;
+    only the latter gets booking-aware answers."""
+    token = None
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+    if not token:
+        token = request.cookies.get(ACCESS_COOKIE_NAME, "")
+    if not token:
+        return None
+    try:
+        payload = _decode_token(token)
+    except HTTPException:
+        return None
+    user_id = payload.get("user_id")
+    if not user_id:
+        return None
+    customer = db.query(Customer).filter(Customer.user_id == user_id).first()
+    return customer.id if customer else None
 
 
 @router.post("/chat", response_model=ChatMessageResponse)
@@ -22,8 +51,22 @@ def chat(payload: ChatMessageRequest, request: Request, db: Session = Depends(ge
     check_rate_limit(request, "chatbot-chat", max_calls=20, window_seconds=60)
     if not payload.message or not payload.message.strip():
         raise HTTPException(status_code=422, detail="Message cannot be empty")
-    reply, session_key, action_type, action_data = service.get_chat_reply(db, payload.session_key, payload.message.strip())
+    customer_id = _resolve_customer_id(request, db)
+    reply, session_key, action_type, action_data = service.get_chat_reply(
+        db, payload.session_key, payload.message.strip(), customer_id=customer_id
+    )
     return ChatMessageResponse(reply=reply, session_key=session_key, action_type=action_type, action_data=action_data)
+
+
+@router.post("/admin/reindex")
+def admin_reindex(
+    db: Session = Depends(get_db),
+    _: object = Depends(require_any_permission("chatbot.edit", "update-chatbot")),
+):
+    """Rebuild the RAG vector index for tours + FAQs. Call after bulk tour
+    imports/edits -- FAQ create/update/delete already keep themselves in sync."""
+    stats = rag.reindex_all(db)
+    return {"status": "success", **stats}
 
 
 @router.get("/faqs", response_model=list[FAQResponse])

@@ -73,53 +73,33 @@ Tourvaa Backend is a **FastAPI** REST API that powers the Tourvaa tour-and-trave
 
 ```
 backend/
-├── main.py                          # does not exist - app entry is run via uvicorn app.main:app
 ├── app/
-│   ├── config.py                    # Pydantic settings loaded from .env
-│   ├── database.py                  # SQLAlchemy engine, SessionLocal, Base, get_db()
-│   ├── security.py                  # JWT creation, bcrypt hashing, token utilities
-│   ├── seed.py                      # DB seeder - roles, permissions, super admin
-│   └── modules/
-│       ├── auth/                    # Login, register, password reset, email verify
-│       ├── users/                   # User CRUD and role assignment
-│       ├── roles/                   # Role management
-│       ├── permissions/             # Permission management
-│       ├── admin_modules/           # Admin sidebar module definitions
-│       ├── dashboard/               # Dashboard summary, charts, activity
-│       ├── customers/               # Customer profiles, comms, portal
-│       ├── suppliers/               # Supplier onboarding and approval
-│       ├── agents/                  # Agent/reseller onboarding and approval
-│       ├── affiliates/              # Affiliate management
-│       ├── cms/                     # Countries, cities, categories, subcategories, tours
-│       ├── tours/                   # Tour sub-resources (itinerary, pricing, gallery, etc.)
-│       ├── bookings/                # Booking lifecycle
-│       ├── payments/                # Payment lifecycle
-│       ├── invoices/                # Invoice records
-│       ├── notifications/           # In-app + push notifications
-│       ├── reports/                 # Analytics and reporting
-│       ├── chatbot/                 # AI chatbot (Anthropic) + FAQ admin
-│       ├── settings/                # App / payment / API settings
-│       ├── email_templates/         # Email template CRUD
-│       ├── profile/                 # User self-service profile
-│       ├── uploads/                 # File upload handling
-│       ├── audit/                   # Audit log model and service
-│       ├── sessions/                # Login history and session tracking
-│       ├── client/                  # Public-facing client API
-│       └── common/
-│           ├── auth.py              # get_current_user, require_any_permission
-│           ├── ratelimit.py         # In-memory sliding-window rate limiter
-│           ├── mailer.py            # SMTP email sender
-│           ├── email_templates.py   # Fallback HTML email templates
-│           ├── helpers.py           # Utility functions (slugify, mask_email, etc.)
-│           ├── media.py             # File path resolution
-│           ├── money.py             # Currency formatting, utcnow()
-│           └── pagination.py        # pagination_params dependency
-├── alembic/                         # Database migration scripts
-├── alembic.ini                      # Alembic config
+│   ├── main.py                       # FastAPI app instance, router registration, startup table checks (uvicorn app.main:app)
+│   ├── config/                       # Pydantic BaseSettings loaded from .env
+│   ├── database.py                   # SQLAlchemy engine, SessionLocal, Base, get_db()
+│   ├── seed.py                       # DB seeder - roles, permissions, super admin
+│   ├── auth/
+│   │   ├── permissions.py            # get_current_user, require_any_permission, require_portal, expand_permission_slugs, MODULE_ALIASES
+│   │   └── security.py               # JWT creation, password hashing
+│   ├── models/                       # SQLAlchemy models, one file per domain (tours.py, bookings.py, suppliers.py, tour_versions.py, ...)
+│   ├── schemas/                      # Pydantic request/response schemas, mirrors models/
+│   ├── services/                     # Business logic, mirrors models/ (tours.py, cms.py, bookings.py, tour_versions.py, ...)
+│   ├── routers/                      # FastAPI routers, mirrors services/ (mounted in app/main.py)
+│   ├── middleware/
+│   │   └── error_handlers.py         # HTTPException/validation/unhandled-exception -> JSON response formatting
+│   ├── utils/                        # money.py (utcnow/formatting), pagination.py, operations.py, media.py, crypto.py, cloudinary_client.py, mailer.py, ...
+│   └── storage/                      # legacy local file storage folders; uploads actually go through Cloudinary (utils/cloudinary_client.py)
+├── alembic/
+│   └── versions/                     # Migration scripts, chronologically named
+├── alembic.ini                       # Alembic config
+├── tests/                            # pytest integration tests - hit a live server at BASE_URL, not in-process (see tests/conftest.py)
+├── bruno/                            # Bruno API client collections
 ├── requirements.txt
-├── .env                             # Environment variables (not committed to prod)
-└── vapid_private.pem                # VAPID private key for web push
+├── .env                              # Environment variables (not committed to prod)
+└── vapid_private.pem                 # VAPID private key for web push
 ```
+
+Note: there is no `app/modules/` package in this codebase — routes, schemas, services, and models each live in their own top-level directory (`app/routers/`, `app/schemas/`, `app/services/`, `app/models/`), one file per domain, rather than one folder per feature.
 
 ---
 
@@ -281,7 +261,7 @@ python -m alembic current
 
 Each `User` row has a `token_version` integer. On login, it is embedded in the JWT. On every authenticated request, `get_current_user` checks that the token's `token_version` matches the DB value. Incrementing `token_version` (via force logout) invalidates all existing tokens for that user.
 
-### Request Authentication (`app/modules/common/auth.py`)
+### Request Authentication (`app/auth/permissions.py`)
 
 ```python
 # Reads Bearer token from Authorization header
@@ -340,12 +320,12 @@ The auth middleware expands both formats before checking, so endpoints can safel
 - `bookings.view` → also checks `view-bookings`
 - `view-bookings` → also checks `bookings.view`
 
-Module aliases: `email` ↔ `email_templates`
+Module aliases (`MODULE_ALIASES` in `app/auth/permissions.py`): `email` ↔ `email_templates`, `resellers` ↔ `agents`, `audit_logs` ↔ `activity_logs`
 
 ### How to Guard an Endpoint
 
 ```python
-from app.modules.common.auth import require_any_permission
+from app.auth.permissions import require_any_permission
 
 @router.get("/resource")
 def my_endpoint(
@@ -886,7 +866,7 @@ metadata_json, sent_at, read_at, created_at
 
 ## 10. Email System
 
-**Sending via:** `app/modules/common/mailer.py`
+**Sending via:** `app/utils/mailer.py`
 
 ```python
 send_email(to, subject, html)      # raises on failure
@@ -925,7 +905,7 @@ try_send_email(to, subject, html)  # logs error, does not raise
 
 ## 12. Rate Limiting
 
-Implemented in `app/modules/common/ratelimit.py`.
+Implemented in `app/utils/ratelimit.py`.
 
 **Type:** In-memory sliding-window per `(IP, endpoint_key)`.
 
@@ -1035,6 +1015,8 @@ All endpoints return a consistent JSON envelope:
 ---
 
 ## 16. Permission Slug Reference
+
+The live `permissions` table currently holds 247+ rows (and grows as new modules ship) - the lists below are illustrative examples of each naming format, not an exhaustive enumeration. `app/seed.py` is the source of truth for every permission actually seeded.
 
 ### Core CRUD (legacy format)
 

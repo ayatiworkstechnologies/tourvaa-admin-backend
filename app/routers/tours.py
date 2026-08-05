@@ -336,22 +336,37 @@ def remove_gallery_image(tour_id: int, image_id: int, request: Request, db: Sess
 
 
 # pricing
+# Tourvaa's own markup and the resulting public/agent-facing price must
+# never reach a supplier actor, even though they're stored on the same
+# TourPricing row as the supplier's own price/commission fields (which
+# suppliers ARE meant to see -- see TourPricingTab.tsx's "Your Price with
+# commission" column). Stripped here, at the API boundary, rather than only
+# hidden in the frontend.
+_ADMIN_ONLY_PRICING_FIELDS = ("admin_markup_type", "admin_markup_value", "storefront_adult_price", "storefront_child_price")
+
+
+def _for_actor(data: dict, actor: User) -> dict:
+    if not is_supplier_user(actor):
+        return data
+    return {k: v for k, v in data.items() if k not in _ADMIN_ONLY_PRICING_FIELDS}
+
+
 @router.get("/{tour_id}/pricing")
 def tour_pricing(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
     _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
-    return {"status": "success", "data": list_pricing(db, tour_id)}
+    return {"status": "success", "data": [_for_actor(row, current_user) for row in list_pricing(db, tour_id)]}
 
 
 @router.post("/{tour_id}/pricing")
 def add_pricing(tour_id: int, data: PricingPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
     _assert_supplier_owns_tour(db, tour_id, current_user)
-    return {"status": "success", "data": create_pricing(db, tour_id, data, current_user, request)}
+    return {"status": "success", "data": _for_actor(create_pricing(db, tour_id, data, current_user, request), current_user)}
 
 
 @router.put("/{tour_id}/pricing/{pricing_id}")
 def edit_pricing(tour_id: int, pricing_id: int, data: PricingPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
     _assert_supplier_owns_tour(db, tour_id, current_user)
-    return {"status": "success", "data": update_pricing(db, tour_id, pricing_id, data, current_user, request)}
+    return {"status": "success", "data": _for_actor(update_pricing(db, tour_id, pricing_id, data, current_user, request), current_user)}
 
 
 @router.delete("/{tour_id}/pricing/{pricing_id}")

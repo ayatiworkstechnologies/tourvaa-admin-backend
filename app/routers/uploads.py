@@ -2,7 +2,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 
-from app.auth.permissions import get_current_user
+from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.cloudinary_client import upload_to_cloudinary
 from app.utils.media import detect_image_type
 from app.models.users import User
@@ -65,7 +65,9 @@ async def upload_profile_image(
 @router.post("/admin-asset")
 async def upload_admin_asset(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(
+        require_any_permission("tours.edit", "update-tours", "website_cms.edit", "update-website_cms")
+    ),
 ):
     content = await file.read()
 

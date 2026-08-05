@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 from urllib.parse import quote
 
@@ -7,6 +7,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.utils.money import utcnow
 from app.utils.email_templates import (
     render_database_email,
     password_changed_email,
@@ -39,7 +40,6 @@ from app.auth.security import (
 )
 
 logger = logging.getLogger(__name__)
-PUBLIC_REGISTRATION_ROLES = {"customer", "supplier", "agent-reseller"}
 
 
 def _request_ip(request) -> str | None:
@@ -221,7 +221,7 @@ def register_unified_user(db: Session, data):
     if not role:
         raise HTTPException(status_code=400, detail="Selected account type is not available")
 
-    now = datetime.utcnow()
+    now = utcnow()
     token, token_hash = create_password_reset_token()
 
     user = User(
@@ -297,7 +297,7 @@ def _registration_token_user(db: Session, token: str):
     user = db.query(User).filter(User.email_verification_token == hash_reset_token(token)).first()
     if not user or not user.email_verification_expires_at:
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
-    if user.email_verification_expires_at.replace(tzinfo=None) < datetime.utcnow():
+    if user.email_verification_expires_at < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
     if user.account_status not in {"PENDING_EMAIL_VERIFICATION", "PENDING_PASSWORD_CREATION"}:
         raise HTTPException(status_code=400, detail="Verification link has already been used")
@@ -307,7 +307,7 @@ def _registration_token_user(db: Session, token: str):
 def complete_registration(db: Session, token: str, password: str):
     user = _registration_token_user(db, token)
     old_status = user.account_status
-    now = datetime.utcnow()
+    now = utcnow()
     user.password = hash_password(password)
     user.password_created_at = now
     user.email_verified = True
@@ -399,7 +399,7 @@ def resend_registration_verification(db: Session, email: str, redirect: str | No
     token, token_hash = create_password_reset_token()
     user.account_status = "PENDING_EMAIL_VERIFICATION"
     user.email_verification_token = token_hash
-    user.email_verification_expires_at = datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
+    user.email_verification_expires_at = utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
     db.commit()
     send_email_verification(db, user, token, redirect)
     return True
@@ -428,144 +428,10 @@ def change_registration_email(db: Session, change_token: str, email: str, redire
     token, token_hash = create_password_reset_token()
     user.account_status = "PENDING_EMAIL_VERIFICATION"
     user.email_verification_token = token_hash
-    user.email_verification_expires_at = datetime.utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
+    user.email_verification_expires_at = utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
     db.commit()
     send_email_verification(db, user, token, redirect)
     return user
-
-
-
-def register_user(db: Session, data):
-    email = str(data.email).strip().lower()
-
-    existing_user = db.query(User).filter(User.email == email).first()
-
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already exists")
-
-    selected_role = None
-
-    if data.role_id:
-        selected_role = (
-            db.query(Role)
-            .filter(Role.id == data.role_id)
-            .filter(Role.is_active == True)
-            .first()
-        )
-
-        if not selected_role:
-            raise HTTPException(status_code=400, detail="Selected role is not available")
-
-        if selected_role.slug not in PUBLIC_REGISTRATION_ROLES:
-            raise HTTPException(status_code=403, detail="Selected role is not available for registration")
-
-        if selected_role.slug == "super-admin":
-            user_count = db.query(User).count()
-
-            if user_count > 0:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Super admin registration is restricted",
-                )
-
-    if not selected_role:
-        selected_role = (
-            db.query(Role)
-            .filter(Role.slug == "customer")
-            .filter(Role.is_active == True)
-            .first()
-        )
-
-    role_slug = selected_role.slug if selected_role else None
-    supplier_verification = role_slug == "supplier"
-    verification_token = None
-    verification_token_hash = None
-    if supplier_verification:
-        verification_token, verification_token_hash = create_password_reset_token()
-    now = datetime.utcnow()
-
-    new_user = User(
-        name=data.name.strip(),
-        email=email,
-        phone=data.phone.strip(),
-        profile_image=data.profile_image.strip(),
-        address=data.address.strip(),
-        country=data.country.strip(),
-        state=data.state.strip(),
-        city=data.city.strip(),
-        pincode=data.pincode.strip(),
-        password=hash_password(data.password),
-        role_id=selected_role.id if selected_role else None,
-        user_type={"customer": "CUSTOMER", "supplier": "SUPPLIER", "agent-reseller": "AGENT"}.get(selected_role.slug if selected_role else "", "ADMIN"),
-        is_active=not supplier_verification,
-        approval_status="pending" if supplier_verification else "approved",
-        account_status="PENDING_EMAIL_VERIFICATION" if supplier_verification else "ACTIVE",
-        admin_verified=False,
-        admin_verified_at=None,
-        email_verified=False,
-        password_created_at=now,
-        email_verified_at=None,
-        email_verification_token=verification_token_hash,
-        email_verification_expires_at=(
-            now + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
-            if supplier_verification else None
-        ),
-    )
-
-    db.add(new_user)
-    db.flush()
-    if new_user.role_id:
-        db.add(UserRole(user_id=new_user.id, role_id=new_user.role_id))
-
-    # Auto-create the corresponding profile record linked by user_id
-    if role_slug == "customer":
-        existing_customer = db.query(Customer).filter(Customer.email == email).first()
-        if not existing_customer:
-            name_parts = new_user.name.strip().split(None, 1)
-            first = name_parts[0] if name_parts else ""
-            last = name_parts[1] if len(name_parts) > 1 else ""
-            db.add(Customer(
-                user_id=new_user.id,
-                first_name=first,
-                last_name=last,
-                full_name=new_user.name.strip(),
-                email=email,
-                phone=new_user.phone,
-                status="active",
-                email_verified=False,
-            ))
-        else:
-            existing_customer.user_id = new_user.id
-
-    elif role_slug == "supplier":
-        existing_supplier = db.query(Supplier).filter(Supplier.user_id == new_user.id).first()
-        if not existing_supplier:
-            db.add(Supplier(
-                user_id=new_user.id,
-                supplier_name=new_user.name.strip(),
-                status="inactive",
-                approval_status="email_verification_pending",
-            ))
-
-    elif role_slug == "agent-reseller":
-        existing_agent = db.query(Agent).filter(Agent.user_id == new_user.id).first()
-        if not existing_agent:
-            db.add(Agent(
-                user_id=new_user.id,
-                agent_name=new_user.name.strip(),
-                status="active",
-                approval_status="approved",
-                approved_at=now,
-            ))
-
-    db.commit()
-    db.refresh(new_user)
-
-    if supplier_verification and verification_token:
-        send_email_verification(db, new_user, verification_token)
-
-    return new_user
-
 
 def login_user(db: Session, data, request=None):
     identifier = data.login_identifier
@@ -699,7 +565,7 @@ def _finalize_login(db: Session, user: User, data, request=None):
             "device_name": data.device_name,
         },
     )
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = utcnow()
     db.commit()
 
     return {
@@ -725,7 +591,7 @@ def request_otp(db: Session, data):
         raise HTTPException(status_code=400, detail="This email is registered under a different account type. Please use the standard login.")
 
     code, code_hash = create_otp_code()
-    now = datetime.utcnow()
+    now = utcnow()
 
     if not user:
         role = db.query(Role).filter(Role.slug == "customer", Role.is_active == True).first()
@@ -772,7 +638,7 @@ def verify_otp_and_login(db: Session, data, request=None):
     if not user or not user.otp_code_hash or not user.otp_expires_at:
         raise HTTPException(status_code=400, detail="Request a new verification code.")
 
-    if user.otp_expires_at < datetime.utcnow():
+    if user.otp_expires_at < utcnow():
         user.otp_code_hash = None
         user.otp_expires_at = None
         user.otp_attempts = 0
@@ -799,7 +665,7 @@ def verify_otp_and_login(db: Session, data, request=None):
         user.account_status = "ACTIVE"
         user.is_active = True
         user.email_verified = True
-        user.email_verified_at = datetime.utcnow()
+        user.email_verified_at = utcnow()
         db.add(UserStatusHistory(user_id=user.id, from_status="PENDING_OTP_VERIFICATION", to_status="ACTIVE", reason="OTP verified"))
         customer = db.query(Customer).filter(Customer.user_id == user.id).first()
         if customer:
@@ -853,10 +719,10 @@ def verify_email(db: Session, token: str | None = ""):
     if not user or not user.email_verification_expires_at:
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
-    if user.email_verification_expires_at.replace(tzinfo=None) < datetime.utcnow():
+    if user.email_verification_expires_at < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
-    user.email_verified_at = datetime.utcnow()
+    user.email_verified_at = utcnow()
     user_id_val = getattr(user, "id", None)
     customer = db.query(Customer).filter(Customer.user_id == user_id_val).first() if user_id_val else None
     if customer:
@@ -911,8 +777,15 @@ def get_login_history(db: Session, user: User, limit: int = 20):
 
 
 def force_logout_user(db: Session, target_user: User, actor: User | None = None, request=None):
+    """Bumps token_version (invalidating every JWT already issued to this
+    user) and revokes every active UserSession row. Delegates the actual
+    revocation to services.sessions.force_logout_user so this and
+    /sessions/users/{id}/force-logout can't diverge again -- they used to
+    be two separate implementations, and this one alone never revoked
+    sessions, leaving them "active" in the DB after /auth/logout."""
+    from app.services.sessions import force_logout_user as _revoke_sessions
     old_version = target_user.token_version
-    target_user.token_version += 1
+    result = _revoke_sessions(db, target_user.id)
     log_audit(
         db,
         actor=actor,
@@ -920,7 +793,7 @@ def force_logout_user(db: Session, target_user: User, actor: User | None = None,
         entity_type="user",
         entity_id=target_user.id,
         old_values={"token_version": old_version},
-        new_values={"token_version": target_user.token_version},
+        new_values={"token_version": result["token_version"]},
         request=request,
     )
     db.commit()
@@ -947,7 +820,7 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web"):
 
     token, token_hash = create_password_reset_token()
     user.reset_password_token = token_hash
-    user.reset_password_expires_at = datetime.utcnow() + timedelta(minutes=30)
+    user.reset_password_expires_at = utcnow() + timedelta(minutes=30)
 
     db.commit()
 
@@ -992,7 +865,7 @@ def reset_password(db: Session, token: str, password: str):
 
     expires_at = user.reset_password_expires_at
 
-    if expires_at.replace(tzinfo=None) < datetime.utcnow():
+    if expires_at < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
     if user.account_status != "ACTIVE" or not user.is_active or not user.email_verified:
@@ -1037,7 +910,7 @@ def validate_reset_token(db: Session, token: str):
     if not user or not user.reset_password_expires_at:
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    if user.reset_password_expires_at.replace(tzinfo=None) < datetime.utcnow():
+    if user.reset_password_expires_at < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
     if user.account_status != "ACTIVE" or not user.is_active or not user.email_verified:

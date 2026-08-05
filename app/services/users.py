@@ -1,4 +1,6 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from app.utils.money import utcnow
 
 from fastapi import HTTPException, Request
 from sqlalchemy import or_
@@ -277,7 +279,7 @@ def create_user(
         is_active=True,
         approval_status="approved",
         reset_password_token=token_hash,
-        reset_password_expires_at=datetime.utcnow() + timedelta(minutes=30),
+        reset_password_expires_at=utcnow() + timedelta(minutes=30),
     )
 
     db.add(user)
@@ -402,7 +404,7 @@ def approve_user(
     user.is_active = True
     user.account_status = "ACTIVE"
     user.admin_verified = True
-    user.admin_verified_at = datetime.utcnow()
+    user.admin_verified_at = utcnow()
     user.admin_verified_by = actor.id if actor else None
     user.deactivated_at = None
     user.deactivated_by = None
@@ -459,7 +461,7 @@ def deactivate_user(db: Session, user_id: int, reason: str, actor: User | None =
     old_status = user.account_status
     user.account_status = "INACTIVE"
     user.is_active = False
-    user.deactivated_at = datetime.utcnow()
+    user.deactivated_at = utcnow()
     user.deactivated_by = actor.id if actor else None
     user.deactivation_reason = reason.strip()
     user.token_version += 1
@@ -513,7 +515,7 @@ def reactivate_user(
     user.account_status = "ACTIVE"
     user.is_active = True
     user.admin_verified = True
-    user.admin_verified_at = datetime.utcnow()
+    user.admin_verified_at = utcnow()
     user.admin_verified_by = actor.id if actor else None
     user.deactivated_at = None
     user.deactivated_by = None
@@ -624,7 +626,7 @@ def send_user_password_reset(db: Session, user_id: int):
     token, token_hash = create_password_reset_token()
 
     user.reset_password_token = token_hash
-    user.reset_password_expires_at = datetime.utcnow() + timedelta(minutes=30)
+    user.reset_password_expires_at = utcnow() + timedelta(minutes=30)
     db.commit()
 
     reset_url = build_password_reset_url(token)

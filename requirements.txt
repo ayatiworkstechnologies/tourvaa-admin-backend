@@ -12,8 +12,10 @@ email-validator
 alembic
 requests
 anthropic
+fastembed
 pywebpush
 reportlab
 redis
 cloudinary
 bleach
+cryptography

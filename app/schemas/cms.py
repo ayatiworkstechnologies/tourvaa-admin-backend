@@ -1,4 +1,6 @@
 import re
+from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -137,6 +139,10 @@ class TourPayload(BaseModel):
     tour_video_url: str = Field(default="", max_length=500)
     brochure_pdf: str = Field(default="", max_length=255)
     status: str = Field(default="draft", max_length=20)
+    # Optimistic concurrency: the tour's updated_at the client last saw.
+    # When set on an edit (create leaves it None), the server rejects the
+    # write with 409 if the tour has changed since -- see save_tour().
+    expected_updated_at: Optional[datetime] = None
 
     @field_validator("title", "slug", "subtitle", "currency", "start_location", "finish_location", "short_description", "long_description", "seo_title", "seo_description", "seo_keywords", "image_alt_text", "banner_image", "map_image", "status", "tour_language", "suitable_age_range", "tour_visibility", "pricing_type", "focus_keyword", "canonical_url", "open_graph_image", "mobile_cover_image", "tour_video_url", "brochure_pdf")
     @classmethod

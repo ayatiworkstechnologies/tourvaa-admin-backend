@@ -12,7 +12,11 @@ def _is_admin(actor: "User | None") -> bool:
     if not actor or not actor.role:
         return True
     slug = actor.role.slug or ""
-    return not any(marker in slug for marker in ("supplier", "agent", "customer"))
+    # A substring check here means "affiliate" matched none of these and
+    # fell through to True (i.e. treated as admin) -- affiliates could see
+    # and modify every user's notifications. List every non-admin portal
+    # role explicitly instead of trying to substring-match them.
+    return not any(marker in slug for marker in ("supplier", "agent", "customer", "affiliate", "reseller"))
 
 
 def serialize_notification(n: Notification) -> dict:

@@ -5,7 +5,7 @@ from app.database import get_db
 from app.services import cancellations as service
 from app.schemas.cancellations import (
     CancellationApprove, CancellationReject, CancellationRequestCreate,
-    ProcessRefundBody, RefundRuleCreate,
+    ProcessRefundBody, RefundRuleCreate, RefundRuleUpdate,
 )
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.pagination import pagination_params
@@ -67,6 +67,12 @@ def list_rules(tour_id: int = Query(default=0), db: Session = Depends(get_db), _
 @router.post("/refund-rules")
 def create_rule(data: RefundRuleCreate, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("tours.edit", "update-tours"))):
     result = service.create_rule(db, data=data, actor=current_user, request=request)
+    return {"status": "success", "data": result}
+
+
+@router.put("/refund-rules/{rule_id}")
+def update_rule(rule_id: int, data: RefundRuleUpdate, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("tours.edit", "update-tours"))):
+    result = service.update_rule(db, rule_id=rule_id, data=data, actor=current_user, request=request)
     return {"status": "success", "data": result}
 
 

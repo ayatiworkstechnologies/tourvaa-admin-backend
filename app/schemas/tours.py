@@ -182,6 +182,9 @@ class PricingPayload(BaseModel):
     admin_markup_value: float = Field(default=0.0, ge=0)
     currency: str = Field(default="USD", max_length=10)
     status: str = Field(default="active", max_length=20)
+    # Optional explanation for the audit trail when Admin edits a Supplier's
+    # pricing slab on their behalf -- never stored on the slab itself.
+    change_reason: str = Field(default="", max_length=500)
 
     @field_validator("markup_type", "admin_markup_type")
     @classmethod

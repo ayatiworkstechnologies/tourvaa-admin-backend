@@ -39,7 +39,7 @@ from app.models.sessions import UserSession, LoginHistory
 from app.models.chatbot import ChatFAQ, ChatSession, ChatMessage
 
 # New modules
-from app.models.tour_versions import TourVersion
+from app.models.tour_versions import TourVersion, TourReviewComment
 from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierPayoutItem
 from app.models.checkout import CheckoutSession
 from app.models.website_cms import (
@@ -120,6 +120,7 @@ def schema_is_ready():
         "chat_messages",
         "states",
         "tour_versions",
+        "tour_review_comments",
         "supplier_ledgers",
         "supplier_payouts",
         "supplier_payout_items",

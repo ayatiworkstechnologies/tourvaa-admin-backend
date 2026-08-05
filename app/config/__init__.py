@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     PAYPAL_WEBHOOK_ID: str = ""
 
     ANTHROPIC_API_KEY: str = ""
+    # Local ONNX embedding model (fastembed) used for chatbot RAG retrieval.
+    # No API key needed -- downloads once on first use and runs on CPU.
+    CHATBOT_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
 
     # Countries / States / Cities fallback API (countrystatecity.in)
     COUNTRY_STATE_CITY_API_KEY: str = ""

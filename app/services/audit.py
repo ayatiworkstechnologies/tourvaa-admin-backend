@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Any
 
 from fastapi import Request
@@ -13,6 +14,9 @@ def _json_safe(value: Any):
 
     if isinstance(value, list):
         return [_json_safe(item) for item in value]
+
+    if isinstance(value, Decimal):
+        return float(value)
 
     if hasattr(value, "isoformat"):
         return value.isoformat()

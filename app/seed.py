@@ -211,9 +211,12 @@ def seed_super_admin_user(db: Session, role: Role | None):
 
     default_password = Settings.model_fields["SUPER_ADMIN_PASSWORD"].default
     if settings.APP_ENV.lower() == "production" and settings.SUPER_ADMIN_PASSWORD == default_password:
-        logger.warning(
-            "SUPER_ADMIN_PASSWORD is still the default value in a production environment - "
-            "set a real password via the SUPER_ADMIN_PASSWORD env var."
+        # A warning alone still let startup proceed and seed the most
+        # privileged account in the system with a publicly-known password -
+        # refuse to start instead.
+        raise RuntimeError(
+            "SUPER_ADMIN_PASSWORD is still the default value in a production environment. "
+            "Set a real password via the SUPER_ADMIN_PASSWORD env var before starting."
         )
 
     email = settings.SUPER_ADMIN_EMAIL.strip().lower()

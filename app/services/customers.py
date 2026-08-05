@@ -1,4 +1,6 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from app.utils.money import utcnow
 from math import ceil
 
 from fastapi import HTTPException, Request
@@ -470,7 +472,7 @@ def block_customer(
     customer.status = "blocked"
     customer.is_blocked = True
     customer.blocked_reason = data.reason
-    customer.blocked_at = datetime.utcnow()
+    customer.blocked_at = utcnow()
     customer.blocked_by = actor.id if actor else None
 
     if customer.user:
@@ -534,7 +536,7 @@ def reset_customer_password(
 
     token, token_hash = create_password_reset_token()
     user.reset_password_token = token_hash
-    user.reset_password_expires_at = datetime.utcnow() + timedelta(minutes=30)
+    user.reset_password_expires_at = utcnow() + timedelta(minutes=30)
     user.token_version += 1
 
     reset_url = build_password_reset_url(token)

@@ -15,7 +15,7 @@ from app.utils.operations import (
     serialize_common_review,
     simple_paginate,
 )
-from datetime import datetime
+from app.utils.money import utcnow
 
 from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierCommissionRequest, SupplierDocument, SupplierVehicle
 from app.schemas.suppliers import (
@@ -348,7 +348,7 @@ def approve_supplier(db: Session, supplier_id: int, actor: User, request: Reques
 
     old = serialize_supplier(item)
     previous_status = item.approval_status
-    now = datetime.utcnow()
+    now = utcnow()
     item.approval_status = "APPROVED"
     item.status = "active"
     item.approved_at = now
@@ -476,7 +476,7 @@ def set_supplier_account_status(
     item.user.is_active = normalized == "ACTIVE"
     item.status = "active" if normalized == "ACTIVE" else normalized.lower()
     if normalized in {"INACTIVE", "SUSPENDED", "LOCKED"}:
-        item.user.deactivated_at = datetime.utcnow()
+        item.user.deactivated_at = utcnow()
         item.user.deactivated_by = actor.id
         item.user.deactivation_reason = reason or normalized.title()
         item.user.token_version += 1
@@ -530,7 +530,7 @@ def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRe
     commission_request_pending = item.commission_request_status == "pending"
     if commission_request_pending:
         item.commission_request_status = "approved"
-        item.commission_reviewed_at = datetime.utcnow()
+        item.commission_reviewed_at = utcnow()
         item.pending_requirements = None
         latest_request = _find_pending_commission_request(db, item.id)
         if latest_request:
@@ -554,7 +554,7 @@ def reject_supplier_commission_request(db: Session, supplier_id: int, actor: Use
         raise HTTPException(status_code=409, detail="No pending commission request to reject")
     old = serialize_supplier(item)
     item.commission_request_status = "rejected"
-    item.commission_reviewed_at = datetime.utcnow()
+    item.commission_reviewed_at = utcnow()
     latest_request = _find_pending_commission_request(db, item.id)
     if latest_request:
         latest_request.status = "rejected"
@@ -594,13 +594,13 @@ def request_supplier_commission(db: Session, user: User, data: SupplierMarkupReq
 
     supplier.commission_request_type = data.markup_type
     supplier.commission_request_value = data.markup_value
-    supplier.commission_requested_at = datetime.utcnow()
+    supplier.commission_requested_at = utcnow()
 
     if is_increase:
         supplier.markup_type = data.markup_type
         supplier.markup_value = data.markup_value
         supplier.commission_request_status = "approved"
-        supplier.commission_reviewed_at = datetime.utcnow()
+        supplier.commission_reviewed_at = utcnow()
         supplier.pending_requirements = None
     else:
         supplier.commission_request_status = "pending"
@@ -697,7 +697,7 @@ def review_supplier_document(db: Session, supplier_id: int, document_id: int, da
     old = _document(document)
     document.status = data.status
     document.rejection_reason = data.rejection_reason if data.status == "rejected" else None
-    document.reviewed_at = datetime.utcnow()
+    document.reviewed_at = utcnow()
     document.reviewed_by = actor.id
 
     log_audit(
@@ -727,7 +727,7 @@ def review_supplier_vehicle(db: Session, supplier_id: int, vehicle_id: int, data
     old = {"id": vehicle.id, "approval_status": vehicle.approval_status, "rejection_reason": vehicle.rejection_reason}
     vehicle.approval_status = data.approval_status
     vehicle.rejection_reason = data.rejection_reason if data.approval_status == "rejected" else None
-    vehicle.reviewed_at = datetime.utcnow()
+    vehicle.reviewed_at = utcnow()
     vehicle.reviewed_by = actor.id
 
     log_audit(
