@@ -227,6 +227,11 @@ async def tours_import(
         raise HTTPException(status_code=400, detail="File is required")
     try:
         rows = parse_tour_import_rows(content)
+    except HTTPException:
+        # parse_tour_import_rows already raises a specific, actionable
+        # message (e.g. unrecognized headers) - don't bury it under the
+        # generic "Could not read the uploaded file" wrapper below.
+        raise
     except Exception as error:
         raise HTTPException(status_code=400, detail=f"Could not read the uploaded file: {error}") from error
     if not rows:
