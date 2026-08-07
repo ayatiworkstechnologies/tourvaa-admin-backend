@@ -169,9 +169,12 @@ class PricingPayload(BaseModel):
     passenger_to: int = Field(ge=1)
     adult_price: float = Field(ge=0)
     child_price: float = Field(default=0.0, ge=0)
-    # markup_type/markup_value/final_price/supplier_price are accepted for
-    # backward compatibility but are always recomputed server-side from the
-    # tour's supplier commission -- see services.tours.create_pricing.
+    # final_price/supplier_price are accepted for backward compatibility but
+    # are always recomputed server-side -- see services.tours.create_pricing.
+    # markup_value is the supplier's own commission for this slab: a supplier
+    # may raise it above their agreed rate (for higher marketplace
+    # visibility) but the server floors it at Supplier.markup_value
+    # regardless of what's sent here -- see _apply_pricing_computation.
     supplier_price: float = Field(default=0.0, ge=0)
     markup_type: str = Field(default="percentage", max_length=20)
     markup_value: float = Field(default=0.0, ge=0)

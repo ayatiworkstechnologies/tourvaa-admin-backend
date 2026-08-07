@@ -652,7 +652,7 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
     query = query.order_by(Booking.id.asc() if sort_by == "oldest" else Booking.id.desc())
     total = query.count()
     items = [serialize_booking(b) for b in query.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit)), "status_counts": status_counts}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit)), "status_counts": status_counts}
 
 
 def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:

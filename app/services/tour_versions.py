@@ -204,14 +204,14 @@ def list_pending(db: Session, page: int = 1, limit: int = 20) -> dict:
     q = db.query(TourVersion).filter(TourVersion.status == "pending_approval").order_by(TourVersion.id.desc())
     total = q.count()
     items = [_serialize(v) for v in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def list_versions(db: Session, tour_id: int, page: int = 1, limit: int = 20) -> dict:
     q = db.query(TourVersion).filter(TourVersion.tour_id == tour_id).order_by(TourVersion.version_number.desc())
     total = q.count()
     items = [_serialize(v) for v in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def approve_version(db: Session, tour_id: int, version_id: int, actor: User, request=None) -> dict:

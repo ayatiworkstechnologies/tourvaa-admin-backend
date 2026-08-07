@@ -757,7 +757,7 @@ def get_login_history(db: Session, user: User, limit: int = 20):
         db.query(AuditLog)
         .filter(AuditLog.entity_type == "auth")
         .filter(AuditLog.action.in_(["login_success", "login_failed"]))
-        .filter((AuditLog.actor_user_id == user.id) | (AuditLog.actor_user_id.is_(None)))
+        .filter(AuditLog.actor_user_id == user.id)
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(limit)
         .all()

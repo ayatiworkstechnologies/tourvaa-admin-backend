@@ -59,7 +59,7 @@ def list_notifications(
     query = query.order_by(Notification.id.desc())
     total = query.count()
     items = [serialize_notification(notification) for notification in query.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def mark_all_read(db: Session, user_id: int | None, actor: "User | None" = None) -> int:

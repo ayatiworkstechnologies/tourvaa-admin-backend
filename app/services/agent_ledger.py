@@ -125,7 +125,7 @@ def get_agent_ledger(db: Session, agent_id: int, page: int = 1, limit: int = 20,
     q = q.order_by(AgentLedger.id.desc())
     total = q.count()
     items = [_serialize_ledger(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def list_all_ledgers(db: Session, page: int = 1, limit: int = 20, agent_id: Optional[int] = None, status: str = "") -> dict:
@@ -137,7 +137,7 @@ def list_all_ledgers(db: Session, page: int = 1, limit: int = 20, agent_id: Opti
     q = q.order_by(AgentLedger.id.desc())
     total = q.count()
     items = [_serialize_ledger(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def get_agent_statement(db: Session, agent_id: int) -> dict:
@@ -180,7 +180,7 @@ def list_payouts(db: Session, page: int = 1, limit: int = 20, agent_id: Optional
     q = q.order_by(AgentPayout.id.desc())
     total = q.count()
     items = [_serialize_payout(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def _actor_agent_id(db: Session, actor: User) -> int | None:

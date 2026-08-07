@@ -99,14 +99,14 @@ def list_clicks(db: Session, affiliate_id: int, page: int = 1, limit: int = 20) 
     q = db.query(AffiliateClick).filter(AffiliateClick.affiliate_id == affiliate_id).order_by(AffiliateClick.id.desc())
     total = q.count()
     items = [_s_click(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def list_conversions(db: Session, affiliate_id: int, page: int = 1, limit: int = 20) -> dict:
     q = db.query(AffiliateConversion).filter(AffiliateConversion.affiliate_id == affiliate_id).order_by(AffiliateConversion.id.desc())
     total = q.count()
     items = [_s_conversion(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def resolve_affiliate_link(db: Session, ref_code: str) -> Optional[AffiliateLink]:
@@ -248,4 +248,4 @@ def list_payouts(db: Session, affiliate_id: Optional[int] = None, page: int = 1,
     q = q.order_by(AffiliatePayout.id.desc())
     total = q.count()
     items = [_s_payout(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}

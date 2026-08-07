@@ -28,7 +28,7 @@ def _paginate(q, page: int, limit: int, serializer) -> dict:
             items.append(serializer(row))
         except TypeError:
             items.append(serializer(row, q.session))
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def _get_or_404(db, model, item_id: int, label: str):
