@@ -268,6 +268,16 @@ def parse_tour_import_rows(file_bytes: bytes) -> list[dict]:
     if not raw_rows:
         return []
     header = [str(cell).strip() if cell is not None else "" for cell in raw_rows[0]]
+    # If not a single header cell maps to a known column (e.g. an exported
+    # single-tour workbook's "Field"/"Value" sheet, or the wrong sheet/file
+    # entirely got uploaded), every row will fail identically on "Tour Title
+    # is required" with no clue why -- fail fast with one actionable error
+    # instead of one confusing generic error per row.
+    if not any(_IMPORT_KEY_MAP.get(h) for h in header):
+        raise HTTPException(
+            status_code=400,
+            detail="This file's headers don't match the tour import format. Download the template from \"Import Template\" and fill rows in below the existing header row, without changing it.",
+        )
     records = []
     for raw_row in raw_rows[1:]:
         if raw_row is None or all(cell in (None, "") for cell in raw_row):
