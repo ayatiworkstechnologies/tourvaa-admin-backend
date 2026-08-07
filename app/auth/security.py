@@ -1,9 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 import hashlib
 import secrets
 from jose import jwt
 from passlib.context import CryptContext
 from app.config import settings
+from app.utils.money import utcnow
 
 password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -43,7 +44,7 @@ def get_portal_for_role(role_slug: str) -> str:
 def create_token(data: dict, portal: str | None = None, *, token_type: str = "access", expires_minutes: int | None = None):
     token_data = data.copy()
 
-    expire_time = datetime.utcnow() + timedelta(
+    expire_time = utcnow() + timedelta(
         minutes=expires_minutes if expires_minutes is not None else settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
 

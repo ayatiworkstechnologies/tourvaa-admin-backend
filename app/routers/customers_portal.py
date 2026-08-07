@@ -156,7 +156,7 @@ def customer_wishlist(db: Session = Depends(get_db), current_user: User = Depend
         .all()
     )
     items = [_serialize_wishlist_item(row) for row in rows]
-    return {"status": "success", "items": items, "data": items, "total": len(items)}
+    return {"status": "success", "items": items, "total": len(items)}
 
 
 @router.post("/wishlist/{tour_id}")
@@ -285,7 +285,7 @@ def customer_messages(params: dict = Depends(pagination_params), db: Session = D
     total = query.count()
     rows = query.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()
     items = [serialize_communication(row) for row in rows]
-    return {"status": "success", "items": items, "data": items, "total": total, "page": params["page"], "limit": params["limit"], "total_pages": max(1, (total + params["limit"] - 1) // params["limit"])}
+    return {"status": "success", "items": items, "total": total, "page": params["page"], "limit": params["limit"], "total_pages": max(1, (total + params["limit"] - 1) // params["limit"])}
 
 
 @router.post("/messages")
@@ -307,7 +307,7 @@ def customer_saved_travellers(db: Session = Depends(get_db), current_user: User 
     customer = _current_customer(db, current_user)
     rows = db.query(CustomerSavedTraveller).filter(CustomerSavedTraveller.customer_id == customer.id).order_by(CustomerSavedTraveller.id.desc()).all()
     items = [_serialize_saved_traveller(row) for row in rows]
-    return {"status": "success", "items": items, "data": items, "total": len(items)}
+    return {"status": "success", "items": items, "total": len(items)}
 
 
 @router.post("/travellers")

@@ -216,7 +216,7 @@ def list_requests(db: Session, page: int = 1, limit: int = 20, status: str = "",
     q = q.order_by(CancellationRequest.id.desc())
     total = q.count()
     items = [_serialize_request(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def approve_request(db: Session, request_id: int, data: CancellationApprove, actor: User, request=None) -> dict:

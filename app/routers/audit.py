@@ -41,7 +41,7 @@ def activity_logs(params: dict = Depends(pagination_params), entity_type: str = 
     if action: query = query.filter(AuditLog.action == action)
     query = query.order_by(AuditLog.id.desc())
     total = query.count(); items = [serialize_log(row) for row in query.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()]
-    return {"status": "success", "items": items, "data": items, "total": total, "page": params["page"], "limit": params["limit"], "total_pages": max(1, ceil(total / params["limit"]))}
+    return {"status": "success", "items": items, "total": total, "page": params["page"], "limit": params["limit"], "total_pages": max(1, ceil(total / params["limit"]))}
 
 @router.get("/export")
 def export_logs(db: Session = Depends(get_db), _=Depends(require_any_permission("activity_logs.export", "activity_logs.view"))):

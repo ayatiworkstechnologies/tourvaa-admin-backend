@@ -97,7 +97,6 @@ def simple_paginate(query, page: int, limit: int, serializer):
     items = [serializer(row) for row in rows]
     return {
         "items": items,
-        "data": items,
         "total": total,
         "page": page,
         "limit": limit,

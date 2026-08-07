@@ -38,7 +38,7 @@ def list_sessions(db: Session, page: int = 1, limit: int = 20, user_id: int | No
     query = query.order_by(UserSession.id.desc())
     total = query.count()
     items = [serialize_session(session) for session in query.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def revoke_session(db: Session, session_id: int):
@@ -74,7 +74,7 @@ def list_login_history(db: Session, page: int = 1, limit: int = 20, user_id: int
     total = query.count()
     rows = query.offset((page - 1) * limit).limit(limit).all()
     items = [{"id": r.id, "user_id": r.user_id, "email": r.email, "status": r.status, "failure_reason": r.failure_reason, "client_type": r.client_type, "device_id": r.device_id, "device_name": r.device_name, "ip_address": r.ip_address, "user_agent": r.user_agent, "session_id": r.session_id, "created_at": r.created_at} for r in rows]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def expire_inactive_sessions(db: Session, older_than_days: int = 30):

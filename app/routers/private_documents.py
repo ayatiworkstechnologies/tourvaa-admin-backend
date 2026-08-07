@@ -25,10 +25,19 @@ _CLOUDINARY_PREFIX = "cloudinary:"
 
 
 def _serve_document(doc):
-    """Return a response for a document's file_path, whichever backend stored it."""
+    """Return a response for a document's file_path, whichever backend stored it.
+
+    Cloudinary-backed documents are returned as {"url": ...} rather than an
+    HTTP redirect: the frontend fetches this endpoint via XHR (to attach auth
+    and read as a blob), and a redirect's final response comes from
+    res.cloudinary.com - a cross-origin XHR read that Cloudinary's
+    authenticated delivery doesn't grant CORS for. Returning the signed URL
+    as JSON lets the caller open it via a plain top-level navigation instead,
+    which isn't subject to CORS.
+    """
     if doc.file_path.startswith(_CLOUDINARY_PREFIX):
         resource_type, _, public_id = doc.file_path.removeprefix(_CLOUDINARY_PREFIX).partition(":")
-        return RedirectResponse(get_private_file_url(public_id, resource_type or "image"))
+        return {"url": get_private_file_url(public_id, resource_type or "image")}
 
     if not doc.file_path.startswith(_PRIVATE_PREFIX):
         raise HTTPException(status_code=404, detail="Document not available via this endpoint")

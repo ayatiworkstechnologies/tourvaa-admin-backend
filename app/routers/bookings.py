@@ -272,7 +272,7 @@ def supplier_messages(params: dict = Depends(pagination_params), db: Session = D
     total = q.count()
     rows = q.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()
     items = [_serialize_portal_message(r) for r in rows]
-    return {"status": "success", "items": items, "data": items, "total": total, "page": params["page"], "limit": params["limit"]}
+    return {"status": "success", "items": items, "total": total, "page": params["page"], "limit": params["limit"]}
 
 
 @supplier_portal_router.post("/messages")
@@ -301,7 +301,7 @@ def agent_messages(params: dict = Depends(pagination_params), db: Session = Depe
     total = q.count()
     rows = q.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()
     items = [_serialize_portal_message(r) for r in rows]
-    return {"status": "success", "items": items, "data": items, "total": total, "page": params["page"], "limit": params["limit"]}
+    return {"status": "success", "items": items, "total": total, "page": params["page"], "limit": params["limit"]}
 
 
 @agent_portal_router.post("/messages")

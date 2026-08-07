@@ -397,6 +397,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "seo_description": tour.seo_description,
             "booking_deposit": tour.booking_deposit or None,
             "balance_payment_deadline_days": tour.balance_payment_deadline_days,
+            "tour_video_url": tour.tour_video_url or None,
             "overview": _ser_overview(overview) if overview else None,
             "itineraries": [
                 {
@@ -412,10 +413,12 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
                     "travel_distance": i.travel_distance or "",
                     "travel_duration": i.travel_duration or "",
                     "important_notes": i.important_notes or "",
+                    "activities": i.activities or "",
+                    "image": i.image or None,
                 }
                 for i in itineraries
             ],
-            "highlights": [{"text": h.title} for h in highlights],
+            "highlights": [{"text": h.title, "title": h.title, "image": h.image or None, "description": h.short_description or ""} for h in highlights],
             "inclusions": [{"text": i.title} for i in inclusions],
             "exclusions": [{"text": e.title} for e in exclusions],
             "gallery": [{"image_url": g.image_path, "alt_text": g.image_alt_text, "is_banner": g.image_type == "banner"} for g in gallery],

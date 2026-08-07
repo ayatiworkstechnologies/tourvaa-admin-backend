@@ -107,7 +107,7 @@ def list_invoices(db: Session, page: int = 1, limit: int = 20, booking_id: int |
     query = query.order_by(Invoice.id.desc())
     total = query.count()
     items = [serialize_invoice(i) for i in query.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def get_invoice(db: Session, invoice_id: int, actor: User | None = None) -> Invoice:

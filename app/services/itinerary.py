@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_private_docs_root
 from app.models.bookings import Booking
-from app.models.tours import TourItinerary
+from app.models.tours import TourHighlight, TourItinerary
 from app.models.users import User
 from app.utils.itinerary_pdf import generate_pdf
 
@@ -34,6 +34,13 @@ def download_itinerary_pdf(db: Session, booking_id: int, actor: User) -> tuple[s
     if not days:
         raise HTTPException(status_code=404, detail="No itinerary is available for this tour yet")
 
+    highlights = (
+        db.query(TourHighlight)
+        .filter(TourHighlight.tour_id == booking.tour_id, TourHighlight.status == "active")
+        .order_by(TourHighlight.display_order.asc())
+        .all()
+    )
+
     storage = get_private_docs_root().joinpath("itineraries")
     storage.mkdir(parents=True, exist_ok=True)
     filename = f"{booking.booking_code or booking.id}-itinerary.pdf"
@@ -45,6 +52,7 @@ def download_itinerary_pdf(db: Session, booking_id: int, actor: User) -> tuple[s
             "tour_name": booking.tour_name or "Tour",
             "customer_name": booking.customer.full_name if booking.customer else "",
             "tour_date": booking.tour_date or "",
+            "highlights": [{"title": h.title, "description": h.short_description or ""} for h in highlights],
             "days": [
                 {
                     "day": d.day_number,

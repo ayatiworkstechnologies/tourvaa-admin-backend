@@ -99,7 +99,6 @@ def _paginate(items: list, page: int = 1, limit: int = 20) -> dict:
     end = start + limit
     return {
         "items": items[start:end],
-        "data": items[start:end],
         "total": total,
         "page": page,
         "limit": limit,

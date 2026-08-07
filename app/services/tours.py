@@ -354,21 +354,42 @@ def _apply_markup(markup_type: str, markup_value: float, base: float) -> float:
     return round(base + markup_value, 2)
 
 
+def _apply_commission(commission_type: str, commission_value: float, base: float) -> float:
+    """Commission is carved OUT of the price the supplier enters (the
+    opposite of _apply_markup, which adds Tourvaa's own markup on top) --
+    base is the supplier's gross adult/child price, and the result is what
+    the supplier actually receives once their commission is deducted."""
+    if commission_type == "percentage":
+        return round(max(0.0, base * (1 - commission_value / 100)), 2)
+    return round(max(0.0, base - commission_value), 2)
+
+
 def _is_supplier_actor(db: Session, actor: User) -> bool:
     return db.query(Supplier.id).filter(Supplier.user_id == actor.id).first() is not None
 
 
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    # markup_type/markup_value always mirror the tour's supplier commission --
-    # never trust the client for these, whether the actor is the supplier or
-    # an admin editing on their behalf.
+    # markup_type always mirrors the tour's supplier commission type -- never
+    # trust the client for it. markup_value is the supplier's commission for
+    # this slab: the client-supplied value is honored, but a supplier may
+    # never undercut the rate they've agreed with Tourvaa (Supplier.
+    # markup_value) -- they may only raise it (e.g. for higher marketplace
+    # visibility). This mirrors the same floor-and-reject pattern used for
+    # account-level commission changes in services.suppliers.
+    # request_supplier_commission_change, rather than silently clamping.
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     supplier = db.query(Supplier).filter(Supplier.id == tour.supplier_id).first() if tour and tour.supplier_id else None
     o.markup_type = supplier.markup_type if supplier and supplier.markup_type else "percentage"
-    o.markup_value = supplier.markup_value if supplier else 0.0
+    agreed_commission = supplier.markup_value if supplier else 0.0
+    if data.markup_value < agreed_commission:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Commission cannot be lower than your agreed rate of {agreed_commission:g}%.",
+        )
+    o.markup_value = data.markup_value
 
-    o.supplier_final_adult_price = _apply_markup(o.markup_type, o.markup_value, o.adult_price)
-    o.supplier_final_child_price = _apply_markup(o.markup_type, o.markup_value, o.child_price)
+    o.supplier_final_adult_price = _apply_commission(o.markup_type, o.markup_value, o.adult_price)
+    o.supplier_final_child_price = _apply_commission(o.markup_type, o.markup_value, o.child_price)
     o.final_price = o.supplier_final_adult_price
 
     # admin_markup_type/admin_markup_value can only be set by an admin --
@@ -399,12 +420,14 @@ _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=Tr
 def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 
 # Only these are ever taken verbatim from the client payload -- markup_type,
-# markup_value, final_price, admin_markup_type, admin_markup_value, and every
+# final_price, admin_markup_type, admin_markup_value, and every
 # supplier_final_*/storefront_* field are exclusively computed in
 # _apply_pricing_computation, so a supplier (or a crafted request) can never
-# smuggle in Tourvaa's markup or a hand-picked final price.
+# smuggle in Tourvaa's markup or a hand-picked final price. markup_value is
+# the one exception: the client value is read (in _apply_pricing_computation,
+# not here) but always floored at the supplier's agreed commission rate.
 _PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "child_price", "supplier_price", "currency", "status")
-_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement",)
+_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "markup_value")
 
 
 def _actor_role_slug(actor: User) -> str:

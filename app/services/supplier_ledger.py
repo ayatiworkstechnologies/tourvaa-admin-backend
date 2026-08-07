@@ -137,7 +137,7 @@ def get_supplier_ledger(db: Session, supplier_id: int, page: int = 1, limit: int
     q = q.order_by(SupplierLedger.id.desc())
     total = q.count()
     items = [_serialize_ledger(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def list_all_ledgers(db: Session, page: int = 1, limit: int = 20, supplier_id: Optional[int] = None, status: str = "") -> dict:
@@ -149,7 +149,7 @@ def list_all_ledgers(db: Session, page: int = 1, limit: int = 20, supplier_id: O
     q = q.order_by(SupplierLedger.id.desc())
     total = q.count()
     items = [_serialize_ledger(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def get_supplier_statement(db: Session, supplier_id: int) -> dict:
@@ -192,7 +192,7 @@ def list_payouts(db: Session, page: int = 1, limit: int = 20, supplier_id: Optio
     q = q.order_by(SupplierPayout.id.desc())
     total = q.count()
     items = [_serialize_payout(r) for r in q.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "data": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit))}
 
 
 def _actor_supplier_id(db: Session, actor: User) -> int | None:

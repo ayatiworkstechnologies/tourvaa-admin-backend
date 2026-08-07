@@ -1,13 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcategory
 from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourPayload
 from app.services.cms import _category, _city, _country, _state, _subcategory, _tour, get_tour, list_categories, list_cities, list_countries, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_state, save_subcategory, save_tour, update_status
+from app.services.tour_import_export import build_import_template_workbook, build_tour_detail_workbook, import_tours, parse_tour_import_rows
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.pagination import pagination_params
 from app.models.users import User
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _get_actor_supplier_id(db: Session, user: User) -> int | None:
@@ -193,6 +197,47 @@ def tour_categories(
     return {"status": "success", **list_categories(db, page, limit, search)}
 
 
+@router.get("/tours/import-template")
+def tours_import_template(db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.create", "create-tours"))):
+    # A supplier acting on their own portal never gets to pick a supplier -
+    # a row's tour is always attached to them - so their template omits that
+    # column entirely rather than showing a field they can't use.
+    include_supplier_column = _get_actor_supplier_id(db, current_user) is None
+    buffer = build_import_template_workbook(db, include_supplier_column)
+    return StreamingResponse(
+        buffer,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="tour-import-template.xlsx"'},
+    )
+
+
+@router.post("/tours/import")
+async def tours_import(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("tours.create", "create-tours")),
+):
+    actor_supplier_id = _get_actor_supplier_id(db, current_user)
+    if actor_supplier_id:
+        _require_approved_supplier(db, actor_supplier_id)
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="File is required")
+    try:
+        rows = parse_tour_import_rows(content)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Could not read the uploaded file: {error}") from error
+    if not rows:
+        raise HTTPException(status_code=400, detail="No tour rows found in the uploaded file")
+
+    results = import_tours(db, rows, current_user, actor_supplier_id, request)
+    created = sum(1 for row in results if row["status"] == "created")
+    failed = sum(1 for row in results if row["status"] == "error")
+    return {"status": "success", "data": {"created": created, "failed": failed, "results": results}}
+
+
 @router.get("/tours/{tour_id}")
 def tour_detail(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.view", "view-tours"))):
     tour = get_tour(db, tour_id)
@@ -200,6 +245,21 @@ def tour_detail(tour_id: int, db: Session = Depends(get_db), current_user: User 
     if actor_supplier_id and tour.supplier_id != actor_supplier_id:
         raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
     return {"status": "success", "data": _tour(tour)}
+
+
+@router.get("/tours/{tour_id}/export")
+def tour_export(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.view", "view-tours"))):
+    tour = get_tour(db, tour_id)
+    actor_supplier_id = _get_actor_supplier_id(db, current_user)
+    if actor_supplier_id and tour.supplier_id != actor_supplier_id:
+        raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
+    buffer = build_tour_detail_workbook(db, tour)
+    filename = f"{tour.tour_code or tour.slug or ('tour-' + str(tour.id))}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/tours/{tour_id}")

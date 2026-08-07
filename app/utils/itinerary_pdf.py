@@ -34,6 +34,13 @@ def _plain_text_pdf(path: Path, data: dict) -> None:
         f"Travel Date: {data.get('tour_date', '-')}",
         "",
     ]
+    if data.get("highlights"):
+        lines += ["TOUR HIGHLIGHTS", "-" * 60]
+        for highlight in data["highlights"]:
+            lines.append(f"* {highlight['title']}")
+            if highlight.get("description"):
+                lines.append(f"  {highlight['description']}")
+        lines.append("")
     for day in data.get("days", []):
         lines += [
             "-" * 60,
@@ -74,6 +81,14 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     ]))
     story.append(meta_table)
     story.append(Spacer(1, 0.5 * cm))
+
+    if data.get("highlights"):
+        story.append(Paragraph("Tour Highlights", styles["Heading2"]))
+        for highlight in data["highlights"]:
+            story.append(Paragraph(f"&bull; <b>{highlight['title']}</b>", styles["Normal"]))
+            if highlight.get("description"):
+                story.append(Paragraph(highlight["description"], styles["Normal"]))
+        story.append(Spacer(1, 0.4 * cm))
 
     for day in data.get("days", []):
         story.append(Paragraph(f"Day {day['day']}: {day['title']}", styles["Heading3"]))
