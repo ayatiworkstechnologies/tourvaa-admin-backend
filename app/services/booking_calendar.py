@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import get_storage_root
+from app.config import get_private_docs_root
 from app.models.booking_calendar import BookingCalendarEvent
 from app.models.bookings import Booking
 from app.utils.money import utcnow
@@ -69,9 +69,11 @@ def _serialize(event: BookingCalendarEvent) -> dict:
 
 
 def sync_booking_to_calendar(db: Session, booking_id: int, actor: Optional[User] = None) -> dict:
+    from app.services.bookings import _ensure_booking_access
     booking = db.query(Booking).filter(Booking.id == booking_id).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
+    _ensure_booking_access(booking, actor)
 
     existing = db.query(BookingCalendarEvent).filter(BookingCalendarEvent.booking_id == booking_id).first()
 
@@ -79,8 +81,8 @@ def sync_booking_to_calendar(db: Session, booking_id: int, actor: Optional[User]
     if existing:
         uid = existing.ical_uid or uid
 
-    # Generate .ics file
-    ics_dir = get_storage_root().joinpath("calendars")
+    # Generate .ics file in the private docs root (not publicly served) - it contains customer PII
+    ics_dir = get_private_docs_root().joinpath("calendars")
     ics_dir.mkdir(parents=True, exist_ok=True)
     ics_filename = f"{booking.booking_code or booking_id}.ics"
     ics_path = ics_dir / ics_filename
@@ -88,7 +90,7 @@ def sync_booking_to_calendar(db: Session, booking_id: int, actor: Optional[User]
     try:
         ics_content = _ics_content(booking, uid)
         ics_path.write_text(ics_content, encoding="utf-8")
-        ics_relative = f"/storage/calendars/{ics_filename}"
+        ics_relative = f"/private-docs/calendars/{ics_filename}"
         sync_status = "synced"
         sync_error = None
     except Exception as exc:
@@ -149,7 +151,7 @@ def get_ics_path(db: Session, booking_id: int, actor: Optional[User] = None) -> 
     event = db.query(BookingCalendarEvent).filter(BookingCalendarEvent.booking_id == booking_id).first()
     if not event or not event.ics_file_path:
         raise HTTPException(status_code=404, detail="Calendar file not found - please sync first")
-    fs_path = str(get_storage_root()) + event.ics_file_path.replace("/storage", "")
+    fs_path = str(get_private_docs_root()) + event.ics_file_path.replace("/private-docs", "")
     import os
     if not os.path.exists(fs_path):
         raise HTTPException(status_code=404, detail="Calendar file missing - please re-sync")

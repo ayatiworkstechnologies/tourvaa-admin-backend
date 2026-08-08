@@ -81,6 +81,7 @@ def run_due_report_schedules(db: Session) -> list[int]:
             _send_scheduled_report(db, schedule, now)
             executed.append(schedule.id)
         except Exception:
+            db.rollback()
             logger.exception("Failed to execute report schedule %s", schedule.id)
     if executed:
         db.commit()
