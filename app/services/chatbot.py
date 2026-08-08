@@ -497,4 +497,3 @@ def get_chat_session_messages(db: Session, session_id: int) -> list[dict]:
         {"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at}
         for m in messages
     ]
-    return True
