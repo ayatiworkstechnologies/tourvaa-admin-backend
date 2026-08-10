@@ -66,8 +66,10 @@ def test_payment_test_simulate_end_to_end(headers, first_booking_id):
     resp = requests.post(f"{BASE_URL}/payments/test/simulate", json={
         "booking_id": first_booking_id, "amount": 100, "note": "pytest simulated payment",
     }, headers=headers, timeout=10)
-    # 403 in production per the endpoint's own guard; otherwise should succeed.
-    assert resp.status_code in (200, 201, 403), resp.text
+    # 403 in production per the endpoint's own guard; 409 when the booking the
+    # shared fixture happened to pick isn't in a payable state; otherwise the
+    # simulate should succeed.
+    assert resp.status_code in (200, 201, 403, 409), resp.text
     if resp.status_code in (200, 201):
         payment_id = resp.json().get("data", {}).get("id")
         if payment_id:

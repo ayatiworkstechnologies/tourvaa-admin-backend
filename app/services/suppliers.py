@@ -590,7 +590,10 @@ def request_supplier_commission(db: Session, user: User, data: SupplierMarkupReq
         )
 
     old = serialize_supplier(supplier)
-    is_increase = same_type and data.markup_value >= floor_value
+    # Only an actual raise over an admin-set floor auto-applies; a supplier
+    # with no floor yet has nothing to "raise" from, so their first request
+    # always goes through admin review, matching request_agent_commission.
+    is_increase = has_floor and same_type and data.markup_value >= floor_value
 
     supplier.commission_request_type = data.markup_type
     supplier.commission_request_value = data.markup_value

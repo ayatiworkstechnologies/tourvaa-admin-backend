@@ -101,7 +101,9 @@ def test_supplier_content_edit_keeps_tour_published(headers, supplier_headers, p
 
 @skip_if_readonly()
 def test_admin_approving_content_edit_keeps_tour_published(headers, published_tour_id):
-    versions = requests.get(f"{BASE_URL}/tours/{published_tour_id}/versions", headers=headers, timeout=10).json()["data"]
+    # The versions list endpoint returns {status, items, ...} (no `data` wrap),
+    # like every other list endpoint in the API.
+    versions = requests.get(f"{BASE_URL}/tours/{published_tour_id}/versions", headers=headers, timeout=10).json()["items"]
     pending = next(v for v in versions if v["status"] == "pending_approval")
     resp = requests.patch(f"{BASE_URL}/tours/{published_tour_id}/versions/{pending['id']}/approve", headers=headers, timeout=10)
     assert resp.status_code == 200, resp.text
@@ -160,7 +162,7 @@ def test_supplier_pricing_edit_freezes_storefront_price(headers, supplier_header
     assert detail["status"] == "published"
     assert detail["pending_review_kind"] == "repricing_required"
 
-    versions = requests.get(f"{BASE_URL}/tours/{published_tour_id}/versions", headers=headers, timeout=10).json()["data"]
+    versions = requests.get(f"{BASE_URL}/tours/{published_tour_id}/versions", headers=headers, timeout=10).json()["items"]
     pending = next(v for v in versions if v["status"] == "pending_approval")
     approve = requests.patch(f"{BASE_URL}/tours/{published_tour_id}/versions/{pending['id']}/approve", headers=headers, timeout=10)
     assert approve.status_code == 200, approve.text
