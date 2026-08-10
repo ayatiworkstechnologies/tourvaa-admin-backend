@@ -109,7 +109,17 @@ def test_supplier_commission_request(supplier_headers):
         "markup_type": "percentage", "markup_value": 10,
     }, headers=supplier_headers, timeout=10)
     assert resp.status_code == 200, resp.text
-    assert resp.json()["data"]["approval_status"] == "admin_review_pending"
+    data = resp.json()["data"]
+    # The supplier's commission-request flow returns its account `approval_status`
+    # ("APPROVED" once the admin approved the profile) plus a separate staging
+    # field `commission_request_status`. The original assertion compared
+    # `approval_status` against "admin_review_pending" -- that is Agent-status
+    # vocabulary, not the supplier commission staging, and the wrong field.
+    # This fixture supplier has no admin-set markup floor yet, so their first
+    # request always goes to pending admin review (no floor to "raise" over) --
+    # matching request_agent_commission's always-pending behavior.
+    assert data["approval_status"] == "APPROVED"
+    assert data["commission_request_status"] == "pending"
 
 
 # ---------------------------------------------------------------------------
