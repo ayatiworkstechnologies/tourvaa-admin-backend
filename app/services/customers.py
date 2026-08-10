@@ -611,22 +611,6 @@ def get_customer_communication_history(db: Session, customer_id: int, page: int 
     )
     serialized = [serialize_communication(item) for item in items]
 
-    if not serialized:
-        serialized = [
-            {
-                "id": 1,
-                "customer_id": customer_id,
-                "booking_id": 1,
-                "subject": "Booking confirmation sent",
-                "message": "Your booking confirmation has been sent to your registered email.",
-                "sent_by_user_id": None,
-                "sent_to_email": "",
-                "message_type": "system_notification",
-                "email_status": "sent",
-                "created_at": None,
-            }
-        ]
-
     return _paginate(serialized, page, limit)
 
 
@@ -652,7 +636,14 @@ def send_customer_message(
     db.flush()
 
     try:
-        send_email(customer.email, data.subject, data.message, template_key="customer_communication")
+        send_email(
+            customer.email,
+            data.subject,
+            data.message,
+            template_key="customer_communication",
+            entity_type="customer_communication",
+            entity_id=message.id,
+        )
         message.email_status = "sent"
     except Exception:
         message.email_status = "failed"

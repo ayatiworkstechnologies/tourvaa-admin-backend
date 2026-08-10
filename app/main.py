@@ -259,11 +259,32 @@ async def _report_schedule_loop():
             logger.exception("Report schedule sweep failed")
 
 
+# Balance-due reminders only need to change once a day (stage boundaries are
+# whole days), so an hourly check is plenty responsive without extra load.
+BALANCE_DUE_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
+
+
+async def _balance_due_reminder_loop():
+    from app.services.invoices import check_balance_due_reminders
+
+    while True:
+        await asyncio.sleep(BALANCE_DUE_REMINDER_SWEEP_INTERVAL_SECONDS)
+        try:
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(check_balance_due_reminders, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Balance-due reminder sweep failed")
+
+
 @app.on_event("startup")
 async def start_background_jobs():
     if schema_is_ready():
         asyncio.create_task(_expire_stale_bookings_loop())
         asyncio.create_task(_report_schedule_loop())
+        asyncio.create_task(_balance_due_reminder_loop())
 
 setup_cors(app)
 

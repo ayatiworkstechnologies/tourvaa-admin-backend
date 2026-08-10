@@ -1,8 +1,6 @@
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from app.database import get_db
 from app.auth.permissions import require_any_permission
@@ -21,10 +19,6 @@ from app.services.invoices import (
 from app.models.users import User
 
 router = APIRouter(prefix="/invoices", tags=["Invoices"])
-
-
-class InvoiceEmailBody(BaseModel):
-    email: Optional[str] = None
 
 
 @router.get("")
@@ -56,6 +50,6 @@ def download(invoice_id: int, db: Session = Depends(get_db), current_user: User 
 
 
 @router.post("/{invoice_id}/email")
-def email_invoice(invoice_id: int, data: InvoiceEmailBody, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("invoices.email", "invoices.view"))):
-    result = email_invoice_to_customer(db, invoice_id, data.email, current_user, request)
+def email_invoice(invoice_id: int, data: InvoiceEmailRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("invoices.email", "invoices.view"))):
+    result = email_invoice_to_customer(db, invoice_id, data, current_user, request)
     return {"status": "success", "message": "Invoice emailed to customer", "data": result}

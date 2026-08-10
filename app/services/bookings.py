@@ -1476,13 +1476,36 @@ def get_upcoming_bookings(db: Session, actor: User | None = None) -> dict:
     return get_bookings(db, limit=20, booking_status="confirmed", sort_by="oldest", actor=actor)
 
 
+def _communication_recipients(booking: Booking, visibility: str) -> list[tuple[str, str]]:
+    """(label, email) pairs a booking communication should be emailed to, per its visibility."""
+    recipients: list[tuple[str, str]] = []
+    if visibility in ("customer", "all") and booking.customer and booking.customer.email:
+        recipients.append(("customer", booking.customer.email))
+    if visibility in ("supplier", "all") and booking.supplier and booking.supplier.user and booking.supplier.user.email:
+        recipients.append(("supplier", booking.supplier.user.email))
+    if visibility in ("agent", "all") and booking.agent and booking.agent.user and booking.agent.user.email:
+        recipients.append(("agent", booking.agent.user.email))
+    return recipients
+
+
 def add_communication(db: Session, booking_id: int, data: BookingCommunicationCreate, actor: User, request: Request | None = None) -> dict:
+    from html import escape
+    from app.utils.mailer import try_send_email
+
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
     row = BookingCommunication(booking_id=booking.id, sender_user_id=actor.id, sender_type=_user_role(actor), message_type=data.message_type, subject=data.subject, message=data.message, visibility=data.visibility)
     db.add(row)
     log_audit(db, actor=actor, action="create_booking_communication", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(row)
+
+    # "internal" notes are admin-only and are never emailed to booking stakeholders.
+    if data.visibility != "internal":
+        subject = data.subject or f"Update on your booking {booking.booking_code or booking.id}"
+        body = f"<p>{escape(data.message)}</p>"
+        for _label, email in _communication_recipients(booking, data.visibility):
+            try_send_email(email, subject, body, template_key="booking_communication", entity_type="booking_communication", entity_id=row.id)
+
     return serialize_communication(row)
 
 

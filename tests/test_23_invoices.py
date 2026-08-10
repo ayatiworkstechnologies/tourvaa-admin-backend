@@ -7,6 +7,11 @@ def test_invoices_list(headers):
     resp = requests.get(f"{BASE_URL}/invoices", headers=headers, timeout=10)
     assert resp.status_code == 200, resp.text
     assert "items" in resp.json()
+    for invoice in resp.json()["items"]:
+        assert "gst_rate" in invoice
+        assert "gst_amount" in invoice
+        assert "amount_due" in invoice
+        assert "balance_due_date" in invoice
 
 
 def test_invoice_detail_not_found(headers):
@@ -47,7 +52,9 @@ def test_invoice_generate_pdf_and_download_and_email(headers, first_booking_id):
     assert download.headers.get("content-type") == "application/pdf"
 
     email = requests.post(f"{BASE_URL}/invoices/{invoice_id}/email", json={}, headers=headers, timeout=10)
-    assert email.status_code in (200, 400), email.text
+    # 502 is the correct result when the invoice is valid but SMTP delivery
+    # fails; the invoice must remain un-emailed and the failure is logged.
+    assert email.status_code in (200, 400, 502), email.text
 
 
 def test_invoice_download_not_found(headers):

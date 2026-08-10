@@ -50,6 +50,7 @@ def _plain_text_pdf(path: Path, data: dict) -> None:
         f"{'TOTAL':<40} {inv['currency']} {inv['total_amount']:>8}",
         f"{'Amount Paid':<40} {inv['currency']} {inv['amount_paid']:>8}",
         f"{'Amount Due':<40} {inv['currency']} {inv['amount_due']:>8}",
+        f"{'Balance Due Date':<40} {inv.get('balance_due_date') or 'Fully paid':>8}",
         "=" * 60,
         "Thank you for booking with Tourvaa.",
     ]
@@ -121,10 +122,11 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     # Totals
     totals_data = [
         ["Subtotal", f"{inv['currency']} {inv['subtotal_amount']}"],
-        ["Tax / GST", f"{inv['currency']} {inv['gst_amount']}"],
+        [f"Tax / GST ({inv.get('gst_rate', '0.18')})", f"{inv['currency']} {inv['gst_amount']}"],
         ["Total", f"{inv['currency']} {inv['total_amount']}"],
         ["Amount Paid", f"{inv['currency']} {inv['amount_paid']}"],
         ["Amount Due", f"{inv['currency']} {inv['amount_due']}"],
+        ["Balance Due Date", inv.get("balance_due_date") or "Fully paid"],
     ]
     totals_table = Table(totals_data, colWidths=[14 * cm, 5 * cm])
     totals_table.setStyle(TableStyle([

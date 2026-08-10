@@ -9,6 +9,8 @@ PAYMENT_TYPES = {"partial", "full"}
 BOOKING_SOURCES = {"customer", "agent", "admin"}
 TRAVELLER_TYPES = {"adult", "child"}
 CHANGE_SOURCES = {"customer", "agent", "supplier", "admin", "system", "payment_gateway"}
+MESSAGE_VISIBILITIES = {"internal", "customer", "supplier", "agent", "all"}
+MESSAGE_TYPES = {"admin_message", "customer_reply", "supplier_update", "agent_message", "system_notification"}
 
 
 class BookingTravellerPayload(BaseModel):
@@ -164,10 +166,34 @@ class SupplierNotifyRequest(BaseModel):
 
 
 class BookingCommunicationCreate(BaseModel):
-    subject: str = ""
-    message: str
-    visibility: str = "internal"
-    message_type: str = "admin_message"
+    subject: str = Field(default="", max_length=255)
+    message: str = Field(min_length=1, max_length=10000)
+    visibility: str = Field(default="internal", max_length=30)
+    message_type: str = Field(default="admin_message", max_length=30)
+
+    @field_validator("subject", "message", "visibility", "message_type", mode="before")
+    @classmethod
+    def trim_communication_text(cls, value: str):
+        return value.strip()
+
+    @field_validator("visibility")
+    @classmethod
+    def validate_visibility(cls, value: str):
+        if value not in MESSAGE_VISIBILITIES:
+            raise ValueError("Invalid message visibility")
+        return value
+
+    @field_validator("message_type")
+    @classmethod
+    def validate_message_type(cls, value: str):
+        if value not in MESSAGE_TYPES:
+            raise ValueError("Invalid message type")
+        return value
 
 class MessageReplyCreate(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=10000)
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def trim_reply(cls, value: str):
+        return value.strip()
