@@ -18,10 +18,15 @@ from app.schemas.auth import (
     RefreshTokenSchema,
     ResendVerificationSchema,
     ResetPasswordSchema,
+    TwoFactorDisableSchema,
+    TwoFactorEnableSchema,
+    TwoFactorLoginVerifySchema,
     VerifyEmailSchema,
     UnifiedRegisterSchema,
 )
 from app.services.auth import (
+    disable_two_factor,
+    enable_two_factor,
     force_logout_user,
     forgot_password,
     get_auth_user_payload,
@@ -34,10 +39,12 @@ from app.services.auth import (
     request_otp,
     resend_registration_verification,
     reset_password,
+    setup_two_factor,
     validate_reset_token,
     validate_registration_token,
     verify_email,
     verify_otp_and_login,
+    verify_two_factor_login,
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -126,13 +133,42 @@ def register_agent(data: UnifiedRegisterSchema, db: Session = Depends(get_db)):
 @router.post("/login")
 def login(request: Request, response: Response, data: LoginSchema, db: Session = Depends(get_db)):
     check_rate_limit(request, "login", max_calls=10, window_seconds=60)
-    result = _set_auth_cookies(response, login_user(db, data, request=request), expose_access_token=data.client_type != "web-cookie")
+    raw_result = login_user(db, data, request=request)
+
+    if raw_result.get("two_factor_required"):
+        return {"status": "success", "message": "Two-factor verification required", "data": raw_result}
+
+    result = _set_auth_cookies(response, raw_result, expose_access_token=data.client_type != "web-cookie")
 
     return {
         "status": "success",
         "message": "Account status returned" if result.get("account_restricted") else "Login successful",
         "data": result
     }
+
+
+@router.post("/2fa/login-verify")
+def two_factor_login_verify(request: Request, response: Response, data: TwoFactorLoginVerifySchema, db: Session = Depends(get_db)):
+    check_rate_limit(request, "2fa-login-verify", max_calls=10, window_seconds=300)
+    result = _set_auth_cookies(response, verify_two_factor_login(db, data, request=request), expose_access_token=data.client_type != "web-cookie")
+    return {"status": "success", "message": "Login successful", "data": result}
+
+
+@router.post("/2fa/setup")
+def two_factor_setup(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return {"status": "success", "message": "Scan the QR code with your authenticator app", "data": setup_two_factor(db, current_user)}
+
+
+@router.post("/2fa/enable")
+def two_factor_enable(data: TwoFactorEnableSchema, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    result = enable_two_factor(db, current_user, data.code)
+    return {"status": "success", "message": "Two-factor authentication enabled. Save your backup codes somewhere safe.", "data": result}
+
+
+@router.post("/2fa/disable")
+def two_factor_disable(data: TwoFactorDisableSchema, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    disable_two_factor(db, current_user, data.password)
+    return {"status": "success", "message": "Two-factor authentication disabled"}
 
 
 @router.post("/otp/request")

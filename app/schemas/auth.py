@@ -168,6 +168,35 @@ class OtpVerifySchema(BaseModel):
         return value
 
 
+class TwoFactorEnableSchema(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+
+    @field_validator("code")
+    @classmethod
+    def validate_code(cls, value: str):
+        value = value.strip()
+        if not value.isdigit() or len(value) != 6:
+            raise ValueError("Enter the 6-digit code from your authenticator app")
+        return value
+
+
+class TwoFactorDisableSchema(BaseModel):
+    password: str = Field(min_length=1)
+
+
+class TwoFactorLoginVerifySchema(BaseModel):
+    pending_token: str
+    code: str = Field(min_length=1, max_length=20)
+    client_type: Optional[str] = "web"
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+
+    @field_validator("code")
+    @classmethod
+    def trim_code(cls, value: str):
+        return value.strip()
+
+
 class ForgotPasswordSchema(BaseModel):
     email: EmailStr
     client_type: Optional[str] = "web"
