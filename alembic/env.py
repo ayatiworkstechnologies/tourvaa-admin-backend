@@ -7,24 +7,32 @@ from app.config import settings
 from app.database import Base
 
 from app.models.admin_modules import AdminModule
+from app.models.affiliate_tracking import AffiliateClick, AffiliateConversion, AffiliateLink, AffiliatePayout
 from app.models.affiliates import Affiliate, AffiliateDocument, AffiliateInvoicing, AffiliateMarketingInfo
 from app.models.agent_ledger import AgentLedger, AgentPayout, AgentPayoutItem
 from app.models.agents import Agent, AgentBusinessInfo, AgentContact, AgentDocument, AgentInvoicing
 from app.models.audit import AuditLog
+from app.models.booking_calendar import BookingCalendarEvent
 from app.models.bookings import Booking, BookingAccommodation, BookingCommunication, BookingExtension, BookingOptionalActivity, BookingStatusHistory, BookingTraveller, EmailLog, MessageReply
-from app.models.chatbot import ChatFAQ, ChatMessage, ChatSession
-from app.models.cms import City, Country, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
-from app.models.customers import Customer, CustomerCommunication
+from app.models.cancellations import CancellationRequest, RefundRule
+from app.models.chatbot import ChatEmbedding, ChatFAQ, ChatMessage, ChatSession
+from app.models.checkout import CheckoutSession
+from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
+from app.models.customers import Customer, CustomerCancellationRequest, CustomerCommunication, CustomerSavedTraveller, CustomerWishlistItem
 from app.models.email_templates import EmailTemplate
 from app.models.invoices import Invoice, InvoiceItem
 from app.models.notifications import Notification, NotificationLog, PushSubscription
 from app.models.payments import Payment, PaymentHold, PaymentTransaction
 from app.models.permissions import Permission, RolePermission
 from app.models.public_leads import ContactMessage, NewsletterSubscriber
+from app.models.reports import ReportSchedule
+from app.models.reviews import TourReview
 from app.models.roles import Role
 from app.models.sessions import LoginHistory, UserSession
-from app.models.settings import ApiSetting, AppSetting, PaymentSetting
-from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierBusinessInfo, SupplierContact, SupplierDocument, SupplierInvoicing, SupplierVehicle
+from app.models.settings import ApiSetting, AppSetting, PaymentSetting, SmtpSetting
+from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierPayoutItem
+from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierBusinessInfo, SupplierCommissionRequest, SupplierContact, SupplierDocument, SupplierInvoicing, SupplierVehicle
+from app.models.tour_versions import TourReviewComment, TourVersion
 from app.models.tours import (
     TourAccommodationExtra,
     TourCalendar,
@@ -41,7 +49,8 @@ from app.models.tours import (
     TourSimilar,
     TourUnavailableDate,
 )
-from app.models.users import User, UserRole
+from app.models.users import User, UserRole, UserStatusHistory
+from app.models.website_cms import Blog, CmsPolicy, CustomerReview, ExternalLink, HelpCentreArticle, HomepageBanner, PopularDestination, PopularTour, PromotionalPopup, SitemapEntry, TourOnDeal
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
