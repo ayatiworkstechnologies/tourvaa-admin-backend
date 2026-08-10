@@ -474,6 +474,16 @@ def login_user(db: Session, data, request=None):
     if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Email verification is required before login")
 
+    if user.two_factor_enabled:
+        _record_login_history(db, data=data, email=email, status="2fa_pending", user=user, request=request)
+        db.commit()
+        return {
+            "two_factor_required": True,
+            "pending_token": create_token(
+                {"user_id": user.id}, token_type="2fa_pending", expires_minutes=5,
+            ),
+        }
+
     return _finalize_login(db, user, data, request=request)
 
 
@@ -577,6 +587,90 @@ def _finalize_login(db: Session, user: User, data, request=None):
         "session_id": session.session_id if session else None,
         "user": auth_user,
     }
+
+
+def setup_two_factor(db: Session, user: User) -> dict:
+    """Generate a new TOTP secret for `user` (not yet enabled - a wrong or
+    unconfirmed setup call must never lock anyone out of their account).
+    Calling this again before /2fa/enable simply discards the previous,
+    unconfirmed secret."""
+    from app.utils.crypto import encrypt_secret
+    from app.utils.totp import generate_qr_code_data_uri, generate_totp_secret, totp_provisioning_uri
+
+    secret = generate_totp_secret()
+    user.two_factor_secret = encrypt_secret(secret)
+    db.commit()
+
+    uri = totp_provisioning_uri(secret, user.email)
+    return {
+        "secret": secret,
+        "otpauth_uri": uri,
+        "qr_code_data_uri": generate_qr_code_data_uri(uri),
+    }
+
+
+def enable_two_factor(db: Session, user: User, code: str) -> dict:
+    from app.utils.crypto import decrypt_secret
+    from app.utils.totp import generate_backup_codes, hash_backup_codes, verify_totp_code
+
+    if not user.two_factor_secret:
+        raise HTTPException(status_code=400, detail="Start setup first with /auth/2fa/setup")
+    if user.two_factor_enabled:
+        raise HTTPException(status_code=400, detail="Two-factor authentication is already enabled")
+
+    secret = decrypt_secret(user.two_factor_secret)
+    if not verify_totp_code(secret, code):
+        raise HTTPException(status_code=400, detail="Incorrect code. Check your authenticator app and try again.")
+
+    backup_codes = generate_backup_codes()
+    user.two_factor_enabled = True
+    user.two_factor_backup_codes = hash_backup_codes(backup_codes)
+    log_audit(db, actor=user, action="enable_two_factor", entity_type="auth", entity_id=user.id)
+    db.commit()
+
+    return {"enabled": True, "backup_codes": backup_codes}
+
+
+def disable_two_factor(db: Session, user: User, password: str) -> None:
+    if not verify_password(password, user.password or ""):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+
+    user.two_factor_enabled = False
+    user.two_factor_secret = None
+    user.two_factor_backup_codes = None
+    log_audit(db, actor=user, action="disable_two_factor", entity_type="auth", entity_id=user.id)
+    db.commit()
+
+
+def verify_two_factor_login(db: Session, data, request=None) -> dict:
+    from jose import JWTError, jwt
+    from app.utils.crypto import decrypt_secret
+    from app.utils.totp import verify_and_consume_backup_code, verify_totp_code
+
+    try:
+        claims = jwt.decode(data.pending_token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="This verification step has expired. Please log in again.")
+    if claims.get("token_type") != "2fa_pending":
+        raise HTTPException(status_code=401, detail="Invalid verification token")
+
+    user = db.query(User).filter(User.id == claims.get("user_id")).first()
+    if not user or not user.two_factor_enabled:
+        raise HTTPException(status_code=401, detail="Invalid verification token")
+
+    secret = decrypt_secret(user.two_factor_secret)
+    if verify_totp_code(secret, data.code):
+        return _finalize_login(db, user, data, request=request)
+
+    matched, remaining_json = verify_and_consume_backup_code(user.two_factor_backup_codes, data.code)
+    if matched:
+        user.two_factor_backup_codes = remaining_json
+        db.commit()
+        return _finalize_login(db, user, data, request=request)
+
+    _record_login_history(db, data=data, email=user.email, status="failed", user=user, failure_reason="bad_2fa_code", request=request)
+    db.commit()
+    raise HTTPException(status_code=400, detail="Incorrect verification code")
 
 
 def request_otp(db: Session, data):

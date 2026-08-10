@@ -20,3 +20,5 @@ cloudinary
 bleach
 cryptography
 openpyxl
+pyotp
+qrcode
