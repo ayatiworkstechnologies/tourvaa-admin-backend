@@ -1,4 +1,4 @@
-from fastapi import Request
+from fastapi import HTTPException, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -6,7 +6,10 @@ from app.models.affiliates import Affiliate
 from app.schemas.affiliates import AffiliateApiLinkRequest, AffiliateCreate, AffiliateUpdate
 from app.services.audit import log_audit
 from app.utils.operations import RejectRequest, approve_item, code_for, get_or_404, relationship_list, reject_item, simple_paginate
-from app.models.users import User
+from app.auth.security import hash_password
+from app.models.roles import Role
+from app.models.users import User, UserRole
+from app.utils.money import utcnow
 
 
 def _document(item):
@@ -82,11 +85,36 @@ def get_affiliate(db: Session, affiliate_id: int):
 
 
 def create_affiliate(db: Session, data: AffiliateCreate, actor: User, request: Request | None = None):
-    item = Affiliate(**data.model_dump())
-    # Auto-link to existing user account if email matches
-    linked_user = db.query(User).filter(User.email == str(data.email).strip().lower()).first()
+    affiliate_data = data.model_dump(exclude={"password"})
+    email = str(data.email).strip().lower()
+    linked_user = db.query(User).filter(User.email == email).first()
+    if data.password is not None:
+        if linked_user:
+            raise HTTPException(status_code=409, detail="Email already exists")
+        role = db.query(Role).filter(Role.slug == "affiliate", Role.is_active == True).first()
+        if not role:
+            raise HTTPException(status_code=400, detail="Affiliate accounts are not available")
+        now = utcnow()
+        linked_user = User(
+            name=data.name,
+            email=email,
+            phone=data.phone,
+            password=hash_password(data.password),
+            role_id=role.id,
+            user_type="AFFILIATE",
+            is_active=True,
+            approval_status="pending",
+            email_verified=True,
+            email_verified_at=now,
+            password_created_at=now,
+            account_status="ACTIVE",
+        )
+        db.add(linked_user)
+        db.flush()
+        db.add(UserRole(user_id=linked_user.id, role_id=role.id))
     if linked_user:
-        item.user_id = linked_user.id
+        affiliate_data["user_id"] = linked_user.id
+    item = Affiliate(**affiliate_data)
     db.add(item)
     db.flush()
     item.affiliate_code = code_for("TVA-AFF", item.id)

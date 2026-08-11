@@ -35,6 +35,7 @@ def test_create_affiliate(headers, first_country_id):
     payload = {
         "name": unique("AffiliateTest"),
         "email": f"{unique('aff')}@test.com",
+        "password": "Strong@123",
         "phone": "9876543210",
         "business_type": "individual",
         "country_id": first_country_id,
