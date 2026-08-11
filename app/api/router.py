@@ -21,6 +21,7 @@ from app.routers.cms_geo import router as geo_router
 from app.routers.cms_geo_seed import router as geo_seed_router
 from app.routers.cms import router as cms_router
 from app.routers.customers_portal import router as customer_portal_router
+from app.routers.customers_portal import wishlist_router
 from app.routers.customers import router as customers_router
 from app.routers.currency import router as currency_router
 from app.routers.dashboard import router as dashboard_router
@@ -69,6 +70,7 @@ CORE_ROUTERS = (
 PARTNER_AND_CUSTOMER_ROUTERS = (
     customers_router,
     customer_portal_router,
+    wishlist_router,
     suppliers_router,
     agents_router,
     affiliates_router,

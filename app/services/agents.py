@@ -265,6 +265,19 @@ def update_agent_discount(db: Session, agent_id: int, data: AgentDiscountRequest
     return serialize_agent(item)
 
 
+def reject_agent_commission_request(db: Session, agent_id: int, actor: User, request: Request | None = None):
+    item = get_agent(db, agent_id)
+    if item.commission_request_status != "pending":
+        raise HTTPException(status_code=409, detail="No pending commission request to reject")
+    old = serialize_agent(item)
+    item.commission_request_status = "rejected"
+    item.commission_reviewed_at = utcnow()
+    log_audit(db, actor=actor, action="reject_agent_commission_request", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
+    db.commit()
+    db.refresh(item)
+    return serialize_agent(item)
+
+
 def request_agent_commission(db: Session, user: User, data: AgentDiscountRequest, request: Request | None = None):
     item = db.query(Agent).filter(Agent.user_id == user.id).first()
     if not item:

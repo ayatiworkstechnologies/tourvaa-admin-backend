@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models.agents import Agent
 from pydantic import BaseModel
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentSelfUpdate, AgentUpdate
-from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, list_agents, partial_approve_agent, reject_agent, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
+from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, list_agents, partial_approve_agent, reject_agent, reject_agent_commission_request, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
 from app.schemas.auth import UnifiedRegisterSchema, VerifyEmailSchema
 from app.services.auth import register_unified_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs, _is_agent
@@ -97,6 +97,7 @@ def agents(
     return {"status": "success", **list_agents(db, params["page"], params["limit"], params["search"], country_id, status, approval_status, start_date, end_date)}
 
 
+@router.post("")
 @router.post("/")
 def add_agent(data: AgentCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.create", "create-agents"))):
     return {"status": "success", "message": "Agent created successfully", "data": create_agent(db, data, current_user, request)}
@@ -330,3 +331,8 @@ def request_correction(agent_id: int, data: PartialApprovalRequest, request: Req
 @router.patch("/{agent_id}/discount")
 def discount(agent_id: int, data: AgentDiscountRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.manage_discount"))):
     return {"status": "success", "message": "Agent discount updated successfully", "data": update_agent_discount(db, agent_id, data, current_user, request)}
+
+
+@router.post("/{agent_id}/commission-request/reject")
+def reject_commission_request(agent_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.manage_discount"))):
+    return {"status": "success", "message": "Commission request rejected", "data": reject_agent_commission_request(db, agent_id, current_user, request)}

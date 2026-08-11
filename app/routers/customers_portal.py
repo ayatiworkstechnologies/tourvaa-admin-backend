@@ -34,6 +34,7 @@ from app.schemas.profile import PasswordUpdate
 from app.schemas.cms import slugify
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
+wishlist_router = APIRouter(prefix="/wishlist", tags=["Wishlist"])
 
 
 def _current_customer(db: Session, current_user: User) -> Customer:
@@ -97,6 +98,47 @@ def _serialize_wishlist_item(row: CustomerWishlistItem) -> dict:
     }
 
 
+def _user_wishlist(db: Session, current_user: User) -> dict:
+    rows = (
+        db.query(CustomerWishlistItem)
+        .join(Tour, Tour.id == CustomerWishlistItem.tour_id)
+        .filter(CustomerWishlistItem.user_id == current_user.id, Tour.status == "published")
+        .order_by(CustomerWishlistItem.id.desc())
+        .all()
+    )
+    items = [_serialize_wishlist_item(row) for row in rows]
+    return {"status": "success", "items": items, "total": len(items)}
+
+
+def _add_user_wishlist_item(tour_id: int, db: Session, current_user: User) -> dict:
+    tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+
+    row = db.query(CustomerWishlistItem).filter(
+        CustomerWishlistItem.user_id == current_user.id,
+        CustomerWishlistItem.tour_id == tour_id,
+    ).first()
+    if not row:
+        row = CustomerWishlistItem(user_id=current_user.id, tour_id=tour_id)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+    return {"status": "success", "message": "Tour saved to wishlist", "data": _serialize_wishlist_item(row)}
+
+
+def _delete_user_wishlist_item(tour_id: int, db: Session, current_user: User) -> dict:
+    row = db.query(CustomerWishlistItem).filter(
+        CustomerWishlistItem.user_id == current_user.id,
+        CustomerWishlistItem.tour_id == tour_id,
+    ).first()
+    if row:
+        db.delete(row)
+        db.commit()
+    return {"status": "success", "message": "Tour removed from wishlist"}
+
+
 @router.get("/profile")
 def customer_profile(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
@@ -148,48 +190,34 @@ def change_customer_password(data: PasswordUpdate, db: Session = Depends(get_db)
 @router.get("/wishlist")
 def customer_wishlist(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _current_customer(db, current_user)
-    rows = (
-        db.query(CustomerWishlistItem)
-        .join(Tour, Tour.id == CustomerWishlistItem.tour_id)
-        .filter(CustomerWishlistItem.user_id == current_user.id, Tour.status == "published")
-        .order_by(CustomerWishlistItem.id.desc())
-        .all()
-    )
-    items = [_serialize_wishlist_item(row) for row in rows]
-    return {"status": "success", "items": items, "total": len(items)}
+    return _user_wishlist(db, current_user)
 
 
 @router.post("/wishlist/{tour_id}")
 def add_customer_wishlist_item(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _current_customer(db, current_user)
-    tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
-    if not tour:
-        raise HTTPException(status_code=404, detail="Tour not found")
-
-    row = db.query(CustomerWishlistItem).filter(
-        CustomerWishlistItem.user_id == current_user.id,
-        CustomerWishlistItem.tour_id == tour_id,
-    ).first()
-    if not row:
-        row = CustomerWishlistItem(user_id=current_user.id, tour_id=tour_id)
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-
-    return {"status": "success", "message": "Tour saved to wishlist", "data": _serialize_wishlist_item(row)}
+    return _add_user_wishlist_item(tour_id, db, current_user)
 
 
 @router.delete("/wishlist/{tour_id}")
 def delete_customer_wishlist_item(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _current_customer(db, current_user)
-    row = db.query(CustomerWishlistItem).filter(
-        CustomerWishlistItem.user_id == current_user.id,
-        CustomerWishlistItem.tour_id == tour_id,
-    ).first()
-    if row:
-        db.delete(row)
-        db.commit()
-    return {"status": "success", "message": "Tour removed from wishlist"}
+    return _delete_user_wishlist_item(tour_id, db, current_user)
+
+
+@wishlist_router.get("")
+def user_wishlist(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _user_wishlist(db, current_user)
+
+
+@wishlist_router.post("/{tour_id}")
+def add_user_wishlist_item(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _add_user_wishlist_item(tour_id, db, current_user)
+
+
+@wishlist_router.delete("/{tour_id}")
+def delete_user_wishlist_item(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _delete_user_wishlist_item(tour_id, db, current_user)
 
 
 @router.get("/bookings")

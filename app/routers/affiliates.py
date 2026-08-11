@@ -25,6 +25,7 @@ def affiliates(
     return {"status": "success", **list_affiliates(db, params["page"], params["limit"], params["search"], country_id, status, approval_status)}
 
 
+@router.post("")
 @router.post("/")
 def add_affiliate(data: AffiliateCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.create", "affiliates.approve"))):
     return {"status": "success", "message": "Affiliate created successfully", "data": create_affiliate(db, data, current_user, request)}

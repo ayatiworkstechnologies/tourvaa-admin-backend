@@ -136,6 +136,7 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, revie
     return {
         "id": item.id,
         "tour_code": item.tour_code,
+        "supplier_name": item.supplier.supplier_name if item.supplier else "",
         "title": item.title,
         "slug": item.slug,
         "subtitle": item.subtitle,
@@ -189,7 +190,19 @@ def public_tours(
     query = db.query(Tour).filter(Tour.status == "published")
     if search:
         pat = f"%{search.strip()}%"
-        query = query.filter(or_(Tour.title.ilike(pat), Tour.short_description.ilike(pat)))
+        query = query.filter(
+            or_(
+                Tour.title.ilike(pat),
+                Tour.tour_code.ilike(pat),
+                Tour.slug.ilike(pat),
+                Tour.short_description.ilike(pat),
+                Tour.start_location.ilike(pat),
+                Tour.finish_location.ilike(pat),
+                Tour.country.has(Country.country_name.ilike(pat)),
+                Tour.city.has(City.city_name.ilike(pat)),
+                Tour.category.has(TourCategory.category_name.ilike(pat)),
+            )
+        )
     if country:
         c = db.query(Country).filter(Country.country_name.ilike(country)).first()
         if not c:
