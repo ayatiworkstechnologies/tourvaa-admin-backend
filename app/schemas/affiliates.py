@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.schemas.auth import validate_strong_password
 from app.utils.operations import ACTIVE_STATUSES, APPROVAL_STATUSES
 
 
@@ -7,6 +8,7 @@ class AffiliateCreate(BaseModel):
     business_type: str = Field(default="", max_length=75)
     name: str = Field(min_length=1, max_length=150)
     email: EmailStr
+    password: str | None = Field(default=None, min_length=8)
     phone: str = Field(default="", max_length=30)
     website_url: str = Field(default="", max_length=255)
     country_id: int | None = None
@@ -24,6 +26,11 @@ class AffiliateCreate(BaseModel):
     @classmethod
     def normalize_email(cls, value: EmailStr):
         return str(value).strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str | None):
+        return validate_strong_password(value) if value is not None else value
 
     @field_validator("status")
     @classmethod

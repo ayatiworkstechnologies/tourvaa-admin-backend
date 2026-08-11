@@ -1,11 +1,15 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from app.schemas.auth import validate_strong_password
 from app.utils.operations import ACTIVE_STATUSES, APPROVAL_STATUSES, VALUE_TYPES
 
 
 class AgentCreate(BaseModel):
     agent_name: str = Field(min_length=1, max_length=150)
     agent_type: str = Field(default="", max_length=75)
+    email: EmailStr | None = None
+    password: str | None = Field(default=None, min_length=8)
+    user_id: int | None = None
     country_id: int | None = None
     city_id: int | None = None
     years_in_operation: int = Field(default=0, ge=0)
@@ -32,6 +36,24 @@ class AgentCreate(BaseModel):
         if value not in APPROVAL_STATUSES:
             raise ValueError("Invalid approval status")
         return value
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: EmailStr | None):
+        return str(value).strip().lower() if value is not None else value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str | None):
+        return validate_strong_password(value) if value is not None else value
+
+    @model_validator(mode="after")
+    def require_complete_login_details(self):
+        if bool(self.email) != bool(self.password):
+            raise ValueError("Email and password must be provided together")
+        if self.user_id is not None and self.email is not None:
+            raise ValueError("Choose an existing user or provide new login details, not both")
+        return self
 
 
 class AgentContactUpdate(BaseModel):

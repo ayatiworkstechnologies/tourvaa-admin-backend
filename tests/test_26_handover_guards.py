@@ -271,6 +271,38 @@ def test_admin_supplier_service_creates_login_without_prefixed_supplier_code():
     assert 'code_for("TVA-SUP"' not in service
 
 
+def test_admin_agent_and_affiliate_login_details_are_validated():
+    from app.schemas.agents import AgentCreate
+    from app.schemas.affiliates import AffiliateCreate
+
+    agent = AgentCreate(agent_name="Example Agent", email="AGENT@example.com", password="Strong@123")
+    affiliate = AffiliateCreate(name="Example Affiliate", email="AFFILIATE@example.com", password="Strong@123")
+
+    assert str(agent.email) == "agent@example.com"
+    assert str(affiliate.email) == "affiliate@example.com"
+    assert agent.password == affiliate.password == "Strong@123"
+
+    with pytest.raises(ValidationError):
+        AgentCreate(agent_name="Missing Password", email="agent@example.com")
+    with pytest.raises(ValidationError):
+        AgentCreate(agent_name="Weak Password", email="agent@example.com", password="password")
+    with pytest.raises(ValidationError):
+        AffiliateCreate(name="Weak Password", email="affiliate@example.com", password="password")
+
+
+def test_admin_agent_and_affiliate_services_create_portal_users():
+    backend_dir = Path(__file__).resolve().parents[1]
+    agents_service = (backend_dir / "app" / "services" / "agents.py").read_text(encoding="utf-8")
+    affiliates_service = (backend_dir / "app" / "services" / "affiliates.py").read_text(encoding="utf-8")
+
+    assert 'Role.slug == "agent-reseller"' in agents_service
+    assert "hash_password(data.password)" in agents_service
+    assert 'user_type="AGENT"' in agents_service
+    assert 'Role.slug == "affiliate"' in affiliates_service
+    assert "hash_password(data.password)" in affiliates_service
+    assert 'user_type="AFFILIATE"' in affiliates_service
+
+
 def test_email_verification_moves_portal_profiles_forward():
     backend_dir = Path(__file__).resolve().parents[1]
     auth_service = (backend_dir / "app" / "services" / "auth.py").read_text(encoding="utf-8")

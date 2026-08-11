@@ -33,8 +33,9 @@ def test_agent_detail_404(headers):
 @skip_if_readonly()
 def test_create_agent(headers, first_country_id):
     payload = {
-        "user_id": 1,
         "agent_name": unique("AgentTest"),
+        "email": f"{unique('agent')}@test.com",
+        "password": "Strong@123",
         "agent_type": "travel_agency",
         "country_id": first_country_id,
     }

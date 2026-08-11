@@ -9,6 +9,9 @@ from app.models.agents import Agent, AgentBusinessInfo, AgentContact, AgentDocum
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentUpdate
 from app.utils.operations import PartialApprovalRequest, RejectRequest, approve_item, code_for, filter_review_query, get_or_404, partial_approve_item, reject_item, relationship_list, serialize_common_review, simple_paginate
 from app.models.users import User
+from app.auth.security import hash_password
+from app.models.roles import Role
+from app.models.users import UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +173,39 @@ def bulk_reject_agents(db: Session, agent_ids: list[int], data: RejectRequest, a
 
 
 def create_agent(db: Session, data: AgentCreate, actor: User, request: Request | None = None):
-    item = Agent(**data.model_dump())
+    agent_data = data.model_dump(exclude={"email", "password"})
+    if data.user_id is not None:
+        linked_user = db.query(User).filter(User.id == data.user_id).first()
+        if not linked_user or linked_user.user_type != "AGENT":
+            raise HTTPException(status_code=400, detail="user_id must reference an existing AGENT account")
+        if db.query(Agent).filter(Agent.user_id == data.user_id).first():
+            raise HTTPException(status_code=409, detail="This user is already linked to another agent")
+    elif data.email is not None and data.password is not None:
+        email = str(data.email).strip().lower()
+        if db.query(User).filter(User.email == email).first():
+            raise HTTPException(status_code=409, detail="Email already exists")
+        role = db.query(Role).filter(Role.slug == "agent-reseller", Role.is_active == True).first()
+        if not role:
+            raise HTTPException(status_code=400, detail="Agent accounts are not available")
+        now = utcnow()
+        linked_user = User(
+            name=data.agent_name,
+            email=email,
+            password=hash_password(data.password),
+            role_id=role.id,
+            user_type="AGENT",
+            is_active=True,
+            approval_status="pending",
+            email_verified=True,
+            email_verified_at=now,
+            password_created_at=now,
+            account_status="ACTIVE",
+        )
+        db.add(linked_user)
+        db.flush()
+        db.add(UserRole(user_id=linked_user.id, role_id=role.id))
+        agent_data["user_id"] = linked_user.id
+    item = Agent(**agent_data)
     db.add(item)
     db.flush()
     item.agent_code = code_for("TVA-AGT", item.id)
