@@ -8,7 +8,6 @@ from app.services.audit import log_audit
 from app.utils.operations import (
     PartialApprovalRequest,
     RejectRequest,
-    code_for,
     filter_review_query,
     get_or_404,
     relationship_list,
@@ -25,7 +24,9 @@ from app.schemas.suppliers import (
     SupplierUpdate,
     VehicleReviewRequest,
 )
-from app.models.users import User
+from app.auth.security import hash_password
+from app.models.roles import Role
+from app.models.users import User, UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +273,7 @@ def export_suppliers_directory(db: Session) -> list[dict]:
 
 
 def create_supplier(db: Session, data: SupplierCreate, actor: User, request: Request | None = None):
+    supplier_data = data.model_dump(exclude={"email", "password"})
     if data.user_id is not None:
         linked_user = db.query(User).filter(User.id == data.user_id).first()
         if not linked_user or linked_user.user_type != "SUPPLIER":
@@ -279,10 +281,34 @@ def create_supplier(db: Session, data: SupplierCreate, actor: User, request: Req
         already_linked = db.query(Supplier).filter(Supplier.user_id == data.user_id).first()
         if already_linked:
             raise HTTPException(status_code=409, detail="This user is already linked to another supplier")
-    item = Supplier(**data.model_dump())
+    elif data.email is not None and data.password is not None:
+        email = str(data.email).strip().lower()
+        if db.query(User).filter(User.email == email).first():
+            raise HTTPException(status_code=409, detail="Email already exists")
+        role = db.query(Role).filter(Role.slug == "supplier", Role.is_active == True).first()
+        if not role:
+            raise HTTPException(status_code=400, detail="Supplier accounts are not available")
+        now = utcnow()
+        linked_user = User(
+            name=data.supplier_name,
+            email=email,
+            password=hash_password(data.password),
+            role_id=role.id,
+            user_type="SUPPLIER",
+            is_active=True,
+            approval_status="PENDING",
+            email_verified=True,
+            email_verified_at=now,
+            password_created_at=now,
+            account_status="ACTIVE",
+        )
+        db.add(linked_user)
+        db.flush()
+        db.add(UserRole(user_id=linked_user.id, role_id=role.id))
+        supplier_data["user_id"] = linked_user.id
+    item = Supplier(**supplier_data)
     db.add(item)
     db.flush()
-    item.supplier_code = code_for("TVA-SUP", item.id)
     log_audit(db, actor=actor, action="create_supplier", entity_type="supplier", entity_id=item.id, new_values=serialize_supplier(item), request=request)
     db.commit()
     db.refresh(item)

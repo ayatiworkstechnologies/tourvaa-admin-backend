@@ -191,7 +191,9 @@ def list_cities(db: Session, page: int, limit: int, search: str = "", country_id
 def save_city(db: Session, data: CityPayload, actor: User, request: Request | None = None, city_id: int | None = None):
     get_or_404(db, Country, data.country_id, "Country")
     if data.state_id:
-        get_or_404(db, State, data.state_id, "State")
+        state = get_or_404(db, State, data.state_id, "State")
+        if state.country_id != data.country_id:
+            raise HTTPException(status_code=422, detail="State does not belong to the selected country")
     item = get_or_404(db, City, city_id, "City") if city_id else City()
     old = _city(item) if city_id else None
     for key, value in data.model_dump().items():

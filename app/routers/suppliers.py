@@ -108,6 +108,7 @@ def suppliers(
     return {"status": "success", **list_suppliers(db, params["page"], params["limit"], params["search"], country_id, status, approval_status, start_date, end_date)}
 
 
+@router.post("")
 @router.post("/")
 def add_supplier(data: SupplierCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.create", "create-suppliers"))):
     return {"status": "success", "message": "Supplier created successfully", "data": create_supplier(db, data, current_user, request)}

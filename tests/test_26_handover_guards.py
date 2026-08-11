@@ -203,6 +203,74 @@ def test_supplier_agent_verification_api_contract_exists():
         assert route in agent_router
 
 
+def test_admin_managed_accounts_accept_collection_posts_with_or_without_trailing_slash():
+    from app.main import app
+
+    paths = app.openapi()["paths"]
+    for module in ["suppliers", "agents", "affiliates"]:
+        assert "post" in paths[f"/api/{module}"]
+        assert "post" in paths[f"/api/{module}/"]
+
+
+def test_city_state_must_belong_to_selected_country(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.models.cms import Country, State
+    from app.schemas.cms import CityPayload
+    from app.services import cms
+
+    def fake_get_or_404(_db, model, _item_id, _label):
+        if model is Country:
+            return SimpleNamespace(id=1)
+        if model is State:
+            return SimpleNamespace(id=9, country_id=2)
+        raise AssertionError(f"Unexpected model: {model}")
+
+    monkeypatch.setattr(cms, "get_or_404", fake_get_or_404)
+
+    with pytest.raises(HTTPException) as error:
+        cms.save_city(
+            None,
+            CityPayload(country_id=1, state_id=9, city_name="Test City"),
+            SimpleNamespace(id=1),
+        )
+
+    assert error.value.status_code == 422
+    assert error.value.detail == "State does not belong to the selected country"
+
+
+def test_admin_supplier_login_details_are_validated_as_a_complete_pair():
+    from app.schemas.suppliers import SupplierCreate
+
+    supplier = SupplierCreate(
+        supplier_name="Example Supplier",
+        email="SUPPLIER@example.com",
+        password="Strong@123",
+    )
+    assert str(supplier.email) == "supplier@example.com"
+    assert supplier.password == "Strong@123"
+
+    with pytest.raises(ValidationError):
+        SupplierCreate(supplier_name="Missing Password", email="missing@example.com")
+
+    with pytest.raises(ValidationError):
+        SupplierCreate(
+            supplier_name="Weak Password",
+            email="weak@example.com",
+            password="password",
+        )
+
+
+def test_admin_supplier_service_creates_login_without_prefixed_supplier_code():
+    backend_dir = Path(__file__).resolve().parents[1]
+    service = (backend_dir / "app" / "services" / "suppliers.py").read_text(encoding="utf-8")
+
+    assert 'Role.slug == "supplier"' in service
+    assert "hash_password(data.password)" in service
+    assert 'user_type="SUPPLIER"' in service
+    assert 'code_for("TVA-SUP"' not in service
+
+
 def test_email_verification_moves_portal_profiles_forward():
     backend_dir = Path(__file__).resolve().parents[1]
     auth_service = (backend_dir / "app" / "services" / "auth.py").read_text(encoding="utf-8")
