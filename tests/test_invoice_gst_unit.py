@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.schemas.invoices import InvoiceEmailRequest, InvoiceGenerateRequest
 from app.schemas.bookings import BookingCommunicationCreate, MessageReplyCreate
 from app.services import invoices
+from app.routers import payments_gateway
 
 
 def test_gst_is_split_from_charged_total_without_increasing_invoice_total():
@@ -73,6 +74,27 @@ def test_failed_smtp_does_not_mark_invoice_as_emailed(monkeypatch):
     assert error.value.status_code == 502
     assert invoice.status == "generated"
     assert invoice.emailed_at is None
+
+
+def test_paid_gateway_payment_generates_invoice_without_authenticated_actor(monkeypatch):
+    calls = []
+    payment = SimpleNamespace(id=42, booking_id=17)
+
+    monkeypatch.setattr(
+        invoices,
+        "generate_invoice",
+        lambda db, data, actor, request=None: calls.append((db, data, actor, request)),
+    )
+
+    db = SimpleNamespace()
+    request = SimpleNamespace()
+    payments_gateway._ensure_payment_invoice(db, payment, request=request)
+
+    assert len(calls) == 1
+    assert calls[0][1].booking_id == payment.booking_id
+    assert calls[0][1].payment_id == payment.id
+    assert calls[0][2] is None
+    assert calls[0][3] is request
 
 
 @pytest.mark.parametrize(

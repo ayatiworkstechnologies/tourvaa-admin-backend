@@ -197,7 +197,7 @@ def _is_agent_actor(actor: User) -> bool:
     for user_role in actor.user_roles or []:
         if user_role.role and user_role.role.slug:
             role_slugs.add(user_role.role.slug)
-    return "agent" in " ".join(role_slugs) and not ({"admin", "super-admin"} & role_slugs)
+    return "agent-reseller" in role_slugs and not ({"admin", "super-admin"} & role_slugs)
 
 
 def _resolve_payout_agent_id(db: Session, data: AgentPayoutCreate, actor: User) -> int:

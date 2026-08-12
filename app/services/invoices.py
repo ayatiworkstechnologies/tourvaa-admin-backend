@@ -114,8 +114,10 @@ def _user_role(user: User | None) -> str:
 
 
 def _ensure_invoice_access(inv: Invoice, actor: User | None) -> None:
+    if actor is None:
+        raise HTTPException(status_code=403, detail="Invoice access denied")
     role = _user_role(actor)
-    if role == "admin" or actor is None:
+    if role == "admin":
         return
     if role == "customer" and inv.customer and inv.customer.user_id == actor.id:
         return
@@ -152,7 +154,7 @@ def get_invoice(db: Session, invoice_id: int, actor: User | None = None) -> Invo
     return inv
 
 
-def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, request: Request | None = None):
+def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | None, request: Request | None = None):
     booking = db.query(Booking).filter(Booking.id == data.booking_id).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
@@ -161,6 +163,16 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
         raise HTTPException(status_code=400, detail="Payment does not belong to the specified booking")
     existing = db.query(Invoice).filter(Invoice.booking_id == booking.id, Invoice.payment_id == (payment.id if payment else None)).first()
     if existing:
+        # A prior process may have committed the invoice record before its
+        # private PDF was persisted, or the file may have been removed during
+        # a deployment. Re-running generation must repair that record instead
+        # of returning an invoice that can never be downloaded.
+        try:
+            download_invoice_pdf(db, existing.id, actor)
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            return regenerate_invoice_pdf(db, existing.id, actor, request)
         return serialize_invoice(existing, detail=True)
     booking_total = money(booking.final_amount or booking.total_cost or 0)
     paid = money(payment.captured_amount if payment else booking.amount_paid)
@@ -180,7 +192,7 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
         amount_paid=paid,
         amount_due=balance_due,
         balance_due_date=_balance_due_date(booking, data.balance_due_date) if balance_due > 0 else None,
-        created_by=actor.id,
+        created_by=actor.id if actor else None,
     )
     db.add(inv)
     db.flush()
@@ -206,7 +218,7 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User, req
     return serialize_invoice(inv, detail=True)
 
 
-def regenerate_invoice_pdf(db: Session, invoice_id: int, actor: User, request: Request | None = None):
+def regenerate_invoice_pdf(db: Session, invoice_id: int, actor: User | None, request: Request | None = None):
     inv = get_invoice(db, invoice_id, actor)
     booking = inv.booking
     if not booking:
@@ -375,13 +387,12 @@ def check_balance_due_reminders(db: Session) -> list[int]:
                 )
             inv.balance_reminder_stage = stage
             inv.last_balance_reminder_at = now
+            db.commit()
             reminded.append(inv.id)
         except Exception:
             logger.exception("Failed to send balance-due reminder for invoice %s", inv.id)
             db.rollback()
 
-    if reminded:
-        db.commit()
     return reminded
 
 
