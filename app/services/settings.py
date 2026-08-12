@@ -9,13 +9,26 @@ _PAYMENT_SECRET_FIELDS = {"secret_key"}
 _API_SECRET_FIELDS = {"api_key", "api_secret"}
 _SMTP_SECRET_FIELDS = {"password"}
 
+_PLACEHOLDER_PUBLIC_CONTACTS = {
+    "support_email": {"hello@tourvaa.com", "support@tourvaa.com"},
+    "support_phone": {"+910000000000", "+919876543210"},
+    "company_address": {"new zealand"},
+}
+
+
+def sanitize_public_contact_setting(key: str, value: str | None) -> str:
+    normalized = (value or "").strip()
+    if normalized.lower() in _PLACEHOLDER_PUBLIC_CONTACTS.get(key, set()):
+        return ""
+    return normalized
+
 
 DEFAULT_SETTINGS = [
     {"key": "site_name", "label": "Site Name", "value": "Tourvaa", "group": "general", "is_public": True},
     {"key": "company_name", "label": "Company Name", "value": "Tourvaa", "group": "general", "is_public": True},
-    {"key": "support_email", "label": "Support Email", "value": "support@tourvaa.com", "group": "general", "is_public": True},
-    {"key": "support_phone", "label": "Support Phone", "value": "+910000000000", "group": "general", "is_public": True},
-    {"key": "company_address", "label": "Company Address", "value": "New Zealand", "group": "general", "is_public": True},
+    {"key": "support_email", "label": "Support Email", "value": "", "group": "general", "is_public": True},
+    {"key": "support_phone", "label": "Support Phone", "value": "", "group": "general", "is_public": True},
+    {"key": "company_address", "label": "Company Address", "value": "", "group": "general", "is_public": True},
     {"key": "default_country", "label": "Default Country", "value": "India", "group": "general", "is_public": True},
     {"key": "default_currency", "label": "Default Currency", "value": "USD", "group": "general", "is_public": True},
     {"key": "logo", "label": "Logo URL", "value": "", "group": "general", "is_public": True},

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -12,18 +13,18 @@ from app.auth.permissions import get_current_user
 from app.utils.money import money
 from app.utils.pagination import pagination_params
 from app.models.cms import Tour
-from app.models.customers import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerWishlistItem
+from app.models.customers import Customer, CustomerSavedTraveller, CustomerWishlistItem
 from app.schemas.customers import (
     CustomerCancellationCreate,
     CustomerManualPaymentRequest,
-    CustomerMessageCreate,
     CustomerProfileUpdate,
     SavedTravellerRequest,
 )
 from app.models.cancellations import CancellationRequest
 from app.schemas.cancellations import CancellationRequestCreate
 from app.services import cancellations as cancellations_service
-from app.services.customers import serialize_customer, serialize_communication
+from app.services.customers import serialize_customer
+from app.services import messaging as messaging_service
 from app.services.invoices import list_invoices
 from app.services.itinerary import download_itinerary_pdf
 from app.schemas.payments import PaymentCreate
@@ -35,6 +36,10 @@ from app.schemas.cms import slugify
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 wishlist_router = APIRouter(prefix="/wishlist", tags=["Wishlist"])
+
+
+class CustomerSendMessageBody(BaseModel):
+    message: str = Field(min_length=1, max_length=5000)
 
 
 def _current_customer(db: Session, current_user: User) -> Customer:
@@ -307,27 +312,14 @@ def customer_invoice_download(invoice_id: int, db: Session = Depends(get_db), cu
 
 
 @router.get("/messages")
-def customer_messages(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    customer = _current_customer(db, current_user)
-    query = db.query(CustomerCommunication).filter(CustomerCommunication.customer_id == customer.id).order_by(CustomerCommunication.id.desc())
-    total = query.count()
-    rows = query.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()
-    items = [serialize_communication(row) for row in rows]
-    return {"status": "success", "items": items, "total": total, "page": params["page"], "limit": params["limit"], "total_pages": max(1, (total + params["limit"] - 1) // params["limit"])}
+async def customer_messages(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", "data": messaging_service.get_own_conversation_thread(db, current_user)}
 
 
 @router.post("/messages")
-def send_customer_portal_message(data: CustomerMessageCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    customer = _current_customer(db, current_user)
-    if data.booking_id:
-        booking = db.query(Booking).filter(Booking.id == data.booking_id, Booking.customer_id == customer.id).first()
-        if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found")
-    row = CustomerCommunication(customer_id=customer.id, booking_id=data.booking_id, subject=data.subject, message=data.message, sent_by_user_id=current_user.id, sent_to_email="admin", message_type="customer_reply", email_status="pending")
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return {"status": "success", "message": "Message sent successfully", "data": serialize_communication(row)}
+async def send_customer_portal_message(data: CustomerSendMessageBody, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    message = await messaging_service.send_message_as_participant(db, current_user, data.message)
+    return {"status": "success", "message": "Message sent successfully", "data": message}
 
 
 @router.get("/travellers")

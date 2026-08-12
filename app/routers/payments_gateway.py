@@ -33,6 +33,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/payments", tags=["Payment Gateways"])
 
 
+def _ensure_payment_invoice(db: Session, payment: Payment, actor=None, request: Request | None = None) -> None:
+    """Idempotently create (or repair) the PDF invoice for a paid gateway payment."""
+    from app.schemas.invoices import InvoiceGenerateRequest
+    from app.services.invoices import generate_invoice
+
+    try:
+        generate_invoice(
+            db,
+            InvoiceGenerateRequest(booking_id=payment.booking_id, payment_id=payment.id),
+            actor,
+            request,
+        )
+    except Exception:
+        # Gateway acknowledgement must remain successful even if document
+        # generation has an environmental failure. The exception is retained
+        # in server logs and a repeated return/webhook repairs the invoice.
+        logger.exception("Invoice generation failed for paid payment %s", payment.id)
+
+
 # request schemas
 
 
@@ -224,8 +243,12 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
     logger.info("Stripe webhook received: %s id=%s", event_type, event_id)
 
     # Idempotency: skip events already recorded via their Stripe event ID
-    if event_id and db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first():
+    existing_transaction = db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first() if event_id else None
+    if existing_transaction:
         logger.info("Stripe event %s already processed -- skipping", event_id)
+        payment = db.query(Payment).filter(Payment.id == existing_transaction.payment_id).first()
+        if payment and payment.payment_status == "paid":
+            _ensure_payment_invoice(db, payment, request=request)
         return {"status": "success", "received": True}
 
     if event_type == "checkout.session.completed":
@@ -245,6 +268,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
             db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=event_id or payment_intent, metadata_json={"event": event_type}))
             _sync_booking_payment_fields(db, payment.booking)
             db.commit()
+            _ensure_payment_invoice(db, payment, request=request)
 
     elif event_type in ("payment_intent.payment_failed", "checkout.session.expired"):
         obj = event["data"]["object"]
@@ -330,6 +354,8 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
         db.commit()
         db.refresh(payment)
 
+    _ensure_payment_invoice(db, payment, actor=current_user)
+
     return {
         "status": "success",
         "message": "Stripe payment confirmed",
@@ -383,6 +409,7 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
         raise HTTPException(status_code=404, detail="PayPal payment record not found")
     _ensure_booking_payment_access(payment.booking, current_user)
     if payment.payment_status == "paid":
+        _ensure_payment_invoice(db, payment, actor=current_user)
         return {"status": "success", "message": "PayPal payment was already captured", "data": {"paypal_status": "COMPLETED", "payment_id": payment.id}}
 
     paypal = get_paypal(db)
@@ -406,6 +433,7 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
         _sync_booking_payment_fields(db, payment.booking)
         db.commit()
         db.refresh(payment)
+        _ensure_payment_invoice(db, payment, actor=current_user)
 
     return {"status": "success", "message": f"PayPal capture status: {status}", "data": {"paypal_status": status, "payment_id": payment.id}}
 
@@ -445,8 +473,12 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
     logger.info("PayPal webhook received: %s id=%s", event_type, event_id)
 
     # Idempotency: skip events already recorded via PayPal event ID
-    if event_id and db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first():
+    existing_transaction = db.query(PaymentTransaction).filter(PaymentTransaction.gateway_reference == event_id).first() if event_id else None
+    if existing_transaction:
         logger.info("PayPal event %s already processed -- skipping", event_id)
+        payment = db.query(Payment).filter(Payment.id == existing_transaction.payment_id).first()
+        if payment and payment.payment_status == "paid":
+            _ensure_payment_invoice(db, payment, request=request)
         return {"status": "success", "received": True}
 
     if event_type == "PAYMENT.CAPTURE.COMPLETED":
@@ -468,6 +500,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
             db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=event_id or capture_id, metadata_json={"event_type": event_type, "capture_id": capture_id}))
             _sync_booking_payment_fields(db, payment.booking)
             db.commit()
+            _ensure_payment_invoice(db, payment, request=request)
 
     elif event_type == "PAYMENT.CAPTURE.REFUNDED":
         resource = event.get("resource", {})
@@ -572,6 +605,7 @@ def test_simulate_payment(
     _sync_booking_payment_fields(db, payment.booking)
     db.commit()
     db.refresh(payment)
+    _ensure_payment_invoice(db, payment, actor=current_user)
 
     return {
         "status": "success",

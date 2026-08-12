@@ -98,8 +98,10 @@ def _user_role(user: User | None) -> str:
 
 
 def _ensure_booking_owner(booking: Booking, actor: User | None) -> None:
+    if actor is None:
+        raise HTTPException(status_code=403, detail="Booking access denied")
     role = _user_role(actor)
-    if role == "admin" or actor is None:
+    if role == "admin":
         return
     if role == "customer" and booking.customer and booking.customer.user_id == actor.id:
         return
@@ -269,6 +271,11 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
         reverse_ledger_entry(db, booking.id)
     except Exception:
         logger.exception("Failed to reverse supplier ledger entry for booking_id=%s", booking.id)
+    try:
+        from app.services.agent_ledger import reverse_ledger_entry as reverse_agent_ledger_entry
+        reverse_agent_ledger_entry(db, booking.id)
+    except Exception:
+        logger.exception("Failed to reverse agent ledger entry for booking_id=%s", booking.id)
 
     db.commit()
     db.refresh(req)

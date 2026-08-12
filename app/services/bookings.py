@@ -689,11 +689,11 @@ def _validate_customer_travellers(data: BookingCreate, adults: int, children: in
 
 
 def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
+    if data.booking_source == "customer" and not data.customer_id:
+        raise HTTPException(status_code=400, detail="customer_id is required for customer bookings")
     customer = db.query(Customer).filter(Customer.id == data.customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
-    if data.booking_source == "customer" and not data.customer_id:
-        raise HTTPException(status_code=400, detail="customer_id is required for customer bookings")
     if data.booking_source == "customer" and actor and _user_role(actor) == "customer" and customer.user_id != actor.id:
         raise HTTPException(status_code=403, detail="Customer booking access denied")
     if actor and _user_role(actor) == "agent":

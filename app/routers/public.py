@@ -16,6 +16,7 @@ from app.models.cancellations import RefundRule
 from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.services.cms import _category, _city, _country, _subcategory, _tour
 from app.services.reviews import get_review_stats, list_tour_reviews
+from app.services.settings import sanitize_public_contact_setting
 from app.schemas.cms import slugify
 from app.utils.ratelimit import check_rate_limit
 from app.models.tours import (
@@ -66,7 +67,7 @@ def submit_contact_message(request: Request, data: ContactMessageRequest, db: Se
     db.commit()
 
     setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
-    support_email = (setting.value if setting and setting.value else "") or "support@tourvaa.com"
+    support_email = sanitize_public_contact_setting("support_email", setting.value if setting else "")
 
     esc = html_escape.escape
     body = (
@@ -78,8 +79,9 @@ def submit_contact_message(request: Request, data: ContactMessageRequest, db: Se
         f"<p><strong>Subject:</strong> {esc(data.subject)}</p>"
         f"<p><strong>Message:</strong><br/>{esc(data.message).replace(chr(10), '<br/>')}</p>"
     )
-    try_send_email(support_email, f"New enquiry: {data.subject}", body, template_key="contact_enquiry")
-    return {"status": "success", "message": "Your enquiry has been sent."}
+    if support_email:
+        try_send_email(support_email, f"New enquiry: {data.subject}", body, template_key="contact_enquiry")
+    return {"status": "success", "message": "Your enquiry has been received."}
 
 
 class NewsletterSubscribeRequest(BaseModel):
@@ -103,11 +105,12 @@ def subscribe_newsletter(request: Request, data: NewsletterSubscribeRequest, db:
         db.commit()
 
     setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
-    support_email = (setting.value if setting and setting.value else "") or "support@tourvaa.com"
+    support_email = sanitize_public_contact_setting("support_email", setting.value if setting else "")
 
     esc = html_escape.escape
     body = f"<p><strong>New newsletter signup from the Tourvaa website</strong></p><p><strong>Email:</strong> {esc(email)}</p>"
-    try_send_email(support_email, "New newsletter signup", body, template_key="newsletter_signup")
+    if support_email:
+        try_send_email(support_email, "New newsletter signup", body, template_key="newsletter_signup")
     return {"status": "success", "message": "You're subscribed! Watch your inbox for travel inspiration."}
 
 

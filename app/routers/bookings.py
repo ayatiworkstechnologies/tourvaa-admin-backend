@@ -43,7 +43,7 @@ from app.services.bookings import (
 )
 from app.auth.permissions import require_any_permission, get_current_user
 from app.utils.pagination import pagination_params
-from app.models.customers import CustomerCommunication
+from app.services import messaging as messaging_service
 from app.models.users import User
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
@@ -249,75 +249,25 @@ def supplier_booking_history(booking_id: int, db: Session = Depends(get_db), cur
     return {"status": "success", "data": get_status_history(db, booking_id, current_user)}
 
 
-def _serialize_portal_message(row: CustomerCommunication) -> dict:
-    return {
-        "id": row.id,
-        "subject": row.subject,
-        "message": row.message,
-        "message_type": row.message_type,
-        "email_status": row.email_status,
-        "sender_name": row.sender.name if row.sender else None,
-        "sender_role": row.message_type,
-        "direction": "outbound",
-        "created_at": row.created_at,
-    }
-
-
 @supplier_portal_router.get("/messages")
-def supplier_messages(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    q = db.query(CustomerCommunication).filter(
-        CustomerCommunication.sent_by_user_id == current_user.id,
-        CustomerCommunication.message_type == "supplier_message",
-    ).order_by(CustomerCommunication.id.desc())
-    total = q.count()
-    rows = q.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()
-    items = [_serialize_portal_message(r) for r in rows]
-    return {"status": "success", "items": items, "total": total, "page": params["page"], "limit": params["limit"]}
+async def supplier_messages(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", "data": messaging_service.get_own_conversation_thread(db, current_user)}
 
 
 @supplier_portal_router.post("/messages")
-def send_supplier_message(data: BookingCommunicationCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    row = CustomerCommunication(
-        customer_id=None,
-        subject=data.subject or "Supplier Support Request",
-        message=data.message,
-        sent_by_user_id=current_user.id,
-        sent_to_email="admin",
-        message_type="supplier_message",
-        email_status="pending",
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return {"status": "success", "message": "Message sent successfully", "data": _serialize_portal_message(row)}
+async def send_supplier_message(data: BookingCommunicationCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    message = await messaging_service.send_message_as_participant(db, current_user, data.message)
+    return {"status": "success", "message": "Message sent successfully", "data": message}
 
 
 @agent_portal_router.get("/messages")
-def agent_messages(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    q = db.query(CustomerCommunication).filter(
-        CustomerCommunication.sent_by_user_id == current_user.id,
-        CustomerCommunication.message_type == "agent_message",
-    ).order_by(CustomerCommunication.id.desc())
-    total = q.count()
-    rows = q.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()
-    items = [_serialize_portal_message(r) for r in rows]
-    return {"status": "success", "items": items, "total": total, "page": params["page"], "limit": params["limit"]}
+async def agent_messages(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", "data": messaging_service.get_own_conversation_thread(db, current_user)}
 
 
 @agent_portal_router.post("/messages")
-def send_agent_message(data: BookingCommunicationCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    row = CustomerCommunication(
-        customer_id=None,
-        subject=data.subject or "Agent Support Request",
-        message=data.message,
-        sent_by_user_id=current_user.id,
-        sent_to_email="admin",
-        message_type="agent_message",
-        email_status="pending",
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return {"status": "success", "message": "Message sent successfully", "data": _serialize_portal_message(row)}
+async def send_agent_message(data: BookingCommunicationCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    message = await messaging_service.send_message_as_participant(db, current_user, data.message)
+    return {"status": "success", "message": "Message sent successfully", "data": message}
 
 

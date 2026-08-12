@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -131,7 +131,7 @@ class TourExtension(Base):
     extension_tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
     extension_title = Column(String(255), default="", nullable=False)
     extension_note = Column(Text, default="", nullable=True)
-    extra_price = Column(Float, default=0.0, nullable=False)
+    extra_price = Column(Numeric(12, 2), default=0, nullable=False)
     category = Column(String(30), default="other", nullable=False)
     display_order = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
@@ -167,24 +167,24 @@ class TourPricing(Base):
     tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
     passenger_from = Column(Integer, nullable=False)
     passenger_to = Column(Integer, nullable=False)
-    adult_price = Column(Float, nullable=False)
-    child_price = Column(Float, default=0.0, nullable=False)
-    supplier_price = Column(Float, default=0.0, nullable=False)
+    adult_price = Column(Numeric(12, 2), nullable=False)
+    child_price = Column(Numeric(12, 2), default=0, nullable=False)
+    supplier_price = Column(Numeric(12, 2), default=0, nullable=False)
     # markup_type/markup_value are the supplier's commission, mirrored from
     # Supplier.markup_type/markup_value at save time -- never client-set.
     markup_type = Column(String(20), default="percentage", nullable=False)
-    markup_value = Column(Float, default=0.0, nullable=False)
-    final_price = Column(Float, nullable=False)
-    supplier_final_adult_price = Column(Float, nullable=True)
-    supplier_final_child_price = Column(Float, nullable=True)
+    markup_value = Column(Numeric(12, 2), default=0, nullable=False)
+    final_price = Column(Numeric(12, 2), nullable=False)
+    supplier_final_adult_price = Column(Numeric(12, 2), nullable=True)
+    supplier_final_child_price = Column(Numeric(12, 2), nullable=True)
     # admin_markup_type/admin_markup_value are Tourvaa's own markup on top of
     # the supplier-final price, editable by admins only.
     admin_markup_type = Column(String(20), default="percentage", nullable=False)
-    admin_markup_value = Column(Float, default=0.0, nullable=False)
+    admin_markup_value = Column(Numeric(12, 2), default=0, nullable=False)
     # storefront_adult_price/storefront_child_price are what bookings.py
     # actually charges -- the true customer-facing price.
-    storefront_adult_price = Column(Float, nullable=True)
-    storefront_child_price = Column(Float, nullable=True)
+    storefront_adult_price = Column(Numeric(12, 2), nullable=True)
+    storefront_child_price = Column(Numeric(12, 2), nullable=True)
     currency = Column(String(10), default="USD", nullable=False)
     status = Column(String(20), default="active", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -200,7 +200,7 @@ class TourOptionalActivity(Base):
     tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
     activity_name = Column(String(255), nullable=False)
     description = Column(Text, default="", nullable=True)
-    price_per_person = Column(Float, default=0.0, nullable=False)
+    price_per_person = Column(Numeric(12, 2), default=0, nullable=False)
     image = Column(String(255), default="", nullable=False)
     category = Column(String(30), default="other", nullable=False)
     status = Column(String(20), default="active", nullable=False)
@@ -217,7 +217,7 @@ class TourAccommodationExtra(Base):
     tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
     accommodation_name = Column(String(255), nullable=False)
     description = Column(Text, default="", nullable=True)
-    extra_price = Column(Float, default=0.0, nullable=False)
+    extra_price = Column(Numeric(12, 2), default=0, nullable=False)
     price_type = Column(String(20), default="per_person", nullable=False)
     category = Column(String(30), default="room_upgrade", nullable=False)
     is_default = Column(Integer, default=0, nullable=False)
@@ -268,13 +268,13 @@ class TourDiscount(Base):
     discount_name = Column(String(255), nullable=False)
     discount_code = Column(String(50), nullable=True, unique=True, index=True)
     discount_type = Column(String(20), nullable=False)
-    discount_value = Column(Float, nullable=False)
+    discount_value = Column(Numeric(12, 2), nullable=False)
     discount_scope = Column(String(20), default="tour", nullable=False)
     start_date = Column(DateTime(timezone=True), nullable=True)
     end_date = Column(DateTime(timezone=True), nullable=True)
     usage_limit = Column(Integer, nullable=True)
     used_count = Column(Integer, default=0, nullable=False)
-    minimum_booking_amount = Column(Float, default=0.0, nullable=False)
+    minimum_booking_amount = Column(Numeric(12, 2), default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

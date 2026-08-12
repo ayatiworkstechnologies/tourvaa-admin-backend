@@ -66,6 +66,7 @@ Prefix `/api/cms` (`CONTENT_AND_TOUR_ROUTERS`, no router-level auth).
 
 - **Static assets** (`tourvaa-admin-frontend/public/`): `sw.js` + `images/`, served at `/`.
 - **`(public)` route group** (`src/app/(public)/`): `/`, `/about`, `/accessibility`, `/account-status`, `/blogs`(+`/[slug]`), `/booking/[id]`, `/cancellation-policy`, `/cart`, `/compare`, `/contact`, `/cookie-policy`, `/destinations`, `/login`, `/privacy-policy`, `/register`, `/terms`, `/tours`(+`/[country]/[slug]`), `/wishlist`.
+- **Tour route implementation note:** the public URL is canonically `/tours/[country]/[slug]`, while the shared frontend implementation lives under `src/app/(public)/tours/[id]/`. That internal segment accepts a country slug for country listings and a numeric tour id for legacy redirects; its nested `[slug]` page uses the same first segment as the canonical country slug. The folder name is therefore an implementation detail, not a different public URL contract.
 - **Dedicated login/register portals** (each its own group, not under `(public)`): `/agent-portal`(+`/login`), `/supplier-portal`(+`/login`). `/login` and `/register` are traveller/customer-only.
 - **Proxy**: `next.config.ts` rewrites `/api/public/:path*` and a catch-all `/api/:path*` to the backend.
 

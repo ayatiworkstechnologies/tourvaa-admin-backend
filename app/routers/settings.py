@@ -62,8 +62,9 @@ def settings_cities(
 def public_settings(db: Session = Depends(get_db)):
     """Returns only is_public settings - safe to call without auth."""
     from app.models.settings import AppSetting
+    from app.services.settings import sanitize_public_contact_setting
     rows = db.query(AppSetting).filter(AppSetting.is_public == True).all()  # noqa: E712
-    return {"data": {row.key: row.value for row in rows}}
+    return {"data": {row.key: sanitize_public_contact_setting(row.key, row.value) for row in rows}}
 
 
 @router.get("/")

@@ -28,6 +28,11 @@ from app.routers.dashboard import router as dashboard_router
 from app.routers.email_templates import router as email_templates_router
 from app.routers.email_logs import router as email_logs_router
 from app.routers.invoices import router as invoices_router
+from app.routers.messaging import booking_router as messaging_booking_router
+from app.routers.messaging import router as messaging_router
+from app.routers.messaging import supplier_booking_router as messaging_supplier_booking_router
+from app.routers.messaging import ticket_router as messaging_ticket_router
+from app.routers.messaging import ws_router as messaging_ws_router
 from app.routers.notifications import router as notifications_router
 from app.routers.payments_gateway import router as payments_gateway_router
 from app.routers.payments import router as payments_router
@@ -94,6 +99,11 @@ OPERATIONS_ROUTERS = (
     payments_gateway_router,
     payments_router,
     invoices_router,
+    messaging_router,
+    messaging_booking_router,
+    messaging_supplier_booking_router,
+    messaging_ticket_router,
+    messaging_ws_router,
     notifications_router,
     reports_router,
     sessions_router,

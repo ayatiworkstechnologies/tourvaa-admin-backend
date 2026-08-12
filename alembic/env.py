@@ -21,6 +21,7 @@ from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcate
 from app.models.customers import Customer, CustomerCancellationRequest, CustomerCommunication, CustomerSavedTraveller, CustomerWishlistItem
 from app.models.email_templates import EmailTemplate
 from app.models.invoices import Invoice, InvoiceItem
+from app.models.messaging import BookingConversation, BookingMessage, Conversation, Message
 from app.models.notifications import Notification, NotificationLog, PushSubscription
 from app.models.payments import Payment, PaymentHold, PaymentTransaction
 from app.models.permissions import Permission, RolePermission
