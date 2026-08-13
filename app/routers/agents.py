@@ -215,12 +215,12 @@ async def upload_agent_document(
         else:
             raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, AVIF, PDF, DOC, and DOCX files are allowed")
 
-    from uuid import uuid4
     from app.utils.cloudinary_client import upload_to_cloudinary
+    from app.utils.media import sanitize_filename
     from app.models.agents import AgentDocument
     from app.services.agents import _document
 
-    filename = f"{uuid4().hex}.{extension}"
+    filename = sanitize_filename(file.filename, extension)
     uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/agent-documents", is_private=True, content_type=file.content_type)
     relative_path = f"cloudinary:{uploaded['resource_type']}:{uploaded['public_id']}"
 

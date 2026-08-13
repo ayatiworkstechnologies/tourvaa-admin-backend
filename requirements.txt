@@ -12,7 +12,8 @@ email-validator
 alembic
 requests
 anthropic
-fastembed
+fastembed==0.8.0
+onnxruntime==1.28.0
 pywebpush
 reportlab
 redis

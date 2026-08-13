@@ -204,6 +204,17 @@ register_error_handlers(app)
 
 
 @app.on_event("startup")
+def warn_if_chatbot_llm_unconfigured():
+    from app.config import settings
+
+    if not settings.ANTHROPIC_API_KEY:
+        logger.warning(
+            "ANTHROPIC_API_KEY is not set; the chatbot will run in keyword-only fallback mode "
+            "(no LLM, no streaming). Set ANTHROPIC_API_KEY to enable full AI responses."
+        )
+
+
+@app.on_event("startup")
 def run_seed():
     if schema_is_ready():
         db = SessionLocal()
