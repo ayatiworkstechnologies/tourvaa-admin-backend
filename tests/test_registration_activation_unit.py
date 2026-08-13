@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import app.main  # noqa: F401 - ensures every model is registered before mapper configuration
+from app.models.affiliates import Affiliate
 from app.models.agents import Agent
 from app.models.customers import Customer
 from app.models.suppliers import Supplier
@@ -17,6 +18,7 @@ from app.utils import notification_triggers
         ("CUSTOMER", Customer),
         ("AGENT", Agent),
         ("SUPPLIER", Supplier),
+        ("AFFILIATE", Affiliate),
     ],
 )
 def test_password_creation_activates_every_registration_type(monkeypatch, user_type, profile_model):
@@ -48,10 +50,19 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
         approved_at=None,
         rejection_reason="",
     )
+    affiliate = SimpleNamespace(
+        id=77,
+        name="Test Affiliate",
+        status="inactive",
+        approval_status="email_verification_pending",
+        approved_at=None,
+        rejection_reason="",
+    )
     profiles = {
         Customer: customer if profile_model is Customer else None,
         Agent: agent if profile_model is Agent else None,
         Supplier: supplier if profile_model is Supplier else None,
+        Affiliate: affiliate if profile_model is Affiliate else None,
     }
     db = MagicMock()
 
@@ -65,6 +76,8 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     monkeypatch.setattr(auth, "hash_password", lambda _password: "hashed-password")
     monkeypatch.setattr(auth, "UserStatusHistory", lambda **values: SimpleNamespace(**values))
     monkeypatch.setattr(notification_triggers, "notify_supplier_approval_pending", lambda *_args, **_values: None)
+    from app.services import notifications as notifications_service
+    monkeypatch.setattr(notifications_service, "notify_admins", lambda *_args, **_values: None)
 
     result = auth.complete_registration(db, "raw-token", "StrongPass1!")
 
@@ -73,13 +86,15 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     assert user.email_verified is True
     assert user.account_status == "ACTIVE"
     assert user.is_active is True
-    expected_approval = "PENDING" if user_type == "SUPPLIER" else "NOT_REQUIRED"
+    expected_approval = "PENDING" if user_type in {"SUPPLIER", "AFFILIATE"} else "NOT_REQUIRED"
     assert user.approval_status == expected_approval
     selected_profile = profiles[profile_model]
     assert selected_profile.status == "active"
     if profile_model is Customer:
         assert selected_profile.email_verified is True
     elif profile_model is Agent:
+        assert selected_profile.approval_status == "pending"
+    elif profile_model is Affiliate:
         assert selected_profile.approval_status == "pending"
     else:
         assert selected_profile.approval_status == "PENDING"

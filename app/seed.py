@@ -135,8 +135,19 @@ OPERATIONAL_PERMISSIONS = [
         "manage_discount", "approve_discount", "view_documents", "reset_password", "communicate", "export",
     ]),
     ("affiliates", "Affiliates", [
-        "view", "create", "approve", "reject", "manage_api_link", "view_documents", "export",
+        "view", "create", "approve", "reject", "activate", "suspend", "manage_api_link", "view_documents", "export",
     ]),
+    ("affiliate_links", "Affiliate Links", [
+        "view", "create", "update", "activate", "disable", "delete", "duplicate",
+    ]),
+    ("affiliate_commission_rules", "Affiliate Commission Rules", [
+        "view", "create", "update", "delete",
+    ]),
+    ("affiliate_payouts", "Affiliate Payouts", [
+        "view", "create", "approve", "reject", "process", "mark_paid",
+    ]),
+    ("affiliate_reports", "Affiliate Reports", ["view"]),
+    ("affiliate_settings", "Affiliate Settings", ["manage"]),
     ("countries", "Countries", ["view", "create", "edit", "disable"]),
     ("cities", "Cities", ["view", "create", "edit", "disable"]),
     ("categories", "Categories", ["view", "create", "edit", "disable"]),
@@ -569,6 +580,12 @@ def seed_default_roles_and_permissions(db: Session):
         affiliate: [
             "view-dashboard", "dashboard.view",
             "affiliates.view", "view-affiliates",
+            # Own links only (ensure_affiliate_access scopes to caller's affiliate_id).
+            # activate/disable/delete/duplicate stay admin-only.
+            "affiliate_links.view", "affiliate_links.create", "affiliate_links.update",
+            # Own payout requests only; approving/rejecting/processing stays admin-only.
+            "affiliate_payouts.view", "affiliate_payouts.create",
+            "affiliate_reports.view",
             "view-notifications", "notifications.view",
             "view-profile", "update-profile", "profile.view",
         ],

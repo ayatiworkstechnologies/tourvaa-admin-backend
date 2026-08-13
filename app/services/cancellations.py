@@ -263,7 +263,7 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
 
     try:
         from app.services.affiliate_tracking import reverse_conversion
-        reverse_conversion(db, booking.id)
+        reverse_conversion(db, booking.id, refund_percentage=req.refund_percentage)
     except Exception:
         logger.exception("Failed to reverse affiliate conversion for booking_id=%s", booking.id)
     try:

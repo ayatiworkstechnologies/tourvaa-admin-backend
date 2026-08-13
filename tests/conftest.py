@@ -82,6 +82,7 @@ def create_active_account(role_slug: str, user_type: str, name: str, email: str,
     from app.models.customers import Customer
     from app.models.suppliers import Supplier
     from app.models.agents import Agent
+    from app.models.affiliates import Affiliate
     from app.auth.security import hash_password
 
     db = SessionLocal()
@@ -108,6 +109,11 @@ def create_active_account(role_slug: str, user_type: str, name: str, email: str,
             db.add(Supplier(user_id=user.id, supplier_name=name, status="inactive", approval_status="PENDING"))
         elif role_slug == "agent-reseller":
             db.add(Agent(user_id=user.id, agent_name=name, status="active", approval_status="NOT_REQUIRED"))
+        elif role_slug == "affiliate":
+            # Left un-approved on purpose, mirroring the supplier fixture -
+            # tests that need an approved+active affiliate call the real
+            # POST /affiliates/{id}/approve endpoint themselves.
+            db.add(Affiliate(user_id=user.id, name=name, email=email, phone=phone, status="inactive", approval_status="pending", commission_percentage=10))
         db.commit()
         db.refresh(user)
         return user

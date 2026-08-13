@@ -253,6 +253,35 @@ def notify_agent_rejected(db: Session, *, agent_id: int, agent_name: str, reject
     db.flush()
 
 
+def notify_affiliate_approved(db: Session, *, affiliate_id: int, affiliate_name: str, user_id: int | None = None):
+    notify_admins(db, notification_type="affiliate_approved", title="Affiliate Approved", message=f"Affiliate '{affiliate_name}' has been approved.", entity_type="affiliate", entity_id=affiliate_id)
+    if user_id:
+        enqueue_notification(db, user_id=user_id, notification_type="affiliate_approved", title="Your affiliate profile is approved!", message=f"Congratulations! Your affiliate profile '{affiliate_name}' has been approved. You can now generate referral links.", entity_type="affiliate", entity_id=affiliate_id)
+        from app.config import settings
+        from app.utils.email_templates import approved_email
+        login_url = f"{settings.FRONTEND_URL}/login"
+        send_templated_email(db, _user_email(db, user_id), "affiliate_approved", {"affiliate_name": affiliate_name, "name": affiliate_name, "login_url": login_url}, "Your Tourvaa affiliate profile is approved", approved_email(affiliate_name, login_url))
+    db.flush()
+
+
+def notify_affiliate_rejected(db: Session, *, affiliate_id: int, affiliate_name: str, rejection_reason: str = "", user_id: int | None = None):
+    if user_id:
+        enqueue_notification(db, user_id=user_id, notification_type="affiliate_rejected", title="Affiliate Application Rejected", message=f"Your affiliate application '{affiliate_name}' was not approved. Reason: {rejection_reason}", entity_type="affiliate", entity_id=affiliate_id)
+    db.flush()
+
+
+def notify_affiliate_activated(db: Session, *, affiliate_id: int, affiliate_name: str, user_id: int | None = None):
+    if user_id:
+        enqueue_notification(db, user_id=user_id, notification_type="affiliate_activated", title="Affiliate Account Activated", message=f"Your affiliate account '{affiliate_name}' is active again. Link generation and commissions are unblocked.", entity_type="affiliate", entity_id=affiliate_id)
+    db.flush()
+
+
+def notify_affiliate_suspended(db: Session, *, affiliate_id: int, affiliate_name: str, reason: str = "", user_id: int | None = None):
+    if user_id:
+        enqueue_notification(db, user_id=user_id, notification_type="affiliate_suspended", title="Affiliate Account Suspended", message=f"Your affiliate account '{affiliate_name}' has been suspended. Reason: {reason}", entity_type="affiliate", entity_id=affiliate_id)
+    db.flush()
+
+
 # ---------------------------------------------------------------------------
 # Booking events
 # ---------------------------------------------------------------------------

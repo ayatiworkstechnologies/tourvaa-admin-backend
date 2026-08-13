@@ -50,7 +50,17 @@ from app.models.website_cms import (
 from app.models.cancellations import CancellationRequest, RefundRule
 from app.models.reviews import TourReview
 from app.models.booking_calendar import BookingCalendarEvent
-from app.models.affiliate_tracking import AffiliateLink, AffiliateClick, AffiliateConversion, AffiliatePayout
+from app.models.affiliate_tracking import (
+    AffiliateLink,
+    AffiliateClick,
+    AffiliateAttribution,
+    AffiliateCommissionRule,
+    AffiliateConversion,
+    AffiliatePayoutMethod,
+    AffiliatePayout,
+    AffiliatePayoutItem,
+    AffiliateWalletTransaction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +154,11 @@ def schema_is_ready():
         "affiliate_clicks",
         "affiliate_conversions",
         "affiliate_payouts",
+        "affiliate_attributions",
+        "affiliate_commission_rules",
+        "affiliate_payout_methods",
+        "affiliate_payout_items",
+        "affiliate_wallet_transactions",
         "user_status_history",
     }
 
@@ -157,6 +172,10 @@ def schema_is_ready():
         "suppliers": {"commission_request_type", "commission_request_value", "commission_request_status", "commission_requested_at", "commission_reviewed_at"},
         "supplier_payouts": {"paid_by"},
         "supplier_vehicles": {"vehicle_type", "registration_number"},
+        "affiliate_links": {"link_type", "custom_alias", "status", "attribution_window_days"},
+        "affiliate_conversions": {"commission_rule_id", "eligible_amount", "final_commission"},
+        "affiliate_payouts": {"payout_method_id", "requested_at", "rejection_reason"},
+        "bookings": {"affiliate_attribution_id"},
         "users": {
             "approval_status",
             "reset_password_token",
@@ -312,6 +331,9 @@ private_docs_root.joinpath("invoices").mkdir(parents=True, exist_ok=True)
 private_docs_root.joinpath("itineraries").mkdir(parents=True, exist_ok=True)
 
 register_api_routes(app)
+
+from app.routers.affiliate_redirect import router as affiliate_redirect_router
+app.include_router(affiliate_redirect_router)
 
 @app.get("/")
 def home():

@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.affiliates import AffiliateApiLinkRequest, AffiliateCreate, AffiliateUpdate
-from app.services.affiliates import approve_affiliate, create_affiliate, get_affiliate, list_affiliates, reject_affiliate, serialize_affiliate, update_affiliate, update_affiliate_api_link
+from app.schemas.affiliates import AffiliateApiLinkRequest, AffiliateCreate, AffiliateSuspendRequest, AffiliateUpdate
+from app.services.affiliates import activate_affiliate, approve_affiliate, create_affiliate, get_affiliate, list_affiliates, reject_affiliate, serialize_affiliate, suspend_affiliate, update_affiliate, update_affiliate_api_link
 from app.auth.permissions import require_any_permission
 from app.utils.pagination import pagination_params
 from app.utils.operations import RejectRequest
@@ -49,6 +49,16 @@ def approve(affiliate_id: int, request: Request, db: Session = Depends(get_db), 
 @router.patch("/{affiliate_id}/reject")
 def reject(affiliate_id: int, data: RejectRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.reject"))):
     return {"status": "success", "message": "Affiliate rejected successfully", "data": reject_affiliate(db, affiliate_id, data, current_user, request)}
+
+
+@router.post("/{affiliate_id}/activate")
+def activate(affiliate_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.activate"))):
+    return {"status": "success", "message": "Affiliate activated successfully", "data": activate_affiliate(db, affiliate_id, current_user, request)}
+
+
+@router.post("/{affiliate_id}/suspend")
+def suspend(affiliate_id: int, data: AffiliateSuspendRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.suspend"))):
+    return {"status": "success", "message": "Affiliate suspended successfully", "data": suspend_affiliate(db, affiliate_id, data, current_user, request)}
 
 
 @router.patch("/{affiliate_id}/api-link")

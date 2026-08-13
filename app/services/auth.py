@@ -25,6 +25,7 @@ from app.models.permissions import Permission, RolePermission
 from app.models.customers import Customer
 from app.models.suppliers import Supplier
 from app.models.agents import Agent
+from app.models.affiliates import Affiliate
 from app.models.sessions import LoginHistory
 from app.services.sessions import create_session
 from app.utils.media import existing_storage_path
@@ -107,6 +108,7 @@ def get_auth_user_payload(db: Session, user: User):
     supplier_id = None
     supplier_approval_status = "NOT_REQUIRED"
     agent_id = None
+    affiliate_id = None
     role_slug = user.role.slug if user.role else ""
     if "customer" in role_slug:
         customer = db.query(Customer).filter(Customer.user_id == user.id).first()
@@ -123,6 +125,10 @@ def get_auth_user_payload(db: Session, user: User):
         agent = db.query(Agent).filter(Agent.user_id == user.id).first()
         if agent:
             agent_id = agent.id
+    elif "affiliate" in role_slug.lower():
+        affiliate = db.query(Affiliate).filter(Affiliate.user_id == user.id).first()
+        if affiliate:
+            affiliate_id = affiliate.id
 
     return {
         "id": user.id,
@@ -148,6 +154,7 @@ def get_auth_user_payload(db: Session, user: User):
         "supplier_id": supplier_id,
         "supplier_approval_status": supplier_approval_status,
         "agent_id": agent_id,
+        "affiliate_id": affiliate_id,
         "dashboard_route": {
             "customer": "/customer/dashboard",
             "agent-reseller": "/agent/dashboard",
@@ -175,6 +182,7 @@ def build_portal_login_url(user: User):
         "customer": "traveller",
         "agent-reseller": "agent",
         "supplier": "supplier",
+        "affiliate": "affiliate",
     }.get(role_slug)
     if role_param:
         return f"{settings.FRONTEND_URL}/login?role={role_param}"
@@ -187,6 +195,7 @@ def portal_display_name(user: User):
         "customer": "traveller",
         "agent-reseller": "agent",
         "supplier": "supplier",
+        "affiliate": "affiliate",
     }.get(role_slug, "admin")
 
 
@@ -216,7 +225,7 @@ def register_unified_user(db: Session, data):
     if db.query(User).filter(or_(User.mobile_number == phone, User.phone == phone)).first():
         raise HTTPException(status_code=400, detail="Mobile number already exists")
 
-    role_slug = {"CUSTOMER": "customer", "AGENT": "agent-reseller", "SUPPLIER": "supplier"}[data.account_type]
+    role_slug = {"CUSTOMER": "customer", "AGENT": "agent-reseller", "SUPPLIER": "supplier", "AFFILIATE": "affiliate"}[data.account_type]
     role = db.query(Role).filter(Role.slug == role_slug, Role.is_active == True).first()
     if not role:
         raise HTTPException(status_code=400, detail="Selected account type is not available")
@@ -234,7 +243,7 @@ def register_unified_user(db: Session, data):
         role_id=role.id,
         user_type=data.account_type,
         is_active=False,
-        approval_status="PENDING" if data.account_type == "SUPPLIER" else "NOT_REQUIRED",
+        approval_status="PENDING" if data.account_type in {"SUPPLIER", "AFFILIATE"} else "NOT_REQUIRED",
         email_verified=False,
         admin_verified=False,
         password_created_at=None,
@@ -255,6 +264,8 @@ def register_unified_user(db: Session, data):
         db.add(Customer(user_id=user.id, first_name=user.name, last_name="", full_name=user.name, email=email, phone=phone, status="inactive", email_verified=False))
     elif role_slug == "supplier":
         db.add(Supplier(user_id=user.id, supplier_name=user.name, status="inactive", approval_status="PENDING"))
+    elif role_slug == "affiliate":
+        db.add(Affiliate(user_id=user.id, name=user.name, email=email, phone=phone, status="inactive", approval_status="pending"))
     else:
         db.add(Agent(user_id=user.id, agent_name=user.name, status="inactive", approval_status="pending"))
 
@@ -297,7 +308,14 @@ def _registration_token_user(db: Session, token: str):
     user = db.query(User).filter(User.email_verification_token == hash_reset_token(token)).first()
     if not user or not user.email_verification_expires_at:
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
-    if user.email_verification_expires_at < utcnow():
+    # MySQL strips tzinfo on round-trip even though the column is declared
+    # DateTime(timezone=True), so a freshly-queried value here is naive while
+    # utcnow() is tz-aware - compare on equal footing rather than crashing.
+    now = utcnow()
+    expires_at = user.email_verification_expires_at
+    if expires_at.tzinfo is None:
+        now = now.replace(tzinfo=None)
+    if expires_at < now:
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
     if user.account_status not in {"PENDING_EMAIL_VERIFICATION", "PENDING_PASSWORD_CREATION"}:
         raise HTTPException(status_code=400, detail="Verification link has already been used")
@@ -316,7 +334,7 @@ def complete_registration(db: Session, token: str, password: str):
     user.email_verification_expires_at = None
     user.account_status = "ACTIVE"
     user.is_active = True
-    user.approval_status = "PENDING" if user.user_type == "SUPPLIER" else "NOT_REQUIRED"
+    user.approval_status = "PENDING" if user.user_type in {"SUPPLIER", "AFFILIATE"} else "NOT_REQUIRED"
 
     customer = db.query(Customer).filter(Customer.user_id == user.id).first()
     if customer:
@@ -336,6 +354,13 @@ def complete_registration(db: Session, token: str, password: str):
         supplier.approval_status = "PENDING"
         supplier.approved_at = None
         supplier.rejection_reason = None
+
+    affiliate = db.query(Affiliate).filter(Affiliate.user_id == user.id).first()
+    if affiliate:
+        affiliate.status = "active"
+        affiliate.approval_status = "pending"
+        affiliate.approved_at = None
+        affiliate.rejection_reason = None
 
     db.add(UserStatusHistory(
         user_id=user.id,
@@ -367,6 +392,9 @@ def complete_registration(db: Session, token: str, password: str):
             supplier_name=supplier.supplier_name,
             user_id=user.id,
         )
+    if affiliate:
+        from app.services.notifications import notify_admins
+        notify_admins(db, notification_type="affiliate_application", title="New Affiliate Application", message=f"{affiliate.name} applied to become an affiliate.", entity_type="affiliate", entity_id=affiliate.id)
     db.commit()
     try:
         login_url = build_portal_login_url(user)
@@ -471,7 +499,7 @@ def login_user(db: Session, data, request=None):
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"} and not user.email_verified_at:
+    if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER", "AFFILIATE"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Email verification is required before login")
 
     if user.two_factor_enabled:
@@ -508,7 +536,7 @@ def _finalize_login(db: Session, user: User, data, request=None):
         }, portal=portal)
         _record_login_history(db, data=data, email=email, status="restricted", user=user, failure_reason=user.account_status, request=request)
         db.commit()
-        if user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"}:
+        if user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER", "AFFILIATE"}:
             raise HTTPException(
                 status_code=403,
                 detail=f"Account is {user.account_status.lower().replace('_', ' ')}",
@@ -905,7 +933,7 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web"):
         logger.info("Password reset requested for unknown email: %s", normalized_email)
         return False
 
-    if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER"} and not user.email_verified_at:
+    if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER", "AFFILIATE"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Email verification is required before password reset")
 
     if user.account_status != "ACTIVE" or not user.is_active:

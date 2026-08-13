@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.chatbot import ChatFAQ, ChatFeedback, ChatMessage, ChatSession
 from app.schemas.chatbot import FAQCreate, FAQUpdate
-from app.models.cms import Tour
+from app.models.cms import Country, Tour
+from app.models.website_cms import CustomerReview, PopularDestination, PopularTour
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,90 @@ def _tour_fallback(db: Session, user_message: str) -> str | None:
     return "\n".join(lines)
 
 
+def _top_tours(db: Session, limit: int = 5) -> list[Tour]:
+    """Prefer the admin-curated CMS "popular tours" list (same one the
+    website homepage uses); fall back to featured/latest published tours
+    when nothing has been curated yet."""
+    curated = (
+        db.query(Tour)
+        .join(PopularTour, PopularTour.tour_id == Tour.id)
+        .filter(PopularTour.is_active == True, Tour.status == "published")
+        .order_by(PopularTour.sort_order, PopularTour.id)
+        .limit(limit)
+        .all()
+    )
+    if curated:
+        return curated
+
+    tours = (
+        db.query(Tour)
+        .filter(Tour.status == "published", Tour.featured == True)
+        .order_by(Tour.id.desc())
+        .limit(limit)
+        .all()
+    )
+    if not tours:
+        tours = db.query(Tour).filter(Tour.status == "published").order_by(Tour.id.desc()).limit(limit).all()
+    return tours
+
+
+def _top_countries(db: Session, limit: int = 8) -> list[str]:
+    """Prefer the admin-curated CMS "popular destinations" list; fall back
+    to the countries with the most published tours."""
+    curated = (
+        db.query(PopularDestination.title)
+        .filter(PopularDestination.is_active == True)
+        .order_by(PopularDestination.sort_order, PopularDestination.id)
+        .limit(limit)
+        .all()
+    )
+    if curated:
+        return [title for (title,) in curated]
+
+    rows = (
+        db.query(Country.country_name, func.count(Tour.id).label("tour_count"))
+        .join(Tour, Tour.country_id == Country.id)
+        .filter(Tour.status == "published")
+        .group_by(Country.country_name)
+        .order_by(func.count(Tour.id).desc())
+        .limit(limit)
+        .all()
+    )
+    return [name for name, _count in rows]
+
+
+def _why_tourvaa_text(db: Session) -> str:
+    """Build the "why Tourvaa" answer from real review data in the DB
+    instead of a static blurb, so it stays honest as reviews come in."""
+    reviews = (
+        db.query(CustomerReview)
+        .filter(CustomerReview.is_active == True)
+        .order_by(CustomerReview.rating.desc(), CustomerReview.sort_order)
+        .limit(3)
+        .all()
+    )
+
+    base = (
+        "Why Tourvaa? We handpick and vet every tour, offer transparent pricing with no hidden fees, "
+        "flexible booking with instant confirmation, secure payments, and dedicated support before, during, "
+        "and after your trip."
+    )
+
+    if reviews:
+        all_ratings = [r[0] for r in db.query(CustomerReview.rating).filter(CustomerReview.is_active == True).all()]
+        avg_rating = sum(all_ratings) / len(all_ratings)
+        base += f" Rated {avg_rating:.1f}/5 by {len(all_ratings)} travellers, including:\n"
+        for r in reviews:
+            quote = r.review_text.strip()
+            if len(quote) > 140:
+                quote = quote[:137].rstrip() + "..."
+            base += f"\n- \"{quote}\" - {r.reviewer_name}" + (f", {r.tour_name}" if r.tour_name else "")
+        base += "\n"
+
+    base += "\nTell me a destination or travel date and I can show you tours to get started!"
+    return base
+
+
 SHOW_TOURS_TOOL = {
     "name": "show_tours",
     "description": (
@@ -312,6 +397,25 @@ def _rule_based_reply(db: Session, user_message: str, faqs: list[ChatFAQ]) -> tu
         return "Cancellation and refund rules can vary by tour. Open the tour page or your customer dashboard to review the booking, and contact support if travel is close.", None, None
     if "payment" in msg or "pay" in msg:
         return "Payments and pending balances are shown in your customer dashboard. If a payment is pending, our team can confirm payment options and next steps.", None, None
+
+    if "why tourvaa" in msg or "benefit" in msg or "advantage" in msg or "why choose" in msg or "why book with" in msg:
+        return _why_tourvaa_text(db), None, None
+
+    if "review" in msg or "testimonial" in msg or "rating" in msg:
+        return _why_tourvaa_text(db), None, None
+
+    if "top" in msg or "best" in msg or "popular" in msg:
+        if "countr" in msg or "destination" in msg:
+            countries = _top_countries(db)
+            if countries:
+                reply = "Our most popular destinations are:\n" + "\n".join(f"- {c}" for c in countries)
+                reply += "\n\nAsk me about any of these and I can show matching tours."
+                return reply, None, None
+        if "tour" in msg or "package" in msg or "trip" in msg:
+            tours = _top_tours(db)
+            if tours:
+                reply = "Here are some of our top Tourvaa tours. Tap a tour to start booking:"
+                return reply, "show_tours", {"tours": _tour_cards(tours)}
 
     if any(word in msg for word in ["tour", "trip", "book", "destination", "package", "show", "find", "search"]):
         reply, action_type, action_data = _tour_action(db, user_message)

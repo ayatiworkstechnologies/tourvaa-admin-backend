@@ -717,6 +717,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     # an offline referral.
     resolved_affiliate_id = None
     resolved_affiliate_ref_code = None
+    resolved_attribution = None
     if data.affiliate_ref_code:
         from app.services.affiliate_tracking import resolve_affiliate_link
         link = resolve_affiliate_link(db, data.affiliate_ref_code)
@@ -725,6 +726,20 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
             resolved_affiliate_ref_code = link.ref_code
     elif data.affiliate_id and _user_role(actor) == "admin":
         resolved_affiliate_id = data.affiliate_id
+    else:
+        # Fall back to the server-tracked attribution cookie set by
+        # GET /r/{code} - covers the common case of "clicked a link, booked
+        # later without the app re-sending ref_code". Never allowed to break
+        # booking creation: any failure here is swallowed and the booking
+        # just proceeds with no affiliate attached.
+        try:
+            from app.services.affiliate_tracking import resolve_attribution_from_request
+            resolved_attribution = resolve_attribution_from_request(db, request)
+            if resolved_attribution:
+                resolved_affiliate_id = resolved_attribution.affiliate_id
+                resolved_affiliate_ref_code = resolved_attribution.link.ref_code if resolved_attribution.link else None
+        except Exception:
+            logger.warning("Affiliate attribution lookup failed for booking creation", exc_info=True)
 
     tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab = _price_booking(db, data, lock_calendar=True, consume_discount=True)
     _validate_customer_travellers(data, adults, children)
@@ -743,7 +758,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     elif data.booking_source == "agent" and data.agent_payment_method == "bank_transfer":
         payment_status = "bank_transfer_pending"
     booking = Booking(
-        customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
+        customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, affiliate_attribution_id=resolved_attribution.id if resolved_attribution else None, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
         no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, no_of_rooms=data.no_of_rooms, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
         total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
@@ -767,6 +782,9 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     db.add(booking)
     db.flush()
     booking.booking_code = _booking_code(booking.id)
+    if resolved_attribution:
+        resolved_attribution.booking_id = booking.id
+        resolved_attribution.status = "consumed"
     if calendar:
         calendar.booked_seats += adults + children
     for t in data.travellers:

@@ -144,6 +144,46 @@ def reject_affiliate(db: Session, affiliate_id: int, data: RejectRequest, actor:
     return reject_item(db, get_affiliate(db, affiliate_id), data, actor, "affiliate", serialize_affiliate, request)
 
 
+def activate_affiliate(db: Session, affiliate_id: int, actor: User, request: Request | None = None):
+    """Re-enable an already-approved affiliate's operational access (undo a
+    prior suspend) without re-running the full approval review."""
+    item = get_affiliate(db, affiliate_id)
+    if (item.approval_status or "").lower() != "approved":
+        raise HTTPException(status_code=400, detail="Only an approved affiliate can be activated")
+    old = serialize_affiliate(item)
+    item.status = "active"
+    log_audit(db, actor=actor, action="activate_affiliate", entity_type="affiliate", entity_id=item.id, old_values=old, new_values=serialize_affiliate(item), request=request)
+    db.commit()
+    db.refresh(item)
+    try:
+        from app.utils.notification_triggers import notify_affiliate_activated
+        notify_affiliate_activated(db, affiliate_id=item.id, affiliate_name=item.name, user_id=item.user_id)
+        db.commit()
+    except Exception:
+        pass
+    return serialize_affiliate(item)
+
+
+def suspend_affiliate(db: Session, affiliate_id: int, data, actor: User, request: Request | None = None):
+    """Block link generation/commission for an affiliate without rejecting
+    their application - status flips to inactive; approval_status is left
+    untouched so activate_affiliate can restore access later."""
+    item = get_affiliate(db, affiliate_id)
+    old = serialize_affiliate(item)
+    item.status = "inactive"
+    item.admin_comments = data.reason
+    log_audit(db, actor=actor, action="suspend_affiliate", entity_type="affiliate", entity_id=item.id, old_values=old, new_values=serialize_affiliate(item), request=request)
+    db.commit()
+    db.refresh(item)
+    try:
+        from app.utils.notification_triggers import notify_affiliate_suspended
+        notify_affiliate_suspended(db, affiliate_id=item.id, affiliate_name=item.name, reason=data.reason, user_id=item.user_id)
+        db.commit()
+    except Exception:
+        pass
+    return serialize_affiliate(item)
+
+
 def update_affiliate_api_link(db: Session, affiliate_id: int, data: AffiliateApiLinkRequest, actor: User, request: Request | None = None):
     item = get_affiliate(db, affiliate_id)
     old = serialize_affiliate(item)

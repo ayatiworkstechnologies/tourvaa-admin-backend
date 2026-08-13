@@ -84,7 +84,7 @@ class UnifiedRegisterSchema(BaseModel):
     @classmethod
     def validate_account_type(cls, value: str):
         value = value.strip().upper()
-        if value not in {"CUSTOMER", "AGENT", "SUPPLIER"}:
+        if value not in {"CUSTOMER", "AGENT", "SUPPLIER", "AFFILIATE"}:
             raise ValueError("Choose a valid account type")
         return value
 

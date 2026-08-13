@@ -3,8 +3,11 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.services import affiliate_tracking as service
-from app.schemas.affiliate_tracking import AffiliateLinkCreate, AffiliatePayoutCreate
-from app.auth.permissions import require_any_permission
+from app.services import messaging as messaging_service
+from app.schemas.affiliate_tracking import AffiliateLinkCreate, AffiliateLinkUpdate, AffiliatePayoutCreate
+from app.schemas.bookings import BookingCommunicationCreate
+from app.auth.permissions import require_any_permission, get_current_user
+from app.models.users import User
 from app.utils.pagination import pagination_params
 
 router = APIRouter(tags=["Affiliate Tracking"])
@@ -13,7 +16,8 @@ router = APIRouter(tags=["Affiliate Tracking"])
 @router.post("/affiliates/{affiliate_id}/links")
 def create_link(affiliate_id: int, data: AffiliateLinkCreate, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
     service.ensure_affiliate_access(db, affiliate_id, current_user)
-    result = service.create_link(db, affiliate_id=affiliate_id, data=data, actor=current_user)
+    is_admin = not service.is_affiliate_user(current_user)
+    result = service.create_link(db, affiliate_id=affiliate_id, data=data, actor=current_user, is_admin=is_admin)
     return {"status": "success", "data": result}
 
 
@@ -21,6 +25,27 @@ def create_link(affiliate_id: int, data: AffiliateLinkCreate, db: Session = Depe
 def list_links(affiliate_id: int, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
     service.ensure_affiliate_access(db, affiliate_id, current_user)
     return {"status": "success", "data": service.list_links(db, affiliate_id=affiliate_id)}
+
+
+@router.get("/affiliates/{affiliate_id}/links/{link_id}")
+def link_detail(affiliate_id: int, link_id: int, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliates.view", "view-affiliates"))):
+    service.ensure_affiliate_access(db, affiliate_id, current_user)
+    link = service.get_link(db, link_id)
+    if link.affiliate_id != affiliate_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Affiliate link not found")
+    return {"status": "success", "data": service._s_link(link)}
+
+
+@router.put("/affiliates/{affiliate_id}/links/{link_id}")
+def update_own_link(affiliate_id: int, link_id: int, data: AffiliateLinkUpdate, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliate_links.update"))):
+    service.ensure_affiliate_access(db, affiliate_id, current_user)
+    link = service.get_link(db, link_id)
+    if link.affiliate_id != affiliate_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Affiliate link not found")
+    result = service.update_link(db, link_id, data, current_user, is_admin=False)
+    return {"status": "success", "message": "Link updated", "data": result}
 
 
 # Public click-tracking endpoint (no auth needed)
@@ -69,3 +94,17 @@ def create_payout(data: AffiliatePayoutCreate, db: Session = Depends(get_db), cu
     # be able to create a payout for any affiliate_id, including their own.
     result = service.create_payout(db, data=data, actor=current_user)
     return {"status": "success", "message": "Affiliate payout created", "data": result}
+
+
+# Affiliate <-> admin support messaging - mirrors the existing
+# supplier/agent/customer "own conversation" endpoints in bookings.py /
+# customers_portal.py, extended to the "affiliate" participant type.
+@router.get("/affiliate/messages")
+async def affiliate_messages(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", "data": messaging_service.get_own_conversation_thread(db, current_user)}
+
+
+@router.post("/affiliate/messages")
+async def send_affiliate_message(data: BookingCommunicationCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    message = await messaging_service.send_message_as_participant(db, current_user, data.message)
+    return {"status": "success", "message": "Message sent successfully", "data": message}

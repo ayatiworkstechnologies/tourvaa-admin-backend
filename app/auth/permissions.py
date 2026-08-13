@@ -10,6 +10,7 @@ from app.models.sessions import UserSession
 from app.models.users import User, UserRole
 from app.models.suppliers import Supplier
 from app.models.agents import Agent
+from app.models.affiliates import Affiliate
 
 bearer_scheme = HTTPBearer(auto_error=False)
 ACCESS_COOKIE_NAME = "tourvaa_access"
@@ -24,6 +25,12 @@ AGENT_APPROVAL_ERROR = {
     "success": False,
     "code": "AGENT_APPROVAL_REQUIRED",
     "message": "Your agent account must be approved before using this feature.",
+}
+
+AFFILIATE_APPROVAL_ERROR = {
+    "success": False,
+    "code": "AFFILIATE_APPROVAL_REQUIRED",
+    "message": "Your affiliate account must be approved and active before using this feature.",
 }
 
 PENDING_SUPPLIER_SAFE_API_PREFIXES = (
@@ -232,6 +239,36 @@ def ensure_approved_agent(db: Session, user: User) -> Agent:
     if not agent or (agent.approval_status or "").lower() != "approved":
         raise HTTPException(status_code=403, detail=AGENT_APPROVAL_ERROR)
     return agent
+
+
+def _is_affiliate(user: User) -> bool:
+    return user.user_type == "AFFILIATE" or "affiliate" in ((user.role.slug if user.role else "") or "").lower()
+
+
+def ensure_approved_affiliate(db: Session, user: User) -> Affiliate:
+    """Block affiliate operational access (link generation, payout requests)
+    unless the affiliate profile is approved AND currently active - mirrors
+    ensure_approved_supplier/ensure_approved_agent. Affiliate.status uses
+    active/inactive (suspend sets it to "inactive"), separately from
+    approval_status (pending/approved/rejected), so both are checked: a
+    suspended-but-previously-approved affiliate must still be blocked.
+    """
+    if not _is_affiliate(user):
+        raise HTTPException(status_code=403, detail="This endpoint requires an affiliate account")
+    if user.account_status != "ACTIVE" or not user.is_active:
+        raise HTTPException(status_code=403, detail=AFFILIATE_APPROVAL_ERROR)
+    affiliate = db.query(Affiliate).filter(Affiliate.user_id == user.id).first()
+    if not affiliate or (affiliate.approval_status or "").lower() != "approved" or (affiliate.status or "").lower() != "active":
+        raise HTTPException(status_code=403, detail=AFFILIATE_APPROVAL_ERROR)
+    return affiliate
+
+
+def require_approved_affiliate(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Affiliate:
+    """Authenticate and return the approved+active affiliate profile for operational APIs."""
+    return ensure_approved_affiliate(db, current_user)
 
 
 def get_token_user_including_inactive(
