@@ -1,9 +1,9 @@
 """
 One-time script to seed Stripe keys into the payment_settings table.
-Run from the backend/ directory:  python seed_stripe.py
+Run from the backend/ directory:  python scripts/seed_stripe.py
 """
 import os, sys
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal
 from app.models.settings import PaymentSetting

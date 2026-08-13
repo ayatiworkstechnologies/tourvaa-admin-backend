@@ -1,6 +1,8 @@
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -9,8 +11,9 @@ from app.models.customers import Customer
 from app.utils.pagination import pagination_params
 from app.utils.ratelimit import check_rate_limit
 from app.schemas.chatbot import (
+    ChatFeedbackCreate,
+    ChatFeedbackResponse,
     ChatMessageRequest,
-    ChatMessageResponse,
     FAQCreate,
     FAQResponse,
     FAQUpdate,
@@ -46,16 +49,46 @@ def _resolve_customer_id(request: Request, db: Session) -> int | None:
     return customer.id if customer else None
 
 
-@router.post("/chat", response_model=ChatMessageResponse)
+@router.post("/chat")
 def chat(payload: ChatMessageRequest, request: Request, db: Session = Depends(get_db)):
     check_rate_limit(request, "chatbot-chat", max_calls=20, window_seconds=60)
     if not payload.message or not payload.message.strip():
         raise HTTPException(status_code=422, detail="Message cannot be empty")
     customer_id = _resolve_customer_id(request, db)
-    reply, session_key, action_type, action_data = service.get_chat_reply(
-        db, payload.session_key, payload.message.strip(), customer_id=customer_id
+
+    def event_stream():
+        for event in service.stream_chat_reply(
+            db, payload.session_key, payload.message.strip(),
+            customer_id=customer_id, page_url=payload.page_url,
+        ):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-    return ChatMessageResponse(reply=reply, session_key=session_key, action_type=action_type, action_data=action_data)
+
+
+@router.get("/health")
+def chatbot_health(db: Session = Depends(get_db)):
+    from app.config import settings
+    from app.models.chatbot import ChatEmbedding
+
+    return {
+        "llm_configured": bool(settings.ANTHROPIC_API_KEY),
+        "llm_model": settings.CHATBOT_LLM_MODEL if settings.ANTHROPIC_API_KEY else None,
+        "rag_indexed": db.query(ChatEmbedding).first() is not None,
+    }
+
+
+@router.post("/feedback", response_model=ChatFeedbackResponse)
+def submit_chat_feedback(payload: ChatFeedbackCreate, request: Request, db: Session = Depends(get_db)):
+    check_rate_limit(request, "chatbot-feedback", max_calls=30, window_seconds=60)
+    feedback = service.submit_feedback(db, payload.message_id, payload.rating, payload.comment)
+    if not feedback:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return feedback
 
 
 @router.post("/admin/reindex")
@@ -78,10 +111,17 @@ def public_faqs(db: Session = Depends(get_db)):
 @router.get("/admin/faqs")
 def admin_list_faqs(
     params: dict = Depends(pagination_params),
+    is_public: bool | None = None,
     db: Session = Depends(get_db),
     _: object = Depends(require_any_permission("chatbot.view", "view-chatbot")),
 ):
-    return {"status": "success", **service.list_faqs_paginated(db, page=params["page"], limit=params["limit"], search=params["search"], include_inactive=True)}
+    return {
+        "status": "success",
+        **service.list_faqs_paginated(
+            db, page=params["page"], limit=params["limit"], search=params["search"],
+            include_inactive=True, is_public=is_public,
+        ),
+    }
 
 
 @router.post("/admin/faqs", response_model=FAQResponse, status_code=201)

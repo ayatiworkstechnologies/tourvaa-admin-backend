@@ -1,23 +1,18 @@
 import logging
+import re
 import secrets
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.chatbot import ChatEmbedding, ChatFAQ, ChatMessage, ChatSession
+from app.models.chatbot import ChatFAQ, ChatFeedback, ChatMessage, ChatSession
 from app.schemas.chatbot import FAQCreate, FAQUpdate
 from app.models.cms import Tour
-from app.services import rag
 
 logger = logging.getLogger(__name__)
 
 HISTORY_WINDOW = 10
-
-# RAG index is built lazily on first use per worker process, then kept in
-# sync incrementally by the FAQ CRUD hooks below and the admin reindex
-# endpoint (POST /chatbot/admin/reindex) after bulk tour changes.
-_rag_bootstrap_done = False
 
 BOOKING_INFO_PHRASES = (
     "my booking", "my bookings", "my trip", "my order", "my reservation",
@@ -34,21 +29,6 @@ def _keyword_score(message: str, *texts: str | None) -> int:
     words = {w for w in _normalise(message).replace("?", "").replace(",", "").split() if len(w) > 2}
     haystack = _normalise(" ".join(t or "" for t in texts))
     return sum(1 for word in words if word in haystack)
-
-
-def _ensure_rag_indexed(db: Session) -> None:
-    """Bootstrap the vector index once per process if it has never been built."""
-    global _rag_bootstrap_done
-    if _rag_bootstrap_done:
-        return
-    try:
-        if db.query(ChatEmbedding).count() == 0:
-            logger.info("chat_embeddings is empty; running initial RAG index build")
-            rag.reindex_all(db)
-    except Exception:
-        logger.exception("RAG bootstrap indexing failed; continuing with keyword fallback")
-    finally:
-        _rag_bootstrap_done = True
 
 
 def _wants_booking_info(user_message: str) -> bool:
@@ -81,7 +61,34 @@ def _get_customer_bookings_context(db: Session, customer_id: int) -> str:
     return "\n".join(lines)
 
 
-def _build_system_prompt(faq_snippets: list[str], tour_snippets: list[str], booking_context: str | None) -> str:
+_TOUR_PAGE_URL_RE = re.compile(r"/tours/(\d+)")
+
+
+def _page_context(db: Session, page_url: str | None) -> str | None:
+    """Best-effort: if the visitor is currently on a tour detail page, surface
+    that tour so the assistant can answer page-specific questions ("is
+    breakfast included?") without the customer having to name the tour."""
+    if not page_url:
+        return None
+    match = _TOUR_PAGE_URL_RE.search(page_url)
+    if not match:
+        return None
+    tour = db.query(Tour).filter(Tour.id == int(match.group(1)), Tour.status == "published").first()
+    if not tour:
+        return None
+    price = f"{tour.currency} {tour.price_start_per_person:,.0f}" if tour.price_start_per_person else "price on request"
+    return (
+        f"{tour.title} ({tour.number_of_days} day(s), starting from {price}). "
+        f"{tour.short_description or ''}".strip()
+    )
+
+
+def _build_system_prompt(
+    faq_snippets: list[str],
+    tour_snippets: list[str],
+    booking_context: str | None,
+    page_context: str | None = None,
+) -> str:
     base = (
         "You are a friendly and knowledgeable travel assistant for Tourvaa, "
         "a premium tour and travel booking platform. "
@@ -89,6 +96,12 @@ def _build_system_prompt(faq_snippets: list[str], tour_snippets: list[str], book
         "cover the question, answer briefly from general travel knowledge and encourage the customer to "
         "contact the Tourvaa support team for anything account-specific. Be concise, warm, and helpful.\n\n"
     )
+    if page_context:
+        base += (
+            "The customer is currently viewing this tour's page. If their question is ambiguous "
+            "(e.g. \"is breakfast included\", \"how many days\"), assume it refers to this tour:\n\n"
+            + page_context + "\n\n"
+        )
     if faq_snippets:
         base += "Relevant FAQs (retrieved for this question):\n\n" + "\n\n".join(faq_snippets) + "\n\n"
     if tour_snippets:
@@ -116,18 +129,6 @@ def _faq_fallback(user_message: str, faqs: list[ChatFAQ]) -> str | None:
 
 
 def _search_tours(db: Session, user_message: str) -> list[Tour]:
-    # Semantic search first (true RAG); fall back to keyword ILIKE matching
-    # when the index is unavailable or the query has no strong matches, so
-    # tour lookup never regresses even if embedding indexing has an issue.
-    matches = rag.semantic_search(db, user_message, ["tour"], top_k=4)
-    if matches:
-        ids = [m["source_id"] for m in matches]
-        found = db.query(Tour).filter(Tour.id.in_(ids), Tour.status == "published").all()
-        by_id = {t.id: t for t in found}
-        ordered = [by_id[i] for i in ids if i in by_id]
-        if ordered:
-            return ordered
-
     msg = _normalise(user_message)
     words = [word for word in msg.split() if len(word) > 2]
     query = db.query(Tour).filter(Tour.status == "published")
@@ -148,6 +149,22 @@ def _search_tours(db: Session, user_message: str) -> list[Tour]:
     return tours
 
 
+def _tour_cards(tours: list[Tour]) -> list[dict]:
+    cards = []
+    for t in tours:
+        price = float(t.price_start_per_person) if t.price_start_per_person else None
+        cards.append({
+            "id": t.id,
+            "title": t.title,
+            "duration_days": t.number_of_days,
+            "price": price,
+            "currency": t.currency or "USD",
+            "cover_image": t.banner_image or None,
+            "slug": t.slug or str(t.id),
+        })
+    return cards
+
+
 def _tour_action(db: Session, user_message: str) -> tuple[str, str | None, dict | None]:
     msg = _normalise(user_message)
     wants_tour = any(word in msg for word in ["tour", "trip", "dubai", "price", "cost", "book", "destination", "package", "days"])
@@ -158,21 +175,8 @@ def _tour_action(db: Session, user_message: str) -> tuple[str, str | None, dict 
     if not tours:
         return "", None, None
 
-    tour_cards = []
-    for t in tours:
-        price = float(t.price_start_per_person) if t.price_start_per_person else None
-        tour_cards.append({
-            "id": t.id,
-            "title": t.title,
-            "duration_days": t.number_of_days,
-            "price": price,
-            "currency": t.currency or "USD",
-            "cover_image": t.banner_image or None,
-            "slug": t.slug or str(t.id),
-        })
-
     reply = "Here are some Tourvaa tours that match your request. Tap a tour to start booking:"
-    return reply, "show_tours", {"tours": tour_cards}
+    return reply, "show_tours", {"tours": _tour_cards(tours)}
 
 
 def _tour_fallback(db: Session, user_message: str) -> str | None:
@@ -193,6 +197,27 @@ def _tour_fallback(db: Session, user_message: str) -> str | None:
     lines.append("Share your destination, travel date, and traveller count if you want a narrower suggestion.")
     return "\n".join(lines)
 
+
+SHOW_TOURS_TOOL = {
+    "name": "show_tours",
+    "description": (
+        "Search Tourvaa's published tours and show the matching tours as cards in the chat UI. "
+        "Call this whenever the customer is asking about tours, destinations, prices, packages, or wants "
+        "to browse or start booking something -- even if the request is indirect (e.g. 'what can I do in "
+        "Dubai', 'something for a family of 4', 'any cheaper options', 'show me more'). "
+        "Do not call it for general FAQ, cancellation, payment, or account questions -- answer those with text."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "A short search query capturing what the customer is looking for: destination, theme, budget, duration, etc.",
+            }
+        },
+        "required": ["query"],
+    },
+}
 
 BOOKING_PREFIXES = ("__select_tour__:", "__select_date__:", "__select_travellers__:")
 
@@ -325,9 +350,17 @@ def get_active_faqs(db: Session) -> list[ChatFAQ]:
     )
 
 
-def get_chat_reply(
-    db: Session, session_key: str | None, user_message: str, customer_id: int | None = None
-) -> tuple[str, str, str | None, dict | None]:
+def stream_chat_reply(
+    db: Session,
+    session_key: str | None,
+    user_message: str,
+    customer_id: int | None = None,
+    page_url: str | None = None,
+):
+    """Generator yielding incremental chat events as dicts:
+    - {"type": "delta", "text": str}           -- a chunk of reply text to append
+    - {"type": "done", "session_key": str, "action_type": str | None, "action_data": dict | None}
+    Always ends with exactly one "done" event."""
     session = get_or_create_session(db, session_key)
 
     is_booking_command = any(user_message.strip().startswith(p) for p in BOOKING_PREFIXES)
@@ -345,29 +378,28 @@ def get_chat_reply(
             reply_text, action_type, action_data = result
         else:
             reply_text = "Sorry, I could not process that request. Please try again."
-        db.add(ChatMessage(session_id=session.id, role="assistant", content=reply_text))
+        yield {"type": "delta", "text": reply_text}
+        assistant_message = ChatMessage(session_id=session.id, role="assistant", content=reply_text)
+        db.add(assistant_message)
         db.commit()
-        return reply_text, session.session_key, action_type, action_data
-
-    _ensure_rag_indexed(db)
+        db.refresh(assistant_message)
+        yield {
+            "type": "done", "session_key": session.session_key, "action_type": action_type,
+            "action_data": action_data, "message_id": assistant_message.id,
+        }
+        return
 
     faqs = get_active_faqs(db)
+    faq_snippets = [f"Q: {f.question}\nA: {f.answer}" for f in faqs]
 
-    faq_matches = rag.semantic_search(db, user_message, ["faq"], top_k=3)
-    faq_snippets = [m["content"] for m in faq_matches]
-    if not faq_snippets:
-        # Index empty/no strong match yet -- fall back to the small full FAQ set
-        # rather than answering with zero grounding.
-        faq_snippets = [f"Q: {f.question}\nA: {f.answer}" for f in faqs]
-
-    tour_matches = rag.semantic_search(db, user_message, ["tour"], top_k=4)
-    tour_snippets = [m["content"] for m in tour_matches]
+    tour_snippets: list[str] = []
 
     booking_context = None
     if customer_id and _wants_booking_info(user_message):
         booking_context = _get_customer_bookings_context(db, customer_id)
 
-    system_prompt = _build_system_prompt(faq_snippets, tour_snippets, booking_context)
+    page_context = _page_context(db, page_url)
+    system_prompt = _build_system_prompt(faq_snippets, tour_snippets, booking_context, page_context)
 
     history = (
         db.query(ChatMessage)
@@ -379,43 +411,123 @@ def get_chat_reply(
     history = list(reversed(history))
     messages = [{"role": m.role, "content": m.content} for m in history]
 
+    reply_text = ""
+
     if not settings.ANTHROPIC_API_KEY:
         logger.info("ANTHROPIC_API_KEY is not configured; using local chatbot fallback")
         reply_text, action_type, action_data = _rule_based_reply(db, user_message, faqs)
+        yield {"type": "delta", "text": reply_text}
     else:
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-            response = client.messages.create(
-                model="claude-haiku-4-5",
+            call_messages = list(messages)
+
+            with client.messages.stream(
+                model=settings.CHATBOT_LLM_MODEL,
                 max_tokens=512,
                 system=system_prompt,
-                messages=messages,
-            )
-            reply_text = response.content[0].text
-            _, action_type, action_data = _rule_based_reply(db, user_message, faqs)
+                messages=call_messages,
+                tools=[SHOW_TOURS_TOOL],
+            ) as stream:
+                for text in stream.text_stream:
+                    reply_text += text
+                    yield {"type": "delta", "text": text}
+                final = stream.get_final_message()
+
+            if final.stop_reason == "tool_use":
+                tool_use = next(b for b in final.content if b.type == "tool_use")
+                search_query = (tool_use.input or {}).get("query") or user_message
+                tours = _search_tours(db, search_query)
+
+                if tours:
+                    action_type, action_data = "show_tours", {"tours": _tour_cards(tours)}
+                    tool_result_content = f"Found {len(tours)} matching published tour(s)."
+                else:
+                    tool_result_content = "No matching published tours were found."
+
+                call_messages.append({"role": "assistant", "content": final.content})
+                call_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_use.id,
+                        "content": tool_result_content,
+                    }],
+                })
+                with client.messages.stream(
+                    model=settings.CHATBOT_LLM_MODEL,
+                    max_tokens=512,
+                    system=system_prompt,
+                    messages=call_messages,
+                ) as followup_stream:
+                    for text in followup_stream.text_stream:
+                        reply_text += text
+                        yield {"type": "delta", "text": text}
+
+                if not reply_text.strip():
+                    reply_text = (
+                        "Here are some Tourvaa tours that match your request. Tap a tour to start booking:"
+                        if tours else
+                        "I could not find a published tour matching that. Could you share a destination or budget?"
+                    )
+                    yield {"type": "delta", "text": reply_text}
         except Exception as exc:
             logger.error("Anthropic API error: %s", exc)
             reply_text, action_type, action_data = _rule_based_reply(db, user_message, faqs)
+            yield {"type": "delta", "text": reply_text}
 
-    db.add(ChatMessage(session_id=session.id, role="assistant", content=reply_text))
+    assistant_message = ChatMessage(session_id=session.id, role="assistant", content=reply_text)
+    db.add(assistant_message)
     db.commit()
-    return reply_text, session.session_key, action_type, action_data
+    db.refresh(assistant_message)
+    yield {
+        "type": "done", "session_key": session.session_key, "action_type": action_type,
+        "action_data": action_data, "message_id": assistant_message.id,
+    }
+
+
+def submit_feedback(db: Session, message_id: int, rating: int, comment: str | None) -> ChatFeedback | None:
+    """Record (or update) a thumbs up/down on an assistant message. Returns
+    None if the message doesn't exist or isn't an assistant reply."""
+    msg = db.query(ChatMessage).filter(ChatMessage.id == message_id, ChatMessage.role == "assistant").first()
+    if not msg:
+        return None
+
+    feedback = db.query(ChatFeedback).filter(ChatFeedback.message_id == message_id).first()
+    if feedback:
+        feedback.rating = rating
+        feedback.comment = comment
+    else:
+        feedback = ChatFeedback(message_id=message_id, session_id=msg.session_id, rating=rating, comment=comment)
+        db.add(feedback)
+    db.commit()
+    db.refresh(feedback)
+    return feedback
 
 
 def list_faqs(db: Session, include_inactive: bool = False) -> list[ChatFAQ]:
     q = db.query(ChatFAQ)
     if not include_inactive:
-        q = q.filter(ChatFAQ.is_active == True)
+        q = q.filter(ChatFAQ.is_active == True, ChatFAQ.is_public == True)
     return q.order_by(ChatFAQ.sort_order, ChatFAQ.id).all()
 
 
-def list_faqs_paginated(db: Session, page: int = 1, limit: int = 20, search: str = "", include_inactive: bool = True) -> dict:
+def list_faqs_paginated(
+    db: Session,
+    page: int = 1,
+    limit: int = 20,
+    search: str = "",
+    include_inactive: bool = True,
+    is_public: bool | None = None,
+) -> dict:
     from app.utils.pagination import paginated_response
 
     q = db.query(ChatFAQ)
     if not include_inactive:
         q = q.filter(ChatFAQ.is_active == True)
+    if is_public is not None:
+        q = q.filter(ChatFAQ.is_public == is_public)
     if search:
         pattern = f"%{search.strip().lower()}%"
         q = q.filter(func.lower(ChatFAQ.question).like(pattern))
@@ -430,7 +542,6 @@ def create_faq(db: Session, data: FAQCreate) -> ChatFAQ:
     db.add(faq)
     db.commit()
     db.refresh(faq)
-    rag.index_faq(db, faq)
     return faq
 
 
@@ -442,7 +553,6 @@ def update_faq(db: Session, faq_id: int, data: FAQUpdate) -> ChatFAQ | None:
         setattr(faq, field, value)
     db.commit()
     db.refresh(faq)
-    rag.index_faq(db, faq)
     return faq
 
 
@@ -452,7 +562,6 @@ def delete_faq(db: Session, faq_id: int) -> bool:
         return False
     db.delete(faq)
     db.commit()
-    rag.delete_embedding(db, "faq", faq_id)
     return True
 
 

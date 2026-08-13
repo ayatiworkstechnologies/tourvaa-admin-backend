@@ -275,9 +275,8 @@ def delete_vehicle_photo(vehicle_id: int, photo_index: int = Query(...), db: Ses
 
 
 async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
-    from uuid import uuid4
     from app.utils.cloudinary_client import upload_to_cloudinary
-    from app.utils.media import detect_image_type
+    from app.utils.media import detect_image_type, sanitize_filename
     ALLOWED = {
         "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
         "image/webp": "webp", "image/avif": "avif", "application/pdf": "pdf",
@@ -302,7 +301,7 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
             return ""
     elif ext == "pdf" and not content.startswith(b"%PDF"):
         return ""
-    filename = f"{uuid4().hex}.{ext}"
+    filename = sanitize_filename(upload.filename, ext)
     # Vehicle fitness certs/insurance docs/photos are supplier business
     # documents, same sensitivity class as KYC documents - upload them
     # privately (authenticated Cloudinary delivery) and store the same
@@ -458,12 +457,12 @@ async def upload_supplier_document(
     elif extension == "pdf" and not content.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="Invalid PDF file")
 
-    from uuid import uuid4
     from app.utils.cloudinary_client import upload_to_cloudinary
+    from app.utils.media import sanitize_filename
     from app.models.suppliers import SupplierDocument
     from app.services.suppliers import _document
 
-    filename = f"{uuid4().hex}.{extension}"
+    filename = sanitize_filename(file.filename, extension)
     uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/supplier-documents", is_private=True, content_type=file.content_type)
     relative_path = f"cloudinary:{uploaded['resource_type']}:{uploaded['public_id']}"
 

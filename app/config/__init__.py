@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     PAYPAL_WEBHOOK_ID: str = ""
 
     ANTHROPIC_API_KEY: str = ""
+    CHATBOT_LLM_MODEL: str = "claude-haiku-4-5"
     # Local ONNX embedding model (fastembed) used for chatbot RAG retrieval.
     # No API key needed -- downloads once on first use and runs on CPU.
     CHATBOT_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"

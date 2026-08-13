@@ -1,7 +1,25 @@
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
 from app.config import get_storage_root, get_private_docs_root
+
+_UNSAFE_CHARS_RE = re.compile(r"[^a-zA-Z0-9]+")
+_MAX_FILENAME_BASE_LENGTH = 80
+
+
+def sanitize_filename(original_name: str | None, extension: str) -> str:
+    """Turn a user-supplied filename into a short, storage-safe name instead
+    of a generated uuid4 hex string: strip any path, drop the original
+    extension, replace anything that isn't alphanumeric with a hyphen, and
+    cap the length so folder listings/URLs stay readable. Falls back to
+    "file" if nothing usable is left (e.g. an original name that was pure
+    punctuation, or no name at all)."""
+    base = (original_name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    base = base.rsplit(".", 1)[0] if "." in base else base
+    base = _UNSAFE_CHARS_RE.sub("-", base).strip("-").lower()
+    base = base[:_MAX_FILENAME_BASE_LENGTH].rstrip("-") or "file"
+    return f"{base}.{extension}"
 
 
 def detect_image_type(content: bytes) -> str | None:

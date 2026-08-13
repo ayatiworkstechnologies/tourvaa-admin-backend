@@ -1,10 +1,8 @@
-from uuid import uuid4
-
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.cloudinary_client import upload_to_cloudinary
-from app.utils.media import detect_image_type
+from app.utils.media import detect_image_type, sanitize_filename
 from app.models.users import User
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
@@ -47,7 +45,7 @@ async def upload_profile_image(
         raise HTTPException(status_code=400, detail="Invalid image file")
 
     extension = ALLOWED_IMAGE_TYPES[detected_type]
-    filename = f"{uuid4().hex}.{extension}"
+    filename = sanitize_filename(file.filename, extension)
     uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/profile-images", content_type=file.content_type)
 
     return {
@@ -97,7 +95,7 @@ async def upload_admin_asset(
     elif not content.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="Invalid PDF file")
 
-    filename = f"{uuid4().hex}.{extension}"
+    filename = sanitize_filename(file.filename, extension)
     uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/admin-assets", content_type=file.content_type)
 
     return {

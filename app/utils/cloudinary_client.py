@@ -61,6 +61,14 @@ def upload_to_cloudinary(content: bytes, filename: str, folder: str, is_private:
     `public_id`/`resource_type` and use `get_private_file_url` to build a
     freshly-signed delivery URL on each authorized access, same pattern as
     the private-document endpoints already use.
+
+    `filename` (expected pre-sanitized, e.g. via app.utils.media.sanitize_filename)
+    is used as the base of the Cloudinary public_id (`use_filename=True`) so
+    stored/displayed names stay human-readable instead of opaque generated
+    ids. `unique_filename=True` is kept alongside it so Cloudinary appends a
+    short random suffix only on an actual name collision, rather than
+    silently reusing or overwriting an unrelated asset that happens to
+    sanitize to the same name.
     """
     _configure()
     resource_type = _resource_type_for(content_type, filename)
@@ -70,7 +78,8 @@ def upload_to_cloudinary(content: bytes, filename: str, folder: str, is_private:
             folder=folder.strip("/"),
             resource_type=resource_type,
             type="authenticated" if is_private else "upload",
-            use_filename=False,
+            filename=filename,
+            use_filename=True,
             unique_filename=True,
             overwrite=False,
         )
