@@ -215,13 +215,15 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
     log_audit(db, actor=actor, action=f"approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
     # Notifications
     try:
-        from app.utils.notification_triggers import notify_supplier_approved, notify_agent_approved
+        from app.utils.notification_triggers import notify_supplier_approved, notify_agent_approved, notify_affiliate_approved
         user_id = _entity_user_id(item)
         name = _entity_name(item)
         if entity_type == "supplier":
             notify_supplier_approved(db, supplier_id=item.id, supplier_name=name, user_id=user_id)
         elif entity_type == "agent":
             notify_agent_approved(db, agent_id=item.id, agent_name=name, user_id=user_id)
+        elif entity_type == "affiliate":
+            notify_affiliate_approved(db, affiliate_id=item.id, affiliate_name=name, user_id=user_id)
     except Exception:
         logger.exception("Failed to send %s approval notification for id=%s", entity_type, item.id)
     db.commit()
@@ -247,7 +249,7 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
     log_audit(db, actor=actor, action=f"reject_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
     # Notifications
     try:
-        from app.utils.notification_triggers import notify_supplier_rejected, notify_agent_rejected
+        from app.utils.notification_triggers import notify_supplier_rejected, notify_agent_rejected, notify_affiliate_rejected
         user_id = _entity_user_id(item)
         name = _entity_name(item)
         reason = getattr(data, "rejection_reason", "")
@@ -255,6 +257,8 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
             notify_supplier_rejected(db, supplier_id=item.id, supplier_name=name, rejection_reason=reason, user_id=user_id)
         elif entity_type == "agent":
             notify_agent_rejected(db, agent_id=item.id, agent_name=name, rejection_reason=reason, user_id=user_id)
+        elif entity_type == "affiliate":
+            notify_affiliate_rejected(db, affiliate_id=item.id, affiliate_name=name, rejection_reason=reason, user_id=user_id)
     except Exception:
         logger.exception("Failed to send %s rejection notification for id=%s", entity_type, item.id)
     db.commit()

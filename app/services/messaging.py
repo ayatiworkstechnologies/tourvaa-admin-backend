@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.affiliates import Affiliate
 from app.models.agents import Agent
 from app.models.bookings import Booking
 from app.models.customers import Customer
@@ -16,7 +17,7 @@ from app.utils.money import utcnow
 
 logger = logging.getLogger(__name__)
 
-PARTICIPANT_TYPES = ("agent", "supplier", "customer")
+PARTICIPANT_TYPES = ("agent", "supplier", "customer", "affiliate")
 PREVIEW_LENGTH = 160
 
 
@@ -29,6 +30,8 @@ def participant_type_for_user(user: User) -> Optional[str]:
         return "agent"
     if user_type == "CUSTOMER" or "customer" in slug:
         return "customer"
+    if user_type == "AFFILIATE" or "affiliate" in slug:
+        return "affiliate"
     return None
 
 
@@ -50,6 +53,11 @@ def _participant_profile(db: Session, participant_type: str, user: User) -> dict
         if customer:
             name = customer.full_name or user.name
             profile["customer_id"] = customer.id
+    elif participant_type == "affiliate":
+        affiliate = db.query(Affiliate).filter(Affiliate.user_id == user.id).first()
+        if affiliate:
+            name = affiliate.name or user.name
+            profile["affiliate_id"] = affiliate.id
     return {"name": name, "email": user.email, **profile}
 
 
@@ -76,6 +84,7 @@ def _serialize_conversation(db: Session, conv: Conversation, *, with_messages: b
         "agent_id": profile.get("agent_id"),
         "supplier_id": profile.get("supplier_id"),
         "customer_id": profile.get("customer_id"),
+        "affiliate_id": profile.get("affiliate_id"),
         "status": conv.status,
         "last_message_at": conv.last_message_at,
         "last_message_preview": conv.last_message_preview,

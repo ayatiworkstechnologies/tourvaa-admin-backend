@@ -62,6 +62,10 @@ class AffiliateUpdate(BaseModel):
     commission_percentage: float | None = Field(default=None, ge=0, le=100)
 
 
+class AffiliateSuspendRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class AffiliateApiLinkRequest(BaseModel):
     api_link: str = Field(max_length=255)
 

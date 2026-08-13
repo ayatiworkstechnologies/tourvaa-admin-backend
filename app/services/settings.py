@@ -50,7 +50,24 @@ DEFAULT_SETTINGS = [
     {"key": "sms_api_key", "label": "SMS API Key Placeholder", "value": "", "group": "api", "is_public": False},
     {"key": "third_party_api_key", "label": "Third Party API Key Placeholder", "value": "", "group": "api", "is_public": False},
     {"key": "brightlane_external_link", "label": "Brightlane External Link Placeholder", "value": "", "group": "api", "is_public": False},
+    {"key": "affiliate_default_commission_type", "label": "Default Affiliate Commission Type", "value": "percentage", "group": "affiliate", "is_public": False},
+    {"key": "affiliate_default_commission_value", "label": "Default Affiliate Commission Value", "value": "5", "group": "affiliate", "is_public": False},
+    {"key": "affiliate_default_attribution_model", "label": "Default Attribution Model", "value": "last_click", "group": "affiliate", "is_public": False},
+    {"key": "affiliate_default_attribution_window_days", "label": "Default Attribution Window (days)", "value": "30", "group": "affiliate", "is_public": False},
+    {"key": "affiliate_minimum_payout", "label": "Minimum Affiliate Payout", "value": "50", "group": "affiliate", "is_public": False},
+    {"key": "affiliate_allow_self_link_creation", "label": "Allow Affiliate Self-Service Link Creation", "value": "true", "group": "affiliate", "is_public": False},
+    {"key": "affiliate_allow_custom_alias", "label": "Allow Custom Alias", "value": "true", "group": "affiliate", "is_public": False},
+    {"key": "affiliate_auto_approve_commission", "label": "Auto-Approve Affiliate Commission", "value": "false", "group": "affiliate", "is_public": False},
 ]
+
+
+def get_affiliate_setting(db: Session, key: str, default: str = "") -> str:
+    """Single read-through accessor for affiliate.* settings so callers
+    (commission engine, payout request flow, link creation) don't each
+    re-implement the seed-then-query dance."""
+    seed_settings(db)
+    setting = db.query(AppSetting).filter(AppSetting.key == key).first()
+    return setting.value if setting and setting.value is not None else default
 
 DEFAULT_PAYMENT_SETTINGS = [
     {"provider_name": "stripe", "is_enabled": False, "public_key": "", "secret_key": "", "surcharge_percentage": "0", "mode": "test"},

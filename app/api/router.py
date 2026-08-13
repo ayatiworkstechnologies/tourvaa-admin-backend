@@ -3,6 +3,9 @@ from fastapi import FastAPI
 from app.routers.admin_modules import router as admin_modules_router
 from app.routers.affiliates import router as affiliates_router
 from app.routers.affiliate_tracking import router as affiliate_tracking_router
+from app.routers.affiliate_links import router as affiliate_links_router
+from app.routers.affiliate_commission_rules import router as affiliate_commission_rules_router
+from app.routers.affiliate_payouts import router as affiliate_payouts_admin_router
 from app.routers.agent_ledger import router as agent_ledger_router
 from app.routers.agents import router as agents_router
 from app.routers.audit import alias_router as audit_logs_alias_router
@@ -119,6 +122,9 @@ OPERATIONS_ROUTERS = (
     cancellations_router,
     booking_calendar_router,
     affiliate_tracking_router,
+    affiliate_links_router,
+    affiliate_commission_rules_router,
+    affiliate_payouts_admin_router,
     private_documents_router,
     reviews_router,
 )
