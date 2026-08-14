@@ -138,15 +138,26 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
     net_paid = max(money(0), money(captured) - money(refunded))
     final = money(booking.final_amount or booking.total_cost or 0)
     booking.amount_paid = net_paid
-    booking.amount_pending = max(money(0), final - net_paid)
-    booking.payment_status = _derive_booking_status(net_paid, final)
+    if money(refunded) > 0:
+        # A refunded booking doesn't still "owe" the refunded portion back to
+        # Tourvaa - without this branch _derive_booking_status(net_paid=0, ...)
+        # reports "unpaid" and amount_pending snaps back to the full price,
+        # making a fully-refunded customer look like they still owe the whole
+        # booking (see cancellations.py::process_refund, which hits this path
+        # with no other code to correct it afterwards).
+        booking.amount_pending = money(0)
+        booking.payment_status = "refunded" if net_paid <= 0 else "partially_refunded"
+    else:
+        booking.amount_pending = max(money(0), final - net_paid)
+        booking.payment_status = _derive_booking_status(net_paid, final)
     next_status = _status_after_payment_sync(booking, booking.payment_status)
     if next_status:
         booking.booking_status = next_status
     if booking.booking_status == "confirmed" and booking.affiliate_ref_code:
         try:
             from app.services.affiliate_tracking import record_conversion
-            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=money(booking.final_amount or booking.total_cost or 0), currency=booking.currency or "USD")
+            from app.services.bookings import affiliate_eligible_amount
+            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=booking.currency or "USD")
         except Exception:
             logger.warning("Affiliate conversion recording failed for booking %s", booking.id, exc_info=True)
 

@@ -5,6 +5,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import log_audit
+from app.services.settings import get_commission_percentage
 from app.models.cms import Tour
 from app.models.suppliers import Supplier
 from app.utils.operations import get_or_404
@@ -348,17 +349,10 @@ def _ser_pricing(o: TourPricing) -> dict:
     }
 
 
-def _apply_markup(markup_type: str, markup_value: float, base: float) -> float:
-    if markup_type == "percentage":
-        return round(base * (1 + markup_value / 100), 2)
-    return round(base + markup_value, 2)
-
-
 def _apply_commission(commission_type: str, commission_value: float, base: float) -> float:
-    """Commission is carved OUT of the price the supplier enters (the
-    opposite of _apply_markup, which adds Tourvaa's own markup on top) --
-    base is the supplier's gross adult/child price, and the result is what
-    the supplier actually receives once their commission is deducted."""
+    """Commission is carved OUT of the price entered (the supplier's listed
+    price is the full customer-facing total) -- the result is what the
+    supplier actually receives once Tourvaa's global commission is deducted."""
     if commission_type == "percentage":
         return round(max(0.0, base * (1 - commission_value / 100)), 2)
     return round(max(0.0, base - commission_value), 2)
@@ -369,35 +363,22 @@ def _is_supplier_actor(db: Session, actor: User) -> bool:
 
 
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    # markup_type always mirrors the tour's supplier commission type -- never
-    # trust the client for it. markup_value is the supplier's commission for
-    # this slab: the client-supplied value is honored, but a supplier may
-    # never undercut the rate they've agreed with Tourvaa (Supplier.
-    # markup_value) -- they may only raise it (e.g. for higher marketplace
-    # visibility). This mirrors the same floor-and-reject pattern used for
-    # account-level commission changes in services.suppliers.
-    # request_supplier_commission_change, rather than silently clamping.
+    # Single global commission (Admin Settings -> Tourvaa Commission %,
+    # services.settings.get_commission_percentage) replaces the old two-layer
+    # per-supplier-commission + admin-markup-on-top model: the price entered
+    # here (adult_price/child_price) IS the full customer-facing total, and
+    # Tourvaa's cut is carved out of it - never trust the client for the
+    # commission value, it's never supplier- or admin-editable per slab.
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
-    supplier = db.query(Supplier).filter(Supplier.id == tour.supplier_id).first() if tour and tour.supplier_id else None
-    o.markup_type = supplier.markup_type if supplier and supplier.markup_type else "percentage"
-    agreed_commission = supplier.markup_value if supplier else 0.0
-    if data.markup_value < agreed_commission:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Commission cannot be lower than your agreed rate of {agreed_commission:g}%.",
-        )
-    o.markup_value = data.markup_value
+    commission_pct = float(get_commission_percentage(db))
+    o.markup_type = "percentage"
+    o.markup_value = commission_pct
+    o.admin_markup_type = "percentage"
+    o.admin_markup_value = 0.0
 
-    o.supplier_final_adult_price = _apply_commission(o.markup_type, o.markup_value, o.adult_price)
-    o.supplier_final_child_price = _apply_commission(o.markup_type, o.markup_value, o.child_price)
-    o.final_price = o.supplier_final_adult_price
-
-    # admin_markup_type/admin_markup_value can only be set by an admin --
-    # a supplier saving/editing a slab never changes Tourvaa's own markup.
-    is_supplier = _is_supplier_actor(db, actor)
-    if not is_supplier:
-        o.admin_markup_type = data.admin_markup_type
-        o.admin_markup_value = data.admin_markup_value
+    o.supplier_final_adult_price = _apply_commission("percentage", commission_pct, o.adult_price)
+    o.supplier_final_child_price = _apply_commission("percentage", commission_pct, o.child_price)
+    o.final_price = o.adult_price
 
     # A supplier editing an existing slab on a tour that's already been
     # through at least one approval must not change what the storefront
@@ -407,12 +388,13 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     # New slabs and admin edits still compute immediately: a brand-new slab
     # has no existing public price to protect, and an admin has direct
     # authority over Tourvaa's own pricing.
+    is_supplier = _is_supplier_actor(db, actor)
     freeze = is_update and is_supplier and tour and tour.status in ("active", "published", "repricing_required")
     if freeze:
         return
 
-    o.storefront_adult_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.supplier_final_adult_price)
-    o.storefront_child_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.supplier_final_child_price)
+    o.storefront_adult_price = o.adult_price
+    o.storefront_child_price = o.child_price
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
@@ -467,14 +449,6 @@ def recalculate_price_start(db: Session, tour_id: int) -> None:
 
 def create_pricing(db: Session, tour_id: int, data: PricingPayload, actor: User, request: Request | None = None) -> dict:
     _require_tour(db, tour_id)
-    # admin_markup_type/value have a column-level default, but that's only
-    # applied by SQLAlchemy at flush/INSERT time -- reading them off a
-    # freshly-constructed, not-yet-flushed object (as _apply_pricing_
-    # computation does immediately below) gives None, not the column
-    # default, which crashes _apply_markup's arithmetic for a supplier
-    # actor (the branch that would otherwise set them from the payload is
-    # only taken for admins). Seed them explicitly so both roles see a
-    # real value regardless of flush timing.
     o = TourPricing(tour_id=tour_id, admin_markup_type="percentage", admin_markup_value=0.0, **{key: getattr(data, key) for key in _PRICING_CLIENT_FIELDS})
     _apply_pricing_computation(db, tour_id, o, data, actor, is_update=False)
     db.add(o)
@@ -787,8 +761,16 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
     )
 
     currency = slab.currency if slab else tour.currency
-    adult_unit = slab.adult_price if slab else float(tour.price_start_per_person)
-    child_unit = slab.child_price if slab else 0.0
+    # storefront_* (falling back to the raw price if unset) is what
+    # _price_booking actually charges at checkout - this preview must match
+    # that, especially during the freeze window where a supplier's pending
+    # edit has changed adult_price/child_price but not yet the storefront price.
+    # float(...) throughout this function: TourPricing/TourOptionalActivity/
+    # TourAccommodationExtra/TourExtension/TourDiscount amount columns are all
+    # Numeric (Decimal on read) - this function otherwise does plain float
+    # arithmetic (0.0 accumulators), and Decimal + float raises TypeError.
+    adult_unit = float((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else tour.price_start_per_person)
+    child_unit = float((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0.0)
 
     adult_total = adult_unit * req.adults_count
     child_total = child_unit * req.children_count
@@ -804,7 +786,7 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
             TourOptionalActivity.status == "active",
         ).all()
         for act in acts:
-            cost = act.price_per_person * total_pax
+            cost = float(act.price_per_person) * total_pax
             activity_total += cost
             activity_breakdown.append({"id": act.id, "name": act.activity_name, "amount": cost})
 
@@ -818,7 +800,7 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
             TourAccommodationExtra.status == "active",
         ).all()
         for extra in extras:
-            cost = extra.extra_price * (total_pax if extra.price_type == "per_person" else 1)
+            cost = float(extra.extra_price) * (total_pax if extra.price_type == "per_person" else 1)
             accommodation_total += cost
             accommodation_breakdown.append({"id": extra.id, "name": extra.accommodation_name, "amount": cost})
 
@@ -832,8 +814,9 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
             TourExtension.status == "active",
         ).all()
         for ext in exts:
-            extension_total += ext.extra_price
-            extension_breakdown.append({"id": ext.id, "title": ext.extension_title, "amount": ext.extra_price})
+            amount = float(ext.extra_price)
+            extension_total += amount
+            extension_breakdown.append({"id": ext.id, "title": ext.extension_title, "amount": amount})
 
     subtotal = base_price + activity_total + accommodation_total + extension_total
 
@@ -862,22 +845,24 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
         )
 
     if discount:
+        discount_value = float(discount.discount_value)
+        minimum_booking_amount = float(discount.minimum_booking_amount or 0)
         expiry_ok = (not discount.end_date) or discount.end_date.replace(tzinfo=timezone.utc) >= now
         start_ok = (not discount.start_date) or discount.start_date.replace(tzinfo=timezone.utc) <= now
         limit_ok = (not discount.usage_limit) or discount.used_count < discount.usage_limit
-        min_ok = subtotal >= discount.minimum_booking_amount
+        min_ok = subtotal >= minimum_booking_amount
 
         if expiry_ok and start_ok and limit_ok and min_ok:
             if discount.discount_type == "percentage":
-                discount_amount = subtotal * discount.discount_value / 100
+                discount_amount = subtotal * discount_value / 100
             else:
-                discount_amount = min(discount.discount_value, subtotal)
+                discount_amount = min(discount_value, subtotal)
             discount_info = {
                 "id": discount.id,
                 "name": discount.discount_name,
                 "code": discount.discount_code,
                 "type": discount.discount_type,
-                "value": discount.discount_value,
+                "value": discount_value,
                 "amount": discount_amount,
             }
 

@@ -312,12 +312,17 @@ def _restore_snapshot(db: Session, tour: Tour, snapshot: dict) -> None:
 
 
 def _recalculate_storefront_prices(db: Session, tour_id: int) -> None:
+    # Storefront price == the price entered (adult_price/child_price) under
+    # the single-global-commission model - see services.tours.
+    # _apply_pricing_computation. This unfreezes the storefront price a
+    # supplier's slab edit held back (spec: don't let an edit silently
+    # change what's charged) once an admin has reviewed and approved it.
     from app.models.tours import TourPricing
-    from app.services.tours import _apply_markup, recalculate_price_start
+    from app.services.tours import recalculate_price_start
 
     for row in db.query(TourPricing).filter(TourPricing.tour_id == tour_id).all():
-        row.storefront_adult_price = _apply_markup(row.admin_markup_type, row.admin_markup_value, row.supplier_final_adult_price or 0)
-        row.storefront_child_price = _apply_markup(row.admin_markup_type, row.admin_markup_value, row.supplier_final_child_price or 0)
+        row.storefront_adult_price = row.adult_price
+        row.storefront_child_price = row.child_price
     recalculate_price_start(db, tour_id)
 
 

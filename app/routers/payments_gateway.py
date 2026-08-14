@@ -287,6 +287,8 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
         if payment:
             payment.refunded_amount = refund_amount
             payment.payment_status = "refunded" if refund_amount >= payment.captured_amount else "partially_refunded"
+            if payment.booking:
+                _sync_booking_payment_fields(db, payment.booking)
             db.commit()
 
     return {"status": "success", "received": True}
@@ -404,7 +406,7 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
         Payment.id == body.payment_id,
         Payment.gateway == "paypal",
         Payment.gateway_order_id == body.order_id,
-    ).first()
+    ).with_for_update().first()
     if not payment:
         raise HTTPException(status_code=404, detail="PayPal payment record not found")
     _ensure_booking_payment_access(payment.booking, current_user)
@@ -513,8 +515,15 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
         if capture_id:
             payment = db.query(Payment).filter(Payment.gateway_payment_id == capture_id).first()
             if payment:
-                payment.refunded_amount = refunded_amt
-                payment.payment_status = "refunded" if refunded_amt >= payment.captured_amount else "partially_refunded"
+                # Unlike Stripe's charge.amount_refunded (a running total),
+                # PAYMENT.CAPTURE.REFUNDED's resource.amount is only the
+                # amount of THIS refund - it must be added to what's already
+                # recorded, or a second partial refund would overwrite and
+                # lose the first.
+                payment.refunded_amount = money(payment.refunded_amount) + refunded_amt
+                payment.payment_status = "refunded" if payment.refunded_amount >= payment.captured_amount else "partially_refunded"
+                if payment.booking:
+                    _sync_booking_payment_fields(db, payment.booking)
                 db.commit()
 
     return {"status": "success", "received": True}

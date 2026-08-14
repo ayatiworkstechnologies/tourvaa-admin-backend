@@ -204,6 +204,16 @@ def _similar_tours_for_email(db: Session, tour_id: int | None, limit: int = 3) -
     return results
 
 
+def affiliate_eligible_amount(booking: Booking):
+    """Base amount for affiliate commission - excludes an agent's own markup
+    (agent_net_price) so an affiliate isn't paid a cut of money the agent
+    added on top and never routed through Tourvaa's own margin. Mirrors the
+    same booking_source == "agent" carve-out used for the supplier ledger."""
+    if booking.booking_source == "agent" and booking.agent_net_price:
+        return money(booking.agent_net_price)
+    return money(booking.final_amount or booking.total_cost or 0)
+
+
 def _settle_cancelled_booking_payments(
     db: Session,
     booking: Booking,
@@ -1137,15 +1147,19 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         from app.services.supplier_ledger import create_ledger_entry
         existing_ledger = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking.id).first()
         if not existing_ledger:
-            gross_amount = money(booking.final_amount or booking.total_cost or 0)
-            markup_type = (booking.supplier.markup_type or "").strip().lower() if booking.supplier else ""
-            markup_value = money(booking.supplier.markup_value) if booking.supplier else money(0)
-            if markup_type == "percentage":
-                commission_amount = money((gross_amount * markup_value) / 100)
-            elif markup_type == "fixed":
-                commission_amount = markup_value
+            from app.services.settings import get_commission_percentage
+            # For agent bookings, final_amount/total_cost is the customer-facing
+            # price INCLUDING the agent's own markup (see create_booking) - the
+            # supplier never sees that markup, so their commission must be based
+            # on agent_net_price (the actual tour cost) instead.
+            if booking.booking_source == "agent" and booking.agent_net_price:
+                gross_amount = money(booking.agent_net_price)
             else:
-                commission_amount = money(0)
+                gross_amount = money(booking.final_amount or booking.total_cost or 0)
+            # Single global commission rate (Admin Settings -> Tourvaa
+            # Commission %) replaces the old per-supplier agreed rate -
+            # read live at settlement time, not baked into the booking.
+            commission_amount = money((gross_amount * get_commission_percentage(db)) / 100)
             try:
                 create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=gross_amount, commission_amount=commission_amount)
             except Exception as error:
@@ -1154,7 +1168,7 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
     if booking.affiliate_ref_code:
         try:
             from app.services.affiliate_tracking import record_conversion
-            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=money(booking.final_amount or booking.total_cost or 0), currency=booking.currency or "USD")
+            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=booking.currency or "USD")
         except Exception as error:
             logger.warning("Affiliate conversion recording failed for booking %s: %s", booking.id, error)
 
