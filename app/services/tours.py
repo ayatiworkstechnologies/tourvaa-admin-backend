@@ -65,10 +65,10 @@ def _ser_overview(o: TourOverview) -> dict:
         "end_location": o.end_location, "group_size": o.group_size,
         "tour_type": o.tour_type, "physical_rating": o.physical_rating,
         "overview_icon_data": o.overview_icon_data,
-        "why_choose_this_tour": o.why_choose_this_tour, "ideal_for": o.ideal_for,
-        "best_season": o.best_season, "tour_pace": o.tour_pace,
-        "transportation_summary": o.transportation_summary,
-        "accommodation_summary": o.accommodation_summary, "meal_summary": o.meal_summary,
+        "why_choose_this_tour": o.why_choose_this_tour or "", "ideal_for": o.ideal_for or "",
+        "best_season": o.best_season or "", "tour_pace": o.tour_pace or "",
+        "transportation_summary": o.transportation_summary or "",
+        "accommodation_summary": o.accommodation_summary or "", "meal_summary": o.meal_summary or "",
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 

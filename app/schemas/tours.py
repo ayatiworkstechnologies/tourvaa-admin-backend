@@ -31,6 +31,21 @@ class TourOverviewPayload(BaseModel):
     accommodation_summary: str = Field(default="")
     meal_summary: str = Field(default="")
 
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_null_text_fields(cls, data):
+        # Several TourOverview DB columns are nullable with no default (see
+        # app.models.tours.TourOverview) - existing rows can hold NULL, and
+        # the frontend round-trips GET data straight back into this POST/PUT
+        # payload, so a None here from an old row is expected, not client
+        # error. Treat it the same as "" rather than 422ing.
+        if isinstance(data, dict):
+            for key in ("why_choose_this_tour", "ideal_for", "best_season", "tour_pace",
+                        "transportation_summary", "accommodation_summary", "meal_summary"):
+                if data.get(key) is None:
+                    data[key] = ""
+        return data
+
     @field_validator("physical_rating")
     @classmethod
     def validate_rating(cls, v: str):
