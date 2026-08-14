@@ -34,6 +34,12 @@ DEFAULT_SETTINGS = [
     {"key": "logo", "label": "Logo URL", "value": "", "group": "general", "is_public": True},
     {"key": "favicon", "label": "Favicon URL", "value": "", "group": "general", "is_public": True},
     {"key": "booking_prefix", "label": "Booking Prefix", "value": "TVA", "group": "booking", "is_public": False},
+    # Single global commission rate applied to every tour/supplier: the
+    # supplier's listed price IS the full customer-facing total (no separate
+    # admin markup layered on top) - this percentage is what Tourvaa keeps,
+    # settling the supplier the remainder. See services.tours._apply_pricing_computation
+    # and services.bookings' supplier-ledger creation, the two places this is read.
+    {"key": "supplier_commission_percentage", "label": "Tourvaa Commission (%)", "value": "10", "group": "booking", "is_public": True},
     {"key": "currency", "label": "Currency", "value": "USD", "group": "booking", "is_public": True},
     {"key": "timezone", "label": "Timezone", "value": "Pacific/Auckland", "group": "system", "is_public": False},
     {"key": "maintenance_mode", "label": "Maintenance Mode", "value": "false", "group": "system", "is_public": False},
@@ -64,8 +70,14 @@ DEFAULT_SETTINGS = [
 def get_affiliate_setting(db: Session, key: str, default: str = "") -> str:
     """Single read-through accessor for affiliate.* settings so callers
     (commission engine, payout request flow, link creation) don't each
-    re-implement the seed-then-query dance."""
-    seed_settings(db)
+    re-implement the seed-then-query dance.
+
+    Deliberately does NOT call seed_settings() (see get_commission_percentage
+    for why): callers here run mid-transaction with uncommitted changes
+    already staged on other objects (a conversion being adjusted, a payout
+    being created), and seed_settings()'s unconditional db.commit() would
+    flush + expire those objects out from under the caller.
+    """
     setting = db.query(AppSetting).filter(AppSetting.key == key).first()
     return setting.value if setting and setting.value is not None else default
 
@@ -114,6 +126,28 @@ def seed_api_settings(db: Session):
             db.add(ApiSetting(**item))
 
     db.commit()
+
+
+def get_commission_percentage(db: Session):
+    """Single admin-configured commission rate applied to every tour/supplier
+    - see the DEFAULT_SETTINGS entry above for what this drives.
+
+    Deliberately does NOT call seed_settings() here (unlike get_settings()):
+    this is a read used mid-transaction from booking/pricing calculations
+    that may already have uncommitted changes staged on other objects in the
+    same session - seed_settings()'s unconditional db.commit() would flush
+    and expire those objects, silently turning in-memory floats back into
+    Decimal on next access. The row is seeded elsewhere (GET /settings,
+    /settings/public) long before this is ever the first caller in practice;
+    the fallback below covers the case where it somehow isn't yet.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    setting = db.query(AppSetting).filter(AppSetting.key == "supplier_commission_percentage").first()
+    try:
+        return Decimal(str(setting.value)) if setting and setting.value not in (None, "") else Decimal("10")
+    except (InvalidOperation, TypeError):
+        return Decimal("10")
 
 
 def get_settings(db: Session):

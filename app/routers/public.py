@@ -376,7 +376,21 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     activities = db.query(TourOptionalActivity).filter(TourOptionalActivity.tour_id == tour_id).all()
     accommodations = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour_id).all()
     extensions = db.query(TourExtension).filter(TourExtension.tour_id == tour_id).all()
-    discounts = db.query(TourDiscount).filter(TourDiscount.tour_id == tour_id, TourDiscount.status == "active").all()
+    # status == "active" alone isn't enough - an admin-created discount stays
+    # "active" across its whole lifecycle, so a since-expired or not-yet-started
+    # offer would otherwise still be advertised here even though
+    # _resolve_discount (bookings.py) already rejects it at actual checkout.
+    _discount_now = datetime.now(timezone.utc)
+    discounts = (
+        db.query(TourDiscount)
+        .filter(
+            TourDiscount.tour_id == tour_id,
+            TourDiscount.status == "active",
+            or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= _discount_now),
+            or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= _discount_now),
+        )
+        .all()
+    )
     calendar = db.query(TourCalendar).filter(TourCalendar.tour_id == tour_id).order_by(TourCalendar.tour_date.asc()).all()
     similar_links = db.query(TourSimilar).filter(TourSimilar.tour_id == tour_id).all()
     tour_refund_rules = (
@@ -438,7 +452,12 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "inclusions": [{"text": i.title} for i in inclusions],
             "exclusions": [{"text": e.title} for e in exclusions],
             "gallery": [{"image_url": g.image_path, "alt_text": g.image_alt_text, "is_banner": g.image_type == "banner"} for g in gallery],
-            "pricing": [{"persons_from": p.passenger_from, "persons_to": p.passenger_to, "price_per_person": float(p.final_price), "currency": p.currency} for p in pricing],
+            # price_per_person must match what _price_booking (bookings.py)
+            # actually charges at checkout, not the raw just-entered
+            # adult_price - those diverge whenever a supplier's edit to a
+            # live tour is frozen pending admin approval (see
+            # services.tours._apply_pricing_computation's freeze guard).
+            "pricing": [{"persons_from": p.passenger_from, "persons_to": p.passenger_to, "price_per_person": float(p.storefront_adult_price if p.storefront_adult_price is not None else p.adult_price), "currency": p.currency} for p in pricing],
             "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other"} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade"} for a in accommodations],
             "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other"} for e in extensions],
