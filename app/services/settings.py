@@ -41,6 +41,14 @@ DEFAULT_SETTINGS = [
     # and services.bookings' supplier-ledger creation, the two places this is read.
     {"key": "supplier_commission_percentage", "label": "Tourvaa Commission (%)", "value": "10", "group": "booking", "is_public": True},
     {"key": "currency", "label": "Currency", "value": "USD", "group": "booking", "is_public": True},
+    # This ONLY controls whether "currency" above locks the display currency
+    # for every site visitor (frontend useCurrency.ts) - it must default to
+    # "false", since "currency" itself always has a non-blank value (it also
+    # doubles as the default booking/tour currency) and the admin UI's
+    # CurrencySelect has no blank option, so without this separate opt-in
+    # every fresh install would silently force-lock the currency selector
+    # for all visitors with no way to turn it back off.
+    {"key": "force_site_currency", "label": "Force Currency For All Visitors", "value": "false", "group": "booking", "is_public": True},
     {"key": "timezone", "label": "Timezone", "value": "Pacific/Auckland", "group": "system", "is_public": False},
     {"key": "maintenance_mode", "label": "Maintenance Mode", "value": "false", "group": "system", "is_public": False},
     {"key": "stripe_enabled", "label": "Stripe Enabled", "value": "false", "group": "payment", "is_public": False},
