@@ -1,4 +1,5 @@
 """Module 29 - Chatbot FAQ CRUD and Chat"""
+import json
 import pytest
 import requests
 import os
@@ -6,6 +7,19 @@ import uuid
 from tests.conftest import BASE_URL, skip_if_readonly, unique, auth_headers
 
 _created_faq_id = None
+
+
+def _streamed_chat_reply(resp):
+    """Collect reply text from the chatbot's Server-Sent Events response."""
+    assert "text/event-stream" in resp.headers.get("content-type", ""), resp.headers
+    events = [
+        json.loads(line.removeprefix("data:").strip())
+        for line in resp.text.splitlines()
+        if line.startswith("data:")
+    ]
+    reply = "".join(event.get("text", "") for event in events if event.get("type") == "delta")
+    assert any(event.get("type") == "done" for event in events), events
+    return reply
 
 
 def test_public_faqs_returns_200():
@@ -96,24 +110,17 @@ def test_chatbot_chat_happy_path():
     payload = {"message": "Hello"}
     resp = requests.post(f"{BASE_URL}/chatbot/chat", json=payload, timeout=30)
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    # Response should have a reply or message key
-    reply = body.get("reply") or body.get("message") or body.get("response") or body.get("data", {})
-    if isinstance(reply, dict):
-        reply = reply.get("reply") or reply.get("message") or reply.get("response")
-    assert reply, f"Expected a reply in chatbot response, got: {body}"
+    reply = _streamed_chat_reply(resp)
+    assert reply, f"Expected a streamed chatbot reply, got: {resp.text}"
 
 
 def test_chatbot_chat_greeting_response():
     payload = {"message": "Hi, what tours do you offer?"}
     resp = requests.post(f"{BASE_URL}/chatbot/chat", json=payload, timeout=30)
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    reply = body.get("reply") or body.get("message") or body.get("response")
-    if isinstance(reply, dict):
-        reply = reply.get("reply") or reply.get("message") or reply.get("response")
+    reply = _streamed_chat_reply(resp)
     assert isinstance(reply, str) and len(reply) > 0, (
-        f"Expected non-empty string reply from chatbot, got: {body}"
+        f"Expected non-empty streamed reply from chatbot, got: {resp.text}"
     )
 
 
