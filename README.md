@@ -22,7 +22,21 @@ FastAPI REST API powering the Tourvaa travel platform. Provides authentication, 
 
 ---
 
-## Setup
+## Container and CI/CD
+
+Build the production API image from this repository:
+
+```bash
+docker build -t tourvaa/backend:local .
+```
+
+The image runs as a non-root user on port `8000`, checks `/api/health`, persists `/data`, and applies Alembic migrations before startup. Keep `WEB_CONCURRENCY=1` until scheduled jobs and WebSockets use shared worker/pub-sub infrastructure.
+
+The workflow at `.github/workflows/ci-cd.yml` provisions MySQL, applies and verifies migrations, starts the API, runs tests, scans the image, and publishes verified main/tag builds to `ghcr.io/<owner>/<repository>`. For the complete stack and required environment variables, see `DOCKER_CICD_GUIDE.md` in the shared workspace root.
+
+---
+
+## Local Python Setup
 
 ### 1. Create and activate a virtual environment
 
