@@ -34,6 +34,17 @@ The image runs as a non-root user on port `8000`, checks `/api/health`, persists
 
 The workflow at `.github/workflows/ci-cd.yml` provisions MySQL, applies and verifies migrations, starts the API, runs tests, scans the image, and publishes verified main/tag builds to `ghcr.io/<owner>/<repository>`. For the complete stack and required environment variables, see `DOCKER_CICD_GUIDE.md` in the shared workspace root.
 
+### Updating a running server
+
+```bash
+git pull origin main
+docker compose build backend
+docker compose run --rm backend python -m alembic upgrade head
+docker compose up -d --no-deps backend
+docker compose ps
+docker compose logs -f backend
+```
+
 ---
 
 ## Local Python Setup
