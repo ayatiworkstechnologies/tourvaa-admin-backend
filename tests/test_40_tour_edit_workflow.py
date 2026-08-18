@@ -266,3 +266,43 @@ def test_fresh_expected_updated_at_succeeds(headers, supplier_ctx, first_country
         "expected_updated_at": fetched["updated_at"],
     }, timeout=10)
     assert resp.status_code == 200, resp.text
+
+
+# ─── Admin-only tour delete ────────────────────────────────────────────────────
+
+@skip_if_readonly()
+def test_supplier_cannot_delete_tour(headers, supplier_headers, supplier_ctx, first_country_id, first_category_id):
+    tour_id = _create_draft_tour(headers, supplier_ctx["supplier_id"], first_country_id, first_category_id)
+    resp = requests.delete(f"{BASE_URL}/tours/{tour_id}", headers=supplier_headers, timeout=10)
+    assert resp.status_code == 403, resp.text
+
+    # Confirm it's still there, untouched by the rejected attempt.
+    still_there = requests.get(f"{BASE_URL}/tours/{tour_id}", headers=headers, timeout=10)
+    assert still_there.status_code == 200
+
+
+@skip_if_readonly()
+def test_admin_can_delete_tour_without_bookings(headers, supplier_ctx, first_country_id, first_category_id):
+    tour_id = _create_draft_tour(headers, supplier_ctx["supplier_id"], first_country_id, first_category_id)
+    resp = requests.delete(f"{BASE_URL}/tours/{tour_id}", headers=headers, timeout=10)
+    assert resp.status_code == 200, resp.text
+
+    gone = requests.get(f"{BASE_URL}/tours/{tour_id}", headers=headers, timeout=10)
+    assert gone.status_code == 404
+
+
+@skip_if_readonly()
+def test_admin_cannot_delete_tour_with_bookings(headers, supplier_ctx, first_country_id, first_category_id):
+    tour_id = _create_draft_tour(headers, supplier_ctx["supplier_id"], first_country_id, first_category_id)
+    _submit_and_approve(headers, tour_id)
+    _publish(headers, tour_id)
+    booking = requests.post(f"{BASE_URL}/bookings", headers=headers, json={
+        "customer_id": 1, "tour_id": tour_id, "booking_source": "admin",
+        "adults_count": 1, "children_count": 0,
+        "tour_name": "Delete Guard Test", "tour_date": "2028-06-01",
+    }, timeout=10)
+    assert booking.status_code in (200, 201), booking.text
+
+    resp = requests.delete(f"{BASE_URL}/tours/{tour_id}", headers=headers, timeout=10)
+    assert resp.status_code == 400, resp.text
+    assert "booking" in str(resp.json()).lower()

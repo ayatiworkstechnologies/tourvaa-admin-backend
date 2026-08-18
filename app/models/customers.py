@@ -132,6 +132,7 @@ class CustomerWishlistItem(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     tour_id = Column(Integer, ForeignKey("tours.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_reminder_sent_at = Column(DateTime(timezone=True), nullable=True)
 
     user = relationship("User")
     tour = relationship("Tour")

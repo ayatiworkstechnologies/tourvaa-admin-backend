@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcategory
 from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourPayload
-from app.services.cms import _category, _city, _country, _state, _subcategory, _tour, get_tour, list_categories, list_cities, list_countries, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_state, save_subcategory, save_tour, update_status
+from app.services.cms import _category, _city, _country, _state, _subcategory, _tour, delete_tour, get_tour, list_categories, list_cities, list_countries, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_state, save_subcategory, save_tour, update_status
 from app.services.tour_import_export import build_import_template_workbook, build_tour_detail_workbook, import_tours, parse_tour_import_rows
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.pagination import pagination_params
@@ -278,6 +278,17 @@ def edit_tour(tour_id: int, data: TourPayload, request: Request, db: Session = D
         _require_approved_supplier(db, actor_supplier_id)
         data = data.model_copy(update={"supplier_id": actor_supplier_id})
     return {"status": "success", "data": save_tour(db, data, current_user, request, tour_id)}
+
+
+@router.delete("/tours/{tour_id}")
+def remove_tour(tour_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.delete", "update-tours"))):
+    # Admin-only, even though the same EDIT-style permission is shared with
+    # suppliers for editing their own tours -- deleting a tour outright is
+    # never a supplier action.
+    if _get_actor_supplier_id(db, current_user):
+        raise HTTPException(status_code=403, detail="Deleting a tour is restricted to administrators")
+    delete_tour(db, tour_id, current_user, request)
+    return {"status": "success", "message": "Tour deleted"}
 
 
 @router.patch("/tours/{tour_id}/status")

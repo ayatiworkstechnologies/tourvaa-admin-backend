@@ -41,6 +41,7 @@ class TourItinerary(Base):
     short_description = Column(Text, default="", nullable=True)
     long_description = Column(Text, default="", nullable=True)
     activities = Column(Text, default="", nullable=True)
+    optional_activities = Column(Text, default="", nullable=True)
     accommodation = Column(String(255), default="", nullable=True)
     start_time = Column(String(20), nullable=True)
     end_time = Column(String(20), nullable=True)
@@ -51,6 +52,11 @@ class TourItinerary(Base):
     important_notes = Column(Text, nullable=True)
     image = Column(String(255), default="", nullable=False)
     image_alt_text = Column(String(180), default="", nullable=False)
+    # JSON-encoded list of image paths for the day's carousel (mirrors
+    # SupplierVehicle.vehicle_photos' JSON-string-array pattern) - `image`
+    # above stays as the single cover/fallback image for backward
+    # compatibility with existing callers (e.g. itinerary_pdf.py).
+    images = Column(Text, default="[]", nullable=True)
     display_order = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -219,6 +225,7 @@ class TourAccommodationExtra(Base):
     description = Column(Text, default="", nullable=True)
     extra_price = Column(Numeric(12, 2), default=0, nullable=False)
     price_type = Column(String(20), default="per_person", nullable=False)
+    image = Column(String(255), default="", nullable=True)
     category = Column(String(30), default="room_upgrade", nullable=False)
     is_default = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
@@ -239,6 +246,35 @@ class TourCalendar(Base):
     available_seats = Column(Integer, default=0, nullable=False)
     booked_seats = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="available", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    tour = relationship("Tour")
+
+
+class TourAvailabilityConfig(Base):
+    """Recurring-availability schedule a supplier/admin defines once
+    (Tour Start/End Date, minimum advance booking window, and a Weekly/
+    Fortnightly/Monthly frequency) - services.tour_availability expands this
+    into concrete TourCalendar rows rather than requiring every date to be
+    added by hand."""
+
+    __tablename__ = "tour_availability_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, unique=True, index=True)
+    availability_start_date = Column(DateTime(timezone=True), nullable=True)
+    availability_end_date = Column(DateTime(timezone=True), nullable=True)
+    min_advance_booking_days = Column(Integer, default=0, nullable=False)
+    # "weekly" | "fortnightly" | "monthly", NULL until a schedule is saved.
+    frequency = Column(String(20), nullable=True)
+    # Week 1/2 for fortnightly, Week 1-4 for monthly; unused for weekly.
+    frequency_week = Column(Integer, nullable=True)
+    # ISO weekday ints (0=Monday..6=Sunday) the tour operates on.
+    frequency_days = Column(JSON, nullable=True)
+    # Capacity applied to each generated TourCalendar row.
+    seats_per_occurrence = Column(Integer, default=0, nullable=False)
+    last_end_date_reminder_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

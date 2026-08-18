@@ -7,6 +7,7 @@ from app.auth.permissions import require_any_permission
 from app.services.supplier_scope import is_supplier_user
 from app.schemas.tours import (
     AccommodationExtraPayload,
+    AvailabilityConfigPayload,
     CalendarPayload,
     DiscountPayload,
     ExtensionPayload,
@@ -23,6 +24,7 @@ from app.schemas.tours import (
     TourOverviewPayload,
     UnavailableDatePayload,
 )
+from app.services.tour_availability import get_availability_config, save_availability_config
 from app.services.tours import (
     add_similar_tour,
     calculate_price,
@@ -452,6 +454,21 @@ def remove_calendar(tour_id: int, calendar_id: int, request: Request, db: Sessio
     _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_calendar_entry(db, tour_id, calendar_id, current_user, request)
     return {"status": "success", "message": "Calendar entry deleted"}
+
+
+# recurring availability schedule (Tour Start/End Date, minimum advance
+# booking window, Weekly/Fortnightly/Monthly frequency) - saving expands the
+# schedule into concrete calendar entries, see services.tour_availability.
+@router.get("/{tour_id}/availability")
+def tour_availability(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
+    return {"status": "success", "data": get_availability_config(db, tour_id)}
+
+
+@router.put("/{tour_id}/availability")
+def save_availability(tour_id: int, data: AvailabilityConfigPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
+    return {"status": "success", "data": save_availability_config(db, tour_id, data, current_user, request)}
 
 
 # unavailable dates
