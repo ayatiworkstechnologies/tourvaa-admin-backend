@@ -143,10 +143,55 @@ def _ser_overview(o: TourOverview):
     }
 
 
-def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, review_stats: dict[int, dict] | None = None, overview: TourOverview | None = None):
+def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
+    """Best active tour-scoped discount per tour, expressed as a percentage
+    off price_start_per_person (a fixed-amount discount is converted to its
+    percentage-equivalent for the "Save X% today" badge). Mirrors the
+    active-window filter in public_tour_detail's own discounts query, but
+    only ever matches TourDiscount.tour_id directly - category/country-scoped
+    discounts (discount_scope) are not resolved here, consistent with the
+    detail endpoint's existing behavior."""
+    tour_ids = [t.id for t in tours]
+    if not tour_ids:
+        return {}
+    now = datetime.now(timezone.utc)
+    rows = (
+        db.query(TourDiscount)
+        .filter(
+            TourDiscount.tour_id.in_(tour_ids),
+            TourDiscount.status == "active",
+            or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= now),
+            or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= now),
+        )
+        .all()
+    )
+    if not rows:
+        return {}
+    price_by_tour = {t.id: float(t.price_start_per_person or 0) for t in tours}
+    best: dict[int, dict] = {}
+    for row in rows:
+        base_price = price_by_tour.get(row.tour_id, 0)
+        if base_price <= 0:
+            continue
+        pct = float(row.discount_value) if row.discount_type == "percentage" else (float(row.discount_value) / base_price) * 100
+        pct = round(min(90.0, max(0.0, pct)))
+        if pct <= 0:
+            continue
+        existing = best.get(row.tour_id)
+        if not existing or pct > existing["discount_percentage"]:
+            best[row.tour_id] = {
+                "discount_percentage": pct,
+                "original_price_per_person": base_price,
+                "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
+            }
+    return best
+
+
+def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, review_stats: dict[int, dict] | None = None, overview: TourOverview | None = None, discount_map: dict[int, dict] | None = None):
     country_name = item.country.country_name if item.country else ""
     country_slug = slugify(country_name or "worldwide")
     stats = (review_stats or {}).get(item.id)
+    discount_info = (discount_map or {}).get(item.id)
     return {
         "id": item.id,
         "tour_code": item.tour_code,
@@ -156,6 +201,9 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, revie
         "subtitle": item.subtitle,
         "price_start_per_person": item.price_start_per_person,
         "currency": item.currency,
+        "discount_percentage": discount_info["discount_percentage"] if discount_info else None,
+        "original_price_per_person": discount_info["original_price_per_person"] if discount_info else None,
+        "discounted_price_per_person": discount_info["discounted_price_per_person"] if discount_info else None,
         "country_name": country_name,
         "country_slug": country_slug,
         "city_name": item.city.city_name if item.city else "",
@@ -301,13 +349,14 @@ def public_tours(
                 departure_map[departure.tour_id].append(departure)
     review_stats = get_review_stats(db, tour_ids)
     overview_map = {o.tour_id: o for o in db.query(TourOverview).filter(TourOverview.tour_id.in_(tour_ids))} if tour_ids else {}
+    discount_map = _active_discount_map(db, tours)
     return {
         "status": "success",
         "total": total,
         "page": page,
         "limit": limit,
         "total_pages": max(1, (total + limit - 1) // limit),
-        "items": [_public_tour(t, departure_map.get(t.id), review_stats, overview_map.get(t.id)) for t in tours],
+        "items": [_public_tour(t, departure_map.get(t.id), review_stats, overview_map.get(t.id), discount_map) for t in tours],
         "filters_applied": {
             "search": search,
             "country": country,
@@ -347,7 +396,8 @@ def featured_tours(db: Session = Depends(get_db), limit: int = Query(default=6, 
     tour_ids = [t.id for t in tours]
     review_stats = get_review_stats(db, tour_ids)
     overview_map = {o.tour_id: o for o in db.query(TourOverview).filter(TourOverview.tour_id.in_(tour_ids))} if tour_ids else {}
-    return {"status": "success", "items": [_public_tour(t, review_stats=review_stats, overview=overview_map.get(t.id)) for t in tours]}
+    discount_map = _active_discount_map(db, tours)
+    return {"status": "success", "items": [_public_tour(t, review_stats=review_stats, overview=overview_map.get(t.id), discount_map=discount_map) for t in tours]}
 
 
 @router.get("/tours/{country_slug}/{tour_slug}")
@@ -426,16 +476,19 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     review_stats = get_review_stats(db, [tour_id])
     reviews = list_tour_reviews(db, tour_id)
 
-    similar_tours = []
+    similar_tour_rows = []
     for link in similar_links:
         st = db.query(Tour).filter(Tour.id == link.similar_tour_id, Tour.status == "published").first()
         if st:
-            similar_tours.append(_public_tour(st))
+            similar_tour_rows.append(st)
+    similar_discount_map = _active_discount_map(db, similar_tour_rows)
+    similar_tours = [_public_tour(st, discount_map=similar_discount_map) for st in similar_tour_rows]
+    own_discount_map = _active_discount_map(db, [tour])
 
     return {
         "status": "success",
         "data": {
-            **_public_tour(tour, review_stats=review_stats),
+            **_public_tour(tour, review_stats=review_stats, discount_map=own_discount_map),
             "long_description": tour.long_description,
             "start_location": tour.start_location,
             "finish_location": tour.finish_location,
