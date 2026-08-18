@@ -309,12 +309,55 @@ async def _balance_due_reminder_loop():
             logger.exception("Balance-due reminder sweep failed")
 
 
+# Tour end-date reminders only need to change once a day (the 30-day/resend
+# windows are whole-day boundaries), so an hourly check is plenty responsive.
+TOUR_AVAILABILITY_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
+
+
+async def _tour_availability_reminder_loop():
+    from app.services.tour_availability import check_availability_end_date_reminders
+
+    while True:
+        await asyncio.sleep(TOUR_AVAILABILITY_REMINDER_SWEEP_INTERVAL_SECONDS)
+        try:
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(check_availability_end_date_reminders, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Tour availability end-date reminder sweep failed")
+
+
+# Each wishlist item's own weekly cadence is tracked per-row
+# (last_reminder_sent_at) - a daily sweep is frequent enough to catch every
+# item within a day of its 7-day mark without checking hourly.
+WISHLIST_REMINDER_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def _wishlist_reminder_loop():
+    from app.services.wishlist_reminders import check_wishlist_reminders
+
+    while True:
+        await asyncio.sleep(WISHLIST_REMINDER_SWEEP_INTERVAL_SECONDS)
+        try:
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(check_wishlist_reminders, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Wishlist reminder sweep failed")
+
+
 @app.on_event("startup")
 async def start_background_jobs():
     if schema_is_ready():
         asyncio.create_task(_expire_stale_bookings_loop())
         asyncio.create_task(_report_schedule_loop())
         asyncio.create_task(_balance_due_reminder_loop())
+        asyncio.create_task(_tour_availability_reminder_loop())
+        asyncio.create_task(_wishlist_reminder_loop())
 
 setup_cors(app)
 

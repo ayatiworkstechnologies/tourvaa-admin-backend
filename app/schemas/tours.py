@@ -8,6 +8,7 @@ ITEM_STATUSES = {"active", "inactive"}
 IMAGE_TYPES = {"gallery", "itinerary", "highlight", "banner", "map"}
 MARKUP_TYPES = {"percentage", "fixed"}
 CALENDAR_STATUSES = {"available", "unavailable", "sold_out", "blocked"}
+AVAILABILITY_FREQUENCIES = {"weekly", "fortnightly", "monthly"}
 DISCOUNT_TYPES = {"percentage", "fixed"}
 DISCOUNT_SCOPES = {"tour", "all_tours", "category", "country"}
 PRICE_TYPES = {"per_person", "per_booking"}
@@ -62,6 +63,7 @@ class ItineraryPayload(BaseModel):
     short_description: str = Field(default="")
     long_description: str = Field(default="")
     activities: str = Field(default="")
+    optional_activities: str = Field(default="")
     accommodation: str = Field(default="", max_length=255)
     start_time: str = Field(default="", max_length=20)
     end_time: str = Field(default="", max_length=20)
@@ -72,6 +74,9 @@ class ItineraryPayload(BaseModel):
     important_notes: str = Field(default="")
     image: str = Field(default="", max_length=255)
     image_alt_text: str = Field(default="", max_length=180)
+    # Additional images for the day's carousel, beyond the single cover
+    # `image` above - stored server-side as a JSON-encoded string.
+    images: list[str] = Field(default_factory=list)
     display_order: int = Field(default=0, ge=0)
     status: str = Field(default="active", max_length=20)
 
@@ -184,12 +189,15 @@ class PricingPayload(BaseModel):
     passenger_to: int = Field(ge=1)
     adult_price: float = Field(ge=0)
     child_price: float = Field(default=0.0, ge=0)
-    # supplier_price/markup_type/markup_value/final_price/admin_markup_type/
-    # admin_markup_value are accepted for backward compatibility only and are
-    # always ignored/recomputed server-side from the single global commission
-    # rate (Admin Settings -> Tourvaa Commission %) -- see
-    # services.tours._apply_pricing_computation. adult_price/child_price are
-    # the only prices that matter here: they ARE the full customer-facing total.
+    # adult_price/child_price are the supplier's own net asking price.
+    # markup_value is the supplier's requested commission % -- always floored
+    # server-side at the supplier's agreed rate (services.tours.
+    # _apply_pricing_computation), so a supplier may raise it but never lower
+    # it below what was agreed at approval. admin_markup_value is the
+    # Tourvaa-only retail markup added on top of the same price to produce
+    # the storefront price; only honoured when the actor is not a supplier.
+    # supplier_price/final_price are legacy/unused, kept for backward
+    # compatibility only.
     supplier_price: float = Field(default=0.0, ge=0)
     markup_type: str = Field(default="percentage", max_length=20)
     markup_value: float = Field(default=0.0, ge=0)
@@ -247,6 +255,7 @@ class AccommodationExtraPayload(BaseModel):
     description: str = Field(default="")
     extra_price: float = Field(default=0.0, ge=0)
     price_type: str = Field(default="per_person", max_length=20)
+    image: str = Field(default="", max_length=255)
     category: str = Field(default="room_upgrade", max_length=30)
     is_default: bool = False
     status: str = Field(default="active", max_length=20)
@@ -288,6 +297,43 @@ class CalendarPayload(BaseModel):
         if v not in CALENDAR_STATUSES:
             raise ValueError(f"status must be one of {CALENDAR_STATUSES}")
         return v
+
+
+# recurring availability schedule
+class AvailabilityConfigPayload(BaseModel):
+    availability_start_date: datetime | None = None
+    availability_end_date: datetime | None = None
+    min_advance_booking_days: int = Field(default=0, ge=0)
+    frequency: str | None = None
+    frequency_week: int | None = Field(default=None, ge=1, le=4)
+    frequency_days: list[int] = Field(default_factory=list)
+    seats_per_occurrence: int = Field(default=0, ge=0)
+
+    @field_validator("frequency")
+    @classmethod
+    def validate_frequency(cls, v: str | None):
+        if v is not None and v not in AVAILABILITY_FREQUENCIES:
+            raise ValueError(f"frequency must be one of {AVAILABILITY_FREQUENCIES}")
+        return v
+
+    @field_validator("frequency_days")
+    @classmethod
+    def validate_frequency_days(cls, v: list[int]):
+        if any(day < 0 or day > 6 for day in v):
+            raise ValueError("frequency_days must contain weekday values 0 (Monday) through 6 (Sunday)")
+        return v
+
+    @model_validator(mode="after")
+    def validate_range_and_frequency(self) -> "AvailabilityConfigPayload":
+        if self.availability_start_date and self.availability_end_date and self.availability_end_date < self.availability_start_date:
+            raise ValueError("availability_end_date must be on or after availability_start_date")
+        if self.frequency and not self.frequency_days:
+            raise ValueError("Select at least one day of the week for the chosen frequency")
+        if self.frequency in ("fortnightly",) and self.frequency_week not in (1, 2):
+            raise ValueError("frequency_week must be 1 or 2 for a fortnightly schedule")
+        if self.frequency == "monthly" and self.frequency_week not in (1, 2, 3, 4):
+            raise ValueError("frequency_week must be between 1 and 4 for a monthly schedule")
+        return self
 
 
 # unavailable date

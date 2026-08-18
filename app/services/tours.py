@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
@@ -96,16 +97,20 @@ def save_overview(db: Session, tour_id: int, data: TourOverviewPayload, actor: U
 
 # itinerary
 def _ser_itinerary(i: TourItinerary) -> dict:
+    try:
+        images = json.loads(i.images) if i.images else []
+    except (TypeError, ValueError):
+        images = []
     return {
         "id": i.id, "tour_id": i.tour_id, "day_number": i.day_number,
         "day_title": i.day_title, "location_name": i.location_name,
         "short_description": i.short_description, "long_description": i.long_description,
-        "activities": i.activities, "accommodation": i.accommodation,
+        "activities": i.activities, "optional_activities": i.optional_activities, "accommodation": i.accommodation,
         "start_time": i.start_time, "end_time": i.end_time,
         "travel_distance": i.travel_distance, "travel_duration": i.travel_duration,
         "transport_type": i.transport_type, "meals_included": i.meals_included,
         "important_notes": i.important_notes,
-        "image": i.image, "image_alt_text": i.image_alt_text,
+        "image": i.image, "image_alt_text": i.image_alt_text, "images": images,
         "display_order": i.display_order, "status": i.status,
         "created_at": i.created_at, "updated_at": i.updated_at,
     }
@@ -116,9 +121,15 @@ def list_itineraries(db: Session, tour_id: int) -> list[dict]:
     return [_ser_itinerary(i) for i in db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id).order_by(TourItinerary.display_order, TourItinerary.day_number).all()]
 
 
+def _itinerary_fields(data: ItineraryPayload) -> dict:
+    payload = data.model_dump()
+    payload["images"] = json.dumps(payload.get("images") or [])
+    return payload
+
+
 def create_itinerary(db: Session, tour_id: int, data: ItineraryPayload, actor: User, request: Request | None = None) -> dict:
     _require_tour(db, tour_id)
-    o = TourItinerary(tour_id=tour_id, **data.model_dump())
+    o = TourItinerary(tour_id=tour_id, **_itinerary_fields(data))
     db.add(o)
     log_audit(db, actor=actor, action="create_itinerary", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
@@ -129,7 +140,7 @@ def create_itinerary(db: Session, tour_id: int, data: ItineraryPayload, actor: U
 
 def update_itinerary(db: Session, tour_id: int, itinerary_id: int, data: ItineraryPayload, actor: User, request: Request | None = None) -> dict:
     o = _child_or_404(db, TourItinerary, itinerary_id, tour_id, "Itinerary")
-    for key, value in data.model_dump().items():
+    for key, value in _itinerary_fields(data).items():
         setattr(o, key, value)
     log_audit(db, actor=actor, action="update_itinerary", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
@@ -350,12 +361,21 @@ def _ser_pricing(o: TourPricing) -> dict:
 
 
 def _apply_commission(commission_type: str, commission_value: float, base: float) -> float:
-    """Commission is carved OUT of the price entered (the supplier's listed
-    price is the full customer-facing total) -- the result is what the
-    supplier actually receives once Tourvaa's global commission is deducted."""
+    """Commission is carved OUT of the supplier's own entered price -- the
+    result is what the supplier actually receives once Tourvaa's commission
+    is deducted from their asking price."""
     if commission_type == "percentage":
         return round(max(0.0, base * (1 - commission_value / 100)), 2)
     return round(max(0.0, base - commission_value), 2)
+
+
+def _apply_markup(markup_type: str, markup_value: float, base: float) -> float:
+    """Tourvaa's retail markup is added ON TOP of the supplier's own entered
+    price to produce the storefront/customer-facing price -- a second,
+    independent layer from the supplier's commission deduction above."""
+    if markup_type == "percentage":
+        return round(max(0.0, base * (1 + markup_value / 100)), 2)
+    return round(max(0.0, base + markup_value), 2)
 
 
 def _is_supplier_actor(db: Session, actor: User) -> bool:
@@ -363,22 +383,44 @@ def _is_supplier_actor(db: Session, actor: User) -> bool:
 
 
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    # Single global commission (Admin Settings -> Tourvaa Commission %,
-    # services.settings.get_commission_percentage) replaces the old two-layer
-    # per-supplier-commission + admin-markup-on-top model: the price entered
-    # here (adult_price/child_price) IS the full customer-facing total, and
-    # Tourvaa's cut is carved out of it - never trust the client for the
-    # commission value, it's never supplier- or admin-editable per slab.
+    # Two-layer model: adult_price/child_price are the supplier's own net
+    # asking price.
+    #  1. Commission (per-supplier agreed rate, Supplier.markup_type/value) is
+    #     carved out of that price -> what the supplier is actually paid
+    #     (supplier_final_*). The supplier may raise their own commission
+    #     above the agreed rate (never below it) via markup_value on the
+    #     payload -- the agreed rate set by admin is always the floor.
+    #  2. An admin-only retail markup (admin_markup_type/value) is added ON
+    #     TOP of the same supplier price -> the storefront/customer price
+    #     (storefront_*). Only a non-supplier actor may change it; a
+    #     supplier-submitted slab keeps whatever markup already exists (0 for
+    #     a brand-new slab pending its first admin review).
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
-    commission_pct = float(get_commission_percentage(db))
-    o.markup_type = "percentage"
-    o.markup_value = commission_pct
-    o.admin_markup_type = "percentage"
-    o.admin_markup_value = 0.0
+    supplier = db.query(Supplier).filter(Supplier.id == tour.supplier_id).first() if tour and tour.supplier_id else None
+    # Supplier.markup_type is only ever set once an admin has actually agreed
+    # a per-supplier rate (it defaults to NULL; markup_value defaults to 0,
+    # which is not a usable "unset" sentinel on its own) - fall back to the
+    # global commission setting until then.
+    has_agreed_rate = bool(supplier and supplier.markup_type)
+    agreed_type = supplier.markup_type if has_agreed_rate else "percentage"
+    agreed_value = float(supplier.markup_value) if has_agreed_rate else float(get_commission_percentage(db))
+    submitted_value = float(data.markup_value or 0.0)
+    commission_type = agreed_type
+    commission_value = max(agreed_value, submitted_value)
 
-    o.supplier_final_adult_price = _apply_commission("percentage", commission_pct, o.adult_price)
-    o.supplier_final_child_price = _apply_commission("percentage", commission_pct, o.child_price)
+    o.markup_type = commission_type
+    o.markup_value = commission_value
+    o.supplier_final_adult_price = _apply_commission(commission_type, commission_value, o.adult_price)
+    o.supplier_final_child_price = _apply_commission(commission_type, commission_value, o.child_price)
     o.final_price = o.adult_price
+
+    is_supplier = _is_supplier_actor(db, actor)
+    if not is_supplier:
+        o.admin_markup_type = data.admin_markup_type or "percentage"
+        o.admin_markup_value = max(0.0, float(data.admin_markup_value or 0.0))
+    elif o.admin_markup_type is None:
+        o.admin_markup_type = "percentage"
+        o.admin_markup_value = o.admin_markup_value or 0.0
 
     # A supplier editing an existing slab on a tour that's already been
     # through at least one approval must not change what the storefront
@@ -388,13 +430,12 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     # New slabs and admin edits still compute immediately: a brand-new slab
     # has no existing public price to protect, and an admin has direct
     # authority over Tourvaa's own pricing.
-    is_supplier = _is_supplier_actor(db, actor)
     freeze = is_update and is_supplier and tour and tour.status in ("active", "published", "repricing_required")
     if freeze:
         return
 
-    o.storefront_adult_price = o.adult_price
-    o.storefront_child_price = o.child_price
+    o.storefront_adult_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.adult_price)
+    o.storefront_child_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.child_price)
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
@@ -409,7 +450,7 @@ def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 # the one exception: the client value is read (in _apply_pricing_computation,
 # not here) but always floored at the supplier's agreed commission rate.
 _PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "child_price", "supplier_price", "currency", "status")
-_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "markup_value")
+_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "markup_value", "admin_markup_value")
 
 
 def _actor_role_slug(actor: User) -> str:
@@ -504,7 +545,7 @@ def delete_activity(db, tour_id, rid, actor, request=None): return _delete_activ
 
 # accommodation extra
 def _ser_accommodation(o: TourAccommodationExtra) -> dict:
-    return {"id": o.id, "tour_id": o.tour_id, "accommodation_name": o.accommodation_name, "description": o.description, "extra_price": o.extra_price, "price_type": o.price_type, "category": o.category, "is_default": bool(o.is_default), "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
+    return {"id": o.id, "tour_id": o.tour_id, "accommodation_name": o.accommodation_name, "description": o.description, "extra_price": o.extra_price, "price_type": o.price_type, "image": o.image or "", "category": o.category, "is_default": bool(o.is_default), "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
 
 def list_accommodations(db: Session, tour_id: int) -> list[dict]:

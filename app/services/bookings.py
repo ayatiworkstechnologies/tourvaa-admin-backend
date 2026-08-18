@@ -752,6 +752,15 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
             logger.warning("Affiliate attribution lookup failed for booking creation", exc_info=True)
 
     tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab = _price_booking(db, data, lock_calendar=True, consume_discount=True)
+    if tour:
+        # calendar is only set when the caller passed tour_calendar_id - fall
+        # back to the raw tour_date string (checkout/admin bookings that
+        # book a date without pinning a specific calendar row) so the
+        # advance-booking window is enforced either way.
+        booked_date = calendar.tour_date if calendar and calendar.tour_date else (_parse_dt(data.tour_date) if data.tour_date else None)
+        if booked_date:
+            from app.services.tour_availability import assert_meets_advance_booking_window
+            assert_meets_advance_booking_window(db, tour.id, booked_date)
     _validate_customer_travellers(data, adults, children)
     country = db.query(Country).filter(Country.id == (data.country_id or (tour.country_id if tour else None))).first() if (data.country_id or tour) else None
     city = db.query(City).filter(City.id == (data.city_id or (tour.city_id if tour else None))).first() if (data.city_id or tour) else None

@@ -34,6 +34,39 @@ def test_booking_calculate_price(headers, first_tour_id):
     assert resp.status_code in (200, 400, 404, 422), resp.text
 
 
+@skip_if_readonly()
+def test_booking_blocked_within_minimum_advance_booking_window(headers):
+    from datetime import datetime, timedelta
+
+    tours_resp = requests.get(f"{BASE_URL}/tours", headers=headers, params={"limit": 100}, timeout=10)
+    tours = tours_resp.json().get("data", tours_resp.json().get("items", []))
+    published = [t for t in tours if t.get("status") == "published"]
+    if not published:
+        return  # nothing published to book against in this environment
+    tour_id = published[0]["id"]
+
+    tomorrow = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
+    cal_resp = requests.post(f"{BASE_URL}/tours/{tour_id}/calendar", headers=headers, json={
+        "tour_date": tomorrow, "available_seats": 10, "booked_seats": 0, "status": "available",
+    }, timeout=10)
+    assert cal_resp.status_code in (200, 201), cal_resp.text
+
+    avail_resp = requests.put(f"{BASE_URL}/tours/{tour_id}/availability", headers=headers, json={
+        "min_advance_booking_days": 30,
+    }, timeout=10)
+    assert avail_resp.status_code == 200, avail_resp.text
+
+    try:
+        payload = {"customer_id": 1, "tour_id": tour_id, "booking_source": "admin", "adults_count": 1, "children_count": 0, "tour_name": "Advance Window Test", "tour_date": tomorrow[:10]}
+        resp = requests.post(f"{BASE_URL}/bookings", json=payload, headers=headers, timeout=10)
+        assert resp.status_code == 400, resp.text
+        assert "advance" in str(resp.json()).lower()
+    finally:
+        # Reset so this tour's advance-booking window doesn't affect any
+        # other test that books a near-term date against it.
+        requests.put(f"{BASE_URL}/tours/{tour_id}/availability", headers=headers, json={"min_advance_booking_days": 0}, timeout=10)
+
+
 def test_booking_detail_not_found(headers):
     resp = requests.get(f"{BASE_URL}/bookings/999999999", headers=headers, timeout=10)
     assert resp.status_code == 404, resp.text

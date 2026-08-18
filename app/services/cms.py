@@ -350,6 +350,71 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     return _tour(item)
 
 
+def delete_tour(db: Session, tour_id: int, actor: User, request: Request | None = None) -> None:
+    """Admin-only hard delete. Blocked if any booking ever referenced this
+    tour (no ondelete cascade exists on Booking.tour_id, and a booking's
+    history must never silently disappear) -- unpublish/disable the tour
+    instead if it needs to stop taking new bookings. All of the tour's own
+    detail-page child rows have no independent meaning without the tour, so
+    those are deleted here rather than left as orphans."""
+    item = get_or_404(db, Tour, tour_id, "Tour")
+
+    from app.models.bookings import Booking
+    has_bookings = db.query(Booking.id).filter(Booking.tour_id == tour_id).first() is not None
+    if has_bookings:
+        raise HTTPException(status_code=400, detail="This tour has existing bookings and cannot be deleted. Unpublish or disable it instead.")
+
+    from app.models.customers import CustomerWishlistItem
+    from app.models.tour_versions import TourReviewComment, TourVersion
+    from app.models.tours import (
+        TourAccommodationExtra,
+        TourAvailabilityConfig,
+        TourCalendar,
+        TourDiscount,
+        TourExclusion,
+        TourExtension,
+        TourGalleryImage,
+        TourHighlight,
+        TourInclusion,
+        TourItinerary,
+        TourOptionalActivity,
+        TourOverview,
+        TourPricing,
+        TourSimilar,
+        TourUnavailableDate,
+    )
+
+    old = _tour(item)
+    child_deletes = [
+        (TourVersion, TourVersion.tour_id),
+        (TourReviewComment, TourReviewComment.tour_id),
+        (CustomerWishlistItem, CustomerWishlistItem.tour_id),
+        (TourOverview, TourOverview.tour_id),
+        (TourItinerary, TourItinerary.tour_id),
+        (TourInclusion, TourInclusion.tour_id),
+        (TourExclusion, TourExclusion.tour_id),
+        (TourHighlight, TourHighlight.tour_id),
+        (TourGalleryImage, TourGalleryImage.tour_id),
+        (TourPricing, TourPricing.tour_id),
+        (TourOptionalActivity, TourOptionalActivity.tour_id),
+        (TourAccommodationExtra, TourAccommodationExtra.tour_id),
+        (TourCalendar, TourCalendar.tour_id),
+        (TourAvailabilityConfig, TourAvailabilityConfig.tour_id),
+        (TourUnavailableDate, TourUnavailableDate.tour_id),
+        (TourDiscount, TourDiscount.tour_id),
+    ]
+    for model, column in child_deletes:
+        db.query(model).filter(column == tour_id).delete(synchronize_session=False)
+    # TourExtension/TourSimilar each reference tours.id twice (as the owning
+    # tour and as the linked tour) - clear both directions.
+    db.query(TourExtension).filter((TourExtension.tour_id == tour_id) | (TourExtension.extension_tour_id == tour_id)).delete(synchronize_session=False)
+    db.query(TourSimilar).filter((TourSimilar.tour_id == tour_id) | (TourSimilar.similar_tour_id == tour_id)).delete(synchronize_session=False)
+
+    log_audit(db, actor=actor, action="delete_tour", entity_type="tour", entity_id=tour_id, old_values=old, request=request)
+    db.delete(item)
+    db.commit()
+
+
 def update_status(db: Session, model, serializer, item_id: int, data: StatusUpdate, actor: User, entity_type: str, request: Request | None = None):
     item = get_or_404(db, model, item_id, entity_type.title())
     old = serializer(item)

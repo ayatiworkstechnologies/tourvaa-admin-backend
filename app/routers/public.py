@@ -3,6 +3,7 @@ Public API - no authentication required.
 Serves tour listing and detail for the public website.
 """
 import html as html_escape
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -112,6 +113,16 @@ def subscribe_newsletter(request: Request, data: NewsletterSubscribeRequest, db:
     if support_email:
         try_send_email(support_email, "New newsletter signup", body, template_key="newsletter_signup")
     return {"status": "success", "message": "You're subscribed! Watch your inbox for travel inspiration."}
+
+
+def _safe_json_list(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
 
 
 def _ser_overview(o: TourOverview):
@@ -391,7 +402,14 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
         )
         .all()
     )
-    calendar = db.query(TourCalendar).filter(TourCalendar.tour_id == tour_id).order_by(TourCalendar.tour_date.asc()).all()
+    calendar = (
+        db.query(TourCalendar)
+        .filter(TourCalendar.tour_id == tour_id, TourCalendar.tour_date >= datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
+        .order_by(TourCalendar.tour_date.asc())
+        .all()
+    )
+    from app.models.tours import TourAvailabilityConfig
+    availability_config = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
     similar_links = db.query(TourSimilar).filter(TourSimilar.tour_id == tour_id).all()
     tour_refund_rules = (
         db.query(RefundRule)
@@ -444,7 +462,9 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
                     "travel_duration": i.travel_duration or "",
                     "important_notes": i.important_notes or "",
                     "activities": i.activities or "",
+                    "optional_activities": i.optional_activities or "",
                     "image": i.image or None,
+                    "images": _safe_json_list(i.images),
                 }
                 for i in itineraries
             ],
@@ -458,11 +478,13 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             # live tour is frozen pending admin approval (see
             # services.tours._apply_pricing_computation's freeze guard).
             "pricing": [{"persons_from": p.passenger_from, "persons_to": p.passenger_to, "price_per_person": float(p.storefront_adult_price if p.storefront_adult_price is not None else p.adult_price), "currency": p.currency} for p in pricing],
-            "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other"} for a in activities],
-            "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade"} for a in accommodations],
-            "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other"} for e in extensions],
+            "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
+            "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],
+            "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other", "image": (e.extension_tour.banner_image or None) if e.extension_tour else None} for e in extensions],
             "discounts": [{"label": d.discount_name, "discount_type": d.discount_type, "value": float(d.discount_value), "valid_from": str(d.start_date) if d.start_date else None, "valid_to": str(d.end_date) if d.end_date else None} for d in discounts],
             "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": max(0, c.available_seats - c.booked_seats), "status": c.status} for c in calendar],
+            "min_advance_booking_days": availability_config.min_advance_booking_days if availability_config else 0,
+            "availability_end_date": str(availability_config.availability_end_date.date()) if availability_config and availability_config.availability_end_date else None,
             "similar_tours": similar_tours,
             "cancellation_policy": [
                 {
