@@ -630,10 +630,23 @@ def send_user_password_reset(db: Session, user_id: int):
     db.commit()
 
     reset_url = build_password_reset_url(token)
-    send_email(
-        user.email,
+    subject, html = render_database_email(
+        db,
+        "password_reset",
+        {
+            "name": user.name,
+            "email": user.email,
+            "reset_url": reset_url,
+            "button_text": "Reset Password",
+            "button_url": reset_url,
+        },
         "Reset your Tourvaa password",
         password_reset_email(user.name, reset_url),
+    )
+    send_email(
+        user.email,
+        subject,
+        html,
         template_key="password_reset",
     )
 

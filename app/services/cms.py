@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.services.audit import log_audit
 from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
 from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourPayload, slugify
-from app.utils.operations import code_for, get_or_404, simple_paginate
+from app.utils.operations import get_or_404, simple_paginate
 from app.models.users import User
 
 
@@ -94,6 +94,7 @@ def _tour(item: Tour):
         # instead of a plain Published badge, without the tour ever
         # actually leaving the public site mid-review.
         "pending_review_kind": _pending_review_kind(item),
+        "active_discount": _active_discount(item),
         "created_by": item.created_by,
         "updated_by": item.updated_by,
         "created_at": item.created_at,
@@ -116,6 +117,49 @@ def _pending_review_kind(item: Tour) -> str | None:
         .first()
     )
     return pending.change_kind if pending else None
+
+
+def _active_discount(item: Tour) -> dict | None:
+    """Best currently-active, tour-scoped TourDiscount expressed as a
+    percentage off price_start_per_person - mirrors public.py's
+    _active_discount_map so the admin/supplier "Basic tour details" preview
+    matches exactly what customers see on the storefront."""
+    if not item.id:
+        return None
+    from datetime import datetime, timezone
+    from sqlalchemy import or_
+    from sqlalchemy.orm import object_session
+    from app.models.tours import TourDiscount
+    session = object_session(item)
+    if session is None:
+        return None
+    now = datetime.now(timezone.utc)
+    rows = (
+        session.query(TourDiscount)
+        .filter(
+            TourDiscount.tour_id == item.id,
+            TourDiscount.status == "active",
+            or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= now),
+            or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= now),
+        )
+        .all()
+    )
+    base_price = float(item.price_start_per_person or 0)
+    if not rows or base_price <= 0:
+        return None
+    best: dict | None = None
+    for row in rows:
+        pct = float(row.discount_value) if row.discount_type == "percentage" else (float(row.discount_value) / base_price) * 100
+        pct = round(min(90.0, max(0.0, pct)))
+        if pct <= 0:
+            continue
+        if not best or pct > best["discount_percentage"]:
+            best = {
+                "discount_percentage": pct,
+                "original_price_per_person": base_price,
+                "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
+            }
+    return best
 
 
 def _unique_slug(db: Session, model, slug: str, current_id: int | None = None):
@@ -336,7 +380,7 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     db.add(item)
     db.flush()
     if not item.tour_code:
-        item.tour_code = code_for("TVA-TOUR", item.id)
+        item.tour_code = f"{item.id:05d}"
     item.subcategory_links = [TourSubcategoryMap(subcategory_id=subcategory_id) for subcategory_id in subcategory_ids]
     if tour_id:
         # Editing an already-live tour's own fields is the same live-edit gap

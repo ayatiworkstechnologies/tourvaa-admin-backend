@@ -78,7 +78,7 @@ def _email_agent_booking_status(db, booking: Booking, new_status: str, reason: s
 
 
 def _booking_code(booking_id: int) -> str:
-    return f"TVA-BKG-{booking_id:06d}"
+    return f"TOURVAA-BOOKING-{booking_id:05d}"
 
 
 def _parse_dt(value: str | None):
@@ -377,7 +377,7 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
 
 
 def serialize_traveller(t: BookingTraveller) -> dict:
-    return {"id": t.id, "traveller_type": t.traveller_type, "first_name": t.first_name, "last_name": t.last_name, "full_name": t.full_name, "age": t.age, "gender": t.gender, "nationality": t.nationality, "passport_number": _mask_passport(t.passport_number), "email": t.email, "phone": t.phone, "is_primary_contact": bool(t.is_primary_contact), "special_requirements": t.special_requirements}
+    return {"id": t.id, "traveller_type": t.traveller_type, "first_name": t.first_name, "last_name": t.last_name, "full_name": t.full_name, "age": t.age, "gender": t.gender, "nationality": t.nationality, "passport_number": _mask_passport(t.passport_number), "email": t.email, "phone": t.phone, "is_primary_contact": bool(t.is_primary_contact), "special_requirements": t.special_requirements, "pickup_location": t.pickup_location, "emergency_contact": t.emergency_contact}
 
 
 def serialize_activity(a: BookingOptionalActivity) -> dict:
@@ -1156,19 +1156,36 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         from app.services.supplier_ledger import create_ledger_entry
         existing_ledger = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking.id).first()
         if not existing_ledger:
-            from app.services.settings import get_commission_percentage
             # For agent bookings, final_amount/total_cost is the customer-facing
             # price INCLUDING the agent's own markup (see create_booking) - the
-            # supplier never sees that markup, so their commission must be based
-            # on agent_net_price (the actual tour cost) instead.
+            # supplier never sees that markup, so the payout must be based on
+            # agent_net_price (the actual tour cost) instead.
             if booking.booking_source == "agent" and booking.agent_net_price:
                 gross_amount = money(booking.agent_net_price)
             else:
                 gross_amount = money(booking.final_amount or booking.total_cost or 0)
-            # Single global commission rate (Admin Settings -> Tourvaa
-            # Commission %) replaces the old per-supplier agreed rate -
-            # read live at settlement time, not baked into the booking.
-            commission_amount = money((gross_amount * get_commission_percentage(db)) / 100)
+            # Tourvaa pays the supplier their own asking price in full - no
+            # commission is deducted from the supplier. Tourvaa's commission
+            # is the per-tour admin markup (tour_pricing.admin_markup_value,
+            # 5-15%) that was already added on top when the customer was
+            # charged, so the supplier's share is reconstructed from the
+            # booking's pricing slab (raw supplier prices) rather than
+            # applying a flat rate to the customer-facing total. Add-ons
+            # (activities/accommodation/extensions), tax, surcharge and
+            # discount carry no Tourvaa markup and pass through to the
+            # supplier untouched.
+            supplier_share = gross_amount
+            slab = db.query(TourPricing).filter(TourPricing.id == booking.pricing_slab_id).first() if booking.pricing_slab_id else None
+            if slab:
+                adults = booking.adults_count if booking.adults_count is not None else (booking.no_of_adults or 0)
+                children = booking.children_count if booking.children_count is not None else (booking.no_of_children or 0)
+                raw_tour_amount = money(money(slab.adult_price) * adults + money(slab.child_price) * children)
+                marked_up_adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
+                marked_up_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
+                marked_up_tour_amount = money(money(marked_up_adult) * adults + money(marked_up_child) * children)
+                addon_amount = gross_amount - marked_up_tour_amount
+                supplier_share = money(raw_tour_amount + addon_amount)
+            commission_amount = money(max(money(0), gross_amount - supplier_share))
             try:
                 create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=gross_amount, commission_amount=commission_amount)
             except Exception as error:

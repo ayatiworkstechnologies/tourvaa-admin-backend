@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -21,13 +21,6 @@ class Supplier(Base):
     rejection_reason = Column(String(255), nullable=True)
     admin_comments = Column(Text, nullable=True)
     pending_requirements = Column(Text, nullable=True)
-    markup_type = Column(String(20), nullable=True)
-    markup_value = Column(Float, default=0, nullable=False)
-    commission_request_type = Column(String(20), nullable=True)
-    commission_request_value = Column(Float, nullable=True)
-    commission_request_status = Column(String(20), nullable=True, index=True)
-    commission_requested_at = Column(DateTime(timezone=True), nullable=True)
-    commission_reviewed_at = Column(DateTime(timezone=True), nullable=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     rejected_at = Column(DateTime(timezone=True), nullable=True)
@@ -49,12 +42,6 @@ class Supplier(Base):
         cascade="all, delete-orphan",
         order_by="SupplierApprovalHistory.id.desc()",
     )
-    commission_requests = relationship(
-        "SupplierCommissionRequest",
-        back_populates="supplier",
-        cascade="all, delete-orphan",
-        order_by="SupplierCommissionRequest.id.desc()",
-    )
 
 
 class SupplierApprovalHistory(Base):
@@ -70,22 +57,6 @@ class SupplierApprovalHistory(Base):
 
     supplier = relationship("Supplier", back_populates="approval_history")
     administrator = relationship("User", foreign_keys=[changed_by])
-
-
-class SupplierCommissionRequest(Base):
-    __tablename__ = "supplier_commission_requests"
-
-    id = Column(Integer, primary_key=True, index=True)
-    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False, index=True)
-    markup_type = Column(String(20), nullable=False)
-    markup_value = Column(Float, nullable=False)
-    status = Column(String(20), default="pending", nullable=False, index=True)
-    requested_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    reviewed_at = Column(DateTime(timezone=True), nullable=True)
-    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-
-    supplier = relationship("Supplier", back_populates="commission_requests")
-    reviewer = relationship("User", foreign_keys=[reviewed_by])
 
 
 class SupplierContact(Base):

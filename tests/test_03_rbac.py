@@ -1,7 +1,41 @@
 """Module 03 - RBAC / Roles / Permissions"""
 import pytest
 import requests
-from tests.conftest import BASE_URL, skip_if_readonly, unique
+from tests.conftest import BASE_URL, skip_if_readonly, unique, unique_phone, create_active_account, login_with_retry
+
+
+def _register_and_login_customer():
+    email = f"{unique('rbac_cust')}@example.com"
+    password = "Cust@1234"
+    # A customer role carries none of the admin-module permissions
+    # (view-users/view-roles/view-permissions) - this proves enforcement
+    # actually denies, not just that the super-admin path is wired up.
+    create_active_account("customer", "CUSTOMER", "RBAC Denial Test Customer", email, unique_phone(), password)
+    login = login_with_retry(email, password)
+    assert login.status_code == 200, login.text
+    token = login.json().get("data", {}).get("access_token")
+    assert token, login.text
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(scope="module")
+def limited_headers():
+    return _register_and_login_customer()
+
+
+def test_users_list_denied_for_unprivileged_role(limited_headers):
+    resp = requests.get(f"{BASE_URL}/users/", headers=limited_headers, timeout=10)
+    assert resp.status_code == 403, resp.text
+
+
+def test_roles_list_denied_for_unprivileged_role(limited_headers):
+    resp = requests.get(f"{BASE_URL}/roles/", headers=limited_headers, timeout=10)
+    assert resp.status_code == 403, resp.text
+
+
+def test_permissions_list_denied_for_unprivileged_role(limited_headers):
+    resp = requests.get(f"{BASE_URL}/permissions/", headers=limited_headers, timeout=10)
+    assert resp.status_code == 403, resp.text
 
 
 def test_roles_list_loads(headers):

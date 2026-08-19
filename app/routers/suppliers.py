@@ -8,11 +8,11 @@ from app.services.auth import register_unified_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs
 from app.utils.pagination import pagination_params
 from app.utils.operations import PartialApprovalRequest, RejectRequest
+from app.utils.ratelimit import check_rate_limit
 from app.models.permissions import Permission, RolePermission
 from app.schemas.suppliers import (
     DocumentReviewRequest,
     SupplierCreate,
-    SupplierMarkupRequest,
     SupplierAccountAction,
     SupplierSelfUpdate,
     SupplierUpdate,
@@ -21,6 +21,7 @@ from app.schemas.suppliers import (
     VehicleUpdate,
 )
 from app.services.suppliers import (
+    SUPPLIER_DOCUMENT_TYPES,
     _serialize_vehicle,
     approve_supplier,
     bulk_approve_suppliers,
@@ -31,8 +32,6 @@ from app.services.suppliers import (
     list_suppliers,
     partial_approve_supplier,
     reject_supplier,
-    reject_supplier_commission_request,
-    request_supplier_commission,
     review_supplier_document,
     review_supplier_vehicle,
     serialize_supplier,
@@ -40,11 +39,12 @@ from app.services.suppliers import (
     submit_supplier_verification_for,
     set_supplier_account_status,
     update_supplier,
-    update_supplier_markup,
 )
 from app.models.users import User
 
 router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
+
+MAX_VEHICLE_PHOTOS = 6
 
 
 @router.post("/register")
@@ -123,6 +123,17 @@ def my_supplier(db: Session = Depends(get_db), current_user: User = Depends(get_
     return {"status": "success", "data": serialize_supplier(supplier)}
 
 
+@router.get("/document-requirements")
+def supplier_document_requirements(_current_user: User = Depends(get_current_user)):
+    return {
+        "status": "success",
+        "data": [
+            {"document_type": key, **metadata}
+            for key, metadata in SUPPLIER_DOCUMENT_TYPES.items()
+        ],
+    }
+
+
 @router.patch("/me")
 @router.put("/me")
 def edit_my_supplier(data: SupplierSelfUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -132,11 +143,6 @@ def edit_my_supplier(data: SupplierSelfUpdate, request: Request, db: Session = D
         raise HTTPException(status_code=404, detail="Supplier profile not found")
     safe_update = SupplierUpdate(**data.model_dump(exclude_unset=True))
     return {"status": "success", "message": "Supplier updated successfully", "data": update_supplier(db, supplier.id, safe_update, current_user, request)}
-
-
-@router.post("/me/commission-request")
-def request_my_commission(data: SupplierMarkupRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return {"status": "success", "message": "Commission request submitted for admin approval", "data": request_supplier_commission(db, current_user, data, request)}
 
 
 @router.get("/me/vehicles")
@@ -241,6 +247,11 @@ async def upload_vehicle_photos(
         raise HTTPException(status_code=404, detail="Vehicle not found")
     import json
     existing: list[str] = json.loads(v.vehicle_photos) if v.vehicle_photos else []
+    if len(existing) + len(files) > MAX_VEHICLE_PHOTOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A vehicle can have at most {MAX_VEHICLE_PHOTOS} photos ({len(existing)} already uploaded).",
+        )
     for f in files:
         path = await _save_vehicle_file(f, "vehicle-photos")
         if path:
@@ -394,6 +405,7 @@ async def upload_supplier_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    check_rate_limit(request, "upload", max_calls=20, window_seconds=60)
     supplier = get_supplier(db, supplier_id)
     if supplier.user_id != current_user.id:
         role_ids = get_user_role_ids(current_user)
@@ -579,16 +591,6 @@ def partial_approve(supplier_id: int, data: PartialApprovalRequest, request: Req
 @router.post("/{supplier_id}/request-reupload")
 def request_reupload(supplier_id: int, data: PartialApprovalRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.reject", "suppliers.approve"))):
     return {"status": "success", "message": "Supplier reupload requested", "data": partial_approve_supplier(db, supplier_id, data, current_user, request)}
-
-
-@router.patch("/{supplier_id}/markup")
-def markup(supplier_id: int, data: SupplierMarkupRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.manage_markup"))):
-    return {"status": "success", "message": "Supplier markup updated successfully", "data": update_supplier_markup(db, supplier_id, data, current_user, request)}
-
-
-@router.post("/{supplier_id}/commission-request/reject")
-def reject_commission_request(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.manage_markup"))):
-    return {"status": "success", "message": "Commission request rejected", "data": reject_supplier_commission_request(db, supplier_id, current_user, request)}
 
 
 @router.post("/{supplier_id}/deactivate")

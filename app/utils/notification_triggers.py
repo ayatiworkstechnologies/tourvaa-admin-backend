@@ -157,56 +157,6 @@ def notify_supplier_reupload_requested(db: Session, *, supplier_id: int, supplie
     db.flush()
 
 
-def notify_supplier_commission_requested(db: Session, *, supplier_id: int, supplier_name: str, markup_type: str, markup_value: float, user_id: int | None = None):
-    notify_admins(
-        db,
-        notification_type="supplier_commission_requested",
-        title="Supplier Commission Request",
-        message=f"Supplier '{supplier_name}' requested {markup_value} {markup_type} commission/markup approval.",
-        entity_type="supplier",
-        entity_id=supplier_id,
-    )
-    from app.utils.email_templates import supplier_commission_requested_email
-    email_admins(db, "supplier_commission_requested", {"supplier_name": supplier_name, "markup_type": markup_type, "markup_value": markup_value}, "Supplier commission request pending approval", supplier_commission_requested_email(supplier_name, markup_type, markup_value))
-    if user_id:
-        enqueue_notification(
-            db,
-            user_id=user_id,
-            notification_type="supplier_commission_requested",
-            title="Commission request submitted",
-            message="Your commission request was sent to admin for approval.",
-            entity_type="supplier",
-            entity_id=supplier_id,
-        )
-    db.flush()
-
-
-def notify_supplier_commission_approved(db: Session, *, supplier_id: int, supplier_name: str, markup_type: str, markup_value: float, user_id: int | None = None):
-    notify_admins(
-        db,
-        notification_type="supplier_commission_approved",
-        title="Supplier Commission Approved",
-        message=f"Commission for supplier '{supplier_name}' approved as {markup_value} {markup_type}.",
-        entity_type="supplier",
-        entity_id=supplier_id,
-    )
-    if user_id:
-        enqueue_notification(
-            db,
-            user_id=user_id,
-            notification_type="supplier_commission_approved",
-            title="Commission request approved",
-            message=f"Your commission request was approved as {markup_value} {markup_type}.",
-            entity_type="supplier",
-            entity_id=supplier_id,
-        )
-        from app.config import settings
-        from app.utils.email_templates import supplier_commission_approved_email
-        login_url = f"{settings.FRONTEND_URL}/supplier/profile"
-        send_templated_email(db, _user_email(db, user_id), "supplier_commission_approved", {"supplier_name": supplier_name, "markup_type": markup_type, "markup_value": markup_value, "login_url": login_url}, "Your commission request is approved", supplier_commission_approved_email(supplier_name, markup_type, markup_value, login_url))
-    db.flush()
-
-
 # ---------------------------------------------------------------------------
 # Agent events
 # ---------------------------------------------------------------------------

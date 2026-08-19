@@ -120,6 +120,8 @@ class BookingTraveller(Base):
     phone = Column(String(50), nullable=True)
     is_primary_contact = Column(Integer, default=0, nullable=False)
     special_requirements = Column(Text, nullable=True)
+    pickup_location = Column(String(255), nullable=True)
+    emergency_contact = Column(String(150), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

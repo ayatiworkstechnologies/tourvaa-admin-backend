@@ -7,6 +7,7 @@ SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     slug: str = Field(min_length=1, max_length=100, pattern=SLUG_PATTERN)
+    is_active: bool = True
 
     @field_validator("name", "slug")
     @classmethod

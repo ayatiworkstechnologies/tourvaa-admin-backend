@@ -128,7 +128,7 @@ DEFAULT_PERMISSIONS.extend(DASHBOARD_PERMISSIONS)
 OPERATIONAL_PERMISSIONS = [
     ("suppliers", "Suppliers", [
         "view", "create", "edit", "approve", "reject", "partial_approve",
-        "manage_markup", "request_commission", "approve_commission", "view_documents", "reset_password", "communicate", "export",
+        "view_documents", "reset_password", "communicate", "export",
     ]),
     ("agents", "Agents", [
         "view", "create", "edit", "approve", "reject", "partial_approve",
@@ -470,7 +470,7 @@ def seed_default_roles_and_permissions(db: Session):
             "view-dashboard", "dashboard.view", "dashboard.summary",
             # Supplier own profile
             "view-suppliers", "update-suppliers",
-            "suppliers.view", "suppliers.edit", "suppliers.view_documents", "suppliers.request_commission",
+            "suppliers.view", "suppliers.edit", "suppliers.view_documents",
             # Tours (create & manage own tours)
             "view-tours", "create-tours", "update-tours",
             "tours.view", "tours.create", "tours.edit",
@@ -485,7 +485,7 @@ def seed_default_roles_and_permissions(db: Session):
             "payments.view",
             # Reports (supplier-scoped)
             "view-reports",
-            "reports.view", "reports.supplier",
+            "reports.view", "reports.supplier", "reports.export",
             # Invoices (view + download)
             "view-invoices",
             "invoices.view", "invoices.download",

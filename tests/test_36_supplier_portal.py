@@ -103,23 +103,14 @@ def test_supplier_me_requires_auth():
     assert resp.status_code in (401, 403)
 
 
-@skip_if_readonly()
-def test_supplier_commission_request(supplier_headers):
+def test_supplier_commission_request_endpoint_removed(supplier_headers):
+    # Suppliers no longer negotiate a commission rate - Tourvaa pays them
+    # their own listed tour price in full, and the per-tour commission
+    # (5-15%) is an admin-only markup set on tour_pricing.admin_markup_value.
     resp = requests.post(f"{BASE_URL}/suppliers/me/commission-request", json={
         "markup_type": "percentage", "markup_value": 10,
     }, headers=supplier_headers, timeout=10)
-    assert resp.status_code == 200, resp.text
-    data = resp.json()["data"]
-    # The supplier's commission-request flow returns its account `approval_status`
-    # ("APPROVED" once the admin approved the profile) plus a separate staging
-    # field `commission_request_status`. The original assertion compared
-    # `approval_status` against "admin_review_pending" -- that is Agent-status
-    # vocabulary, not the supplier commission staging, and the wrong field.
-    # This fixture supplier has no admin-set markup floor yet, so their first
-    # request always goes to pending admin review (no floor to "raise" over) --
-    # matching request_agent_commission's always-pending behavior.
-    assert data["approval_status"] == "APPROVED"
-    assert data["commission_request_status"] == "pending"
+    assert resp.status_code == 404, resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +180,14 @@ def test_supplier_booking_status_history_not_found(supplier_headers):
 # ---------------------------------------------------------------------------
 
 def test_supplier_messages_list(supplier_headers):
+    # /supplier/messages is the portal support-chat thread (one ongoing
+    # conversation with admin) -- it returns a single conversation object
+    # with a "messages" array, not a paginated "items" list.
     resp = requests.get(f"{BASE_URL}/supplier/messages", headers=supplier_headers, timeout=10)
     assert resp.status_code == 200, resp.text
-    assert "items" in resp.json()
+    body = resp.json()
+    assert "data" in body
+    assert "messages" in body["data"]
 
 
 @skip_if_readonly()
@@ -200,3 +196,4 @@ def test_supplier_send_message(supplier_headers):
         "subject": "Payout question", "message": "When is my next payout?",
     }, headers=supplier_headers, timeout=10)
     assert resp.status_code in (200, 201), resp.text
+    assert resp.json()["data"]["body"] == "When is my next payout?"

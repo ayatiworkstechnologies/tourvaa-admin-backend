@@ -176,10 +176,6 @@ class TourPricing(Base):
     adult_price = Column(Numeric(12, 2), nullable=False)
     child_price = Column(Numeric(12, 2), default=0, nullable=False)
     supplier_price = Column(Numeric(12, 2), default=0, nullable=False)
-    # markup_type/markup_value are the supplier's commission, mirrored from
-    # Supplier.markup_type/markup_value at save time -- never client-set.
-    markup_type = Column(String(20), default="percentage", nullable=False)
-    markup_value = Column(Numeric(12, 2), default=0, nullable=False)
     final_price = Column(Numeric(12, 2), nullable=False)
     supplier_final_adult_price = Column(Numeric(12, 2), nullable=True)
     supplier_final_child_price = Column(Numeric(12, 2), nullable=True)

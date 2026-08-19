@@ -6,7 +6,6 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import log_audit
-from app.services.settings import get_commission_percentage
 from app.models.cms import Tour
 from app.models.suppliers import Supplier
 from app.utils.operations import get_or_404
@@ -347,8 +346,7 @@ def _ser_pricing(o: TourPricing) -> dict:
         "id": o.id, "tour_id": o.tour_id,
         "passenger_from": o.passenger_from, "passenger_to": o.passenger_to,
         "adult_price": o.adult_price, "child_price": o.child_price,
-        "supplier_price": o.supplier_price, "markup_type": o.markup_type,
-        "markup_value": o.markup_value, "final_price": o.final_price,
+        "supplier_price": o.supplier_price, "final_price": o.final_price,
         "supplier_final_adult_price": o.supplier_final_adult_price,
         "supplier_final_child_price": o.supplier_final_child_price,
         "admin_markup_type": o.admin_markup_type,
@@ -358,15 +356,6 @@ def _ser_pricing(o: TourPricing) -> dict:
         "currency": o.currency, "status": o.status,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
-
-
-def _apply_commission(commission_type: str, commission_value: float, base: float) -> float:
-    """Commission is carved OUT of the supplier's own entered price -- the
-    result is what the supplier actually receives once Tourvaa's commission
-    is deducted from their asking price."""
-    if commission_type == "percentage":
-        return round(max(0.0, base * (1 - commission_value / 100)), 2)
-    return round(max(0.0, base - commission_value), 2)
 
 
 def _apply_markup(markup_type: str, markup_value: float, base: float) -> float:
@@ -383,41 +372,27 @@ def _is_supplier_actor(db: Session, actor: User) -> bool:
 
 
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    # Two-layer model: adult_price/child_price are the supplier's own net
-    # asking price.
-    #  1. Commission (per-supplier agreed rate, Supplier.markup_type/value) is
-    #     carved out of that price -> what the supplier is actually paid
-    #     (supplier_final_*). The supplier may raise their own commission
-    #     above the agreed rate (never below it) via markup_value on the
-    #     payload -- the agreed rate set by admin is always the floor.
-    #  2. An admin-only retail markup (admin_markup_type/value) is added ON
-    #     TOP of the same supplier price -> the storefront/customer price
-    #     (storefront_*). Only a non-supplier actor may change it; a
-    #     supplier-submitted slab keeps whatever markup already exists (0 for
-    #     a brand-new slab pending its first admin review).
+    # Tourvaa pays the supplier exactly the price they set for a tour - no
+    # commission is carved out of it. supplier_final_* simply mirrors the
+    # supplier's own adult_price/child_price. Tourvaa's entire commission is
+    # an admin-only retail markup (admin_markup_value, always a percentage,
+    # bounded 5-15% - see PricingPayload) added ON TOP of the supplier's
+    # price to produce the storefront/customer-facing price (storefront_*).
+    # Only a non-supplier actor may change the markup; a supplier-submitted
+    # slab keeps whatever markup already exists (0 for a brand-new slab
+    # pending its first admin review).
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
-    supplier = db.query(Supplier).filter(Supplier.id == tour.supplier_id).first() if tour and tour.supplier_id else None
-    # Supplier.markup_type is only ever set once an admin has actually agreed
-    # a per-supplier rate (it defaults to NULL; markup_value defaults to 0,
-    # which is not a usable "unset" sentinel on its own) - fall back to the
-    # global commission setting until then.
-    has_agreed_rate = bool(supplier and supplier.markup_type)
-    agreed_type = supplier.markup_type if has_agreed_rate else "percentage"
-    agreed_value = float(supplier.markup_value) if has_agreed_rate else float(get_commission_percentage(db))
-    submitted_value = float(data.markup_value or 0.0)
-    commission_type = agreed_type
-    commission_value = max(agreed_value, submitted_value)
-
-    o.markup_type = commission_type
-    o.markup_value = commission_value
-    o.supplier_final_adult_price = _apply_commission(commission_type, commission_value, o.adult_price)
-    o.supplier_final_child_price = _apply_commission(commission_type, commission_value, o.child_price)
+    o.supplier_final_adult_price = o.adult_price
+    o.supplier_final_child_price = o.child_price
     o.final_price = o.adult_price
 
     is_supplier = _is_supplier_actor(db, actor)
     if not is_supplier:
-        o.admin_markup_type = data.admin_markup_type or "percentage"
-        o.admin_markup_value = max(0.0, float(data.admin_markup_value or 0.0))
+        o.admin_markup_type = "percentage"
+        # PricingPayload.admin_markup_value already enforces 5-15% at the API
+        # boundary; clamp again here as defense in depth against any other
+        # caller of this function.
+        o.admin_markup_value = min(15.0, max(5.0, float(data.admin_markup_value or 0.0)))
     elif o.admin_markup_type is None:
         o.admin_markup_type = "percentage"
         o.admin_markup_value = o.admin_markup_value or 0.0
@@ -450,7 +425,7 @@ def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 # the one exception: the client value is read (in _apply_pricing_computation,
 # not here) but always floored at the supplier's agreed commission rate.
 _PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "child_price", "supplier_price", "currency", "status")
-_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "markup_value", "admin_markup_value")
+_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "admin_markup_value")
 
 
 def _actor_role_slug(actor: User) -> str:

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.models.affiliates import Affiliate
 from app.schemas.affiliates import AffiliateApiLinkRequest, AffiliateCreate, AffiliateUpdate
 from app.services.audit import log_audit
-from app.utils.operations import RejectRequest, approve_item, code_for, get_or_404, relationship_list, reject_item, simple_paginate
+from app.utils.operations import RejectRequest, approve_item, get_or_404, relationship_list, reject_item, simple_paginate
 from app.auth.security import hash_password
 from app.models.roles import Role
 from app.models.users import User, UserRole
@@ -117,7 +117,7 @@ def create_affiliate(db: Session, data: AffiliateCreate, actor: User, request: R
     item = Affiliate(**affiliate_data)
     db.add(item)
     db.flush()
-    item.affiliate_code = code_for("TVA-AFF", item.id)
+    item.affiliate_code = f"{item.id:05d}"
     log_audit(db, actor=actor, action="create_affiliate", entity_type="affiliate", entity_id=item.id, new_values=serialize_affiliate(item), request=request)
     db.commit()
     db.refresh(item)

@@ -11,6 +11,7 @@ from app.services.auth import register_unified_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs, _is_agent
 from app.utils.pagination import pagination_params
 from app.utils.operations import PartialApprovalRequest, RejectRequest
+from app.utils.ratelimit import check_rate_limit
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User
 
@@ -172,6 +173,7 @@ async def upload_agent_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    check_rate_limit(request, "upload", max_calls=20, window_seconds=60)
     agent = get_agent(db, agent_id)
     _require_agent_owner_or_permission(db, current_user, agent, "agents.edit", "update-agents")
 

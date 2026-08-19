@@ -9,6 +9,7 @@ class PermissionCreate(BaseModel):
     slug: str = Field(min_length=1, max_length=150, pattern=SLUG_PATTERN)
     module: str = Field(min_length=1, max_length=100, pattern=SLUG_PATTERN)
     action: str = Field(default="get", max_length=20)
+    is_active: bool = True
 
     @field_validator("name", "slug", "module", "action")
     @classmethod

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.services.audit import log_audit
 from app.models.agents import Agent, AgentBusinessInfo, AgentContact, AgentDocument, AgentInvoicing
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentUpdate
-from app.utils.operations import PartialApprovalRequest, RejectRequest, approve_item, code_for, filter_review_query, get_or_404, partial_approve_item, reject_item, relationship_list, serialize_common_review, simple_paginate
+from app.utils.operations import PartialApprovalRequest, RejectRequest, approve_item, filter_review_query, get_or_404, partial_approve_item, reject_item, relationship_list, serialize_common_review, simple_paginate
 from app.models.users import User
 from app.auth.security import hash_password
 from app.models.roles import Role
@@ -208,7 +208,7 @@ def create_agent(db: Session, data: AgentCreate, actor: User, request: Request |
     item = Agent(**agent_data)
     db.add(item)
     db.flush()
-    item.agent_code = code_for("TVA-AGT", item.id)
+    item.agent_code = f"{item.id:05d}"
     log_audit(db, actor=actor, action="create_agent", entity_type="agent", entity_id=item.id, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)

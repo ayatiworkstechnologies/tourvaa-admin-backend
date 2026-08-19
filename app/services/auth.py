@@ -485,7 +485,18 @@ def login_user(db: Session, data, request=None):
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    if user.locked_until and user.locked_until > utcnow():
+        _record_login_history(db, data=data, email=email, status="failed", user=user, failure_reason="account_locked", request=request)
+        db.commit()
+        raise HTTPException(
+            status_code=423,
+            detail="Too many failed attempts. Your account is temporarily locked - please try again later or reset your password.",
+        )
+
     if not user.password or not verify_password(data.password, user.password):
+        user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+        if user.failed_login_attempts >= settings.LOGIN_MAX_FAILED_ATTEMPTS:
+            user.locked_until = utcnow() + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
         _record_login_history(db, data=data, email=email, status="failed", user=user, failure_reason="bad_password", request=request)
         log_audit(
             db,
@@ -498,6 +509,11 @@ def login_user(db: Session, data, request=None):
         )
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if user.failed_login_attempts or user.locked_until:
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.commit()
 
     if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER", "AFFILIATE"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Email verification is required before login")
@@ -845,6 +861,7 @@ def verify_email(db: Session, token: str | None = ""):
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
     user.email_verified_at = utcnow()
+    user.email_verified = True
     user_id_val = getattr(user, "id", None)
     customer = db.query(Customer).filter(Customer.user_id == user_id_val).first() if user_id_val else None
     if customer:

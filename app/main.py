@@ -65,6 +65,60 @@ from app.models.affiliate_tracking import (
 logger = logging.getLogger(__name__)
 
 
+def validate_production_config() -> None:
+    """Refuse to start with unsafe settings when APP_ENV=production.
+
+    APP_ENV defaults to "production" (see app/config/__init__.py) so any
+    deployment that forgets to set it explicitly gets these checks too -
+    that's the point, not an oversight.
+    """
+    if settings.APP_ENV != "production":
+        return
+
+    errors: list[str] = []
+
+    if settings.APP_DEBUG:
+        errors.append("APP_DEBUG must be false in production")
+
+    if settings.ALLOWED_ORIGINS.strip() == "*":
+        errors.append("ALLOWED_ORIGINS must not be '*' in production - set explicit origins")
+
+    if settings.SUPER_ADMIN_PASSWORD == "Admin@123":
+        errors.append("SUPER_ADMIN_PASSWORD must be changed from its default value in production")
+
+    if len(settings.JWT_SECRET_KEY) < 32:
+        errors.append("JWT_SECRET_KEY must be at least 32 characters in production")
+
+    portal_secrets = {
+        "SUPPLIER_JWT_SECRET_KEY": settings.SUPPLIER_JWT_SECRET_KEY,
+        "AGENT_JWT_SECRET_KEY": settings.AGENT_JWT_SECRET_KEY,
+        "CUSTOMER_JWT_SECRET_KEY": settings.CUSTOMER_JWT_SECRET_KEY,
+        "ADMIN_JWT_SECRET_KEY": settings.ADMIN_JWT_SECRET_KEY,
+    }
+    unset_portal_secrets = [name for name, value in portal_secrets.items() if not value]
+    if unset_portal_secrets:
+        errors.append(
+            f"{', '.join(unset_portal_secrets)} must be set to distinct values in production "
+            "(each currently falls back to the shared JWT_SECRET_KEY)"
+        )
+    elif len(set(portal_secrets.values())) < len(portal_secrets):
+        errors.append("SUPPLIER_JWT_SECRET_KEY, AGENT_JWT_SECRET_KEY, CUSTOMER_JWT_SECRET_KEY and ADMIN_JWT_SECRET_KEY must all be distinct in production")
+
+    if not settings.STRIPE_WEBHOOK_SECRET:
+        errors.append("STRIPE_WEBHOOK_SECRET must be set in production (Stripe webhooks are otherwise rejected at runtime)")
+
+    if not settings.PAYPAL_WEBHOOK_ID:
+        errors.append("PAYPAL_WEBHOOK_ID must be set in production (PayPal webhooks are otherwise rejected at runtime)")
+
+    if errors:
+        raise RuntimeError(
+            "Refusing to start with unsafe production configuration:\n- " + "\n- ".join(errors)
+        )
+
+
+validate_production_config()
+
+
 def schema_is_ready():
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
@@ -169,7 +223,6 @@ def schema_is_ready():
         "roles": {"is_system"},
         "permissions": {"action", "is_system"},
         "customers": {"phone_country_code", "date_of_birth", "gender", "email_verified", "phone_verified"},
-        "suppliers": {"commission_request_type", "commission_request_value", "commission_request_status", "commission_requested_at", "commission_reviewed_at"},
         "supplier_payouts": {"paid_by"},
         "supplier_vehicles": {"vehicle_type", "registration_number"},
         "affiliate_links": {"link_type", "custom_alias", "status", "attribution_window_days"},
@@ -200,6 +253,8 @@ def schema_is_ready():
             "deactivation_reason",
             "last_login_at",
             "updated_at",
+            "failed_login_attempts",
+            "locked_until",
         },
     }
 

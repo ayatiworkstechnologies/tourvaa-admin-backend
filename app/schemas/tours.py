@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 PHYSICAL_RATINGS = {"easy", "moderate", "hard"}
 ITEM_STATUSES = {"active", "inactive"}
 IMAGE_TYPES = {"gallery", "itinerary", "highlight", "banner", "map"}
-MARKUP_TYPES = {"percentage", "fixed"}
 CALENDAR_STATUSES = {"available", "unavailable", "sold_out", "blocked"}
 AVAILABILITY_FREQUENCIES = {"weekly", "fortnightly", "monthly"}
 DISCOUNT_TYPES = {"percentage", "fixed"}
@@ -189,33 +188,23 @@ class PricingPayload(BaseModel):
     passenger_to: int = Field(ge=1)
     adult_price: float = Field(ge=0)
     child_price: float = Field(default=0.0, ge=0)
-    # adult_price/child_price are the supplier's own net asking price.
-    # markup_value is the supplier's requested commission % -- always floored
-    # server-side at the supplier's agreed rate (services.tours.
-    # _apply_pricing_computation), so a supplier may raise it but never lower
-    # it below what was agreed at approval. admin_markup_value is the
-    # Tourvaa-only retail markup added on top of the same price to produce
-    # the storefront price; only honoured when the actor is not a supplier.
+    # adult_price/child_price are the supplier's own net asking price -
+    # Tourvaa pays the supplier that price in full, no commission is
+    # deducted. admin_markup_value is Tourvaa's own commission, an
+    # admin-only retail markup added on top of the supplier's price to
+    # produce the storefront price; only honoured when the actor is not a
+    # supplier. Bounded 5-15% - Tourvaa's commission is always a percentage
+    # decided per tour, never a fixed amount or supplier-negotiated rate.
     # supplier_price/final_price are legacy/unused, kept for backward
     # compatibility only.
     supplier_price: float = Field(default=0.0, ge=0)
-    markup_type: str = Field(default="percentage", max_length=20)
-    markup_value: float = Field(default=0.0, ge=0)
     final_price: float = Field(default=0.0, ge=0)
-    admin_markup_type: str = Field(default="percentage", max_length=20)
-    admin_markup_value: float = Field(default=0.0, ge=0)
+    admin_markup_value: float = Field(default=10.0, ge=5, le=15)
     currency: str = Field(default="USD", max_length=10)
     status: str = Field(default="active", max_length=20)
     # Optional explanation for the audit trail when Admin edits a Supplier's
     # pricing slab on their behalf -- never stored on the slab itself.
     change_reason: str = Field(default="", max_length=500)
-
-    @field_validator("markup_type", "admin_markup_type")
-    @classmethod
-    def validate_markup(cls, v: str):
-        if v not in MARKUP_TYPES:
-            raise ValueError(f"markup_type must be one of {MARKUP_TYPES}")
-        return v
 
     @field_validator("status")
     @classmethod

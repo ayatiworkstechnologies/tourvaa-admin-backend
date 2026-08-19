@@ -25,6 +25,7 @@ from app.database import get_db
 from app.models.bookings import Booking
 from app.auth.permissions import get_current_user
 from app.utils.money import money, utcnow
+from app.utils.ratelimit import check_rate_limit
 from app.services.payments_gateway import get_paypal, get_stripe
 from app.models.payments import Payment, PaymentTransaction
 from app.services.payments import _payment_code, _sync_booking_payment_fields
@@ -178,7 +179,8 @@ def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gate
 
 
 @router.post("/stripe/create-session")
-def stripe_create_session(body: StripeSessionRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def stripe_create_session(body: StripeSessionRequest, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    check_rate_limit(request, "payment-create", max_calls=10, window_seconds=60)
     booking = _booking_or_404(db, body.booking_id, for_update=True)
     amount = _validate_payment_request(booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
     currency = _validate_payment_currency(booking, body.currency)
@@ -365,7 +367,8 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
     }
 
 @router.post("/paypal/create-order")
-def paypal_create_order(body: PayPalOrderRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def paypal_create_order(body: PayPalOrderRequest, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    check_rate_limit(request, "payment-create", max_calls=10, window_seconds=60)
     booking = _booking_or_404(db, body.booking_id, for_update=True)
     amount = _validate_payment_request(booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
     currency = _validate_payment_currency(booking, body.currency)
