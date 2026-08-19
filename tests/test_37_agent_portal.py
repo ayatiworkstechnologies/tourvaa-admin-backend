@@ -126,9 +126,14 @@ def test_agent_scoped_bookings_access(agent_headers):
 # ---------------------------------------------------------------------------
 
 def test_agent_messages_list(agent_headers):
+    # /agent/messages is the portal support-chat thread (one ongoing
+    # conversation with admin) -- it returns a single conversation object
+    # with a "messages" array, not a paginated "items" list.
     resp = requests.get(f"{BASE_URL}/agent/messages", headers=agent_headers, timeout=10)
     assert resp.status_code == 200, resp.text
-    assert "items" in resp.json()
+    body = resp.json()
+    assert "data" in body
+    assert "messages" in body["data"]
 
 
 @skip_if_readonly()
@@ -137,3 +142,4 @@ def test_agent_send_message(agent_headers):
         "subject": "Commission question", "message": "When does my commission get paid out?",
     }, headers=agent_headers, timeout=10)
     assert resp.status_code in (200, 201), resp.text
+    assert resp.json()["data"]["body"] == "When does my commission get paid out?"

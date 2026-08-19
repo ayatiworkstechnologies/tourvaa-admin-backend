@@ -1,7 +1,7 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.schemas.auth import validate_strong_password
-from app.utils.operations import ACTIVE_STATUSES, VALUE_TYPES
+from app.utils.operations import ACTIVE_STATUSES
 
 # The supplier domain was migrated (20260724_0034) onto its own canonical,
 # uppercase approval-status set -- it no longer shares the generic
@@ -198,19 +198,6 @@ class VehicleReviewRequest(BaseModel):
     @classmethod
     def trim_reason(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
-
-
-class SupplierMarkupRequest(BaseModel):
-    markup_type: str = Field(max_length=20)
-    markup_value: float = Field(ge=0)
-
-    @field_validator("markup_type")
-    @classmethod
-    def validate_markup_type(cls, value: str):
-        value = value.strip().lower()
-        if value not in VALUE_TYPES:
-            raise ValueError("Invalid markup type")
-        return value
 
 
 class SupplierAccountAction(BaseModel):

@@ -494,34 +494,6 @@ def supplier_submitted_verification_email(supplier_name: str):
     )
 
 
-def supplier_commission_requested_email(supplier_name: str, markup_type: str, markup_value):
-    return base_email(
-        "Supplier commission request pending approval",
-        "Hi team,",
-        (
-            f"Supplier <strong>{esc(supplier_name)}</strong> requested a commission/markup change.<br /><br />"
-            f"Type: <strong>{esc(markup_type)}</strong><br />"
-            f"Value: <strong>{esc(markup_value)}</strong><br /><br />"
-            "Please review this request in the admin supplier detail page."
-        ),
-    )
-
-
-def supplier_commission_approved_email(supplier_name: str, markup_type: str, markup_value, login_url: str):
-    return base_email(
-        "Your commission request is approved",
-        f"Hi {esc(supplier_name)},",
-        (
-            "Your commission request has been approved.<br /><br />"
-            f"Type: <strong>{esc(markup_type)}</strong><br />"
-            f"Value: <strong>{esc(markup_value)}</strong><br /><br />"
-            "You can continue using your supplier portal."
-        ),
-        "View supplier portal",
-        login_url,
-    )
-
-
 # agent lifecycle
 def agent_submitted_verification_email(agent_name: str):
     return base_email(

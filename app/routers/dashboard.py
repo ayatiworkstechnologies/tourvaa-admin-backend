@@ -17,7 +17,7 @@ from app.utils.media import existing_storage_path
 from app.models.suppliers import Supplier
 from app.models.agents import Agent
 from app.models.affiliates import Affiliate
-from app.models.cms import Tour
+from app.models.cms import Tour, Country
 from app.models.bookings import Booking
 from app.models.payments import Payment
 from app.models.customers import Customer
@@ -660,7 +660,14 @@ def dashboard_summary(
         if booking_status:
             payment_query = payment_query.filter(Booking.booking_status == booking_status.strip().lower())
 
-    total_revenue = _safe_query_sum(payment_query.filter(Payment.payment_status != "refunded"), Payment.paid_amount) if can_payments else 0.0
+    # Net of refunds - see /dashboard/revenue for the same fix and rationale.
+    if can_payments:
+        revenue_query = payment_query.filter(Payment.payment_status.notin_(["voided", "failed"]))
+        captured_amount = _safe_query_sum(revenue_query, Payment.paid_amount)
+        refunded_amount = _safe_query_sum(revenue_query, Payment.refunded_amount)
+        total_revenue = max(0.0, captured_amount - refunded_amount)
+    else:
+        total_revenue = 0.0
     pending_payments = _safe_query_sum(payment_query.filter(Payment.payment_status.in_(["pending", "partial"])), Payment.pending_amount) if can_payments else 0.0
 
     return {
@@ -781,8 +788,8 @@ def dashboard_charts(
                 **filters,
                 "dashboard_type": "supplier",
                 "booking_status_chart": booking_statuses,
-                "monthly_bookings": [],
-                "payment_status_chart": [],
+                "monthly_bookings": _monthly_booking_trend(db, Booking.supplier_id == sid, *booking_filters),
+                "payment_status_chart": _payment_status_chart_for_bookings(db, Booking.supplier_id == sid, *booking_filters),
             },
         }
 
@@ -798,8 +805,8 @@ def dashboard_charts(
                 **filters,
                 "dashboard_type": "agent",
                 "booking_status_chart": booking_statuses,
-                "monthly_bookings": [],
-                "payment_status_chart": [],
+                "monthly_bookings": _monthly_booking_trend(db, Booking.agent_id == aid, *booking_filters),
+                "payment_status_chart": _payment_status_chart_for_bookings(db, Booking.agent_id == aid, *booking_filters),
             },
         }
 
@@ -815,7 +822,7 @@ def dashboard_charts(
                 **filters,
                 "dashboard_type": "customer",
                 "booking_status_chart": booking_statuses,
-                "payment_status_chart": [],
+                "payment_status_chart": _payment_status_chart_for_bookings(db, Booking.customer_id == cid, *booking_filters),
             },
         }
 
@@ -844,8 +851,8 @@ def dashboard_charts(
             "payment_status_chart": payment_statuses,
             "supplier_status_chart": _supplier_status_chart(db, *supplier_filters),
             "agent_status_chart": _agent_status_chart(db, *agent_filters),
-            "monthly_booking_trend": [],
-            "top_destinations": [],
+            "monthly_booking_trend": _monthly_booking_trend(db, *booking_filters),
+            "top_destinations": _top_destinations(db, *booking_filters),
         },
     }
 
@@ -911,6 +918,50 @@ def _agent_status_chart(db: Session, *filters):
             for item in filters:
                 query = query.filter(item)
             result.append({"status": status.lower(), "count": query.count()})
+        except Exception:
+            result.append({"status": status, "count": 0})
+    return result
+
+
+def _monthly_booking_trend(db: Session, *filters, months: int = 6):
+    month_expr = sqlfunc.date_format(Booking.created_at, "%Y-%m")
+    query = (
+        db.query(month_expr.label("month"), sqlfunc.count(Booking.id).label("count"))
+        .group_by(month_expr)
+        .order_by(month_expr.desc())
+    )
+    for f in filters:
+        query = query.filter(f)
+    rows = query.limit(months).all()
+    return [{"month": row.month, "count": row.count} for row in reversed(rows)]
+
+
+def _top_destinations(db: Session, *filters, limit: int = 5):
+    query = (
+        db.query(Country.country_name.label("destination"), sqlfunc.count(Booking.id).label("count"))
+        .join(Country, Booking.country_id == Country.id)
+        .group_by(Country.country_name)
+        .order_by(sqlfunc.count(Booking.id).desc())
+    )
+    for f in filters:
+        query = query.filter(f)
+    rows = query.limit(limit).all()
+    return [{"destination": row.destination, "count": row.count} for row in rows]
+
+
+def _payment_status_chart_for_bookings(db: Session, *booking_filters):
+    statuses = ["paid", "partial", "pending", "failed", "refunded"]
+    result = []
+    for status in statuses:
+        try:
+            query = (
+                db.query(Payment)
+                .join(Booking, Payment.booking_id == Booking.id)
+                .filter(Payment.payment_status == status)
+            )
+            for f in booking_filters:
+                query = query.filter(f)
+            result.append({"status": status, "count": query.count()})
         except Exception:
             result.append({"status": status, "count": 0})
     return result
@@ -1031,15 +1082,61 @@ def recent_activities(
         .limit(10)
         .all()
     )
+    recent_bookings = (
+        db.query(Booking).order_by(Booking.created_at.desc()).limit(5).all()
+    )
+    recent_suppliers = (
+        db.query(Supplier).order_by(Supplier.created_at.desc()).limit(5).all()
+    )
+    recent_agents = (
+        db.query(Agent).order_by(Agent.created_at.desc()).limit(5).all()
+    )
+    recent_payments = (
+        db.query(Payment).order_by(Payment.created_at.desc()).limit(5).all()
+    )
 
     return {
         "status": "success",
         "data": {
             "dashboard_type": _get_dashboard_type(role_slug),
-            "recent_bookings": [],
-            "recent_suppliers": [],
-            "recent_agents": [],
-            "recent_payments": [],
+            "recent_bookings": [
+                {
+                    "id": b.id,
+                    "booking_code": b.booking_code,
+                    "tour_name": b.tour_name,
+                    "booking_status": b.booking_status,
+                    "created_at": b.created_at,
+                }
+                for b in recent_bookings
+            ],
+            "recent_suppliers": [
+                {
+                    "id": s.id,
+                    "supplier_name": s.supplier_name,
+                    "approval_status": s.approval_status,
+                    "created_at": s.created_at,
+                }
+                for s in recent_suppliers
+            ],
+            "recent_agents": [
+                {
+                    "id": a.id,
+                    "agent_name": a.agent_name,
+                    "approval_status": a.approval_status,
+                    "created_at": a.created_at,
+                }
+                for a in recent_agents
+            ],
+            "recent_payments": [
+                {
+                    "id": p.id,
+                    "booking_id": p.booking_id,
+                    "payment_status": p.payment_status,
+                    "captured_amount": p.captured_amount,
+                    "created_at": p.created_at,
+                }
+                for p in recent_payments
+            ],
             "recent_admin_actions": [
                 {
                     "id": item.id,
@@ -1227,10 +1324,16 @@ def revenue_analytics(
     db: Session = Depends(get_db),
     _current_user: User = Depends(require_any_permission("dashboard.view", "view-dashboard")),
 ):
-    total_revenue = _safe_sum(db, Payment.paid_amount, Payment.payment_status != "refunded")
+    # total_revenue is net of refunds: captured amounts still include the
+    # original charge after a (partial or full) refund - only
+    # refunded_amount tracks what actually went back to the customer, so it
+    # must be subtracted here rather than relying on payment_status alone
+    # (which only catches the exact "refunded" label, not "partially_refunded").
+    captured_amount = _safe_sum(db, Payment.paid_amount, Payment.payment_status.notin_(["voided", "failed"]))
+    refunded_amount = _safe_sum(db, Payment.refunded_amount, Payment.payment_status.notin_(["voided", "failed"]))
+    total_revenue = max(0.0, captured_amount - refunded_amount)
     paid_amount = _safe_sum(db, Payment.paid_amount, Payment.payment_status == "paid")
     pending_amount = _safe_sum(db, Payment.pending_amount, Payment.payment_status.in_(["pending", "partial"]))
-    refunded_amount = _safe_sum(db, Payment.refunded_amount)
 
     return {
         "status": "success",
@@ -1262,42 +1365,6 @@ def payment_summary(
             "pending_payment_count": _safe_count(db, Payment, Payment.payment_status == "pending"),
             "failed_payment_count": _safe_count(db, Payment, Payment.payment_status == "failed"),
             "refunded_payment_count": _safe_count(db, Payment, Payment.payment_status == "refunded"),
-        },
-    }
-
-
-@router.get("/reports")
-def reports_summary(
-    start_date: date | None = Query(default=None),
-    end_date: date | None = Query(default=None),
-    country_id: int | None = Query(default=None),
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(require_any_permission("dashboard.view", "view-dashboard")),
-):
-    from sqlalchemy import func
-    from app.models.invoices import Invoice
-
-    booking_query = db.query(Booking)
-    if country_id:
-        booking_query = booking_query.filter(Booking.country_id == country_id)
-    total_bookings = booking_query.count()
-    paid = db.query(func.coalesce(func.sum(Payment.captured_amount), 0)).filter(Payment.payment_status.notin_(["voided", "failed"])).scalar() or 0
-    pending = db.query(func.coalesce(func.sum(Booking.amount_pending), 0)).scalar() or 0
-    invoices = db.query(func.count(Invoice.id)).scalar() or 0
-    return {
-        "status": "success",
-        "data": {
-            "filters": _filters_payload(start_date, end_date, country_id),
-            "total_reports": 4,
-            "scheduled_reports": 0,
-            "exported_reports": invoices,
-            "report_cards": [
-                {"name": "Booking Performance", "value": str(total_bookings), "change": "live", "status": "ready"},
-                {"name": "Revenue Summary", "value": str(paid), "change": "captured", "status": "ready"},
-                {"name": "Payment Pending", "value": str(pending), "change": "open balance", "status": "review"},
-                {"name": "Invoices Generated", "value": str(invoices), "change": "generated", "status": "ready"},
-            ],
-            "recent_exports": [],
         },
     }
 

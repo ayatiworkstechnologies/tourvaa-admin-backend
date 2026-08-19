@@ -35,7 +35,7 @@ def _split_name(full_name: str):
 
 
 def _customer_code(customer_id: int):
-    return f"TVA-CUS-{customer_id:05d}"
+    return f"{customer_id:05d}"
 
 
 

@@ -232,15 +232,22 @@ def test_customer_cancel_nonexistent_booking(customer_headers):
 # ---------------------------------------------------------------------------
 
 def test_customer_messages_list(customer_headers):
+    # /customer/messages is the portal support-chat thread (one ongoing
+    # conversation with admin), not the admin-side per-customer
+    # communications log at /customers/{id}/communications -- it returns a
+    # single conversation object with a "messages" array, not a paginated
+    # "items" list.
     resp = requests.get(f"{BASE_URL}/customer/messages", headers=customer_headers, timeout=10)
     assert resp.status_code == 200, resp.text
-    assert "items" in resp.json()
+    body = resp.json()
+    assert "data" in body
+    assert "messages" in body["data"]
 
 
 @skip_if_readonly()
 def test_customer_send_message(customer_headers):
     resp = requests.post(f"{BASE_URL}/customer/messages", json={
-        "subject": "Question about my trip", "message": "Can I add an extra traveller?",
+        "message": "Can I add an extra traveller?",
     }, headers=customer_headers, timeout=10)
     assert resp.status_code in (200, 201), resp.text
-    assert resp.json()["data"]["subject"] == "Question about my trip"
+    assert resp.json()["data"]["body"] == "Can I add an extra traveller?"

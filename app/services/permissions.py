@@ -61,6 +61,7 @@ def create_permission(db: Session, data: PermissionCreate):
         slug=data.slug.strip().lower(),
         module=data.module.strip().lower(),
         action=data.action.strip().lower(),
+        is_active=data.is_active,
     )
 
     db.add(permission)

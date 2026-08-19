@@ -12,6 +12,7 @@ from app.services.bookings import calculate_booking_price, create_booking, get_b
 from app.auth.permissions import get_current_user
 from app.utils.money import money
 from app.utils.pagination import pagination_params
+from app.utils.ratelimit import check_rate_limit
 from app.models.cms import Tour
 from app.models.customers import Customer, CustomerSavedTraveller, CustomerWishlistItem
 from app.schemas.customers import (
@@ -233,6 +234,7 @@ def customer_bookings(params: dict = Depends(pagination_params), booking_status:
 
 @router.post("/bookings")
 def create_customer_booking(payload: dict, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    check_rate_limit(request, "booking-create", max_calls=10, window_seconds=60)
     customer = _current_customer(db, current_user)
     payload = {**payload, "customer_id": customer.id, "booking_source": "customer"}
     data = BookingCreate.model_validate(payload)

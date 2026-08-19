@@ -16,11 +16,10 @@ from app.utils.operations import (
 )
 from app.utils.money import utcnow
 
-from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierCommissionRequest, SupplierDocument, SupplierVehicle
+from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierDocument, SupplierVehicle
 from app.schemas.suppliers import (
     DocumentReviewRequest,
     SupplierCreate,
-    SupplierMarkupRequest,
     SupplierUpdate,
     VehicleReviewRequest,
 )
@@ -29,6 +28,18 @@ from app.models.roles import Role
 from app.models.users import User, UserRole
 
 logger = logging.getLogger(__name__)
+
+
+SUPPLIER_DOCUMENT_TYPES = {
+    "company_registration": {"label": "Company Registration Certificate", "required": True},
+    "trade_license": {"label": "Trade License", "required": True},
+    "tax_certificate": {"label": "Tax Registration Certificate", "required": True},
+    "identity_proof": {"label": "Identity Proof (Passport / Emirates ID)", "required": True},
+    "bank_details": {"label": "Bank Account Details / Cheque", "required": True},
+}
+REQUIRED_SUPPLIER_DOCUMENT_TYPES = {
+    key for key, metadata in SUPPLIER_DOCUMENT_TYPES.items() if metadata["required"]
+}
 
 
 def _approval_history(item):
@@ -51,47 +62,6 @@ def _approval_history(item):
         }
         for history in history_rows
     ]
-
-
-def _commission_history(item):
-    # supplier_commission_requests (migration 20260728_0049) may not exist yet
-    # on every deployed database; degrade to an empty history instead of a 500
-    # until that migration has run everywhere.
-    try:
-        rows = list(item.commission_requests)
-    except SQLAlchemyError:
-        logger.exception("Failed to load commission_requests for supplier %s", item.id)
-        return []
-    return [
-        {
-            "id": row.id,
-            "markup_type": row.markup_type,
-            "markup_value": row.markup_value,
-            "status": row.status,
-            "requested_at": row.requested_at,
-            "reviewed_at": row.reviewed_at,
-            "reviewed_by": row.reviewed_by,
-        }
-        for row in rows
-    ]
-
-
-def _find_pending_commission_request(db: Session, supplier_id: int):
-    # supplier_commission_requests (migration 20260728_0049) may not exist yet
-    # on every deployed database; degrade to "no history row to update"
-    # instead of a 500 until that migration has run everywhere -- the
-    # scalar commission_request_* columns on Supplier remain the source of
-    # truth for approve/reject regardless.
-    try:
-        return (
-            db.query(SupplierCommissionRequest)
-            .filter(SupplierCommissionRequest.supplier_id == supplier_id, SupplierCommissionRequest.status == "pending")
-            .order_by(SupplierCommissionRequest.id.desc())
-            .first()
-        )
-    except SQLAlchemyError:
-        logger.exception("Failed to load pending commission request for supplier %s", supplier_id)
-        return None
 
 
 def _contact(item):
@@ -175,18 +145,10 @@ def serialize_supplier(item: Supplier):
     data.update(
         {
             "supplier_type": item.supplier_type,
-            "markup_type": item.markup_type,
-            "markup_value": item.markup_value,
-            "commission_request_type": item.commission_request_type,
-            "commission_request_value": item.commission_request_value,
-            "commission_request_status": item.commission_request_status,
-            "commission_requested_at": item.commission_requested_at,
-            "commission_reviewed_at": item.commission_reviewed_at,
             "contacts": relationship_list(item.contacts, _contact),
             "vehicles": relationship_list(item.vehicles, _serialize_vehicle),
             "documents": relationship_list(item.documents, _document),
             "approval_history": _approval_history(item),
-            "commission_request_history": _commission_history(item),
             "business_info": {
                 "years_in_business": item.business_info.years_in_business,
                 "certificate_of_incorporation": item.business_info.certificate_of_incorporation,
@@ -265,8 +227,6 @@ def export_suppliers_directory(db: Session) -> list[dict]:
             "contact_phone": primary_contact.phone if primary_contact else "",
             "documents_count": len(item.documents),
             "vehicles_count": len(item.vehicles),
-            "markup_type": item.markup_type,
-            "markup_value": item.markup_value,
             "created_at": item.created_at,
         })
     return rows
@@ -543,127 +503,6 @@ def set_supplier_account_status(
     db.commit()
     db.refresh(item)
     return serialize_supplier(item)
-
-
-def update_supplier_markup(db: Session, supplier_id: int, data: SupplierMarkupRequest, actor: User, request: Request | None = None):
-    # This is the ONLY place a supplier's live markup_type/markup_value may
-    # change -- self-service requests (request_supplier_commission below)
-    # only ever write to the commission_request_* staging fields.
-    item = get_supplier(db, supplier_id)
-    old = serialize_supplier(item)
-    item.markup_type = data.markup_type
-    item.markup_value = data.markup_value
-    commission_request_pending = item.commission_request_status == "pending"
-    if commission_request_pending:
-        item.commission_request_status = "approved"
-        item.commission_reviewed_at = utcnow()
-        item.pending_requirements = None
-        latest_request = _find_pending_commission_request(db, item.id)
-        if latest_request:
-            latest_request.status = "approved"
-            latest_request.reviewed_at = item.commission_reviewed_at
-            latest_request.reviewed_by = actor.id
-        try:
-            from app.utils.notification_triggers import notify_supplier_commission_approved
-            notify_supplier_commission_approved(db, supplier_id=item.id, supplier_name=item.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=item.user_id)
-        except Exception:
-            logger.exception("Failed to send supplier commission-approved notification for supplier_id=%s", item.id)
-    log_audit(db, actor=actor, action="update_supplier_markup", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
-    db.commit()
-    db.refresh(item)
-    return serialize_supplier(item)
-
-
-def reject_supplier_commission_request(db: Session, supplier_id: int, actor: User, request: Request | None = None):
-    item = get_supplier(db, supplier_id)
-    if item.commission_request_status != "pending":
-        raise HTTPException(status_code=409, detail="No pending commission request to reject")
-    old = serialize_supplier(item)
-    item.commission_request_status = "rejected"
-    item.commission_reviewed_at = utcnow()
-    latest_request = _find_pending_commission_request(db, item.id)
-    if latest_request:
-        latest_request.status = "rejected"
-        latest_request.reviewed_at = item.commission_reviewed_at
-        latest_request.reviewed_by = actor.id
-    log_audit(db, actor=actor, action="reject_supplier_commission_request", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
-    db.commit()
-    db.refresh(item)
-    return serialize_supplier(item)
-
-
-def request_supplier_commission(db: Session, user: User, data: SupplierMarkupRequest, request: Request | None = None):
-    # Self-service: the admin-fixed markup_type/markup_value is a floor a
-    # supplier may never go below. Raising it (same type, value >= floor)
-    # applies immediately with no review; anything else (a decrease, or a
-    # change of markup_type, which can't be compared against the floor)
-    # still goes through the commission_request_* staging + admin approval
-    # in update_supplier_markup above.
-    supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
-    if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier profile not found")
-    if supplier.commission_request_status == "pending":
-        raise HTTPException(status_code=400, detail="A commission request is already pending")
-
-    floor_type = supplier.markup_type
-    floor_value = supplier.markup_value or 0
-    has_floor = bool(floor_type)
-    same_type = not has_floor or data.markup_type == floor_type
-    if same_type and data.markup_value < floor_value:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Commission value cannot be lower than the {floor_value:g}% fixed by admin.",
-        )
-
-    old = serialize_supplier(supplier)
-    # Only an actual raise over an admin-set floor auto-applies; a supplier
-    # with no floor yet has nothing to "raise" from, so their first request
-    # always goes through admin review, matching request_agent_commission.
-    is_increase = has_floor and same_type and data.markup_value >= floor_value
-
-    supplier.commission_request_type = data.markup_type
-    supplier.commission_request_value = data.markup_value
-    supplier.commission_requested_at = utcnow()
-
-    if is_increase:
-        supplier.markup_type = data.markup_type
-        supplier.markup_value = data.markup_value
-        supplier.commission_request_status = "approved"
-        supplier.commission_reviewed_at = utcnow()
-        supplier.pending_requirements = None
-    else:
-        supplier.commission_request_status = "pending"
-        supplier.commission_reviewed_at = None
-        supplier.pending_requirements = "Commission request pending admin approval"
-
-    log_audit(db, actor=user, action="request_supplier_commission", entity_type="supplier", entity_id=supplier.id, old_values=old, new_values=serialize_supplier(supplier), request=request)
-    try:
-        if is_increase:
-            from app.utils.notification_triggers import notify_supplier_commission_approved
-            notify_supplier_commission_approved(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=user.id)
-        else:
-            from app.utils.notification_triggers import notify_supplier_commission_requested
-            notify_supplier_commission_requested(db, supplier_id=supplier.id, supplier_name=supplier.supplier_name, markup_type=data.markup_type, markup_value=data.markup_value, user_id=user.id)
-    except Exception:
-        logger.exception("Failed to send supplier commission notification for supplier_id=%s", supplier.id)
-    # Committed on its own so the core commission-request flow (above) can
-    # never be broken by the history table (migration 20260728_0049) being
-    # unavailable on a given deployment -- see _find_pending_commission_request.
-    db.commit()
-    db.refresh(supplier)
-    try:
-        db.add(SupplierCommissionRequest(
-            supplier_id=supplier.id,
-            markup_type=data.markup_type,
-            markup_value=data.markup_value,
-            status=supplier.commission_request_status,
-            reviewed_at=supplier.commission_reviewed_at,
-        ))
-        db.commit()
-    except SQLAlchemyError:
-        logger.exception("Failed to record commission request history for supplier %s", supplier.id)
-        db.rollback()
-    return serialize_supplier(supplier)
 
 
 def _submit_supplier_verification(db: Session, supplier: Supplier, actor: User, request: Request | None = None):

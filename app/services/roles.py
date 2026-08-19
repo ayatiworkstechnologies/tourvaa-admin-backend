@@ -65,7 +65,7 @@ def create_role(
     if existing:
         raise HTTPException(status_code=400, detail="Role already exists")
 
-    role = Role(name=data.name.strip(), slug=data.slug.strip().lower())
+    role = Role(name=data.name.strip(), slug=data.slug.strip().lower(), is_active=data.is_active)
 
     db.add(role)
     db.flush()

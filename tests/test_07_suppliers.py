@@ -75,27 +75,10 @@ def test_reject_supplier(headers):
     assert resp2.status_code in (200, 201, 204)
 
 
-@skip_if_readonly()
-def test_supplier_markup_update(headers):
-    resp = requests.get(f"{BASE_URL}/suppliers/", headers=headers, timeout=10)
-    body = resp.json()
-    items = body if isinstance(body, list) else body.get("data", body.get("items", []))
-    if not items:
-        pytest.skip("No suppliers in DB")
-    sid = items[0]["id"]
-    resp2 = requests.patch(f"{BASE_URL}/suppliers/{sid}/markup", headers=headers,
+def test_supplier_markup_endpoint_removed(headers):
+    # Suppliers no longer have a negotiated markup/commission rate - Tourvaa
+    # pays them their own listed tour price in full. Commission is now an
+    # admin-only, per-tour percentage (5-15%) on tour_pricing.admin_markup_value.
+    resp = requests.patch(f"{BASE_URL}/suppliers/1/markup", headers=headers,
                            json={"markup_type": "percentage", "markup_value": 10.0}, timeout=10)
-    assert resp2.status_code in (200, 201, 204)
-
-
-@skip_if_readonly()
-def test_supplier_markup_invalid_type(headers):
-    resp = requests.get(f"{BASE_URL}/suppliers/", headers=headers, timeout=10)
-    body = resp.json()
-    items = body if isinstance(body, list) else body.get("data", body.get("items", []))
-    if not items:
-        pytest.skip("No suppliers in DB")
-    sid = items[0]["id"]
-    resp2 = requests.patch(f"{BASE_URL}/suppliers/{sid}/markup", headers=headers,
-                           json={"markup_type": "invalid_type", "markup_value": 10.0}, timeout=10)
-    assert resp2.status_code in (400, 422)
+    assert resp.status_code == 404, resp.text

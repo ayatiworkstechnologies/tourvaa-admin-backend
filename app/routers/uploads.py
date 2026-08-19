@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.cloudinary_client import upload_to_cloudinary
 from app.utils.media import detect_image_type, sanitize_filename
+from app.utils.ratelimit import check_rate_limit
 from app.models.users import User
 
 router = APIRouter(prefix="/uploads", tags=["Uploads"])
@@ -25,9 +26,11 @@ ALLOWED_IMAGE_TYPES = {
 
 @router.post("/profile-image")
 async def upload_profile_image(
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
+    check_rate_limit(request, "upload", max_calls=20, window_seconds=60)
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, and AVIF images are allowed")
 
@@ -62,11 +65,13 @@ async def upload_profile_image(
 
 @router.post("/admin-asset")
 async def upload_admin_asset(
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(
         require_any_permission("tours.edit", "update-tours", "website_cms.edit", "update-website_cms")
     ),
 ):
+    check_rate_limit(request, "upload", max_calls=20, window_seconds=60)
     content = await file.read()
 
     if not content:

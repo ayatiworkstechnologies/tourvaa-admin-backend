@@ -261,28 +261,6 @@ DEFAULT_EMAIL_TEMPLATES = [
         "body": "Hi {{supplier_name}}, your supplier profile was rejected. Reason: {{rejection_reason}}",
     },
     {
-        "key": "supplier_commission_requested",
-        "name": "Supplier Commission Requested",
-        "subject": "Supplier commission request pending approval",
-        "body": (
-            "Supplier {{supplier_name}} requested commission approval.\n\n"
-            "Type: {{markup_type}}\n"
-            "Value: {{markup_value}}\n\n"
-            "Review this request in the admin supplier detail page."
-        ),
-    },
-    {
-        "key": "supplier_commission_approved",
-        "name": "Supplier Commission Approved",
-        "subject": "Your commission request is approved",
-        "body": (
-            "Hi {{supplier_name}}, your commission request has been approved.\n\n"
-            "Type: {{markup_type}}\n"
-            "Value: {{markup_value}}\n\n"
-            "You can continue using your supplier portal."
-        ),
-    },
-    {
         "key": "supplier_changes_requested",
         "name": "Supplier Changes Requested",
         "subject": "Supplier profile changes required",

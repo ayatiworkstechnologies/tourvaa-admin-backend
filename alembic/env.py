@@ -32,7 +32,7 @@ from app.models.roles import Role
 from app.models.sessions import LoginHistory, UserSession
 from app.models.settings import ApiSetting, AppSetting, PaymentSetting, SmtpSetting
 from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierPayoutItem
-from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierBusinessInfo, SupplierCommissionRequest, SupplierContact, SupplierDocument, SupplierInvoicing, SupplierVehicle
+from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierBusinessInfo, SupplierContact, SupplierDocument, SupplierInvoicing, SupplierVehicle
 from app.models.tour_versions import TourReviewComment, TourVersion
 from app.models.tours import (
     TourAccommodationExtra,
