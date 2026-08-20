@@ -24,6 +24,17 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def as_aware_utc(value: datetime) -> datetime:
+    """Treats a naive datetime as UTC instead of raising when compared
+    against utcnow(). DateTime(timezone=True) columns are only actually
+    timezone-aware on backends that support it (Postgres); SQLite has no
+    native tz-aware datetime type, so SQLAlchemy silently reads such columns
+    back as naive there, and `naive < aware` raises TypeError. Every value
+    stored in these columns was written using utcnow() in the first place,
+    so treating a naive read-back as UTC is correct, not a guess."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def json_safe(value: Any):
     if isinstance(value, Decimal):
         return money_str(value)
