@@ -7,7 +7,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.utils.money import utcnow
+from app.utils.money import as_aware_utc, utcnow
 from app.utils.email_templates import (
     render_database_email,
     password_changed_email,
@@ -776,7 +776,7 @@ def verify_otp_and_login(db: Session, data, request=None):
     if not user or not user.otp_code_hash or not user.otp_expires_at:
         raise HTTPException(status_code=400, detail="Request a new verification code.")
 
-    if user.otp_expires_at < utcnow():
+    if as_aware_utc(user.otp_expires_at) < utcnow():
         user.otp_code_hash = None
         user.otp_expires_at = None
         user.otp_attempts = 0
@@ -857,7 +857,7 @@ def verify_email(db: Session, token: str | None = ""):
     if not user or not user.email_verification_expires_at:
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
-    if user.email_verification_expires_at < utcnow():
+    if as_aware_utc(user.email_verification_expires_at) < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
     user.email_verified_at = utcnow()
@@ -1013,7 +1013,7 @@ def reset_password(db: Session, token: str, password: str, background_tasks=None
     if not user or not user.reset_password_expires_at:
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    expires_at = user.reset_password_expires_at
+    expires_at = as_aware_utc(user.reset_password_expires_at)
 
     if expires_at < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
@@ -1075,7 +1075,7 @@ def validate_reset_token(db: Session, token: str):
     if not user or not user.reset_password_expires_at:
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    if user.reset_password_expires_at < utcnow():
+    if as_aware_utc(user.reset_password_expires_at) < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
     if user.account_status != "ACTIVE" or not user.is_active:
