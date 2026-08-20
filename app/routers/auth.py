@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth.permissions import get_current_user, get_token_user_including_inactive, require_permission
@@ -207,9 +207,9 @@ def current_session(
 
 
 @router.post("/forgot-password")
-def forgot_password_request(request: Request, data: ForgotPasswordSchema, db: Session = Depends(get_db)):
+def forgot_password_request(request: Request, data: ForgotPasswordSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     check_rate_limit(request, "forgot-password", max_calls=5, window_seconds=300)
-    forgot_password(db, data.email, data.client_type)
+    forgot_password(db, data.email, data.client_type, background_tasks=background_tasks)
 
     return {
         "status": "success",
@@ -218,8 +218,8 @@ def forgot_password_request(request: Request, data: ForgotPasswordSchema, db: Se
 
 
 @router.post("/reset-password")
-def reset_password_request(data: ResetPasswordSchema, db: Session = Depends(get_db)):
-    reset_password(db, data.token, data.password)
+def reset_password_request(data: ResetPasswordSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    reset_password(db, data.token, data.password, background_tasks=background_tasks)
 
     return {
         "status": "success",

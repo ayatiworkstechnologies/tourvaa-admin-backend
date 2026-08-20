@@ -940,7 +940,7 @@ def force_logout_user(db: Session, target_user: User, actor: User | None = None,
     return {"user_id": target_user.id, "token_version": target_user.token_version}
 
 
-def forgot_password(db: Session, email: str, client_type: str | None = "web"):
+def forgot_password(db: Session, email: str, client_type: str | None = "web", background_tasks=None):
     from fastapi import HTTPException
 
     normalized_email = email.strip().lower()
@@ -978,20 +978,31 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web"):
         password_reset_email(user.name, reset_url),
     )
 
-    try:
-        send_email(
-            user.email,
-            subject,
-            html,
-            template_key="password_reset",
-        )
-    except Exception as error:
-        logger.warning("Password reset email failed for user id=%s: %s", user.id, error)
+    # send_email() opens its own DB session and does a live SMTP round-trip,
+    # which can hang for the full SMTP timeout when a mail server is slow or
+    # unreachable - doing that inline here means the client's HTTP request
+    # (and any proxy in front of it) sits blocked for that entire duration.
+    # When called from a request handler, background_tasks lets the response
+    # return immediately after the token is committed and the email goes out
+    # after; callers without a request context (scripts, tests) fall back to
+    # sending synchronously as before.
+    if background_tasks is not None:
+        background_tasks.add_task(send_email, user.email, subject, html, template_key="password_reset")
+    else:
+        try:
+            send_email(
+                user.email,
+                subject,
+                html,
+                template_key="password_reset",
+            )
+        except Exception as error:
+            logger.warning("Password reset email failed for user id=%s: %s", user.id, error)
 
     return True
 
 
-def reset_password(db: Session, token: str, password: str):
+def reset_password(db: Session, token: str, password: str, background_tasks=None):
     token_hash = hash_reset_token(token)
     user = (
         db.query(User)
@@ -1020,24 +1031,36 @@ def reset_password(db: Session, token: str, password: str):
 
     db.commit()
 
+    # The password change above is already committed at this point - the
+    # confirmation email is a courtesy notification, not part of the reset
+    # itself, so it must never be able to make this request hang/time out.
+    # A slow/unreachable SMTP server here previously blocked the HTTP
+    # response for the full SMTP timeout: the client would see "no response"
+    # and, on retry, find the token already consumed by the first (actually
+    # successful) attempt and be told the link was "invalid or expired" even
+    # though the password had already been changed. See the identical fix in
+    # forgot_password() above.
     login_url = f"{settings.FRONTEND_URL}/login"
-    try:
-        subject, html = render_database_email(
-            db,
-            "password_changed",
-            {
-                "name": user.name,
-                "email": user.email,
-                "login_url": login_url,
-                "button_text": "Login to Tourvaa",
-                "button_url": login_url,
-            },
-            "Your Tourvaa password was changed",
-            password_changed_email(user.name, login_url),
-        )
-        try_send_email(user.email, subject, html, template_key="password_changed")
-    except Exception as exc:
-        logger.warning("Password changed email failed for user id=%s: %s", user.id, exc)
+    subject, html = render_database_email(
+        db,
+        "password_changed",
+        {
+            "name": user.name,
+            "email": user.email,
+            "login_url": login_url,
+            "button_text": "Login to Tourvaa",
+            "button_url": login_url,
+        },
+        "Your Tourvaa password was changed",
+        password_changed_email(user.name, login_url),
+    )
+    if background_tasks is not None:
+        background_tasks.add_task(try_send_email, user.email, subject, html, template_key="password_changed")
+    else:
+        try:
+            try_send_email(user.email, subject, html, template_key="password_changed")
+        except Exception as exc:
+            logger.warning("Password changed email failed for user id=%s: %s", user.id, exc)
 
     return True
 
