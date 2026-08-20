@@ -76,10 +76,23 @@ def _effective_smtp_config() -> _SmtpConfig:
                     use_starttls=row.use_starttls,
                     timeout_seconds=row.timeout_seconds,
                 )
+            if row and not (row.is_enabled and row.host):
+                # A row exists (someone opened Settings > Email/SMTP and saved
+                # something) but it's disabled or missing a host, so we're
+                # about to fall back to env vars - without this line that
+                # fallback is invisible, and env vars are frequently unset in
+                # production, producing the exact "no error, email just never
+                # arrives" symptom this is meant to catch.
+                logger.warning("DB SMTP settings row exists but is_enabled=%s host=%r - falling back to env config", row.is_enabled, row.host)
         finally:
             db.close()
     except Exception as error:
-        logger.debug("Could not load DB SMTP settings, using env config: %s", error)
+        # This used to log at debug level, which production log levels
+        # (typically INFO/WARNING) filter out entirely - a DB lookup failure
+        # here silently falls back to (often unset) env vars, which is
+        # exactly the kind of "email just doesn't send" symptom with no
+        # visible cause that this flow has been hit by.
+        logger.warning("Could not load DB SMTP settings, using env config: %s", error)
 
     return _env_smtp_config()
 
@@ -160,8 +173,17 @@ def _build_message(config: _SmtpConfig, to_email: str, subject: str, html: str, 
     smtp_user = config.username
     from_email = config.from_email or smtp_user
 
-    if not config.host or not smtp_user or not config.password or not from_email:
-        raise RuntimeError("SMTP configuration is incomplete")
+    missing = [
+        name for name, value in (
+            ("host", config.host),
+            ("username", smtp_user),
+            ("password", config.password),
+            ("from_email", from_email),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"SMTP configuration is incomplete - missing: {', '.join(missing)}")
 
     message_id = make_msgid(domain=_domain_from_email(from_email))
     message = EmailMessage()

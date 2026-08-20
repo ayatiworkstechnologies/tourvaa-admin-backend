@@ -869,12 +869,13 @@ metadata_json, sent_at, read_at, created_at
 **Sending via:** `app/utils/mailer.py`
 
 ```python
-send_email(to, subject, html)      # raises on failure
-try_send_email(to, subject, html)  # logs error, does not raise
+send_email(to, subject, html)      # logs (email_logs table + logger.warning) then re-raises on failure
+try_send_email(to, subject, html)  # calls send_email, swallows the exception, returns False - no additional logging of its own
 ```
 
-**Config:** `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` from `.env`.  
+**Config:** DB-stored `Settings > Email/SMTP` values (`smtp_settings` table) take priority when a row exists with `is_enabled=true` and a `host` set. Otherwise falls back to env vars: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` from `.env`.
 **From name:** `SMTP_FROM_NAME` (default: "Tourvaa").
+**Debugging a failed send:** check the `email_logs` table (`status='failed'`, `error_message` has the real smtplib/RuntimeError text) or app logs for `"Could not send email to"` / `"DB SMTP settings row exists but"` / `"Could not load DB SMTP settings"`.
 
 **Template resolution:**
 
