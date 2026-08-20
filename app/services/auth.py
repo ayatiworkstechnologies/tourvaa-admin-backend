@@ -1007,7 +1007,10 @@ def reset_password(db: Session, token: str, password: str):
     if expires_at < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    if user.account_status != "ACTIVE" or not user.is_active or not user.email_verified:
+    if user.account_status != "ACTIVE" or not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
+
+    if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER", "AFFILIATE"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
 
     user.password = hash_password(password)
@@ -1052,7 +1055,10 @@ def validate_reset_token(db: Session, token: str):
     if user.reset_password_expires_at < utcnow():
         raise HTTPException(status_code=400, detail="Invalid or expired reset link")
 
-    if user.account_status != "ACTIVE" or not user.is_active or not user.email_verified:
+    if user.account_status != "ACTIVE" or not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
+
+    if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER", "AFFILIATE"} and not user.email_verified_at:
         raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
 
     return True
