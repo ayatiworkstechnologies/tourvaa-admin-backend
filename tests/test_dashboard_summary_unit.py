@@ -58,7 +58,7 @@ def test_admin_dashboard_counts_profiles_without_duplicate_supplier_approval():
         password="x",
         user_type="SUPPLIER",
         is_active=True,
-        approval_status="PENDING",
+        approval_status="pending",
     )
     agent_user = User(
         name="Agent",
@@ -71,7 +71,7 @@ def test_admin_dashboard_counts_profiles_without_duplicate_supplier_approval():
     db.add_all([admin, customer_user, supplier_user, agent_user])
     db.flush()
     db.add(Customer(user_id=customer_user.id, full_name="Customer", email=customer_user.email))
-    db.add(Supplier(user_id=supplier_user.id, supplier_name="Supplier", status="active", approval_status="PENDING"))
+    db.add(Supplier(user_id=supplier_user.id, supplier_name="Supplier", status="active", approval_status="pending"))
     db.add(Agent(user_id=agent_user.id, agent_name="Agent", status="active", approval_status="NOT_REQUIRED"))
     db.commit()
     db.refresh(admin)

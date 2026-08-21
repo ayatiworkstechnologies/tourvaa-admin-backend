@@ -1175,8 +1175,8 @@ def dashboard_alerts(
 
             if supplier.approval_status == "pending":
                 alerts.append({"type": "warning", "message": "Your supplier profile is pending approval", "action": "profile"})
-            elif supplier.approval_status == "rejected":
-                alerts.append({"type": "error", "message": "Your supplier profile was rejected. Please update your documents.", "action": "documents"})
+            elif supplier.approval_status == "more_information_required":
+                alerts.append({"type": "error", "message": "Additional information is needed on your supplier profile. Please update your documents.", "action": "documents"})
 
         return {"status": "success", "data": {"dashboard_type": "supplier", "alerts": alerts}}
 

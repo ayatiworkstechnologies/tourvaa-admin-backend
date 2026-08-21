@@ -289,6 +289,12 @@ def partial_approve_agent(db: Session, agent_id: int, data: PartialApprovalReque
 def update_agent_discount(db: Session, agent_id: int, data: AgentDiscountRequest, actor: User, request: Request | None = None):
     item = get_agent(db, agent_id)
     old = serialize_agent(item)
+    if data.discount_type == "percentage":
+        from app.services.settings import get_agent_commission_max
+        from decimal import Decimal
+        maximum = get_agent_commission_max(db)
+        if Decimal(str(data.discount_value)) > maximum:
+            raise HTTPException(status_code=400, detail=f"Agent commission cannot exceed the platform maximum of {maximum}%")
     item.discount_type = data.discount_type
     item.discount_value = data.discount_value
     if item.commission_request_status == "pending":

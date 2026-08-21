@@ -243,7 +243,7 @@ def register_unified_user(db: Session, data):
         role_id=role.id,
         user_type=data.account_type,
         is_active=False,
-        approval_status="PENDING" if data.account_type in {"SUPPLIER", "AFFILIATE"} else "NOT_REQUIRED",
+        approval_status="pending" if data.account_type in {"SUPPLIER", "AFFILIATE"} else "not_required",
         email_verified=False,
         admin_verified=False,
         password_created_at=None,
@@ -263,7 +263,7 @@ def register_unified_user(db: Session, data):
     if role_slug == "customer":
         db.add(Customer(user_id=user.id, first_name=user.name, last_name="", full_name=user.name, email=email, phone=phone, status="inactive", email_verified=False))
     elif role_slug == "supplier":
-        db.add(Supplier(user_id=user.id, supplier_name=user.name, status="inactive", approval_status="PENDING"))
+        db.add(Supplier(user_id=user.id, supplier_name=user.name, status="inactive", approval_status="pending"))
     elif role_slug == "affiliate":
         db.add(Affiliate(user_id=user.id, name=user.name, email=email, phone=phone, status="inactive", approval_status="pending"))
     else:
@@ -334,7 +334,7 @@ def complete_registration(db: Session, token: str, password: str):
     user.email_verification_expires_at = None
     user.account_status = "ACTIVE"
     user.is_active = True
-    user.approval_status = "PENDING" if user.user_type in {"SUPPLIER", "AFFILIATE"} else "NOT_REQUIRED"
+    user.approval_status = "pending" if user.user_type in {"SUPPLIER", "AFFILIATE"} else "not_required"
 
     customer = db.query(Customer).filter(Customer.user_id == user.id).first()
     if customer:
@@ -351,7 +351,7 @@ def complete_registration(db: Session, token: str, password: str):
     supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
     if supplier:
         supplier.status = "active"
-        supplier.approval_status = "PENDING"
+        supplier.approval_status = "pending"
         supplier.approved_at = None
         supplier.rejection_reason = None
 
@@ -743,7 +743,7 @@ def request_otp(db: Session, data):
             role_id=role.id,
             user_type="CUSTOMER",
             is_active=False,
-            approval_status="NOT_REQUIRED",
+            approval_status="not_required",
             account_status="PENDING_OTP_VERIFICATION",
         )
         db.add(user)

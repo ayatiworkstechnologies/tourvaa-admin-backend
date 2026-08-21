@@ -34,7 +34,7 @@ def inactive_supplier(**overrides):
 
 def test_reactivate_supplier_restores_login_without_approving_operations(monkeypatch):
     user = inactive_supplier()
-    supplier = SimpleNamespace(status="inactive", approval_status="PENDING")
+    supplier = SimpleNamespace(status="inactive", approval_status="pending")
     actor = SimpleNamespace(id=1)
     db = MagicMock()
     db.query.return_value.filter.return_value.first.return_value = supplier
@@ -70,7 +70,7 @@ def test_reactivate_supplier_restores_login_without_approving_operations(monkeyp
     assert user.deactivation_reason is None
     assert user.token_version == 4
     assert supplier.status == "active"
-    assert supplier.approval_status == "PENDING"
+    assert supplier.approval_status == "pending"
     history = db.add.call_args.args[0]
     assert history.from_status == "INACTIVE"
     assert history.to_status == "ACTIVE"

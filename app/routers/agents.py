@@ -138,6 +138,39 @@ def request_my_commission(data: AgentDiscountRequest, request: Request, db: Sess
     return {"status": "success", "message": "Commission request submitted for admin approval", "data": request_agent_commission(db, current_user, data, request)}
 
 
+@router.get("/me/commission-calculator")
+def my_commission_calculator(
+    amount: float = Query(ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Read-only: shows an agent what Tourvaa would pay them on a booking of
+    the given gross amount, at their currently APPROVED discount_type/value
+    (agents cannot self-raise this - see /me/commission-request above and
+    services.agents.update_agent_discount's admin-side cap). Mirrors the
+    same formula used for the live dashboard commission_earned figure
+    (app/routers/dashboard.py)."""
+    from app.utils.money import money
+
+    agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    gross = money(amount)
+    if (agent.discount_type or "").lower() == "percentage":
+        commission = money(gross * money(agent.discount_value or 0) / money(100))
+    else:
+        commission = money(agent.discount_value or 0)
+    return {
+        "status": "success",
+        "data": {
+            "gross_amount": str(gross),
+            "discount_type": agent.discount_type,
+            "discount_value": str(agent.discount_value) if agent.discount_value is not None else None,
+            "commission_amount": str(commission),
+        },
+    }
+
+
 @router.get("/{agent_id}")
 def agent_detail(agent_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     agent = get_agent(db, agent_id)

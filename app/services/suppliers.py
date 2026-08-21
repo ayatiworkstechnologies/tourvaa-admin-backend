@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 
 from fastapi import HTTPException, Request
 from sqlalchemy.exc import SQLAlchemyError
@@ -145,6 +146,8 @@ def serialize_supplier(item: Supplier):
     data.update(
         {
             "supplier_type": item.supplier_type,
+            "commission_percentage": str(item.commission_percentage) if item.commission_percentage is not None else None,
+            "onboarding_completed_at": item.onboarding_completed_at,
             "contacts": relationship_list(item.contacts, _contact),
             "vehicles": relationship_list(item.vehicles, _serialize_vehicle),
             "documents": relationship_list(item.documents, _document),
@@ -256,7 +259,7 @@ def create_supplier(db: Session, data: SupplierCreate, actor: User, request: Req
             role_id=role.id,
             user_type="SUPPLIER",
             is_active=True,
-            approval_status="PENDING",
+            approval_status="pending",
             email_verified=True,
             email_verified_at=now,
             password_created_at=now,
@@ -283,7 +286,13 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
     contact_data = update_data.pop("contact", None)
     business_data = update_data.pop("business_info", None)
     invoicing_data = update_data.pop("invoicing", None)
-    
+
+    if "commission_percentage" in update_data and update_data["commission_percentage"] is not None:
+        from app.services.settings import get_commission_percentage
+        minimum = get_commission_percentage(db)
+        if Decimal(str(update_data["commission_percentage"])) < minimum:
+            raise HTTPException(status_code=400, detail=f"Commission percentage cannot be lower than the platform minimum of {minimum}%")
+
     for key, value in update_data.items():
         setattr(item, key, value)
         
@@ -321,6 +330,16 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
     return serialize_supplier(item)
 
 
+def complete_supplier_onboarding(db: Session, supplier_id: int, actor: User, request: Request | None = None):
+    item = get_supplier(db, supplier_id)
+    if item.onboarding_completed_at is None:
+        item.onboarding_completed_at = utcnow()
+        log_audit(db, actor=actor, action="complete_supplier_onboarding", entity_type="supplier", entity_id=item.id, request=request)
+        db.commit()
+        db.refresh(item)
+    return serialize_supplier(item)
+
+
 def approve_supplier(db: Session, supplier_id: int, actor: User, request: Request | None = None):
     item = get_supplier(db, supplier_id)
     if not item.user or item.user.user_type != "SUPPLIER":
@@ -335,20 +354,29 @@ def approve_supplier(db: Session, supplier_id: int, actor: User, request: Reques
     old = serialize_supplier(item)
     previous_status = item.approval_status
     now = utcnow()
-    item.approval_status = "APPROVED"
+    item.approval_status = "approved"
     item.status = "active"
     item.approved_at = now
     item.approved_by = actor.id
     item.rejection_reason = None
     item.pending_requirements = None
-    item.user.approval_status = "APPROVED"
+    # Deliberately leave commission_percentage untouched (null) here rather
+    # than filling it in with today's platform minimum: a null rate always
+    # live-resolves to the current platform minimum (get_commission_percentage)
+    # at every booking, calculator call and UI read, so it stays in sync
+    # automatically whenever admin changes the platform-wide setting - no
+    # per-supplier update needed. Filling in a concrete number here would
+    # freeze that supplier out of future platform-wide changes until an
+    # admin/supplier explicitly edits it again. Admin can still give this
+    # supplier an explicit override rate via update_supplier at any time.
+    item.user.approval_status = "approved"
     item.user.admin_verified = True
     item.user.admin_verified_at = now
     item.user.admin_verified_by = actor.id
     db.add(SupplierApprovalHistory(
         supplier_id=item.id,
         from_status=previous_status,
-        to_status="APPROVED",
+        to_status="approved",
         notes="Supplier operational access approved",
         changed_by=actor.id,
     ))
@@ -421,15 +449,15 @@ def partial_approve_supplier(db: Session, supplier_id: int, data: PartialApprova
     item = get_supplier(db, supplier_id)
     old = serialize_supplier(item)
     previous_status = item.approval_status
-    item.approval_status = "MORE_INFORMATION_REQUIRED"
+    item.approval_status = "more_information_required"
     item.admin_comments = data.admin_comments
     item.pending_requirements = data.pending_requirements
     if item.user:
-        item.user.approval_status = "MORE_INFORMATION_REQUIRED"
+        item.user.approval_status = "more_information_required"
     db.add(SupplierApprovalHistory(
         supplier_id=item.id,
         from_status=previous_status,
-        to_status="MORE_INFORMATION_REQUIRED",
+        to_status="more_information_required",
         notes=data.pending_requirements or data.admin_comments,
         changed_by=actor.id,
     ))
@@ -509,7 +537,7 @@ def _submit_supplier_verification(db: Session, supplier: Supplier, actor: User, 
     if (supplier.approval_status or "").upper() == "APPROVED":
         raise HTTPException(status_code=409, detail="Supplier is already approved")
     old = serialize_supplier(supplier)
-    supplier.approval_status = "PENDING"
+    supplier.approval_status = "pending"
     supplier.status = "active"
     supplier.rejection_reason = None
     supplier.pending_requirements = None

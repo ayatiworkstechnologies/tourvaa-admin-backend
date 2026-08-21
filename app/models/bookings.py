@@ -47,6 +47,13 @@ class Booking(Base):
     extension_amount = Column(Numeric(12, 2), default=0, nullable=False)
     discount_amount = Column(Numeric(12, 2), default=0, nullable=False)
     promo_code = Column(String(100), nullable=True)
+    # Supplier-defined group-size discount actually applied to this booking's
+    # base_amount (see TourGroupDiscountTier / services.bookings._price_booking).
+    # Kept separate from discount_amount/promo_code (TourDiscount promo codes)
+    # since group discounts are tour-scoped and auto-applied by pax count,
+    # not code-redeemed.
+    group_discount_tier_id = Column(Integer, ForeignKey("tour_group_discount_tiers.id"), nullable=True)
+    group_discount_amount = Column(Numeric(12, 2), default=0, nullable=False)
     tax_amount = Column(Numeric(12, 2), default=0, nullable=False)
     surcharge_amount = Column(Numeric(12, 2), default=0, nullable=False)
     final_amount = Column(Numeric(12, 2), default=0, nullable=False)

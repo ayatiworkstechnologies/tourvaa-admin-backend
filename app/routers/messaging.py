@@ -25,6 +25,23 @@ def issue_ws_ticket(current_user: User = Depends(get_current_user)):
     return {"status": "success", "data": {"ticket": ticket_store.issue(current_user.id)}}
 
 
+@ticket_router.delete("/{message_id}")
+async def delete_own_message(message_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Deletes a message in an admin-support conversation (admin's own
+    reply, or a supplier/agent/customer/affiliate's own message to admin).
+    Own messages only, regardless of which portal the caller is in."""
+    message = await messaging_service.delete_message(db, message_id, current_user)
+    return {"status": "success", "message": "Message deleted", "data": message}
+
+
+@ticket_router.delete("/booking/{message_id}")
+async def delete_own_booking_message(message_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Deletes a message in a booking-scoped conversation (customer/agent
+    <-> supplier). Own messages only."""
+    message = await messaging_service.delete_booking_message(db, message_id, current_user)
+    return {"status": "success", "message": "Message deleted", "data": message}
+
+
 class SendReplyBody(BaseModel):
     body: str = Field(min_length=1)
 

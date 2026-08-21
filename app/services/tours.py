@@ -16,6 +16,7 @@ from app.models.tours import (
     TourExclusion,
     TourExtension,
     TourGalleryImage,
+    TourGroupDiscountTier,
     TourHighlight,
     TourInclusion,
     TourItinerary,
@@ -31,6 +32,7 @@ from app.schemas.tours import (
     DiscountPayload,
     ExtensionPayload,
     GalleryImagePayload,
+    GroupDiscountTierPayload,
     HighlightPayload,
     InclusionPayload,
     ItineraryPayload,
@@ -372,30 +374,20 @@ def _is_supplier_actor(db: Session, actor: User) -> bool:
 
 
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    # Tourvaa pays the supplier exactly the price they set for a tour - no
-    # commission is carved out of it. supplier_final_* simply mirrors the
-    # supplier's own adult_price/child_price. Tourvaa's entire commission is
-    # an admin-only retail markup (admin_markup_value, always a percentage,
-    # bounded 5-15% - see PricingPayload) added ON TOP of the supplier's
-    # price to produce the storefront/customer-facing price (storefront_*).
-    # Only a non-supplier actor may change the markup; a supplier-submitted
-    # slab keeps whatever markup already exists (0 for a brand-new slab
-    # pending its first admin review).
+    # The customer is charged exactly the supplier's own adult_price/
+    # child_price - there is no separate retail markup layered on top
+    # (admin_markup_value/_apply_markup are legacy and no longer applied;
+    # kept as unused columns for backward compatibility). Tourvaa's
+    # commission is instead deducted from this same price when the supplier
+    # is paid out - see Tour.commission_percentage / Supplier.commission_percentage
+    # / the platform minimum, resolved by
+    # services.bookings.resolve_effective_commission_percentage.
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     o.supplier_final_adult_price = o.adult_price
     o.supplier_final_child_price = o.child_price
     o.final_price = o.adult_price
 
     is_supplier = _is_supplier_actor(db, actor)
-    if not is_supplier:
-        o.admin_markup_type = "percentage"
-        # PricingPayload.admin_markup_value already enforces 5-15% at the API
-        # boundary; clamp again here as defense in depth against any other
-        # caller of this function.
-        o.admin_markup_value = min(15.0, max(5.0, float(data.admin_markup_value or 0.0)))
-    elif o.admin_markup_type is None:
-        o.admin_markup_type = "percentage"
-        o.admin_markup_value = o.admin_markup_value or 0.0
 
     # A supplier editing an existing slab on a tour that's already been
     # through at least one approval must not change what the storefront
@@ -409,8 +401,8 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     if freeze:
         return
 
-    o.storefront_adult_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.adult_price)
-    o.storefront_child_price = _apply_markup(o.admin_markup_type, o.admin_markup_value, o.child_price)
+    o.storefront_adult_price = o.adult_price
+    o.storefront_child_price = o.child_price
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
@@ -681,6 +673,68 @@ def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPaylo
 def delete_discount(db: Session, tour_id: int, disc_id: int, actor: User, request: Request | None = None):
     o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
     log_audit(db, actor=actor, action="delete_discount", entity_type="tour", entity_id=tour_id, request=request)
+    db.delete(o)
+    maybe_resubmit_for_review(db, tour_id, actor)
+    db.commit()
+
+
+# group-size discount tiers (supplier-defined, scoped to the whole Tour --
+# see models.tours.TourGroupDiscountTier and services.bookings._resolve_group_discount)
+def _ser_group_discount_tier(o: TourGroupDiscountTier) -> dict:
+    return {
+        "id": o.id, "tour_id": o.tour_id, "min_pax": o.min_pax, "max_pax": o.max_pax,
+        "discount_type": o.discount_type, "discount_value": o.discount_value, "status": o.status,
+        "created_at": o.created_at, "updated_at": o.updated_at,
+    }
+
+
+def _assert_no_tier_overlap(db: Session, tour_id: int, min_pax: int, max_pax: int, exclude_id: int | None = None):
+    query = db.query(TourGroupDiscountTier).filter(
+        TourGroupDiscountTier.tour_id == tour_id,
+        TourGroupDiscountTier.status == "active",
+        TourGroupDiscountTier.min_pax <= max_pax,
+        TourGroupDiscountTier.max_pax >= min_pax,
+    )
+    if exclude_id is not None:
+        query = query.filter(TourGroupDiscountTier.id != exclude_id)
+    if query.first():
+        raise HTTPException(status_code=409, detail="This traveller-count range overlaps an existing group discount tier for this tour")
+
+
+def list_group_discount_tiers(db: Session, tour_id: int) -> list[dict]:
+    _require_tour(db, tour_id)
+    return [_ser_group_discount_tier(o) for o in db.query(TourGroupDiscountTier).filter(TourGroupDiscountTier.tour_id == tour_id).order_by(TourGroupDiscountTier.min_pax.asc()).all()]
+
+
+def create_group_discount_tier(db: Session, tour_id: int, data: GroupDiscountTierPayload, actor: User, request: Request | None = None) -> dict:
+    _require_tour(db, tour_id)
+    if data.status == "active":
+        _assert_no_tier_overlap(db, tour_id, data.min_pax, data.max_pax)
+    o = TourGroupDiscountTier(tour_id=tour_id, **data.model_dump())
+    db.add(o)
+    log_audit(db, actor=actor, action="create_group_discount_tier", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
+    db.commit()
+    db.refresh(o)
+    return _ser_group_discount_tier(o)
+
+
+def update_group_discount_tier(db: Session, tour_id: int, tier_id: int, data: GroupDiscountTierPayload, actor: User, request: Request | None = None) -> dict:
+    o = _child_or_404(db, TourGroupDiscountTier, tier_id, tour_id, "Group discount tier")
+    if data.status == "active":
+        _assert_no_tier_overlap(db, tour_id, data.min_pax, data.max_pax, exclude_id=tier_id)
+    for key, value in data.model_dump().items():
+        setattr(o, key, value)
+    log_audit(db, actor=actor, action="update_group_discount_tier", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
+    db.commit()
+    db.refresh(o)
+    return _ser_group_discount_tier(o)
+
+
+def delete_group_discount_tier(db: Session, tour_id: int, tier_id: int, actor: User, request: Request | None = None):
+    o = _child_or_404(db, TourGroupDiscountTier, tier_id, tour_id, "Group discount tier")
+    log_audit(db, actor=actor, action="delete_group_discount_tier", entity_type="tour", entity_id=tour_id, request=request)
     db.delete(o)
     maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()

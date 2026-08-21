@@ -13,6 +13,7 @@ from app.schemas.tours import (
     ExtensionPayload,
     GalleryImagePayload,
     GlobalDiscountPayload,
+    GroupDiscountTierPayload,
     HighlightPayload,
     InclusionPayload,
     ItineraryPayload,
@@ -36,6 +37,7 @@ from app.services.tours import (
     create_extension,
     create_gallery_image,
     create_global_discount,
+    create_group_discount_tier,
     create_highlight,
     create_inclusion,
     create_itinerary,
@@ -49,6 +51,7 @@ from app.services.tours import (
     delete_extension,
     delete_gallery_image,
     delete_global_discount,
+    delete_group_discount_tier,
     delete_highlight,
     delete_inclusion,
     delete_itinerary,
@@ -61,6 +64,7 @@ from app.services.tours import (
     list_all_discounts,
     list_calendar,
     list_discounts,
+    list_group_discount_tiers,
     list_exclusions,
     list_extensions,
     list_gallery,
@@ -80,6 +84,7 @@ from app.services.tours import (
     update_extension,
     update_gallery_image,
     update_global_discount,
+    update_group_discount_tier,
     update_highlight,
     update_inclusion,
     update_itinerary,
@@ -515,6 +520,34 @@ def remove_discount(tour_id: int, discount_id: int, request: Request, db: Sessio
     _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_discount(db, tour_id, discount_id, current_user, request)
     return {"status": "success", "message": "Discount deleted"}
+
+
+# group-size discount tiers -- supplier-defined, applies to the whole Tour
+# (every pricing slab), not to an individual slab. See
+# services.tours.TourGroupDiscountTier and services.bookings._resolve_group_discount.
+@router.get("/{tour_id}/group-discount-tiers")
+def tour_group_discount_tiers(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
+    return {"status": "success", "data": list_group_discount_tiers(db, tour_id)}
+
+
+@router.post("/{tour_id}/group-discount-tiers")
+def add_group_discount_tier(tour_id: int, data: GroupDiscountTierPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
+    return {"status": "success", "data": create_group_discount_tier(db, tour_id, data, current_user, request)}
+
+
+@router.put("/{tour_id}/group-discount-tiers/{tier_id}")
+def edit_group_discount_tier(tour_id: int, tier_id: int, data: GroupDiscountTierPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
+    return {"status": "success", "data": update_group_discount_tier(db, tour_id, tier_id, data, current_user, request)}
+
+
+@router.delete("/{tour_id}/group-discount-tiers/{tier_id}")
+def remove_group_discount_tier(tour_id: int, tier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
+    delete_group_discount_tier(db, tour_id, tier_id, current_user, request)
+    return {"status": "success", "message": "Group discount tier deleted"}
 
 
 # price calculation

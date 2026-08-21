@@ -19,7 +19,7 @@ class SupplierCreate(BaseModel):
     city_id: int | None = None
     years_in_operation: int = Field(default=0, ge=0)
     status: str = Field(default="inactive", max_length=20)
-    approval_status: str = Field(default="PENDING", max_length=30)
+    approval_status: str = Field(default="pending", max_length=30)
 
     @field_validator("supplier_name", "supplier_type", "status", "approval_status")
     @classmethod
@@ -98,6 +98,11 @@ class SupplierUpdate(BaseModel):
     years_in_operation: int | None = Field(default=None, ge=0)
     status: str | None = Field(default=None, max_length=20)
     admin_comments: str | None = Field(default=None, max_length=5000)
+    # Supplier-visible commission rate. Null clears the supplier's own rate
+    # (falls back to the admin platform minimum). A non-null value must be
+    # >= the current platform minimum - enforced in services.suppliers.update_supplier,
+    # not here, since the floor is a runtime AppSetting rather than a constant.
+    commission_percentage: float | None = Field(default=None, ge=0, le=100)
     contact: SupplierContactUpdate | None = None
     business_info: SupplierBusinessInfoUpdate | None = None
     invoicing: SupplierInvoicingUpdate | None = None
@@ -126,6 +131,10 @@ class SupplierSelfUpdate(BaseModel):
     country_id: int | None = None
     city_id: int | None = None
     years_in_operation: int | None = Field(default=None, ge=0)
+    # Suppliers may raise their own commission above the admin-set platform
+    # minimum, but never lower it below that minimum - see SupplierUpdate's
+    # commission_percentage and services.suppliers.update_supplier.
+    commission_percentage: float | None = Field(default=None, ge=0, le=100)
     contact: SupplierContactUpdate | None = None
     business_info: SupplierBusinessInfoUpdate | None = None
     invoicing: SupplierInvoicingUpdate | None = None

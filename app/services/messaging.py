@@ -68,7 +68,8 @@ def _serialize_message(msg: Message) -> dict:
         "sender_role": msg.sender_role,
         "sender_user_id": msg.sender_user_id,
         "sender_name": msg.sender.name if msg.sender else None,
-        "body": msg.body,
+        "body": None if msg.is_deleted else msg.body,
+        "is_deleted": msg.is_deleted,
         "created_at": msg.created_at,
     }
 
@@ -196,6 +197,55 @@ async def send_message_as_admin(db: Session, conversation_id: int, admin_user: U
     return serialized
 
 
+async def delete_message(db: Session, message_id: int, actor: User) -> dict:
+    """Soft-deletes a Message the caller themselves sent (admin-support
+    conversation). Deleting someone else's message is not allowed - this is
+    a "take back what I said" action, not moderation (that's a separate,
+    unbuilt admin capability)."""
+    msg = db.query(Message).filter(Message.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.sender_user_id != actor.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    if not msg.is_deleted:
+        msg.is_deleted = True
+        msg.deleted_at = utcnow()
+        db.commit()
+        db.refresh(msg)
+
+    conv = msg.conversation
+    serialized = _serialize_message(msg)
+    await ws_manager.notify_new_message(
+        {"type": "message_deleted", "conversation_id": conv.id, "message": serialized},
+        participant_user_id=conv.participant_user_id,
+    )
+    return serialized
+
+
+async def delete_booking_message(db: Session, message_id: int, actor: User) -> dict:
+    """Soft-deletes a BookingMessage the caller themselves sent (booking-
+    scoped customer/agent <-> supplier thread). Own messages only."""
+    msg = db.query(BookingMessage).filter(BookingMessage.id == message_id).first()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.sender_user_id != actor.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    if not msg.is_deleted:
+        msg.is_deleted = True
+        msg.deleted_at = utcnow()
+        db.commit()
+        db.refresh(msg)
+
+    conv = msg.conversation
+    serialized = _serialize_booking_message(msg)
+    other_party_user_id = conv.supplier_user_id if actor.id == conv.initiator_user_id else conv.initiator_user_id
+    await ws_manager.notify_new_message(
+        {"type": "booking_message_deleted", "conversation_id": conv.id, "message": serialized},
+        participant_user_id=other_party_user_id,
+    )
+    return serialized
+
+
 def admin_unread_summary(db: Session) -> dict:
     rows = (
         db.query(Conversation.participant_type, Conversation.admin_unread_count)
@@ -217,7 +267,8 @@ def _serialize_booking_message(msg: BookingMessage) -> dict:
         "sender_role": msg.sender_role,
         "sender_user_id": msg.sender_user_id,
         "sender_name": msg.sender.name if msg.sender else None,
-        "body": msg.body,
+        "body": None if msg.is_deleted else msg.body,
+        "is_deleted": msg.is_deleted,
         "created_at": msg.created_at,
     }
 

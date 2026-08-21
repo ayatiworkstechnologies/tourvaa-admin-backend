@@ -23,7 +23,18 @@ def _s_rule(r: AffiliateCommissionRule) -> dict:
     }
 
 
+def _assert_within_commission_max(db: Session, commission_type: str | None, percentage) -> None:
+    if (commission_type or "").lower() != "percentage" or percentage is None:
+        return
+    from decimal import Decimal
+    from app.services.settings import get_affiliate_commission_max
+    maximum = get_affiliate_commission_max(db)
+    if Decimal(str(percentage)) > maximum:
+        raise HTTPException(status_code=400, detail=f"Affiliate commission cannot exceed the platform maximum of {maximum}%")
+
+
 def create_rule(db: Session, data: AffiliateCommissionRuleCreate, actor: User) -> dict:
+    _assert_within_commission_max(db, data.commission_type, data.percentage)
     rule = AffiliateCommissionRule(**data.model_dump(), created_by=getattr(actor, "id", None))
     db.add(rule)
     db.commit()
@@ -57,7 +68,11 @@ def list_rules(db: Session, *, affiliate_id: Optional[int] = None, tour_id: Opti
 def update_rule(db: Session, rule_id: int, data: AffiliateCommissionRuleUpdate, actor: User) -> dict:
     rule = get_rule(db, rule_id)
     old = _s_rule(rule)
-    for key, value in data.model_dump(exclude_unset=True).items():
+    update_data = data.model_dump(exclude_unset=True)
+    effective_type = update_data.get("commission_type", rule.commission_type)
+    effective_percentage = update_data.get("percentage", rule.percentage)
+    _assert_within_commission_max(db, effective_type, effective_percentage)
+    for key, value in update_data.items():
         setattr(rule, key, value)
     rule.updated_by = getattr(actor, "id", None)
     db.commit()

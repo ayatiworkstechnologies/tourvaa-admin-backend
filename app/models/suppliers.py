@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -17,7 +17,7 @@ class Supplier(Base):
     city_id = Column(Integer, ForeignKey("cities.id"), nullable=True, index=True)
     years_in_operation = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="inactive", nullable=False, index=True)
-    approval_status = Column(String(30), default="PENDING", nullable=False, index=True)
+    approval_status = Column(String(30), default="pending", nullable=False, index=True)
     rejection_reason = Column(String(255), nullable=True)
     admin_comments = Column(Text, nullable=True)
     pending_requirements = Column(Text, nullable=True)
@@ -25,6 +25,17 @@ class Supplier(Base):
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     rejected_at = Column(DateTime(timezone=True), nullable=True)
     rejected_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Supplier-visible commission rate Tourvaa deducts from the supplier's own
+    # share of a booking. Null means "use the admin-configured platform
+    # minimum" (see AppSetting key "supplier_commission_percentage",
+    # app/services/settings.py:get_commission_percentage). Suppliers may
+    # raise this above the platform minimum but a write can never lower it
+    # below the minimum in force at write time.
+    commission_percentage = Column(Numeric(5, 2), nullable=True)
+    # Set once the supplier finishes the first-login onboarding wizard
+    # (src/app/supplier/onboarding). Null means "show the wizard on next
+    # login" - see supplier/layout.tsx's redirect check.
+    onboarding_completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -59,9 +59,9 @@ def test_role_policy_validation_returns_serializable_422():
 @pytest.mark.parametrize(
     ("account_type", "role_slug", "profile_model", "approval_status"),
     [
-        ("CUSTOMER", "customer", Customer, "NOT_REQUIRED"),
-        ("AGENT", "agent-reseller", Agent, "NOT_REQUIRED"),
-        ("SUPPLIER", "supplier", Supplier, "PENDING"),
+        ("CUSTOMER", "customer", Customer, "not_required"),
+        ("AGENT", "agent-reseller", Agent, "not_required"),
+        ("SUPPLIER", "supplier", Supplier, "pending"),
     ],
 )
 def test_every_role_starts_email_verification(monkeypatch, account_type, role_slug, profile_model, approval_status):
@@ -92,5 +92,5 @@ def test_every_role_starts_email_verification(monkeypatch, account_type, role_sl
     if isinstance(profile, Agent):
         assert profile.approval_status == "pending"
     if isinstance(profile, Supplier):
-        assert profile.approval_status == "PENDING"
+        assert profile.approval_status == "pending"
     send_verification.assert_called_once_with(db, user, "raw-token", None)

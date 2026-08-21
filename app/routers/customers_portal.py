@@ -193,24 +193,6 @@ def change_customer_password(data: PasswordUpdate, db: Session = Depends(get_db)
     return {"status": "success", "message": "Password updated successfully"}
 
 
-@router.get("/wishlist")
-def customer_wishlist(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    _current_customer(db, current_user)
-    return _user_wishlist(db, current_user)
-
-
-@router.post("/wishlist/{tour_id}")
-def add_customer_wishlist_item(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    _current_customer(db, current_user)
-    return _add_user_wishlist_item(tour_id, db, current_user)
-
-
-@router.delete("/wishlist/{tour_id}")
-def delete_customer_wishlist_item(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    _current_customer(db, current_user)
-    return _delete_user_wishlist_item(tour_id, db, current_user)
-
-
 @wishlist_router.get("")
 def user_wishlist(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return _user_wishlist(db, current_user)

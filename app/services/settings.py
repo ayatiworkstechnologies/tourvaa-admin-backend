@@ -34,12 +34,23 @@ DEFAULT_SETTINGS = [
     {"key": "logo", "label": "Logo URL", "value": "", "group": "general", "is_public": True},
     {"key": "favicon", "label": "Favicon URL", "value": "", "group": "general", "is_public": True},
     {"key": "booking_prefix", "label": "Booking Prefix", "value": "TVA", "group": "booking", "is_public": False},
-    # Single global commission rate applied to every tour/supplier: the
-    # supplier's listed price IS the full customer-facing total (no separate
-    # admin markup layered on top) - this percentage is what Tourvaa keeps,
-    # settling the supplier the remainder. See services.tours._apply_pricing_computation
-    # and services.bookings' supplier-ledger creation, the two places this is read.
-    {"key": "supplier_commission_percentage", "label": "Tourvaa Commission (%)", "value": "10", "group": "booking", "is_public": True},
+    # Admin-configured MINIMUM supplier commission percentage. A supplier's
+    # own commission_percentage (suppliers.commission_percentage) may be set
+    # higher than this at onboarding/approval or raised later by the
+    # supplier, but a write can never take it below the current value of
+    # this setting. When a supplier has no rate of their own, this value is
+    # used directly. See services.settings.get_commission_percentage and
+    # services.bookings.supplier_accept_booking (the ledger commission calc).
+    {"key": "supplier_commission_percentage", "label": "Tourvaa Tour Commission - Minimum (%)", "value": "10", "group": "booking", "is_public": True},
+    # Admin-configured MAXIMUM commission Tourvaa pays out to an agent or
+    # affiliate. Unlike the supplier minimum above, agent/affiliate
+    # commission flows the other way (Tourvaa pays them), so the admin
+    # control here is a ceiling, not a floor - see get_agent_commission_max /
+    # get_affiliate_commission_max and their write-path enforcement in
+    # services.agents.update_agent_discount and the affiliate commission
+    # rate/rule write paths.
+    {"key": "agent_commission_max_percentage", "label": "Maximum Agent Commission (%)", "value": "20", "group": "booking", "is_public": True},
+    {"key": "affiliate_commission_max_percentage", "label": "Maximum Affiliate Commission (%)", "value": "20", "group": "booking", "is_public": True},
     {"key": "currency", "label": "Currency", "value": "USD", "group": "booking", "is_public": True},
     # This ONLY controls whether "currency" above locks the display currency
     # for every site visitor (frontend useCurrency.ts) - it must default to
@@ -137,7 +148,8 @@ def seed_api_settings(db: Session):
 
 
 def get_commission_percentage(db: Session):
-    """Single admin-configured commission rate applied to every tour/supplier
+    """Admin-configured platform-minimum supplier commission percentage,
+    used whenever a supplier has no commission_percentage of their own set
     - see the DEFAULT_SETTINGS entry above for what this drives.
 
     Deliberately does NOT call seed_settings() here (unlike get_settings()):
@@ -156,6 +168,33 @@ def get_commission_percentage(db: Session):
         return Decimal(str(setting.value)) if setting and setting.value not in (None, "") else Decimal("10")
     except (InvalidOperation, TypeError):
         return Decimal("10")
+
+
+def _get_percentage_setting(db: Session, key: str, default: str) -> "Decimal":
+    from decimal import Decimal, InvalidOperation
+
+    setting = db.query(AppSetting).filter(AppSetting.key == key).first()
+    try:
+        return Decimal(str(setting.value)) if setting and setting.value not in (None, "") else Decimal(default)
+    except (InvalidOperation, TypeError):
+        return Decimal(default)
+
+
+def get_agent_commission_max(db: Session):
+    """Admin-configured MAXIMUM commission percentage Tourvaa will pay an
+    agent (Agent.discount_type == "percentage"). Unlike supplier commission,
+    this flows Tourvaa -> agent, so it is a ceiling enforced on every write
+    of Agent.discount_value, not a floor an agent can self-raise - see
+    services.agents.update_agent_discount."""
+    return _get_percentage_setting(db, "agent_commission_max_percentage", "20")
+
+
+def get_affiliate_commission_max(db: Session):
+    """Admin-configured MAXIMUM commission percentage Tourvaa will pay an
+    affiliate (Affiliate.commission_percentage and percentage-type
+    AffiliateCommissionRule rows). Ceiling, not a floor - see
+    services.affiliates and services.affiliate_commission_rules."""
+    return _get_percentage_setting(db, "affiliate_commission_max_percentage", "20")
 
 
 def get_settings(db: Session):
@@ -294,6 +333,8 @@ def update_settings(
         if setting:
             setting.value = value
 
+    commission_effects = _enforce_commission_bounds(db, old_values, values)
+
     log_audit(
         db,
         actor=actor,
@@ -303,8 +344,135 @@ def update_settings(
         new_values=values,
         request=request,
     )
+    if commission_effects:
+        log_audit(
+            db,
+            actor=actor,
+            action="enforce_commission_bounds",
+            entity_type="settings",
+            new_values=commission_effects,
+            request=request,
+        )
     db.commit()
     return get_settings(db)
+
+
+def _notify_users(db: Session, user_ids: set[int], *, notification_type: str, title: str, message: str) -> None:
+    from app.services.notifications import enqueue_notification
+    for uid in user_ids:
+        if uid:
+            enqueue_notification(db, user_id=uid, notification_type=notification_type, title=title, message=message)
+
+
+def _enforce_commission_bounds(db: Session, old_values: dict, new_values: dict) -> dict:
+    """A commission minimum/maximum is meant to hold at all times, not just
+    at the moment an individual supplier/agent/affiliate record is next
+    written. When admin changes one of these three platform settings here,
+    immediately bring every existing account back into compliance instead
+    of only gating future writes (services.suppliers.update_supplier,
+    services.agents.update_agent_discount, services.affiliates.update_affiliate,
+    services.affiliate_commission_rules) - so the new bound reflects on
+    every account (and every affiliate commission rule, which covers
+    per-tour rates) immediately, in this one place, with no manual per-account
+    editing required. Accounts with no rate of their own already live-resolve
+    to this setting on every read (see get_commission_percentage /
+    resolve_effective_commission_percentage) so they need no DB write at all
+    to pick up the change - they are still notified below, since their
+    effective rate changed even though nothing was written for them.
+
+    Notifies every affected account's user, and returns a summary of what
+    changed for the audit log.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    def _changed_decimal(key: str):
+        if key not in new_values or new_values.get(key) == old_values.get(key):
+            return None
+        try:
+            return Decimal(str(new_values[key]))
+        except (InvalidOperation, TypeError):
+            return None
+
+    effects: dict = {}
+
+    new_supplier_min = _changed_decimal("supplier_commission_percentage")
+    if new_supplier_min is not None:
+        from app.models.suppliers import Supplier
+        affected = (
+            db.query(Supplier)
+            .filter(Supplier.commission_percentage.is_(None) | (Supplier.commission_percentage < new_supplier_min))
+            .all()
+        )
+        user_ids = {s.user_id for s in affected}
+        raised = (
+            db.query(Supplier)
+            .filter(Supplier.commission_percentage.isnot(None), Supplier.commission_percentage < new_supplier_min)
+            .update({Supplier.commission_percentage: new_supplier_min}, synchronize_session=False)
+        )
+        if raised:
+            effects["suppliers_raised_to_minimum"] = raised
+        if user_ids:
+            effects["suppliers_notified"] = len(user_ids)
+            _notify_users(
+                db, user_ids,
+                notification_type="commission_rate_changed",
+                title="Tourvaa commission rate updated",
+                message=f"The Tourvaa commission rate on your bookings is now {new_supplier_min}%.",
+            )
+
+    new_agent_max = _changed_decimal("agent_commission_max_percentage")
+    if new_agent_max is not None:
+        from app.models.agents import Agent
+        affected_agents = (
+            db.query(Agent)
+            .filter(Agent.discount_type == "percentage", Agent.discount_value > new_agent_max)
+            .all()
+        )
+        user_ids = {a.user_id for a in affected_agents}
+        capped = (
+            db.query(Agent)
+            .filter(Agent.discount_type == "percentage", Agent.discount_value > new_agent_max)
+            .update({Agent.discount_value: new_agent_max}, synchronize_session=False)
+        )
+        if capped:
+            effects["agents_capped_to_maximum"] = capped
+        if user_ids:
+            _notify_users(
+                db, user_ids,
+                notification_type="commission_rate_changed",
+                title="Your commission rate has changed",
+                message=f"Your approved commission rate has been capped to the new platform maximum of {new_agent_max}%.",
+            )
+
+    new_affiliate_max = _changed_decimal("affiliate_commission_max_percentage")
+    if new_affiliate_max is not None:
+        from app.models.affiliates import Affiliate
+        from app.models.affiliate_tracking import AffiliateCommissionRule
+        affected_affiliates = db.query(Affiliate).filter(Affiliate.commission_percentage > new_affiliate_max).all()
+        user_ids = {a.user_id for a in affected_affiliates}
+        capped_affiliates = (
+            db.query(Affiliate)
+            .filter(Affiliate.commission_percentage > new_affiliate_max)
+            .update({Affiliate.commission_percentage: new_affiliate_max}, synchronize_session=False)
+        )
+        capped_rules = (
+            db.query(AffiliateCommissionRule)
+            .filter(AffiliateCommissionRule.commission_type == "percentage", AffiliateCommissionRule.percentage > new_affiliate_max)
+            .update({AffiliateCommissionRule.percentage: new_affiliate_max}, synchronize_session=False)
+        )
+        if capped_affiliates:
+            effects["affiliates_capped_to_maximum"] = capped_affiliates
+        if capped_rules:
+            effects["affiliate_rules_capped_to_maximum"] = capped_rules
+        if user_ids:
+            _notify_users(
+                db, user_ids,
+                notification_type="commission_rate_changed",
+                title="Your commission rate has changed",
+                message=f"Your commission rate has been capped to the new platform maximum of {new_affiliate_max}%.",
+            )
+
+    return effects
 
 
 SYSTEM_SETTING_KEYS = [
