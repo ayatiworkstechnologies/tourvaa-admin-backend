@@ -74,6 +74,7 @@ def _tour(item: Tour):
         "booking_deposit": item.booking_deposit,
         "balance_payment_deadline_days": item.balance_payment_deadline_days,
         "requires_supplier_confirmation": item.requires_supplier_confirmation,
+        "commission_percentage": str(item.commission_percentage) if item.commission_percentage is not None else None,
         "seo_title": item.seo_title,
         "seo_description": item.seo_description,
         "seo_keywords": item.seo_keywords,
@@ -467,3 +468,25 @@ def update_status(db: Session, model, serializer, item_id: int, data: StatusUpda
     db.commit()
     db.refresh(item)
     return serializer(item)
+
+
+def update_tour_commission(db: Session, tour_id: int, data: "TourCommissionUpdate", actor: User, request: Request | None = None):
+    """Admin-only per-tour override of Tourvaa's commission - see
+    models.cms.Tour.commission_percentage. A non-null value must still
+    respect the platform-wide minimum, same as a supplier's own rate
+    (services.settings.get_commission_percentage); it is not bounded by the
+    supplier's own commission_percentage, since this is Tourvaa's own
+    decision to charge more or less on a specific tour."""
+    item = get_tour(db, tour_id)
+    old = _tour(item)
+    if data.commission_percentage is not None:
+        from app.services.settings import get_commission_percentage
+        from decimal import Decimal
+        minimum = get_commission_percentage(db)
+        if Decimal(str(data.commission_percentage)) < minimum:
+            raise HTTPException(status_code=400, detail=f"Tour commission cannot be lower than the platform minimum of {minimum}%")
+    item.commission_percentage = data.commission_percentage
+    log_audit(db, actor=actor, action="update_tour_commission", entity_type="tour", entity_id=item.id, old_values=old, new_values=_tour(item), request=request)
+    db.commit()
+    db.refresh(item)
+    return _tour(item)

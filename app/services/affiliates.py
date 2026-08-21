@@ -127,6 +127,12 @@ def create_affiliate(db: Session, data: AffiliateCreate, actor: User, request: R
 def update_affiliate(db: Session, affiliate_id: int, data: AffiliateUpdate, actor: User, request: Request | None = None):
     item = get_affiliate(db, affiliate_id)
     old = serialize_affiliate(item)
+    if data.commission_percentage is not None:
+        from app.services.settings import get_affiliate_commission_max
+        from decimal import Decimal
+        maximum = get_affiliate_commission_max(db)
+        if Decimal(str(data.commission_percentage)) > maximum:
+            raise HTTPException(status_code=400, detail=f"Affiliate commission cannot exceed the platform maximum of {maximum}%")
     for key, value in data.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(item, key, str(value).strip() if isinstance(value, str) else value)

@@ -5,6 +5,13 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 
 ACTIVE_STATUSES = {"active", "inactive"}
+# TOUR_STATUSES is only the set of values the generic admin publish/disable
+# toggle (PATCH /tours/{id}/status, StatusUpdate below) may set directly.
+# The tour-review workflow (app/services/tour_versions.py) additionally
+# moves Tour.status through "pending_approval" and "active" (submitted /
+# approved-but-not-yet-published) and "rejected" -- those transitions are
+# driven exclusively by the submit/approve/reject endpoints, deliberately
+# not exposed through this generic schema, so they are not listed here.
 TOUR_STATUSES = {"draft", "published", "unpublished", "disabled"}
 TOUR_VISIBILITIES = {"public", "private", "unlisted"}
 TOUR_PRICING_TYPES = {"per_person", "per_couple", "per_group", "per_room", "custom_quote"}
@@ -25,6 +32,13 @@ class StatusUpdate(BaseModel):
         if value not in ACTIVE_STATUSES and value not in TOUR_STATUSES:
             raise ValueError("Invalid status")
         return value
+
+
+class TourCommissionUpdate(BaseModel):
+    # Admin-only per-tour override of Tourvaa's commission - see
+    # models.cms.Tour.commission_percentage. Null clears the override
+    # (falls back to the supplier's own rate / platform minimum).
+    commission_percentage: float | None = Field(default=None, ge=0, le=100)
 
 
 class CountryPayload(BaseModel):

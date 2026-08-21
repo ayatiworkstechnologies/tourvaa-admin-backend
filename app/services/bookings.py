@@ -32,7 +32,7 @@ from app.utils.money import money, money_str, utcnow
 from app.models.customers import Customer
 from app.models.agents import Agent
 from app.models.suppliers import Supplier
-from app.models.tours import TourAccommodationExtra, TourCalendar, TourDiscount, TourExtension, TourOptionalActivity, TourPricing, TourUnavailableDate
+from app.models.tours import TourAccommodationExtra, TourCalendar, TourDiscount, TourExtension, TourGroupDiscountTier, TourOptionalActivity, TourPricing, TourUnavailableDate
 from app.models.users import User
 
 logger = logging.getLogger(__name__)
@@ -494,6 +494,81 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
     return money(amount)
 
 
+def resolve_effective_commission_percentage(db: Session, *, tour=None, supplier=None):
+    """Single source of truth for which commission percentage applies:
+    an admin per-tour override (Tour.commission_percentage) wins outright
+    over the supplier's own rate, which in turn wins over the platform
+    minimum. Used by both supplier_accept_booking (the real ledger) and the
+    supplier-facing commission calculator, so they can never disagree."""
+    from app.services.settings import get_commission_percentage
+
+    if tour is not None and tour.commission_percentage is not None:
+        return money(tour.commission_percentage)
+    if supplier is not None and supplier.commission_percentage is not None:
+        return money(supplier.commission_percentage)
+    return get_commission_percentage(db)
+
+
+def _resolve_group_discount(db: Session, tour_id: int | None, seat_travellers: int, base_amount):
+    """Supplier-defined group-size discount, scoped to the whole Tour (not a
+    single TourPricing slab) - see TourGroupDiscountTier. Applied once to
+    base_amount by total seat-paying traveller count. Returns
+    (tier_or_None, discount_amount, discount_ratio) where discount_ratio is
+    discount_amount / base_amount (0 when there is nothing to discount) -
+    kept alongside the dollar amount so the same tier can be applied
+    proportionally to the supplier's raw (pre-markup) share later, without
+    re-deriving it from a dollar amount computed against a different base."""
+    if not tour_id or seat_travellers <= 0 or money(base_amount) <= 0:
+        return None, money(0), money(0)
+    tier = (
+        db.query(TourGroupDiscountTier)
+        .filter(
+            TourGroupDiscountTier.tour_id == tour_id,
+            TourGroupDiscountTier.status == "active",
+            TourGroupDiscountTier.min_pax <= seat_travellers,
+            TourGroupDiscountTier.max_pax >= seat_travellers,
+        )
+        .first()
+    )
+    if not tier:
+        return None, money(0), money(0)
+    if tier.discount_type == "percentage":
+        amount = money(base_amount) * money(tier.discount_value) / money(100)
+    else:
+        amount = money(tier.discount_value)
+    amount = min(money(amount), money(base_amount))
+    ratio = amount / money(base_amount)
+    return tier, amount, ratio
+
+
+def compute_supplier_commission_breakdown(raw_supplier_amount, group_discount_ratio, commission_percentage):
+    """Pure calculation shared by real booking acceptance (supplier_accept_booking),
+    the ledger, and the supplier-facing commission calculator endpoint, so
+    those three can never disagree on the arithmetic.
+
+    group_discount_ratio is the fraction (0..1) of the customer-facing base
+    amount a Tour's group discount removed - see _resolve_group_discount.
+    Applying the same ratio to the supplier's own raw amount means a
+    discount defined once at the Tour level reduces both what the customer
+    pays and what the supplier earns from, consistently, regardless of the
+    admin markup baked into the customer-facing price."""
+    raw_supplier_amount = money(raw_supplier_amount)
+    group_discount_ratio = money(group_discount_ratio or 0)
+    commission_percentage = money(commission_percentage)
+    discounted_amount = max(money(0), raw_supplier_amount * (money(1) - group_discount_ratio))
+    group_discount_amount = raw_supplier_amount - discounted_amount
+    commission_amount = money(discounted_amount * commission_percentage / money(100))
+    net_earnings = discounted_amount - commission_amount
+    return {
+        "gross_amount": raw_supplier_amount,
+        "group_discount_amount": group_discount_amount,
+        "discounted_amount": discounted_amount,
+        "commission_percentage": commission_percentage,
+        "commission_amount": commission_amount,
+        "net_earnings": net_earnings,
+    }
+
+
 def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False):
     adults = data.adults_count if data.adults_count is not None else data.no_of_adults
     children = data.children_count if data.children_count is not None else data.no_of_children
@@ -543,6 +618,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     adult_unit = money((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else (tour.price_start_per_person if tour else 0))
     child_unit = money((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0)
     base_amount = money(adult_unit * adults + child_unit * children)
+    group_tier, group_discount_amount, _group_discount_ratio = _resolve_group_discount(db, data.tour_id, seat_travellers, base_amount)
 
     activity_rows = []
     activity_total = money(0)
@@ -578,18 +654,21 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         extension_total += total
         extension_rows.append((row, item.quantity, unit, total))
 
-    subtotal = money(base_amount + activity_total + accommodation_total + extension_total)
+    # Group discount is applied before the promo code, off the group-discounted
+    # subtotal, so a promo percentage never gets computed against an amount
+    # the customer was never actually going to pay.
+    subtotal = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total)
     discount = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount)
     tax = money(0)
     surcharge = money(0)
-    final = money(base_amount + activity_total + accommodation_total + extension_total - discount + tax + surcharge)
+    final = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total - discount + tax + surcharge)
     if final < 0:
         raise HTTPException(status_code=400, detail="Final amount cannot be negative")
-    return tour, calendar, adults, children, total_travellers, currency, base_amount, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activity_rows, accommodation_rows, extension_rows, slab
+    return tour, calendar, adults, children, total_travellers, currency, base_amount, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activity_rows, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount
 
 
 def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
-    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab = _price_booking(db, data)
+    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount = _price_booking(db, data)
     agent_markup = money(data.agent_markup if data.booking_source == "agent" else 0)
     customer_selling_price = money(final + agent_markup)
     return {
@@ -603,6 +682,8 @@ def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
         "optional_activity_amount": money_str(activity_total),
         "accommodation_amount": money_str(accommodation_total),
         "extension_amount": money_str(extension_total),
+        "group_discount_tier_id": group_tier.id if group_tier else None,
+        "group_discount_amount": money_str(group_discount_amount),
         "discount_amount": money_str(discount),
         "tax_amount": money_str(tax),
         "surcharge_amount": money_str(surcharge),
@@ -751,7 +832,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         except Exception:
             logger.warning("Affiliate attribution lookup failed for booking creation", exc_info=True)
 
-    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab = _price_booking(db, data, lock_calendar=True, consume_discount=True)
+    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount = _price_booking(db, data, lock_calendar=True, consume_discount=True)
     if tour:
         # calendar is only set when the caller passed tour_calendar_id - fall
         # back to the raw tour_date string (checkout/admin bookings that
@@ -780,7 +861,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, affiliate_attribution_id=resolved_attribution.id if resolved_attribution else None, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
         no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, no_of_rooms=data.no_of_rooms, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
-        total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
+        total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, group_discount_tier_id=group_tier.id if group_tier else None, group_discount_amount=group_discount_amount, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
         booking_status=booking_status, supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status=payment_status, payment_type=data.payment_type, agent_payment_method=data.agent_payment_method if data.booking_source == "agent" else None, agent_reference=data.agent_reference if data.booking_source == "agent" else None, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
         # Pricing/currency snapshot -- captured once here and never touched
         # again, even if the slab, commission, or exchange rates change
@@ -897,6 +978,12 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
         restricted = set(data.model_fields_set) - agent_editable
         if restricted:
             raise HTTPException(status_code=403, detail="Agents may only update booking notes")
+    financial_fields = {"no_of_adults", "no_of_children", "no_of_infants", "total_cost"}
+    if money(booking.amount_paid or 0) > money(0) and financial_fields & set(data.model_fields_set):
+        raise HTTPException(
+            status_code=409,
+            detail="This booking already has a payment recorded, so its passenger counts and total cost can no longer be edited directly. Process a refund/adjustment or cancel and rebook instead.",
+        )
     old_values = serialize_booking(booking)
     for field in ["tour_name", "tour_date", "country", "supplier_name", "notes", "customer_notes", "admin_notes"]:
         value = getattr(data, field)
@@ -1164,17 +1251,15 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
                 gross_amount = money(booking.agent_net_price)
             else:
                 gross_amount = money(booking.final_amount or booking.total_cost or 0)
-            # Tourvaa pays the supplier their own asking price in full - no
-            # commission is deducted from the supplier. Tourvaa's commission
-            # is the per-tour admin markup (tour_pricing.admin_markup_value,
-            # 5-15%) that was already added on top when the customer was
-            # charged, so the supplier's share is reconstructed from the
-            # booking's pricing slab (raw supplier prices) rather than
-            # applying a flat rate to the customer-facing total. Add-ons
-            # (activities/accommodation/extensions), tax, surcharge and
-            # discount carry no Tourvaa markup and pass through to the
-            # supplier untouched.
-            supplier_share = gross_amount
+            # The supplier's own share of the booking is reconstructed from
+            # the pricing slab (raw supplier prices), the same way the
+            # per-tour admin markup used to be backed out here. Add-ons
+            # (activities/accommodation/extensions), tax and surcharge carry
+            # no Tourvaa markup and pass through to the supplier untouched;
+            # any Tour-level group discount (see TourGroupDiscountTier)
+            # reduces only the tour-slab portion, matching how it was
+            # applied to the customer at checkout in _price_booking.
+            supplier_gross_share = gross_amount
             slab = db.query(TourPricing).filter(TourPricing.id == booking.pricing_slab_id).first() if booking.pricing_slab_id else None
             if slab:
                 adults = booking.adults_count if booking.adults_count is not None else (booking.no_of_adults or 0)
@@ -1184,10 +1269,15 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
                 marked_up_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
                 marked_up_tour_amount = money(money(marked_up_adult) * adults + money(marked_up_child) * children)
                 addon_amount = gross_amount - marked_up_tour_amount
-                supplier_share = money(raw_tour_amount + addon_amount)
-            commission_amount = money(max(money(0), gross_amount - supplier_share))
+                group_discount_ratio = money(booking.group_discount_amount or 0) / money(booking.base_amount) if booking.base_amount else money(0)
+                discounted_raw_tour_amount = raw_tour_amount * (money(1) - group_discount_ratio)
+                supplier_gross_share = money(discounted_raw_tour_amount + addon_amount)
+            supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first()
+            tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
+            effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier)
+            breakdown = compute_supplier_commission_breakdown(supplier_gross_share, money(0), effective_commission_percentage)
             try:
-                create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=gross_amount, commission_amount=commission_amount)
+                create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=breakdown["discounted_amount"], commission_amount=breakdown["commission_amount"])
             except Exception as error:
                 logger.warning("Supplier ledger entry creation failed for booking %s: %s", booking.id, error)
 

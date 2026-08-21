@@ -27,6 +27,7 @@ from app.models.tours import (
     TourExtension,
     TourExclusion,
     TourGalleryImage,
+    TourGroupDiscountTier,
     TourHighlight,
     TourInclusion,
     TourItinerary,
@@ -185,6 +186,32 @@ def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
                 "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
             }
     return best
+
+
+def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscountTier]) -> list[dict]:
+    """A tour now has one active base TourPricing row (1 person, see
+    services.tours._apply_pricing_computation) plus separate
+    TourGroupDiscountTier rows for group-size discounts. The public tour
+    page still shows one row per traveller-count range, so this expands
+    the base price into: the base row up to the first tier's min_pax, then
+    one row per active tier with its own discounted price - using the same
+    formula _price_booking / _resolve_group_discount applies at checkout,
+    so the advertised price always matches what a booking is actually
+    charged."""
+    if not pricing:
+        return []
+    base = pricing[0]
+    base_adult = float(base.storefront_adult_price if base.storefront_adult_price is not None else base.adult_price)
+    rows = []
+    solo_upper = (tiers[0].min_pax - 1) if tiers else base.passenger_to
+    rows.append({"persons_from": base.passenger_from, "persons_to": solo_upper, "price_per_person": base_adult, "currency": base.currency})
+    for tier in tiers:
+        if tier.discount_type == "percentage":
+            price = base_adult * (1 - float(tier.discount_value) / 100)
+        else:
+            price = base_adult - float(tier.discount_value)
+        rows.append({"persons_from": tier.min_pax, "persons_to": tier.max_pax, "price_per_person": round(max(0.0, price), 2), "currency": base.currency})
+    return rows
 
 
 def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, review_stats: dict[int, dict] | None = None, overview: TourOverview | None = None, discount_map: dict[int, dict] | None = None):
@@ -433,7 +460,13 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     inclusions = db.query(TourInclusion).filter(TourInclusion.tour_id == tour_id).all()
     exclusions = db.query(TourExclusion).filter(TourExclusion.tour_id == tour_id).all()
     gallery = db.query(TourGalleryImage).filter(TourGalleryImage.tour_id == tour_id).order_by(TourGalleryImage.display_order.asc()).all()
-    pricing = db.query(TourPricing).filter(TourPricing.tour_id == tour_id).all()
+    pricing = db.query(TourPricing).filter(TourPricing.tour_id == tour_id, TourPricing.status == "active").all()
+    group_discount_tiers = (
+        db.query(TourGroupDiscountTier)
+        .filter(TourGroupDiscountTier.tour_id == tour_id, TourGroupDiscountTier.status == "active")
+        .order_by(TourGroupDiscountTier.min_pax.asc())
+        .all()
+    )
     activities = db.query(TourOptionalActivity).filter(TourOptionalActivity.tour_id == tour_id).all()
     accommodations = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour_id).all()
     extensions = db.query(TourExtension).filter(TourExtension.tour_id == tour_id).all()
@@ -530,7 +563,9 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             # adult_price - those diverge whenever a supplier's edit to a
             # live tour is frozen pending admin approval (see
             # services.tours._apply_pricing_computation's freeze guard).
-            "pricing": [{"persons_from": p.passenger_from, "persons_to": p.passenger_to, "price_per_person": float(p.storefront_adult_price if p.storefront_adult_price is not None else p.adult_price), "currency": p.currency} for p in pricing],
+            # See _public_pricing_rows for how the base price + group
+            # discount tiers are expanded into these traveller-count rows.
+            "pricing": _public_pricing_rows(pricing, group_discount_tiers),
             "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],
             "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other", "image": (e.extension_tour.banner_image or None) if e.extension_tour else None} for e in extensions],

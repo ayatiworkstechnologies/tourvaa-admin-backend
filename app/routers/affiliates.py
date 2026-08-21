@@ -41,6 +41,55 @@ def edit_affiliate(affiliate_id: int, data: AffiliateUpdate, request: Request, d
     return {"status": "success", "message": "Affiliate updated successfully", "data": update_affiliate(db, affiliate_id, data, current_user, request)}
 
 
+@router.get("/{affiliate_id}/commission-calculator")
+def affiliate_commission_calculator(
+    affiliate_id: int,
+    amount: float = Query(ge=0),
+    tour_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _=Depends(require_any_permission("affiliates.view")),
+):
+    """Read-only preview of what Tourvaa would pay this affiliate on a
+    booking of the given amount, using the same rule-resolution hierarchy
+    (link -> affiliate+tour -> affiliate -> tour -> category -> global
+    default) as a real conversion - see
+    services.affiliate_commission.resolve_affiliate_commission_rule. Does
+    not account for a link-level override, since this preview has no
+    specific link."""
+    from app.utils.money import money
+    from app.models.cms import Tour
+    from app.services.affiliate_commission import resolve_affiliate_commission_rule
+
+    affiliate = get_affiliate(db, affiliate_id)
+    eligible_amount = money(amount)
+    tour = db.query(Tour).filter(Tour.id == tour_id).first() if tour_id else None
+    rule = resolve_affiliate_commission_rule(
+        db,
+        affiliate_id=affiliate.id,
+        tour_id=tour_id,
+        category_id=tour.category_id if tour else None,
+    )
+    if rule:
+        commission_type = rule.commission_type
+        percentage = money(rule.percentage or 0)
+        fixed_amount = money(rule.fixed_amount or 0)
+    else:
+        commission_type = "percentage"
+        percentage = money(affiliate.commission_percentage or 0)
+        fixed_amount = money(0)
+    commission_amount = fixed_amount if commission_type == "fixed" else money(eligible_amount * percentage / money(100))
+    return {
+        "status": "success",
+        "data": {
+            "gross_amount": str(eligible_amount),
+            "commission_type": commission_type,
+            "commission_percentage": str(percentage) if commission_type == "percentage" else None,
+            "commission_amount": str(commission_amount),
+            "matched_rule_id": rule.id if rule else None,
+        },
+    }
+
+
 @router.patch("/{affiliate_id}/approve")
 def approve(affiliate_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.approve"))):
     return {"status": "success", "message": "Affiliate approved successfully", "data": approve_affiliate(db, affiliate_id, current_user, request)}

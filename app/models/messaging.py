@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -38,6 +38,8 @@ class Message(Base):
     sender_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     sender_role = Column(String(20), nullable=False)  # admin | agent | supplier | customer
     body = Column(Text, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     conversation = relationship("Conversation", back_populates="messages")
@@ -80,6 +82,8 @@ class BookingMessage(Base):
     sender_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     sender_role = Column(String(20), nullable=False)  # customer | agent | supplier
     body = Column(Text, nullable=False)
+    is_deleted = Column(Boolean, default=False, nullable=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     conversation = relationship("BookingConversation", back_populates="messages")

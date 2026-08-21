@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, Numeric, String, Table, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -147,6 +147,13 @@ class Tour(Base):
     tour_video_url = Column(String(500), nullable=True)
     brochure_pdf = Column(String(255), nullable=True)
     status = Column(String(20), default="draft", nullable=False, index=True)
+    # Admin-only per-tour override of Tourvaa's own commission (see
+    # AppSetting "supplier_commission_percentage", the platform-wide
+    # minimum). Null means "use the supplier's own commission_percentage,
+    # falling back to the platform minimum" - see
+    # services.bookings.supplier_accept_booking's resolution order. Always
+    # bound at write time to be >= the current platform minimum.
+    commission_percentage = Column(Numeric(5, 2), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

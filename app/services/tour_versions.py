@@ -62,8 +62,11 @@ def _tour_snapshot(db: Session, tour: Tour) -> dict:
         "price_start_per_person": float(tour.price_start_per_person or 0),
         "currency": tour.currency,
         "country_id": tour.country_id,
+        "country_name": tour.country.country_name if tour.country else "",
         "city_id": tour.city_id,
+        "city_name": tour.city.city_name if tour.city else "",
         "category_id": tour.category_id,
+        "category_name": tour.category.category_name if tour.category else "",
         "start_location": tour.start_location,
         "finish_location": tour.finish_location,
         "number_of_days": tour.number_of_days,
@@ -313,20 +316,17 @@ def _restore_snapshot(db: Session, tour: Tour, snapshot: dict) -> None:
 
 def _recalculate_storefront_prices(db: Session, tour_id: int) -> None:
     # Storefront price = the supplier's own price (adult_price/child_price)
-    # plus the admin-only retail markup stored on the slab - see
-    # services.tours._apply_pricing_computation for the same formula applied
-    # on ordinary (non-frozen) create/update. This unfreezes the storefront
-    # price a supplier's slab edit held back (spec: don't let an edit
-    # silently change what's charged) once an admin has reviewed and
-    # approved it.
+    # directly - see services.tours._apply_pricing_computation for the same
+    # rule applied on ordinary (non-frozen) create/update. This unfreezes
+    # the storefront price a supplier's slab edit held back (spec: don't
+    # let an edit silently change what's charged) once an admin has
+    # reviewed and approved it.
     from app.models.tours import TourPricing
-    from app.services.tours import _apply_markup, recalculate_price_start
+    from app.services.tours import recalculate_price_start
 
     for row in db.query(TourPricing).filter(TourPricing.tour_id == tour_id).all():
-        markup_type = row.admin_markup_type or "percentage"
-        markup_value = float(row.admin_markup_value or 0.0)
-        row.storefront_adult_price = _apply_markup(markup_type, markup_value, float(row.adult_price))
-        row.storefront_child_price = _apply_markup(markup_type, markup_value, float(row.child_price))
+        row.storefront_adult_price = float(row.adult_price)
+        row.storefront_child_price = float(row.child_price)
     recalculate_price_start(db, tour_id)
 
 

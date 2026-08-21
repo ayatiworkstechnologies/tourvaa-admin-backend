@@ -159,9 +159,10 @@ def filter_review_query(query, model, *, search="", country_id="", status="", ap
     if status:
         query = query.filter(model.status == status.strip().lower())
     if approval_status:
-        # Compare case-insensitively: suppliers store approval_status
-        # uppercase (post-migration 20260724_0034) while agents/affiliates
-        # still store it lowercase -- this filter is shared by all three.
+        # Case-insensitive on purpose: this filter is shared across
+        # suppliers/agents/affiliates, and older rows/callers may still pass
+        # mixed-case values even though storage is now consistently
+        # lower-case (see migration 20260821_0078).
         query = query.filter(func.upper(model.approval_status) == approval_status.strip().upper())
     if start_date:
         query = query.filter(model.created_at >= start_date)

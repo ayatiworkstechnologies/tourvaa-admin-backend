@@ -314,3 +314,26 @@ class TourDiscount(Base):
     tour = relationship("Tour", foreign_keys=[tour_id])
     category = relationship("TourCategory", foreign_keys=[category_id])
     country = relationship("Country", foreign_keys=[country_id])
+
+
+class TourGroupDiscountTier(Base):
+    """Supplier-defined group-size discount, scoped to the whole Tour (not a
+    single TourPricing slab). When a booking's total traveller count
+    (adults + children) falls within [min_pax, max_pax], this tier's
+    discount is applied once to the booking's base slab amount, before any
+    TourDiscount promo code, so it is a separate concept from TourDiscount.
+    See services.bookings._price_booking for where this is consumed."""
+
+    __tablename__ = "tour_group_discount_tiers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
+    min_pax = Column(Integer, nullable=False)
+    max_pax = Column(Integer, nullable=False)
+    discount_type = Column(String(20), nullable=False)
+    discount_value = Column(Numeric(12, 2), nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    tour = relationship("Tour")

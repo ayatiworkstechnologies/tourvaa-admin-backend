@@ -26,6 +26,7 @@ from app.services.suppliers import (
     approve_supplier,
     bulk_approve_suppliers,
     bulk_reject_suppliers,
+    complete_supplier_onboarding,
     create_supplier,
     export_suppliers_directory,
     get_supplier,
@@ -68,7 +69,7 @@ def submit_verification(request: Request, db: Session = Depends(get_db), current
 
 @router.get("/pending")
 def pending_suppliers(params: dict = Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission("suppliers.view", "view-suppliers"))):
-    return {"status": "success", **list_suppliers(db, params["page"], params["limit"], params["search"], approval_status="PENDING")}
+    return {"status": "success", **list_suppliers(db, params["page"], params["limit"], params["search"], approval_status="pending")}
 
 
 @router.get("/export")
@@ -143,6 +144,104 @@ def edit_my_supplier(data: SupplierSelfUpdate, request: Request, db: Session = D
         raise HTTPException(status_code=404, detail="Supplier profile not found")
     safe_update = SupplierUpdate(**data.model_dump(exclude_unset=True))
     return {"status": "success", "message": "Supplier updated successfully", "data": update_supplier(db, supplier.id, safe_update, current_user, request)}
+
+
+@router.get("/me/commission-calculator")
+def my_commission_calculator(
+    adults: int = Query(default=1, ge=0),
+    children: int = Query(default=0, ge=0),
+    tour_id: int | None = Query(default=None),
+    adult_price: float | None = Query(default=None, ge=0),
+    child_price: float | None = Query(default=None, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Transparent breakdown for a supplier of what a booking would net them:
+    gross tour amount -> Tour-level group discount (if any, by traveller
+    count) -> discounted amount -> commission % -> commission amount ->
+    final earnings. Reuses the exact same arithmetic as a real booking
+    (services.bookings.compute_supplier_commission_breakdown /
+    _resolve_group_discount) so this can never disagree with what actually
+    gets paid out."""
+    from app.models.suppliers import Supplier
+    from app.models.tours import TourPricing
+    from app.models.cms import Tour
+    from app.services.bookings import _resolve_group_discount, compute_supplier_commission_breakdown, resolve_effective_commission_percentage
+    from app.utils.money import money
+
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    seat_travellers = adults + children
+    if seat_travellers <= 0:
+        raise HTTPException(status_code=400, detail="At least one traveller is required")
+
+    tour = db.query(Tour).filter(Tour.id == tour_id).first() if tour_id is not None else None
+
+    if tour_id is not None:
+        slab = (
+            db.query(TourPricing)
+            .filter(TourPricing.tour_id == tour_id, TourPricing.status == "active", TourPricing.passenger_from <= seat_travellers, TourPricing.passenger_to >= seat_travellers)
+            .first()
+        )
+        if not slab:
+            raise HTTPException(status_code=404, detail=f"No pricing slab covers {seat_travellers} traveller(s) on this tour")
+        resolved_adult_price = money(slab.adult_price)
+        resolved_child_price = money(slab.child_price)
+        # The customer-facing (storefront) price is what a Tour-level group
+        # discount tier is defined against, matching how it is applied to a
+        # real booking in _price_booking - reused here so the calculator
+        # discount always lines up with checkout, not just the raw price.
+        storefront_adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
+        storefront_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
+        storefront_base = money(storefront_adult) * adults + money(storefront_child) * children
+        _tier, _amount, group_discount_ratio = _resolve_group_discount(db, tour_id, seat_travellers, storefront_base)
+    else:
+        if adult_price is None:
+            raise HTTPException(status_code=400, detail="adult_price is required when tour_id is not provided")
+        resolved_adult_price = money(adult_price)
+        resolved_child_price = money(child_price or 0)
+        group_discount_ratio = money(0)
+
+    effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier)
+
+    def _breakdown_dict(amount) -> dict:
+        b = compute_supplier_commission_breakdown(amount, group_discount_ratio, effective_commission_percentage)
+        return {
+            "gross_amount": str(b["gross_amount"]),
+            "group_discount_amount": str(b["group_discount_amount"]),
+            "discounted_amount": str(b["discounted_amount"]),
+            "commission_percentage": str(b["commission_percentage"]),
+            "commission_amount": str(b["commission_amount"]),
+            "net_earnings": str(b["net_earnings"]),
+        }
+
+    adult_gross = money(resolved_adult_price * adults)
+    child_gross = money(resolved_child_price * children)
+    return {
+        "status": "success",
+        "data": {
+            "adults": adults,
+            "children": children,
+            "adult_price": str(resolved_adult_price),
+            "child_price": str(resolved_child_price),
+            # Requirement: show the commission calculation separately for
+            # adult vs child bookings, alongside the combined total a
+            # supplier actually gets paid for the whole booking.
+            "adult_breakdown": _breakdown_dict(adult_gross),
+            "child_breakdown": _breakdown_dict(child_gross),
+            "total": _breakdown_dict(adult_gross + child_gross),
+        },
+    }
+
+
+@router.post("/me/onboarding/complete")
+def complete_my_onboarding(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models.suppliers import Supplier
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    return {"status": "success", "data": complete_supplier_onboarding(db, supplier.id, current_user, request)}
 
 
 @router.get("/me/vehicles")

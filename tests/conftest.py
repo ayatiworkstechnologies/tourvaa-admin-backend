@@ -106,7 +106,7 @@ def create_active_account(role_slug: str, user_type: str, name: str, email: str,
         elif role_slug == "supplier":
             # Left un-approved on purpose - test_36 exercises the real
             # POST /suppliers/{id}/approve endpoint against this fixture.
-            db.add(Supplier(user_id=user.id, supplier_name=name, status="inactive", approval_status="PENDING"))
+            db.add(Supplier(user_id=user.id, supplier_name=name, status="inactive", approval_status="pending"))
         elif role_slug == "agent-reseller":
             db.add(Agent(user_id=user.id, agent_name=name, status="active", approval_status="NOT_REQUIRED"))
         elif role_slug == "affiliate":

@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcategory
-from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourPayload
-from app.services.cms import _category, _city, _country, _state, _subcategory, _tour, delete_tour, get_tour, list_categories, list_cities, list_countries, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_state, save_subcategory, save_tour, update_status
+from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourCommissionUpdate, TourPayload
+from app.services.cms import _category, _city, _country, _state, _subcategory, _tour, delete_tour, get_tour, list_categories, list_cities, list_countries, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_state, save_subcategory, save_tour, update_status, update_tour_commission
 from app.services.tour_import_export import build_import_template_workbook, build_tour_detail_workbook, import_tours, parse_tour_import_rows
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.pagination import pagination_params
@@ -187,16 +187,6 @@ def add_tour(
     return {"status": "success", "data": save_tour(db, data, current_user, request)}
 
 
-@router.get("/tours/categories", operation_id="cms_list_tour_categories")
-def tour_categories(
-    search: str = Query(default=""),
-    page: int = Query(default=1),
-    limit: int = Query(default=200),
-    db: Session = Depends(get_db),
-):
-    return {"status": "success", **list_categories(db, page, limit, search)}
-
-
 @router.get("/tours/import-template")
 def tours_import_template(db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.create", "create-tours"))):
     # A supplier acting on their own portal never gets to pick a supplier -
@@ -300,4 +290,20 @@ def tour_status(tour_id: int, data: StatusUpdate, request: Request, db: Session 
         # submit-for-approval / admin-review workflow, never set directly by
         # a supplier -- otherwise this generic endpoint lets them bypass review.
         raise HTTPException(status_code=403, detail="Tour status is managed through the approval workflow, not directly by suppliers")
+    if data.status == "published" and tour.supplier_id is not None and tour.status not in ("active", "published"):
+        # A supplier-owned tour must have cleared at least one admin review
+        # (submit-for-approval -> approve, which sets Tour.status="active")
+        # before it can go live -- otherwise an admin could publish content
+        # that was never actually reviewed, bypassing the approval workflow
+        # this endpoint already protects suppliers from bypassing themselves.
+        raise HTTPException(status_code=409, detail="This tour must be submitted for review and approved before it can be published")
     return {"status": "success", "data": update_status(db, Tour, _tour, tour_id, data, current_user, "tour", request)}
+
+
+@router.patch("/tours/{tour_id}/commission")
+def tour_commission(tour_id: int, data: TourCommissionUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("tours.edit", "update-tours"))):
+    # Admin-only, matching the status endpoint above - a per-tour commission
+    # override is Tourvaa's own pricing decision, never a supplier action.
+    if _get_actor_supplier_id(db, current_user):
+        raise HTTPException(status_code=403, detail="Tour commission is restricted to administrators")
+    return {"status": "success", "data": update_tour_commission(db, tour_id, data, current_user, request)}

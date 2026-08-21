@@ -188,15 +188,16 @@ class PricingPayload(BaseModel):
     passenger_to: int = Field(ge=1)
     adult_price: float = Field(ge=0)
     child_price: float = Field(default=0.0, ge=0)
-    # adult_price/child_price are the supplier's own net asking price -
-    # Tourvaa pays the supplier that price in full, no commission is
-    # deducted. admin_markup_value is Tourvaa's own commission, an
-    # admin-only retail markup added on top of the supplier's price to
-    # produce the storefront price; only honoured when the actor is not a
-    # supplier. Bounded 5-15% - Tourvaa's commission is always a percentage
-    # decided per tour, never a fixed amount or supplier-negotiated rate.
-    # supplier_price/final_price are legacy/unused, kept for backward
-    # compatibility only.
+    # adult_price/child_price are the supplier's own net asking price, and
+    # is exactly what the customer is charged (see services.tours.
+    # _apply_pricing_computation) - there is no separate retail markup
+    # layered on top. Tourvaa's commission is instead deducted from this
+    # same price when the supplier is paid out - see Tour.commission_percentage
+    # (per-tour override) / Supplier.commission_percentage / the platform
+    # minimum AppSetting, resolved by services.bookings.
+    # resolve_effective_commission_percentage.
+    # admin_markup_value/supplier_price/final_price are legacy/unused,
+    # kept for backward compatibility only - no longer applied to pricing.
     supplier_price: float = Field(default=0.0, ge=0)
     final_price: float = Field(default=0.0, ge=0)
     admin_markup_value: float = Field(default=10.0, ge=5, le=15)
@@ -376,6 +377,39 @@ class GlobalDiscountPayload(DiscountPayload):
         if v not in ITEM_STATUSES:
             raise ValueError("Invalid status")
         return v
+
+
+# group-size discount tier, scoped to the whole Tour (not a pricing slab) -
+# see models.tours.TourGroupDiscountTier for why this is a separate concept
+# from DiscountPayload (promo codes).
+class GroupDiscountTierPayload(BaseModel):
+    min_pax: int = Field(ge=1)
+    max_pax: int = Field(ge=1)
+    discount_type: str = Field(max_length=20)
+    discount_value: float = Field(ge=0)
+    status: str = Field(default="active", max_length=20)
+
+    @field_validator("discount_type")
+    @classmethod
+    def validate_type(cls, v: str):
+        if v not in DISCOUNT_TYPES:
+            raise ValueError(f"discount_type must be one of {DISCOUNT_TYPES}")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str):
+        if v not in ITEM_STATUSES:
+            raise ValueError("Invalid status")
+        return v
+
+    @model_validator(mode="after")
+    def validate_range_and_bound(self) -> "GroupDiscountTierPayload":
+        if self.max_pax < self.min_pax:
+            raise ValueError("max_pax must be greater than or equal to min_pax")
+        if self.discount_type == "percentage" and self.discount_value > 100:
+            raise ValueError("A percentage discount_value cannot exceed 100")
+        return self
 
 
 # price calculation
