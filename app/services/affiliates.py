@@ -43,6 +43,7 @@ def serialize_affiliate(item: Affiliate):
         "approved_by": item.approved_by,
         "rejected_at": item.rejected_at,
         "rejected_by": item.rejected_by,
+        "commission_accepted_at": item.commission_accepted_at,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
         "documents": relationship_list(item.documents, _document),
@@ -82,6 +83,30 @@ def list_affiliates(db: Session, page: int, limit: int, search: str = "", countr
 
 def get_affiliate(db: Session, affiliate_id: int):
     return get_or_404(db, Affiliate, affiliate_id, "Affiliate")
+
+
+def accept_affiliate_commission(db: Session, affiliate_id: int, actor: User, request: Request | None = None):
+    """Records that the affiliate clicked "Yes" on the post-login commission-
+    consent popup (CommissionConsentModal). Affiliates have no document
+    upload endpoint today, so this just unblocks the portal generally --
+    see affiliate/layout.tsx. Also seeds the admin-configured default rate
+    onto Affiliate.commission_percentage (the real payout field) if it's
+    still at its untouched default of 0 -- self-registration always creates
+    affiliates at 0 (see AffiliateCreate), so without this the accepted
+    rate would just be a display number with no effect on payouts. Skipped
+    if an admin already gave this affiliate a deliberate non-zero rate via
+    update_affiliate before they ever logged in."""
+    from decimal import Decimal
+    from app.services.settings import get_affiliate_default_commission
+    item = get_affiliate(db, affiliate_id)
+    if item.commission_accepted_at is None:
+        item.commission_accepted_at = utcnow()
+        if Decimal(str(item.commission_percentage or 0)) == 0:
+            item.commission_percentage = get_affiliate_default_commission(db)
+        log_audit(db, actor=actor, action="accept_affiliate_commission", entity_type="affiliate", entity_id=item.id, request=request)
+        db.commit()
+        db.refresh(item)
+    return serialize_affiliate(item)
 
 
 def create_affiliate(db: Session, data: AffiliateCreate, actor: User, request: Request | None = None):

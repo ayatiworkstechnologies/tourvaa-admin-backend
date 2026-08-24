@@ -51,6 +51,11 @@ DEFAULT_SETTINGS = [
     # rate/rule write paths.
     {"key": "agent_commission_max_percentage", "label": "Maximum Agent Commission (%)", "value": "20", "group": "booking", "is_public": True},
     {"key": "affiliate_commission_max_percentage", "label": "Maximum Affiliate Commission (%)", "value": "20", "group": "booking", "is_public": True},
+    # Default commission % shown to a new agent on the post-login
+    # commission-consent popup (see CommissionConsentModal) - unlike the
+    # supplier minimum above, agents have no per-record override today, so
+    # this is the only rate an agent is ever shown/accepts.
+    {"key": "agent_default_commission_percentage", "label": "Default Agent Commission (%)", "value": "10", "group": "booking", "is_public": True},
     {"key": "currency", "label": "Currency", "value": "USD", "group": "booking", "is_public": True},
     # This ONLY controls whether "currency" above locks the display currency
     # for every site visitor (frontend useCurrency.ts) - it must default to
@@ -76,7 +81,10 @@ DEFAULT_SETTINGS = [
     {"key": "third_party_api_key", "label": "Third Party API Key Placeholder", "value": "", "group": "api", "is_public": False},
     {"key": "brightlane_external_link", "label": "Brightlane External Link Placeholder", "value": "", "group": "api", "is_public": False},
     {"key": "affiliate_default_commission_type", "label": "Default Affiliate Commission Type", "value": "percentage", "group": "affiliate", "is_public": False},
-    {"key": "affiliate_default_commission_value", "label": "Default Affiliate Commission Value", "value": "5", "group": "affiliate", "is_public": False},
+    # Public so the post-login commission-consent popup (CommissionConsentModal)
+    # can read it via GET /settings/public before an affiliate is approved,
+    # the same way suppliers already read supplier_commission_percentage.
+    {"key": "affiliate_default_commission_value", "label": "Default Affiliate Commission Value", "value": "5", "group": "affiliate", "is_public": True},
     {"key": "affiliate_default_attribution_model", "label": "Default Attribution Model", "value": "last_click", "group": "affiliate", "is_public": False},
     {"key": "affiliate_default_attribution_window_days", "label": "Default Attribution Window (days)", "value": "30", "group": "affiliate", "is_public": False},
     {"key": "affiliate_minimum_payout", "label": "Minimum Affiliate Payout", "value": "50", "group": "affiliate", "is_public": False},
@@ -187,6 +195,26 @@ def get_agent_commission_max(db: Session):
     of Agent.discount_value, not a floor an agent can self-raise - see
     services.agents.update_agent_discount."""
     return _get_percentage_setting(db, "agent_commission_max_percentage", "20")
+
+
+def get_agent_default_commission(db: Session):
+    """Admin-configured default commission % a new agent is shown on the
+    post-login commission-consent popup (see CommissionConsentModal). Set
+    onto Agent.discount_type/discount_value the moment the agent accepts -
+    see services.agents.accept_agent_commission - since (unlike supplier's
+    NULL-means-platform-minimum resolution) an agent's real payout fields
+    don't otherwise resolve to any global setting."""
+    return _get_percentage_setting(db, "agent_default_commission_percentage", "10")
+
+
+def get_affiliate_default_commission(db: Session):
+    """Admin-configured default commission % a new affiliate is shown on the
+    post-login commission-consent popup (see CommissionConsentModal). Set
+    onto Affiliate.commission_percentage the moment the affiliate accepts -
+    see services.affiliates.accept_affiliate_commission - since an
+    affiliate's real payout field otherwise stays at its column default (0),
+    not any global setting."""
+    return _get_percentage_setting(db, "affiliate_default_commission_value", "5")
 
 
 def get_affiliate_commission_max(db: Session):
@@ -745,3 +773,33 @@ def update_smtp_settings_payload(
     db.commit()
     db.refresh(setting)
     return get_smtp_settings_payload(db)
+
+
+def send_smtp_test_email(db: Session, to_email: str, actor: User | None = None, request=None) -> dict:
+    """Sends a test email using whatever SMTP config is currently effective
+    (services.settings mirrors app.utils.mailer._effective_smtp_config's own
+    resolution: the saved SmtpSetting row when enabled+host is set, otherwise
+    the env-var fallback) -- same "save first, then test" flow already used
+    by services.email_templates.send_test_email, so there's one testable
+    notion of "what would actually be used right now" rather than a second,
+    divergent draft-config code path."""
+    from fastapi import HTTPException
+    from app.utils.mailer import send_email
+
+    setting = get_or_create_smtp_settings(db)
+    used_custom_smtp = bool(setting.is_enabled and setting.host)
+    subject = "Tourvaa SMTP test email"
+    html = (
+        "<p>This is a test email from Tourvaa's Email / SMTP settings.</p>"
+        f"<p>Sent using {'your saved custom SMTP configuration' if used_custom_smtp else 'the platform default (environment) mail server, since custom SMTP is disabled or missing a host)'}.</p>"
+        "<p>If you received this, outbound email delivery is working.</p>"
+    )
+    try:
+        result = send_email(to_email, subject, html, template_key="smtp:test")
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"Could not send test email: {error}")
+
+    log_audit(db, actor=actor, action="test_smtp_settings", entity_type="smtp_setting", entity_id=setting.id, new_values={"to_email": to_email, "used_custom_smtp": used_custom_smtp}, request=request)
+    db.commit()
+
+    return {"sent": True, "to": to_email, "message_id": result.message_id, "used_custom_smtp": used_custom_smtp}

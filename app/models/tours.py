@@ -179,6 +179,11 @@ class TourPricing(Base):
     final_price = Column(Numeric(12, 2), nullable=False)
     supplier_final_adult_price = Column(Numeric(12, 2), nullable=True)
     supplier_final_child_price = Column(Numeric(12, 2), nullable=True)
+    # The supplier's own agreed commission rate for THIS slab, floor-
+    # enforced against resolve_effective_commission_percentage (Tour >
+    # Supplier > platform minimum) - null means "use that resolved floor
+    # directly". supplier_final_*_price = *_price * (1 - this/100).
+    commission_percentage = Column(Numeric(5, 2), nullable=True)
     # admin_markup_type/admin_markup_value are Tourvaa's own markup on top of
     # the supplier-final price, editable by admins only.
     admin_markup_type = Column(String(20), default="percentage", nullable=False)

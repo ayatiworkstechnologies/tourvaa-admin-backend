@@ -36,6 +36,12 @@ class Supplier(Base):
     # (src/app/supplier/onboarding). Null means "show the wizard on next
     # login" - see supplier/layout.tsx's redirect check.
     onboarding_completed_at = Column(DateTime(timezone=True), nullable=True)
+    # Set the first time the supplier clicks "Yes" on the mandatory
+    # commission-consent popup shown right after login (see
+    # supplier/layout.tsx and CommissionConsentModal). Null blocks document
+    # upload / general portal access - see the gate in
+    # routers/suppliers.py's upload_supplier_document.
+    commission_accepted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

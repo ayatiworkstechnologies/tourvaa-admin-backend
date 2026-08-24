@@ -494,14 +494,19 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
     return money(amount)
 
 
-def resolve_effective_commission_percentage(db: Session, *, tour=None, supplier=None):
+def resolve_effective_commission_percentage(db: Session, *, tour=None, supplier=None, slab=None):
     """Single source of truth for which commission percentage applies:
-    an admin per-tour override (Tour.commission_percentage) wins outright
-    over the supplier's own rate, which in turn wins over the platform
-    minimum. Used by both supplier_accept_booking (the real ledger) and the
-    supplier-facing commission calculator, so they can never disagree."""
+    the specific TourPricing slab's own rate (set in
+    services.tours._apply_pricing_computation, itself already floor-
+    enforced against this same hierarchy) wins outright, then an admin
+    per-tour override (Tour.commission_percentage), then the supplier's own
+    rate, then the platform minimum. Used by both supplier_accept_booking
+    (the real ledger) and the supplier-facing commission calculator, so
+    they can never disagree."""
     from app.services.settings import get_commission_percentage
 
+    if slab is not None and getattr(slab, "commission_percentage", None) is not None:
+        return money(slab.commission_percentage)
     if tour is not None and tour.commission_percentage is not None:
         return money(tour.commission_percentage)
     if supplier is not None and supplier.commission_percentage is not None:
@@ -1274,7 +1279,7 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
                 supplier_gross_share = money(discounted_raw_tour_amount + addon_amount)
             supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first()
             tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
-            effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier)
+            effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
             breakdown = compute_supplier_commission_breakdown(supplier_gross_share, money(0), effective_commission_percentage)
             try:
                 create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=breakdown["discounted_amount"], commission_amount=breakdown["commission_amount"])

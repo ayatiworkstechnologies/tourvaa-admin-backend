@@ -28,6 +28,11 @@ class Affiliate(Base):
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     rejected_at = Column(DateTime(timezone=True), nullable=True)
     rejected_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Set the first time the affiliate clicks "Yes" on the mandatory
+    # commission-consent popup shown right after login (see
+    # affiliate/layout.tsx and CommissionConsentModal). Null blocks general
+    # portal access (affiliates have no document-upload endpoint today).
+    commission_accepted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -32,6 +32,12 @@ class Agent(Base):
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     rejected_at = Column(DateTime(timezone=True), nullable=True)
     rejected_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Set the first time the agent clicks "Yes" on the mandatory
+    # commission-consent popup shown right after login (see
+    # agent/layout.tsx and CommissionConsentModal). Null blocks document
+    # upload / general portal access - see the gate in
+    # routers/agents.py's document upload handler.
+    commission_accepted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

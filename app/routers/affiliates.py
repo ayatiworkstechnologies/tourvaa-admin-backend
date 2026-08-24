@@ -1,15 +1,32 @@
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.affiliates import Affiliate
 from app.schemas.affiliates import AffiliateApiLinkRequest, AffiliateCreate, AffiliateSuspendRequest, AffiliateUpdate
-from app.services.affiliates import activate_affiliate, approve_affiliate, create_affiliate, get_affiliate, list_affiliates, reject_affiliate, serialize_affiliate, suspend_affiliate, update_affiliate, update_affiliate_api_link
-from app.auth.permissions import require_any_permission
+from app.services.affiliates import accept_affiliate_commission, activate_affiliate, approve_affiliate, create_affiliate, get_affiliate, list_affiliates, reject_affiliate, serialize_affiliate, suspend_affiliate, update_affiliate, update_affiliate_api_link
+from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.pagination import pagination_params
 from app.utils.operations import RejectRequest
 from app.models.users import User
 
 router = APIRouter(prefix="/affiliates", tags=["Affiliates"])
+
+
+@router.get("/me")
+def my_affiliate(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    affiliate = db.query(Affiliate).filter(Affiliate.user_id == current_user.id).first()
+    if not affiliate:
+        raise HTTPException(status_code=404, detail="Affiliate profile not found")
+    return {"status": "success", "data": serialize_affiliate(affiliate)}
+
+
+@router.post("/me/accept-commission")
+def accept_my_commission(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    affiliate = db.query(Affiliate).filter(Affiliate.user_id == current_user.id).first()
+    if not affiliate:
+        raise HTTPException(status_code=404, detail="Affiliate profile not found")
+    return {"status": "success", "data": accept_affiliate_commission(db, affiliate.id, current_user, request)}
 
 
 @router.get("")
