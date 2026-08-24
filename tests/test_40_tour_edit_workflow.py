@@ -84,9 +84,8 @@ def published_tour_id(headers, supplier_ctx, first_country_id, first_category_id
 @skip_if_readonly()
 def test_supplier_content_edit_keeps_tour_published(headers, supplier_headers, published_tour_id):
     # Itinerary is one of the "versioned" child resources that triggers
-    # maybe_resubmit_for_review on every supplier write (inclusions/
-    # highlights/exclusions currently aren't wired into that path at all --
-    # a separate, pre-existing gap outside this pass's scope).
+    # maybe_resubmit_for_review on every supplier write (inclusions,
+    # highlights, and exclusions are wired into the same path).
     resp = requests.post(f"{BASE_URL}/tours/{published_tour_id}/itineraries", headers=supplier_headers, json={
         "day_number": 1, "day_title": unique("Day"),
     }, timeout=10)
@@ -131,19 +130,17 @@ def test_supplier_can_create_a_brand_new_pricing_slab(headers, supplier_headers,
 
 
 @skip_if_readonly()
-def test_supplier_pricing_edit_freezes_storefront_price(headers, supplier_headers, published_tour_id):
+def test_supplier_pricing_edit_goes_live_immediately_and_still_logs_review(headers, supplier_headers, published_tour_id):
     # Created by admin directly (not a supplier action), so it's treated as
-    # an already-approved baseline price with a real storefront value --
-    # exactly the "existing public price" the supplier's later edit below
-    # must not silently change.
+    # an already-approved baseline price with a real storefront value.
     create = requests.post(f"{BASE_URL}/tours/{published_tour_id}/pricing", headers=headers, json={
         "passenger_from": 1, "passenger_to": 4, "adult_price": 100.0, "child_price": 50.0,
     }, timeout=10)
     assert create.status_code in (200, 201), create.text
     slab = create.json()["data"]
     slab_id = slab["id"]
-    frozen_storefront = slab["storefront_adult_price"]
-    assert frozen_storefront is not None
+    original_storefront = slab["storefront_adult_price"]
+    assert original_storefront is not None
 
     updated = requests.put(f"{BASE_URL}/tours/{published_tour_id}/pricing/{slab_id}", headers=supplier_headers, json={
         "passenger_from": 1, "passenger_to": 4, "adult_price": 999.0, "child_price": 50.0,
@@ -152,15 +149,15 @@ def test_supplier_pricing_edit_freezes_storefront_price(headers, supplier_header
     supplier_view = updated.json()["data"]
     assert "storefront_adult_price" not in supplier_view, "Tourvaa's public price must never be returned to a supplier"
     assert "admin_markup_value" not in supplier_view, "Tourvaa's own markup must never be returned to a supplier"
-    assert supplier_view["supplier_final_adult_price"] != frozen_storefront
 
+    # The new price is live immediately -- no freeze, no wait for admin approval.
     admin_view = requests.get(f"{BASE_URL}/tours/{published_tour_id}/pricing", headers=headers, timeout=10).json()["data"]
     admin_slab = next(p for p in admin_view if p["id"] == slab_id)
-    assert admin_slab["storefront_adult_price"] == frozen_storefront, "Public price must not change until admin approves"
+    assert admin_slab["storefront_adult_price"] == 999.0, "Supplier's price change must take effect immediately"
 
     detail = requests.get(f"{BASE_URL}/tours/{published_tour_id}", headers=headers, timeout=10).json()["data"]
     assert detail["status"] == "published"
-    assert detail["pending_review_kind"] == "repricing_required"
+    assert detail["pending_review_kind"] == "repricing_required", "Still logged for admin visibility, even though the price already went live"
 
     versions = requests.get(f"{BASE_URL}/tours/{published_tour_id}/versions", headers=headers, timeout=10).json()["items"]
     pending = next(v for v in versions if v["status"] == "pending_approval")
@@ -169,7 +166,7 @@ def test_supplier_pricing_edit_freezes_storefront_price(headers, supplier_header
 
     final = requests.get(f"{BASE_URL}/tours/{published_tour_id}/pricing", headers=headers, timeout=10).json()["data"]
     final_slab = next(p for p in final if p["id"] == slab_id)
-    assert final_slab["storefront_adult_price"] != frozen_storefront, "Approval must recalculate the public price"
+    assert final_slab["storefront_adult_price"] == 999.0, "Approving afterwards must not change the already-live price"
 
 
 # ─── Withdraw submission ───────────────────────────────────────────────────────

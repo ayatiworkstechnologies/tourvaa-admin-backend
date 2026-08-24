@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import log_audit
 from app.models.cms import Tour
-from app.models.suppliers import Supplier
 from app.utils.operations import get_or_404
 from app.models.tours import (
     TourAccommodationExtra,
@@ -213,7 +212,7 @@ def _simple_crud(Model, serializer, versioned: bool = False):
 def _ser_inclusion(o: TourInclusion) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "icon": o.icon, "title": o.title, "description": o.description, "display_order": o.display_order, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
-_list_inclusions_fn, _create_inclusion_fn, _update_inclusion_fn, _delete_inclusion_fn = _simple_crud(TourInclusion, _ser_inclusion)
+_list_inclusions_fn, _create_inclusion_fn, _update_inclusion_fn, _delete_inclusion_fn = _simple_crud(TourInclusion, _ser_inclusion, versioned=True)
 
 def list_inclusions(db, tour_id): return _list_inclusions_fn(db, tour_id)
 def create_inclusion(db, tour_id, data, actor, request=None): return _create_inclusion_fn(db, tour_id, data, actor, "create_inclusion", request)
@@ -225,7 +224,7 @@ def delete_inclusion(db, tour_id, rid, actor, request=None): return _delete_incl
 def _ser_exclusion(o: TourExclusion) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "icon": o.icon, "title": o.title, "description": o.description, "display_order": o.display_order, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
-_list_exclusions_fn, _create_exclusion_fn, _update_exclusion_fn, _delete_exclusion_fn = _simple_crud(TourExclusion, _ser_exclusion)
+_list_exclusions_fn, _create_exclusion_fn, _update_exclusion_fn, _delete_exclusion_fn = _simple_crud(TourExclusion, _ser_exclusion, versioned=True)
 
 def list_exclusions(db, tour_id): return _list_exclusions_fn(db, tour_id)
 def create_exclusion(db, tour_id, data, actor, request=None): return _create_exclusion_fn(db, tour_id, data, actor, "create_exclusion", request)
@@ -237,7 +236,7 @@ def delete_exclusion(db, tour_id, rid, actor, request=None): return _delete_excl
 def _ser_highlight(o: TourHighlight) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "image": o.image, "title": o.title, "short_description": o.short_description, "display_order": o.display_order, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
-_list_highlights_fn, _create_highlight_fn, _update_highlight_fn, _delete_highlight_fn = _simple_crud(TourHighlight, _ser_highlight)
+_list_highlights_fn, _create_highlight_fn, _update_highlight_fn, _delete_highlight_fn = _simple_crud(TourHighlight, _ser_highlight, versioned=True)
 
 def list_highlights(db, tour_id): return _list_highlights_fn(db, tour_id)
 def create_highlight(db, tour_id, data, actor, request=None): return _create_highlight_fn(db, tour_id, data, actor, "create_highlight", request)
@@ -348,6 +347,7 @@ def _ser_pricing(o: TourPricing) -> dict:
         "id": o.id, "tour_id": o.tour_id,
         "passenger_from": o.passenger_from, "passenger_to": o.passenger_to,
         "adult_price": o.adult_price, "child_price": o.child_price,
+        "commission_percentage": o.commission_percentage,
         "supplier_price": o.supplier_price, "final_price": o.final_price,
         "supplier_final_adult_price": o.supplier_final_adult_price,
         "supplier_final_child_price": o.supplier_final_child_price,
@@ -369,40 +369,42 @@ def _apply_markup(markup_type: str, markup_value: float, base: float) -> float:
     return round(max(0.0, base + markup_value), 2)
 
 
-def _is_supplier_actor(db: Session, actor: User) -> bool:
-    return db.query(Supplier.id).filter(Supplier.user_id == actor.id).first() is not None
-
-
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    # The customer is charged exactly the supplier's own adult_price/
-    # child_price - there is no separate retail markup layered on top
-    # (admin_markup_value/_apply_markup are legacy and no longer applied;
-    # kept as unused columns for backward compatibility). Tourvaa's
-    # commission is instead deducted from this same price when the supplier
-    # is paid out - see Tour.commission_percentage / Supplier.commission_percentage
-    # / the platform minimum, resolved by
-    # services.bookings.resolve_effective_commission_percentage.
+    """Two independent layers computed from the supplier's own adult_price/
+    child_price ("Your Price to Tourvaa"):
+      - Supplier layer: this slab's own commission_percentage (floor-
+        enforced against resolve_effective_commission_percentage) ->
+        supplier_final_*_price ("Supplier Receives"). Applies to every
+        actor -- a supplier sets/raises it, an admin can too.
+      - Admin layer: admin_markup_value, honoured ONLY for an admin actor
+        -> storefront_*_price, what bookings.py actually charges the
+        customer at checkout. A supplier's payload can never move this
+        (routers.tours._ADMIN_ONLY_PRICING_FIELDS also hides it from their
+        responses) -- for a supplier actor the existing admin_markup_*
+        already on the row (0 for a brand-new slab) is reused as-is.
+    A supplier's price change (either layer they control) takes effect
+    immediately, like any other content edit (see maybe_resubmit_for_review)
+    -- mark_repricing_required (called by create_pricing/update_pricing
+    right after this) still records a version and notifies admins for
+    visibility, it just no longer withholds anything while that review is
+    pending.
+    """
+    from app.services.bookings import resolve_effective_commission_percentage
+    from app.services.supplier_scope import is_supplier_user
+
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
-    o.supplier_final_adult_price = o.adult_price
-    o.supplier_final_child_price = o.child_price
+    floor = resolve_effective_commission_percentage(db, tour=tour, supplier=tour.supplier if tour else None)
+    requested = data.commission_percentage
+    commission = max(float(requested), float(floor)) if requested is not None else float(floor)
+    o.commission_percentage = commission
+    o.supplier_final_adult_price = round(max(0.0, o.adult_price * (1 - commission / 100)), 2)
+    o.supplier_final_child_price = round(max(0.0, o.child_price * (1 - commission / 100)), 2)
     o.final_price = o.adult_price
 
-    is_supplier = _is_supplier_actor(db, actor)
-
-    # A supplier editing an existing slab on a tour that's already been
-    # through at least one approval must not change what the storefront
-    # charges immediately -- freeze storefront_adult_price/child_price at
-    # their last-approved values and leave them for an admin to recompute
-    # via mark_repricing_required / approve_version's recalculation step.
-    # New slabs and admin edits still compute immediately: a brand-new slab
-    # has no existing public price to protect, and an admin has direct
-    # authority over Tourvaa's own pricing.
-    freeze = is_update and is_supplier and tour and tour.status in ("active", "published", "repricing_required")
-    if freeze:
-        return
-
-    o.storefront_adult_price = o.adult_price
-    o.storefront_child_price = o.child_price
+    if not is_supplier_user(actor):
+        o.admin_markup_value = data.admin_markup_value
+    o.storefront_adult_price = _apply_markup(o.admin_markup_type, float(o.admin_markup_value or 0), o.adult_price)
+    o.storefront_child_price = _apply_markup(o.admin_markup_type, float(o.admin_markup_value or 0), o.child_price)
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
@@ -417,7 +419,7 @@ def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 # the one exception: the client value is read (in _apply_pricing_computation,
 # not here) but always floored at the supplier's agreed commission rate.
 _PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "child_price", "supplier_price", "currency", "status")
-_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "admin_markup_value")
+_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "admin_markup_value", "commission_percentage")
 
 
 def _actor_role_slug(actor: User) -> str:
@@ -833,8 +835,7 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
     currency = slab.currency if slab else tour.currency
     # storefront_* (falling back to the raw price if unset) is what
     # _price_booking actually charges at checkout - this preview must match
-    # that, especially during the freeze window where a supplier's pending
-    # edit has changed adult_price/child_price but not yet the storefront price.
+    # that.
     # float(...) throughout this function: TourPricing/TourOptionalActivity/
     # TourAccommodationExtra/TourExtension/TourDiscount amount columns are all
     # Numeric (Decimal on read) - this function otherwise does plain float

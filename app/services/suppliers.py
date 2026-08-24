@@ -148,6 +148,7 @@ def serialize_supplier(item: Supplier):
             "supplier_type": item.supplier_type,
             "commission_percentage": str(item.commission_percentage) if item.commission_percentage is not None else None,
             "onboarding_completed_at": item.onboarding_completed_at,
+            "commission_accepted_at": item.commission_accepted_at,
             "contacts": relationship_list(item.contacts, _contact),
             "vehicles": relationship_list(item.vehicles, _serialize_vehicle),
             "documents": relationship_list(item.documents, _document),
@@ -335,6 +336,19 @@ def complete_supplier_onboarding(db: Session, supplier_id: int, actor: User, req
     if item.onboarding_completed_at is None:
         item.onboarding_completed_at = utcnow()
         log_audit(db, actor=actor, action="complete_supplier_onboarding", entity_type="supplier", entity_id=item.id, request=request)
+        db.commit()
+        db.refresh(item)
+    return serialize_supplier(item)
+
+
+def accept_supplier_commission(db: Session, supplier_id: int, actor: User, request: Request | None = None):
+    """Records that the supplier clicked "Yes" on the post-login commission-
+    consent popup (CommissionConsentModal). Required before document upload
+    -- see the gate in routers/suppliers.py's upload_supplier_document."""
+    item = get_supplier(db, supplier_id)
+    if item.commission_accepted_at is None:
+        item.commission_accepted_at = utcnow()
+        log_audit(db, actor=actor, action="accept_supplier_commission", entity_type="supplier", entity_id=item.id, request=request)
         db.commit()
         db.refresh(item)
     return serialize_supplier(item)

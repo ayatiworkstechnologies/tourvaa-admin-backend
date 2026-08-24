@@ -185,15 +185,15 @@ def maybe_resubmit_for_review(db: Session, tour_id: int, actor: User) -> None:
 
 def mark_repricing_required(db: Session, tour_id: int, actor: User) -> None:
     """A supplier's Supplier Pricing change on a tour that's already gone
-    through at least one approval must not silently change what customers
-    are charged -- flag it distinctly from ordinary content edits so the
-    editor can show "Repricing Required" and the storefront price stays
-    frozen (see services/tours.py's _apply_pricing_computation) until an
-    admin recalculates and approves it. No-op for admin edits (admins set
-    Tourvaa's own pricing directly) and for tours that haven't been
-    approved yet (a still-draft/rejected/first-time-pending tour has no
-    live public price to protect -- its pricing follows the normal
-    maybe_resubmit_for_review path instead)."""
+    through at least one approval takes effect immediately (see
+    services/tours.py's _apply_pricing_computation) -- this only flags it
+    distinctly from ordinary content edits so the editor can show
+    "Repricing Required" and admins get a version record + notification to
+    review after the fact. No-op for admin edits (admins set Tourvaa's own
+    pricing directly) and for tours that haven't been approved yet (a still-
+    draft/rejected/first-time-pending tour has no live public price to
+    protect -- its pricing follows the normal maybe_resubmit_for_review
+    path instead)."""
     from app.services.supplier_scope import is_supplier_user
     if not is_supplier_user(actor):
         return
@@ -241,11 +241,11 @@ def approve_version(db: Session, tour_id: int, version_id: int, actor: User, req
     if tour.status != LIVE_TOUR_STATUS:
         tour.status = "active"
 
-    # "Admin recalculates Tourvaa Pricing" -- every pricing slab's public
-    # storefront price is (re)computed from its current supplier_final_*
-    # and admin_markup_* here, at the moment of approval. This is what
-    # actually applies a frozen/repricing-required change (or a brand new
-    # slab's first-ever price) to the live public price.
+    # Every pricing slab's storefront price already went live immediately
+    # when it was created/edited (see services/tours.py's
+    # _apply_pricing_computation) -- this just re-syncs it from the current
+    # adult_price/child_price at approval time too, so approving an older
+    # pending version can't accidentally leave a stale storefront price.
     _recalculate_storefront_prices(db, tour_id)
 
     version.status = "approved"
@@ -315,18 +315,19 @@ def _restore_snapshot(db: Session, tour: Tour, snapshot: dict) -> None:
 
 
 def _recalculate_storefront_prices(db: Session, tour_id: int) -> None:
-    # Storefront price = the supplier's own price (adult_price/child_price)
-    # directly - see services.tours._apply_pricing_computation for the same
-    # rule applied on ordinary (non-frozen) create/update. This unfreezes
-    # the storefront price a supplier's slab edit held back (spec: don't
-    # let an edit silently change what's charged) once an admin has
-    # reviewed and approved it.
+    # Storefront price = supplier's own price + admin markup - see
+    # services.tours._apply_markup / _apply_pricing_computation for the
+    # same rule applied on create/update. Re-applied here at approval time
+    # as a safety net so approving keeps the storefront price in sync even
+    # if a slab was touched between the edit and the approval, without
+    # wiping out any markup an admin already set on the row.
     from app.models.tours import TourPricing
-    from app.services.tours import recalculate_price_start
+    from app.services.tours import _apply_markup, recalculate_price_start
 
     for row in db.query(TourPricing).filter(TourPricing.tour_id == tour_id).all():
-        row.storefront_adult_price = float(row.adult_price)
-        row.storefront_child_price = float(row.child_price)
+        markup_value = float(row.admin_markup_value or 0)
+        row.storefront_adult_price = _apply_markup(row.admin_markup_type, markup_value, float(row.adult_price))
+        row.storefront_child_price = _apply_markup(row.admin_markup_type, markup_value, float(row.child_price))
     recalculate_price_start(db, tour_id)
 
 

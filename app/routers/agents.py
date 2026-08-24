@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models.agents import Agent
 from pydantic import BaseModel
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentSelfUpdate, AgentUpdate
-from app.services.agents import AGENT_DOCUMENT_TYPES, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, list_agents, partial_approve_agent, reject_agent, reject_agent_commission_request, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
+from app.services.agents import AGENT_DOCUMENT_TYPES, accept_agent_commission, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, list_agents, partial_approve_agent, reject_agent, reject_agent_commission_request, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
 from app.schemas.auth import UnifiedRegisterSchema, VerifyEmailSchema
 from app.services.auth import register_unified_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs, _is_agent
@@ -138,6 +138,14 @@ def request_my_commission(data: AgentDiscountRequest, request: Request, db: Sess
     return {"status": "success", "message": "Commission request submitted for admin approval", "data": request_agent_commission(db, current_user, data, request)}
 
 
+@router.post("/me/accept-commission")
+def accept_my_commission(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    return {"status": "success", "data": accept_agent_commission(db, agent.id, current_user, request)}
+
+
 @router.get("/me/commission-calculator")
 def my_commission_calculator(
     amount: float = Query(ge=0),
@@ -209,6 +217,11 @@ async def upload_agent_document(
     check_rate_limit(request, "upload", max_calls=20, window_seconds=60)
     agent = get_agent(db, agent_id)
     _require_agent_owner_or_permission(db, current_user, agent, "agents.edit", "update-agents")
+    # Self-service uploads must accept the commission-consent popup first
+    # (CommissionConsentModal); staff/admin uploading on the agent's behalf
+    # are never gated by it.
+    if agent.user_id == current_user.id and agent.commission_accepted_at is None:
+        raise HTTPException(status_code=403, detail="Please accept the Tourvaa commission rate before uploading documents.")
 
     document_type = document_type.strip().lower()
     if document_type not in AGENT_DOCUMENT_TYPES:

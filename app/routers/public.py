@@ -189,17 +189,29 @@ def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
 
 
 def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscountTier]) -> list[dict]:
-    """A tour now has one active base TourPricing row (1 person, see
-    services.tours._apply_pricing_computation) plus separate
-    TourGroupDiscountTier rows for group-size discounts. The public tour
-    page still shows one row per traveller-count range, so this expands
-    the base price into: the base row up to the first tier's min_pax, then
-    one row per active tier with its own discounted price - using the same
-    formula _price_booking / _resolve_group_discount applies at checkout,
-    so the advertised price always matches what a booking is actually
-    charged."""
+    """A tour can have several independently-priced pax-range TourPricing
+    slabs (see services.tours._apply_pricing_computation) -- when it does,
+    each slab already IS a row of the public price ladder, so this just
+    emits one row per active slab using its own storefront price (what
+    _price_booking actually charges for a booking in that range).
+
+    A tour left with exactly one slab instead uses that single price as a
+    base and expands it via TourGroupDiscountTier, unchanged from before -
+    tiers are a simpler alternative to adding more slabs, not a second
+    layer on top of them, so they're only consulted when there's just the
+    one slab."""
     if not pricing:
         return []
+    if len(pricing) > 1:
+        return [
+            {
+                "persons_from": slab.passenger_from,
+                "persons_to": slab.passenger_to,
+                "price_per_person": float(slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price),
+                "currency": slab.currency,
+            }
+            for slab in pricing
+        ]
     base = pricing[0]
     base_adult = float(base.storefront_adult_price if base.storefront_adult_price is not None else base.adult_price)
     rows = []
@@ -559,12 +571,9 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "exclusions": [{"text": e.title} for e in exclusions],
             "gallery": [{"image_url": g.image_path, "alt_text": g.image_alt_text, "is_banner": g.image_type == "banner"} for g in gallery],
             # price_per_person must match what _price_booking (bookings.py)
-            # actually charges at checkout, not the raw just-entered
-            # adult_price - those diverge whenever a supplier's edit to a
-            # live tour is frozen pending admin approval (see
-            # services.tours._apply_pricing_computation's freeze guard).
-            # See _public_pricing_rows for how the base price + group
-            # discount tiers are expanded into these traveller-count rows.
+            # actually charges at checkout - see _public_pricing_rows for
+            # how the base price + group discount tiers are expanded into
+            # these traveller-count rows.
             "pricing": _public_pricing_rows(pricing, group_discount_tiers),
             "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -31,9 +32,14 @@ from app.services.settings import (
     update_smtp_settings_payload,
     update_system_settings,
     update_settings,
+    send_smtp_test_email,
 )
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
+
+
+class SendSmtpTestEmailRequest(BaseModel):
+    to_email: EmailStr
 
 
 # dropdown helpers used by portal forms
@@ -286,4 +292,18 @@ def save_smtp_settings(
             actor=current_user,
             request=request,
         ),
+    }
+
+
+@router.post("/smtp/test")
+def test_smtp_settings(
+    data: SendSmtpTestEmailRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("update-settings")),
+):
+    return {
+        "status": "success",
+        "message": "Test email sent",
+        "data": send_smtp_test_email(db, data.to_email, actor=current_user, request=request),
     }

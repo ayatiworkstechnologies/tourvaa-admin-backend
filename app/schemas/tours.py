@@ -186,21 +186,29 @@ class GalleryImagePayload(BaseModel):
 class PricingPayload(BaseModel):
     passenger_from: int = Field(ge=1)
     passenger_to: int = Field(ge=1)
+    # adult_price/child_price are the supplier's own net asking price
+    # ("Your Price to Tourvaa"). Two independent layers are computed from
+    # them in services.tours._apply_pricing_computation:
+    #  - commission_percentage below (supplier-side, floor-enforced) ->
+    #    supplier_final_*_price ("Supplier Receives").
+    #  - admin_markup_value (admin-only) -> storefront_*_price, what
+    #    bookings.py actually charges the customer at checkout.
     adult_price: float = Field(ge=0)
     child_price: float = Field(default=0.0, ge=0)
-    # adult_price/child_price are the supplier's own net asking price, and
-    # is exactly what the customer is charged (see services.tours.
-    # _apply_pricing_computation) - there is no separate retail markup
-    # layered on top. Tourvaa's commission is instead deducted from this
-    # same price when the supplier is paid out - see Tour.commission_percentage
-    # (per-tour override) / Supplier.commission_percentage / the platform
-    # minimum AppSetting, resolved by services.bookings.
-    # resolve_effective_commission_percentage.
-    # admin_markup_value/supplier_price/final_price are legacy/unused,
-    # kept for backward compatibility only - no longer applied to pricing.
+    # This slab's own commission rate. Floor-enforced server-side against
+    # resolve_effective_commission_percentage (Tour > Supplier > platform
+    # minimum) - a supplier may raise it, never lower it. None means "use
+    # that resolved floor directly".
+    commission_percentage: float | None = Field(default=None, ge=0, le=100)
+    # supplier_price/final_price are legacy/unused, kept for backward
+    # compatibility only - no longer applied to pricing.
     supplier_price: float = Field(default=0.0, ge=0)
     final_price: float = Field(default=0.0, ge=0)
-    admin_markup_value: float = Field(default=10.0, ge=5, le=15)
+    # Admin-only retail markup added on top of adult_price/child_price to
+    # produce the storefront price - deliberately no min/max (admin sets
+    # whatever's needed). Ignored for a supplier actor, see
+    # routers.tours._ADMIN_ONLY_PRICING_FIELDS / _apply_pricing_computation.
+    admin_markup_value: float = Field(default=0.0, ge=0)
     currency: str = Field(default="USD", max_length=10)
     status: str = Field(default="active", max_length=20)
     # Optional explanation for the audit trail when Admin edits a Supplier's

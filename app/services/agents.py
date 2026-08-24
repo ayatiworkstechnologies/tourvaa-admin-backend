@@ -68,6 +68,7 @@ def serialize_agent(item: Agent):
         "commission_request_status": item.commission_request_status,
         "commission_requested_at": item.commission_requested_at,
         "commission_reviewed_at": item.commission_reviewed_at,
+        "commission_accepted_at": item.commission_accepted_at,
         "contacts": relationship_list(item.contacts, _contact),
         "documents": relationship_list(item.documents, _document),
         "business_info": {
@@ -111,6 +112,28 @@ def list_agents(db: Session, page: int, limit: int, search: str = "", country_id
 
 def get_agent(db: Session, agent_id: int):
     return get_or_404(db, Agent, agent_id, "Agent")
+
+
+def accept_agent_commission(db: Session, agent_id: int, actor: User, request: Request | None = None):
+    """Records that the agent clicked "Yes" on the post-login commission-
+    consent popup (CommissionConsentModal). Required before document upload
+    -- see the gate in routers/agents.py's upload_agent_document. Also
+    seeds the admin-configured default rate onto the agent's real payout
+    fields (discount_type/discount_value) the first time, since -- unlike
+    supplier's NULL-means-platform-minimum resolution -- those fields don't
+    otherwise resolve to any global setting on their own; without this the
+    accepted rate would just be a display number with no effect on payouts."""
+    from app.services.settings import get_agent_default_commission
+    item = get_agent(db, agent_id)
+    if item.commission_accepted_at is None:
+        item.commission_accepted_at = utcnow()
+        if item.discount_type is None:
+            item.discount_type = "percentage"
+            item.discount_value = float(get_agent_default_commission(db))
+        log_audit(db, actor=actor, action="accept_agent_commission", entity_type="agent", entity_id=item.id, request=request)
+        db.commit()
+        db.refresh(item)
+    return serialize_agent(item)
 
 
 def export_agents_directory(db: Session) -> list[dict]:

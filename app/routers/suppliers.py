@@ -26,6 +26,7 @@ from app.services.suppliers import (
     approve_supplier,
     bulk_approve_suppliers,
     bulk_reject_suppliers,
+    accept_supplier_commission,
     complete_supplier_onboarding,
     create_supplier,
     export_suppliers_directory,
@@ -202,8 +203,9 @@ def my_commission_calculator(
         resolved_adult_price = money(adult_price)
         resolved_child_price = money(child_price or 0)
         group_discount_ratio = money(0)
+        slab = None
 
-    effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier)
+    effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
 
     def _breakdown_dict(amount) -> dict:
         b = compute_supplier_commission_breakdown(amount, group_discount_ratio, effective_commission_percentage)
@@ -242,6 +244,15 @@ def complete_my_onboarding(request: Request, db: Session = Depends(get_db), curr
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier profile not found")
     return {"status": "success", "data": complete_supplier_onboarding(db, supplier.id, current_user, request)}
+
+
+@router.post("/me/accept-commission")
+def accept_my_commission(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models.suppliers import Supplier
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    return {"status": "success", "data": accept_supplier_commission(db, supplier.id, current_user, request)}
 
 
 @router.get("/me/vehicles")
@@ -506,7 +517,8 @@ async def upload_supplier_document(
 ):
     check_rate_limit(request, "upload", max_calls=20, window_seconds=60)
     supplier = get_supplier(db, supplier_id)
-    if supplier.user_id != current_user.id:
+    is_self_service = supplier.user_id == current_user.id
+    if not is_self_service:
         role_ids = get_user_role_ids(current_user)
         allowed_slugs = expand_permission_slugs(("suppliers.edit", "update-suppliers"))
         allowed = (
@@ -519,6 +531,11 @@ async def upload_supplier_document(
         )
         if not allowed:
             raise HTTPException(status_code=403, detail="Permission denied")
+    # Self-service uploads must accept the commission-consent popup first
+    # (CommissionConsentModal); staff/admin uploading on the supplier's
+    # behalf are never gated by it.
+    elif supplier.commission_accepted_at is None:
+        raise HTTPException(status_code=403, detail="Please accept the Tourvaa commission rate before uploading documents.")
 
     content = await file.read()
     if not content:
