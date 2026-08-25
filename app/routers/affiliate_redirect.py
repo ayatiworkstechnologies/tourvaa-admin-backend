@@ -38,7 +38,14 @@ def _resolve_link(db: Session, code: str):
 
 def _destination_for(link: AffiliateLink) -> str:
     if link.link_type == "tour" and link.tour_id and link.tour:
-        return f"/tours/{link.tour.slug}"
+        # Public tour pages live at /tours/{country_slug}/{tour_slug} - a
+        # bare /tours/{tour_slug} is parsed by the frontend as a country
+        # listing instead (see app/(public)/tours/[id]/page.tsx), which
+        # 404s as "Destination not found". Match app/routers/public.py's
+        # canonical_path and services/bookings.py's slug building exactly.
+        from app.schemas.cms import slugify
+        country_slug = slugify(link.tour.country.country_name if link.tour.country else "worldwide")
+        return f"/tours/{country_slug}/{link.tour.slug}"
     return link.destination_url or DEFAULT_FALLBACK
 
 

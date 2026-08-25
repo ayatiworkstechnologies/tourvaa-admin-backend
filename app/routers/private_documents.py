@@ -107,6 +107,26 @@ def get_agent_document(
     return _serve_document(doc)
 
 
+@router.get("/affiliate/{doc_id}")
+def get_affiliate_document(
+    doc_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.models.affiliates import Affiliate, AffiliateDocument
+
+    doc = db.query(AffiliateDocument).filter(AffiliateDocument.id == doc_id).first()
+    if not doc or not doc.file_path:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    affiliate = db.query(Affiliate).filter(Affiliate.id == doc.affiliate_id).first()
+    is_owner = affiliate and affiliate.user_id == current_user.id
+    if not is_owner and not _has_admin_permission(db, current_user, "affiliates.view_documents", "affiliates.view"):
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    return _serve_document(doc)
+
+
 def _serve_cloudinary_marker(raw: str):
     """Serve a raw stored value that may be a cloudinary:<type>:<id> marker,
     a legacy public URL, or a legacy /storage path - covers vehicle files

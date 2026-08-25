@@ -2,8 +2,8 @@ from fastapi import HTTPException, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.affiliates import Affiliate
-from app.schemas.affiliates import AffiliateApiLinkRequest, AffiliateCreate, AffiliateUpdate
+from app.models.affiliates import Affiliate, AffiliateDocument
+from app.schemas.affiliates import AffiliateApiLinkRequest, AffiliateCreate, AffiliateDocumentReviewRequest, AffiliateUpdate
 from app.services.audit import log_audit
 from app.utils.operations import RejectRequest, approve_item, get_or_404, relationship_list, reject_item, simple_paginate
 from app.auth.security import hash_password
@@ -11,9 +11,28 @@ from app.models.roles import Role
 from app.models.users import User, UserRole
 from app.utils.money import utcnow
 
+# Smaller than SUPPLIER_DOCUMENT_TYPES -- affiliates are individuals/small
+# marketers promoting Tourvaa, not running a tour-operating business, so
+# there's no equivalent of a trade license / company registration to ask for.
+AFFILIATE_DOCUMENT_TYPES = {
+    "identity_proof": {"label": "Identity Proof (Passport / National ID)", "required": True},
+    "bank_details": {"label": "Bank Account Details / Cheque", "required": True},
+    "tax_certificate": {"label": "Tax Registration Certificate (if applicable)", "required": False},
+}
+REQUIRED_AFFILIATE_DOCUMENT_TYPES = {key for key, metadata in AFFILIATE_DOCUMENT_TYPES.items() if metadata["required"]}
+
 
 def _document(item):
-    return {key: getattr(item, key) for key in ["id", "document_type", "document_name", "file_path", "file_size", "mime_type", "status", "uploaded_at", "reviewed_at", "reviewed_by"]}
+    file_path = item.file_path or ""
+    if file_path.startswith("/private-documents/") or file_path.startswith("cloudinary:"):
+        file_url = f"/api/private-documents/affiliate/{item.id}"
+    elif file_path and not file_path.startswith("http"):
+        file_url = file_path if file_path.startswith("/") else "/storage/" + file_path
+    else:
+        file_url = file_path
+    data = {key: getattr(item, key) for key in ["id", "document_type", "document_name", "file_path", "file_size", "mime_type", "status", "rejection_reason", "uploaded_at", "reviewed_at", "reviewed_by"]}
+    data["file_url"] = file_url
+    return data
 
 
 def serialize_affiliate(item: Affiliate):
@@ -158,13 +177,75 @@ def update_affiliate(db: Session, affiliate_id: int, data: AffiliateUpdate, acto
         maximum = get_affiliate_commission_max(db)
         if Decimal(str(data.commission_percentage)) > maximum:
             raise HTTPException(status_code=400, detail=f"Affiliate commission cannot exceed the platform maximum of {maximum}%")
-    for key, value in data.model_dump(exclude_unset=True).items():
+
+    update_data = data.model_dump(exclude_unset=True)
+    marketing_data = update_data.pop("marketing_info", None)
+    invoicing_data = update_data.pop("invoicing", None)
+
+    for key, value in update_data.items():
         if value is not None:
             setattr(item, key, str(value).strip() if isinstance(value, str) else value)
+
+    if marketing_data:
+        if not item.marketing_info:
+            from app.models.affiliates import AffiliateMarketingInfo
+            item.marketing_info = AffiliateMarketingInfo(affiliate_id=item.id)
+            db.add(item.marketing_info)
+        for k, v in marketing_data.items():
+            if v is not None:
+                setattr(item.marketing_info, k, v)
+
+    if invoicing_data:
+        if not item.invoicing:
+            from app.models.affiliates import AffiliateInvoicing
+            item.invoicing = AffiliateInvoicing(affiliate_id=item.id)
+            db.add(item.invoicing)
+        for k, v in invoicing_data.items():
+            if v is not None:
+                setattr(item.invoicing, k, v)
+
     log_audit(db, actor=actor, action="update_affiliate", entity_type="affiliate", entity_id=item.id, old_values=old, new_values=serialize_affiliate(item), request=request)
     db.commit()
     db.refresh(item)
     return serialize_affiliate(item)
+
+
+def submit_affiliate_verification(db: Session, user: User, request: Request | None = None):
+    """Self-service: an affiliate signals their profile/documents are ready
+    for admin review. Mirrors services.suppliers._submit_supplier_verification."""
+    item = db.query(Affiliate).filter(Affiliate.user_id == user.id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Affiliate profile not found")
+    if (item.approval_status or "").lower() == "approved":
+        raise HTTPException(status_code=409, detail="Affiliate is already approved")
+    old = serialize_affiliate(item)
+    item.approval_status = "pending"
+    item.status = "active"
+    item.rejection_reason = None
+    log_audit(db, actor=user, action="submit_affiliate_verification", entity_type="affiliate", entity_id=item.id, old_values=old, new_values=serialize_affiliate(item), request=request)
+    db.commit()
+    db.refresh(item)
+    try:
+        from app.services.notifications import notify_admins
+        notify_admins(db, notification_type="affiliate_submitted", title="Affiliate Submitted for Review", message=f"Affiliate '{item.name}' submitted their profile for review.", entity_type="affiliate", entity_id=item.id)
+        db.commit()
+    except Exception:
+        pass
+    return serialize_affiliate(item)
+
+
+def review_affiliate_document(db: Session, document_id: int, data: AffiliateDocumentReviewRequest, actor: User, request: Request | None = None):
+    doc = db.query(AffiliateDocument).filter(AffiliateDocument.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    doc.status = data.status
+    doc.rejection_reason = data.rejection_reason if data.status == "rejected" else None
+    doc.reviewed_at = utcnow()
+    doc.reviewed_by = actor.id
+    log_audit(db, actor=actor, action="review_affiliate_document", entity_type="affiliate_document", entity_id=doc.id, new_values={"status": doc.status, "rejection_reason": doc.rejection_reason}, request=request)
+    db.commit()
+    db.refresh(doc)
+    return _document(doc)
 
 
 def approve_affiliate(db: Session, affiliate_id: int, actor: User, request: Request | None = None):
