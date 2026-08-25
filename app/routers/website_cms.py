@@ -98,8 +98,8 @@ def delete_deal(item_id: int, db: Session = Depends(get_db), _=Depends(require_a
 # blogs
 
 @router.get("/blogs")
-def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
-    return {"status": "success", **service.list_blogs(db, pagination["page"], pagination["limit"], active_only)}
+def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(default=False), slug: str = Query(default=""), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_blogs(db, pagination["page"], pagination["limit"], active_only, slug)}
 
 @router.get("/blogs/{item_id}")
 def get_blog(item_id: int, db: Session = Depends(get_db)):
