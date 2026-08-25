@@ -90,6 +90,7 @@ class AffiliateDocument(Base):
     file_size = Column(Integer, default=0, nullable=False)
     mime_type = Column(String(100), default="", nullable=False)
     status = Column(String(20), default="pending", nullable=False)
+    rejection_reason = Column(String(255), nullable=True)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
