@@ -179,10 +179,12 @@ def _slugify_blog(title: str) -> str:
     import re
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
 
-def list_blogs(db, page, limit, active_only=False):
+def list_blogs(db, page, limit, active_only=False, slug=""):
     q = db.query(Blog)
     if active_only:
         q = q.filter(Blog.status == "published")
+    if slug:
+        q = q.filter(Blog.slug == slug)
     q = q.order_by(Blog.id.desc())
     return _paginate(q, page, limit, _s_blog)
 
