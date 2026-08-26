@@ -60,7 +60,7 @@ def test_role_policy_validation_returns_serializable_422():
     ("account_type", "role_slug", "profile_model", "approval_status"),
     [
         ("CUSTOMER", "customer", Customer, "not_required"),
-        ("AGENT", "agent-reseller", Agent, "not_required"),
+        ("AGENT", "agent-reseller", Agent, "pending"),
         ("SUPPLIER", "supplier", Supplier, "pending"),
     ],
 )

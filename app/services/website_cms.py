@@ -74,7 +74,7 @@ def _sanitize_html(value: Optional[str]) -> Optional[str]:
 
 # serializers
 
-def _s_banner(r: HomepageBanner): return {"id": r.id, "title": r.title, "subtitle": r.subtitle, "image": r.image, "cta_text": r.cta_text, "cta_url": r.cta_url, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
+def _s_banner(r: HomepageBanner): return {"id": r.id, "title": r.title, "subtitle": r.subtitle, "image": r.image, "video": r.video, "cta_text": r.cta_text, "cta_url": r.cta_url, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_dest(r: PopularDestination): return {"id": r.id, "country_id": r.country_id, "city_id": r.city_id, "title": r.title, "image": r.image, "description": r.description, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _tour_label(db: Session, tour_id: int):
     tour = db.query(Tour).filter(Tour.id == tour_id).first()

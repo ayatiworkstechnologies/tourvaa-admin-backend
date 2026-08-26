@@ -55,6 +55,22 @@ def detect_image_type(content: bytes) -> str | None:
     return None
 
 
+def detect_video_type(content: bytes) -> str | None:
+    """Return the supported video type identified from its file signature."""
+    # MP4/MOV/M4V all use the same ISO Base Media File Format 'ftyp' box as
+    # AVIF (see detect_image_type) - the brand inside tells them apart.
+    if len(content) >= 12 and content[4:8] == b"ftyp":
+        brand = content[8:12]
+        if brand in {b"isom", b"iso2", b"mp41", b"mp42", b"avc1", b"M4V ", b"qt  "}:
+            return "mp4"
+
+    # WebM/Matroska container: EBML magic bytes.
+    if content.startswith(b"\x1a\x45\xdf\xa3"):
+        return "webm"
+
+    return None
+
+
 def existing_storage_path(value: str | None):
     if not value:
         return ""

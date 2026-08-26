@@ -1,16 +1,23 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class BannerPayload(BaseModel):
     title: str
     subtitle: Optional[str] = None
-    image: str
+    image: Optional[str] = None
+    video: Optional[str] = None
     cta_text: Optional[str] = None
     cta_url: Optional[str] = None
     sort_order: int = 0
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def _require_image_or_video(self) -> "BannerPayload":
+        if not (self.image or "").strip() and not (self.video or "").strip():
+            raise ValueError("Upload an image or a video for the banner")
+        return self
 
 
 class PopularDestinationPayload(BaseModel):

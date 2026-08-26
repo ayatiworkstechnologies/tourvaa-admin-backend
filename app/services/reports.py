@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.reports import ReportSchedule
 from app.models.users import User
+from app.services.audit import log_audit
 from app.utils.mailer import try_send_email
 
 logger = logging.getLogger(__name__)
@@ -57,15 +58,25 @@ def _send_scheduled_report(db: Session, schedule: ReportSchedule, now: datetime)
     label = REPORT_LABELS.get(schedule.report_type, schedule.report_type)
     recipients = [email.strip() for email in (schedule.recipient_emails or "").split(",") if email.strip()]
     attachment = (f"{schedule.report_type}.csv", buffer.getvalue().encode("utf-8"), "csv")
+    delivered, failed = [], []
     for recipient in recipients:
-        try_send_email(
+        sent = try_send_email(
             recipient,
             f"Tourvaa scheduled report: {label}",
             f"<p>Your scheduled <strong>{label}</strong> report is attached as a CSV file.</p>",
             attachments=[attachment],
             template_key="scheduled_report",
         )
+        (delivered if sent else failed).append(recipient)
     schedule.last_run_at = now
+    log_audit(
+        db,
+        actor=actor,
+        action="report_schedule_delivered",
+        entity_type="report_schedule",
+        entity_id=schedule.id,
+        new_values={"report_type": schedule.report_type, "delivered_to": delivered, "failed": failed},
+    )
 
 
 def run_due_report_schedules(db: Session) -> list[int]:

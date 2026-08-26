@@ -10,7 +10,12 @@ class HomepageBanner(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200), nullable=False)
     subtitle = Column(String(400), nullable=True)
-    image = Column(String(255), nullable=False)
+    # Nullable: a banner needs at least one of image/video (enforced in
+    # BannerPayload), not both - image also doubles as the <video> poster
+    # frame and the fallback for browsers/crawlers that don't render video,
+    # when both are set.
+    image = Column(String(255), nullable=True)
+    video = Column(String(255), nullable=True)
     cta_text = Column(String(100), nullable=True)
     cta_url = Column(String(500), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)

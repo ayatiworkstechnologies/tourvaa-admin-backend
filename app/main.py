@@ -1,4 +1,5 @@
 import asyncio
+import os
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
@@ -80,8 +81,9 @@ def validate_production_config() -> None:
     if settings.APP_DEBUG:
         errors.append("APP_DEBUG must be false in production")
 
-    if settings.ALLOWED_ORIGINS.strip() == "*":
-        errors.append("ALLOWED_ORIGINS must not be '*' in production - set explicit origins")
+    # ALLOWED_ORIGINS=="*" in production is already refused at Settings()
+    # construction time (see config/_require_explicit_cors_in_production),
+    # before this function can even run.
 
     if settings.SUPER_ADMIN_PASSWORD == "Admin@123":
         errors.append("SUPER_ADMIN_PASSWORD must be changed from its default value in production")
@@ -116,6 +118,28 @@ def validate_production_config() -> None:
         )
 
 
+def validate_worker_concurrency() -> None:
+    """Refuse to start if more than one worker process was requested.
+
+    Scheduled sweeps (`start_background_jobs`, below) and the /ws/messages
+    ticket store + socket registry (`app/services/messaging_ws.py`) are kept
+    in process memory - each worker would run its own independent copy of
+    the sweeps (duplicate emails/refunds/status flips) and would only see
+    the WebSocket connections opened against itself (breaking realtime
+    delivery to users connected to a different worker). Until those move to
+    a shared store (Redis pub/sub / locks), WEB_CONCURRENCY must stay 1.
+    """
+    workers = int(os.environ.get("WEB_CONCURRENCY", "1") or "1")
+    if workers > 1:
+        raise RuntimeError(
+            f"WEB_CONCURRENCY={workers} is not supported: background job sweeps and "
+            "/ws/messages state are process-local and would run/behave incorrectly "
+            "across multiple workers. Scale horizontally with separate single-worker "
+            "instances behind a load balancer instead, or set WEB_CONCURRENCY=1."
+        )
+
+
+validate_worker_concurrency()
 validate_production_config()
 
 

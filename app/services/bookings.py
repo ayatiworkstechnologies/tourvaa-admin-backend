@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.services.audit import log_audit
+from app.services.payments import serialize_payment
 from app.models.bookings import (
     Booking,
     BookingAccommodation,
@@ -354,7 +355,7 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
             "optional_activities": [serialize_activity(a) for a in booking.optional_activities],
             "accommodations": [serialize_accommodation(a) for a in booking.accommodations],
             "extensions": [serialize_extension(e) for e in booking.extensions],
-            "payments": [],
+            "payments": [serialize_payment(p) for p in booking.payments],
             "status_history": [serialize_status_history(h) for h in booking.status_history],
             "communications": [serialize_communication(c) for c in booking.communications],
             "price_breakdown": {

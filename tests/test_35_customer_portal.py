@@ -146,7 +146,7 @@ def test_customer_travellers_crud(customer_headers):
 # ---------------------------------------------------------------------------
 
 def test_customer_wishlist_list(customer_headers):
-    resp = requests.get(f"{BASE_URL}/customer/wishlist", headers=customer_headers, timeout=10)
+    resp = requests.get(f"{BASE_URL}/wishlist", headers=customer_headers, timeout=10)
     assert resp.status_code == 200, resp.text
     assert "items" in resp.json()
 
@@ -163,19 +163,19 @@ def test_customer_wishlist_crud_is_bound_to_user(customer_headers):
     profile = requests.get(f"{BASE_URL}/customer/profile", headers=customer_headers, timeout=10)
     user_id = profile.json()["data"]["user_id"]
 
-    created = requests.post(f"{BASE_URL}/customer/wishlist/{tour_id}", headers=customer_headers, timeout=10)
+    created = requests.post(f"{BASE_URL}/wishlist/{tour_id}", headers=customer_headers, timeout=10)
     assert created.status_code in (200, 201), created.text
     assert created.json()["data"]["user_id"] == user_id
 
-    duplicate = requests.post(f"{BASE_URL}/customer/wishlist/{tour_id}", headers=customer_headers, timeout=10)
+    duplicate = requests.post(f"{BASE_URL}/wishlist/{tour_id}", headers=customer_headers, timeout=10)
     assert duplicate.status_code == 200, duplicate.text
 
-    listed = requests.get(f"{BASE_URL}/customer/wishlist", headers=customer_headers, timeout=10)
+    listed = requests.get(f"{BASE_URL}/wishlist", headers=customer_headers, timeout=10)
     matches = [item for item in listed.json()["items"] if item["id"] == tour_id]
     assert len(matches) == 1
     assert matches[0]["user_id"] == user_id
 
-    deleted = requests.delete(f"{BASE_URL}/customer/wishlist/{tour_id}", headers=customer_headers, timeout=10)
+    deleted = requests.delete(f"{BASE_URL}/wishlist/{tour_id}", headers=customer_headers, timeout=10)
     assert deleted.status_code == 200, deleted.text
 
 

@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     # Countries / States / Cities fallback API (countrystatecity.in)
     COUNTRY_STATE_CITY_API_KEY: str = ""
 
+    # Viator Partner API (Basic Access) - powers the "External Day Trips"
+    # public section. The real, admin-editable values live in the
+    # api_settings DB table (Admin -> Settings -> API Settings), managed via
+    # app/services/settings.py / app/services/viator.py - these two are only
+    # a fallback for environments without DB access (scripts, CI). Both are
+    # optional: the section renders an empty state when no key is set
+    # anywhere instead of failing.
+    VIATOR_API_KEY: str = ""
+    VIATOR_AFFILIATE_PID: str = ""
+
     VAPID_PUBLIC_KEY: str = ""
     VAPID_PRIVATE_KEY_FILE: str = "vapid_private.pem"
     VAPID_MAILTO: str = "mailto:admin@tourvaa.com"
@@ -102,6 +112,20 @@ class Settings(BaseSettings):
         if not self.FRONTEND_URL.strip():
             self.FRONTEND_URL = (
                 LIVE_FRONTEND_URL if self.APP_ENV == "production" else LOCAL_FRONTEND_URL
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_explicit_cors_in_production(self) -> "Settings":
+        # Auth uses httpOnly cookies (see routers/auth.py), and browsers refuse
+        # credentialed requests against a wildcard CORS origin. A forgotten
+        # ALLOWED_ORIGINS in production silently drops the cookies instead of
+        # failing loudly, so refuse to boot rather than serve a broken login.
+        if self.APP_ENV == "production" and self.ALLOWED_ORIGINS.strip() == "*":
+            raise ValueError(
+                "ALLOWED_ORIGINS must be set to an explicit comma-separated origin "
+                "list in production - wildcard '*' disables credentialed CORS and "
+                "breaks cookie-based login."
             )
         return self
 
