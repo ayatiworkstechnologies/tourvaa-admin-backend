@@ -63,6 +63,9 @@ class ApiSettingsUpdate(BaseModel):
     sms_api_placeholder: Optional[str] = None
     brightlane_external_link: Optional[str] = None
     brightlane_external_link_placeholder: Optional[str] = None
+    viator_api_key: Optional[str] = None
+    viator_api_key_placeholder: Optional[str] = None
+    viator_affiliate_pid: Optional[str] = None
 
 
 class SmtpSettingsUpdate(BaseModel):

@@ -49,6 +49,10 @@ def _resource_type_for(content_type: str | None, filename: str) -> str:
         return "image"
     if lowered.endswith((".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif")):
         return "image"
+    if (content_type or "").startswith("video/"):
+        return "video"
+    if lowered.endswith((".mp4", ".webm", ".mov")):
+        return "video"
     return "raw"
 
 

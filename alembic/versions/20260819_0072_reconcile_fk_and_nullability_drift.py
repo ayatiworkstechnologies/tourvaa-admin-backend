@@ -72,12 +72,21 @@ def _existing_fk_names(inspector, table_name):
     return {fk["name"] for fk in inspector.get_foreign_keys(table_name)}
 
 
+def _existing_column_names(inspector, table_name):
+    return {col["name"] for col in inspector.get_columns(table_name)}
+
+
 def upgrade():
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
+    # tour_pricing.markup_value is dropped by the very next migration
+    # (20260819_0073); guard column existence so this still runs cleanly on
+    # a DB where 0073 has already been applied out of band, or where the
+    # column was renamed/removed for any other reason.
     for table_name, column_name, column_type in _NOT_NULL_COLUMNS:
-        op.alter_column(table_name, column_name, existing_type=column_type, nullable=False)
+        if column_name in _existing_column_names(inspector, table_name):
+            op.alter_column(table_name, column_name, existing_type=column_type, nullable=False)
 
     for fk_name, table_name, referent_table, local_col, remote_col in _FOREIGN_KEYS:
         if fk_name not in _existing_fk_names(inspector, table_name):
@@ -93,4 +102,5 @@ def downgrade():
             op.drop_constraint(fk_name, table_name, type_="foreignkey")
 
     for table_name, column_name, column_type in _NOT_NULL_COLUMNS:
-        op.alter_column(table_name, column_name, existing_type=column_type, nullable=True)
+        if column_name in _existing_column_names(inspector, table_name):
+            op.alter_column(table_name, column_name, existing_type=column_type, nullable=True)

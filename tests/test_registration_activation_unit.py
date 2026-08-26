@@ -86,7 +86,8 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     assert user.email_verified is True
     assert user.account_status == "ACTIVE"
     assert user.is_active is True
-    expected_approval = "pending" if user_type in {"SUPPLIER", "AFFILIATE"} else "not_required"
+
+    expected_approval = "pending" if user_type in {"SUPPLIER", "AFFILIATE", "AGENT"} else "not_required"
     assert user.approval_status == expected_approval
     selected_profile = profiles[profile_model]
     assert selected_profile.status == "active"

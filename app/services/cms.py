@@ -381,7 +381,7 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     db.add(item)
     db.flush()
     if not item.tour_code:
-        item.tour_code = f"{item.id:05d}"
+        item.tour_code = str(item.id)
     item.subcategory_links = [TourSubcategoryMap(subcategory_id=subcategory_id) for subcategory_id in subcategory_ids]
     if tour_id:
         # Editing an already-live tour's own fields is the same live-edit gap

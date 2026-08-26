@@ -17,7 +17,6 @@ from app.utils.email_templates import (
     registration_password_created_email,
 )
 from app.utils.mailer import send_email, try_send_email
-from app.models.audit import AuditLog
 from app.services.audit import log_audit
 from app.models.users import User, UserRole, UserStatusHistory
 from app.models.roles import Role
@@ -243,7 +242,7 @@ def register_unified_user(db: Session, data):
         role_id=role.id,
         user_type=data.account_type,
         is_active=False,
-        approval_status="pending" if data.account_type in {"SUPPLIER", "AFFILIATE"} else "not_required",
+        approval_status="pending" if data.account_type in {"SUPPLIER", "AFFILIATE", "AGENT"} else "not_required",
         email_verified=False,
         admin_verified=False,
         password_created_at=None,
@@ -334,7 +333,7 @@ def complete_registration(db: Session, token: str, password: str):
     user.email_verification_expires_at = None
     user.account_status = "ACTIVE"
     user.is_active = True
-    user.approval_status = "pending" if user.user_type in {"SUPPLIER", "AFFILIATE"} else "not_required"
+    user.approval_status = "pending" if user.user_type in {"SUPPLIER", "AFFILIATE", "AGENT"} else "not_required"
 
     customer = db.query(Customer).filter(Customer.user_id == user.id).first()
     if customer:
@@ -893,11 +892,9 @@ def verify_email(db: Session, token: str | None = ""):
 def get_login_history(db: Session, user: User, limit: int = 20):
     limit = max(1, min(limit, 100))
     rows = (
-        db.query(AuditLog)
-        .filter(AuditLog.entity_type == "auth")
-        .filter(AuditLog.action.in_(["login_success", "login_failed"]))
-        .filter(AuditLog.actor_user_id == user.id)
-        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        db.query(LoginHistory)
+        .filter(LoginHistory.user_id == user.id)
+        .order_by(LoginHistory.created_at.desc(), LoginHistory.id.desc())
         .limit(limit)
         .all()
     )
@@ -905,10 +902,12 @@ def get_login_history(db: Session, user: User, limit: int = 20):
     return [
         {
             "id": row.id,
-            "action": row.action,
+            "status": row.status,
+            "failure_reason": row.failure_reason,
+            "client_type": row.client_type,
+            "device_name": row.device_name,
             "ip_address": row.ip_address,
             "user_agent": row.user_agent,
-            "details": row.new_values or {},
             "created_at": row.created_at,
         }
         for row in rows

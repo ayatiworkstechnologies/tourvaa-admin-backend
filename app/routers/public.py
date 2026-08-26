@@ -6,7 +6,7 @@ import html as html_escape
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -18,6 +18,7 @@ from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.services.cms import _category, _city, _country, _subcategory, _tour
 from app.services.reviews import get_review_stats, list_tour_reviews
 from app.services.settings import sanitize_public_contact_setting
+from app.services.viator import is_configured as is_viator_configured, search_day_trips
 from app.schemas.cms import slugify
 from app.utils.ratelimit import check_rate_limit
 from app.models.tours import (
@@ -334,22 +335,22 @@ def public_tours(
         try:
             query = query.filter(Tour.number_of_days >= int(min_days))
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="min_days must be a number")
     if max_days:
         try:
             query = query.filter(Tour.number_of_days <= int(max_days))
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="max_days must be a number")
     if min_price:
         try:
             query = query.filter(Tour.price_start_per_person >= float(min_price))
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="min_price must be a number")
     if max_price:
         try:
             query = query.filter(Tour.price_start_per_person <= float(max_price))
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="max_price must be a number")
 
     calendar_query = db.query(TourCalendar.tour_id).filter(
         TourCalendar.status == "available",
@@ -655,3 +656,18 @@ def public_cities(db: Session = Depends(get_db), country: str = Query(default=""
     items = [{**_city(c), "tour_count": counts.get(c.id, 0)} for c in cities]
     items.sort(key=lambda item: (-item["tour_count"], item["city_name"]))
     return {"status": "success", "items": items}
+
+
+@router.get("/external-day-trips")
+def public_external_day_trips(db: Session = Depends(get_db)):
+    """Viator-sourced day trips - see app/services/viator.py. Always returns
+    200 with a (possibly empty) list; never fails the page on a Viator
+    outage or a missing API key."""
+    result = search_day_trips(db)
+    return {
+        "status": "success",
+        "configured": is_viator_configured(db),
+        "destination_name": result["destination_name"],
+        "stale": result["stale"],
+        "items": result["products"],
+    }

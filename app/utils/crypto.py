@@ -37,20 +37,25 @@ def _get_fernet():
 
 
 def encrypt_secret(value: str | None) -> str | None:
-    """Return an encrypted, prefixed string. Returns None/empty unchanged."""
+    """Return an encrypted, prefixed string. Returns None/empty unchanged.
+
+    Raises RuntimeError instead of storing plaintext when encryption is
+    unavailable or fails - a silent plaintext fallback would leak payment/API
+    secrets at rest.
+    """
     if not value:
         return value
     if value.startswith(_PREFIX):
         return value  # already encrypted
     f = _get_fernet()
     if not f:
-        return value  # encryption unavailable - store plain (safe fallback)
+        raise RuntimeError("crypto: encryption unavailable, refusing to store secret in plaintext")
     try:
         token = f.encrypt(value.encode()).decode()
         return f"{_PREFIX}{token}"
     except Exception as exc:
         logger.error("crypto: encryption failed: %s", exc)
-        return value
+        raise RuntimeError("crypto: encryption failed, refusing to store secret in plaintext") from exc
 
 
 def decrypt_secret(value: str | None) -> str | None:

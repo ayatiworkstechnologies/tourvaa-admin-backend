@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.cloudinary_client import upload_to_cloudinary
-from app.utils.media import detect_image_type, sanitize_filename
+from app.utils.media import detect_image_type, detect_video_type, sanitize_filename
 from app.utils.ratelimit import check_rate_limit
 from app.models.users import User
 
@@ -10,6 +10,7 @@ router = APIRouter(prefix="/uploads", tags=["Uploads"])
 
 MAX_IMAGE_SIZE = 2 * 1024 * 1024
 MAX_ADMIN_ASSET_SIZE = 10 * 1024 * 1024
+MAX_ADMIN_VIDEO_SIZE = 50 * 1024 * 1024
 ALLOWED_CONTENT_TYPES = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -77,26 +78,35 @@ async def upload_admin_asset(
     if not content:
         raise HTTPException(status_code=400, detail="File is required")
 
-    if len(content) > MAX_ADMIN_ASSET_SIZE:
-        raise HTTPException(status_code=400, detail="File must be 10MB or smaller")
-
     allowed_types = {
         "image/jpeg": "jpg",
         "image/png": "png",
         "image/webp": "webp",
         "image/avif": "avif",
         "application/pdf": "pdf",
+        "video/mp4": "mp4",
+        "video/webm": "webm",
     }
     extension = allowed_types.get(file.content_type or "")
 
     if not extension:
-        raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, AVIF, and PDF files are allowed")
+        raise HTTPException(status_code=400, detail="Only JPG, PNG, WEBP, AVIF, PDF, MP4, and WEBM files are allowed")
+
+    is_video = extension in {"mp4", "webm"}
+    max_size = MAX_ADMIN_VIDEO_SIZE if is_video else MAX_ADMIN_ASSET_SIZE
+    if len(content) > max_size:
+        raise HTTPException(status_code=400, detail=f"File must be {max_size // (1024 * 1024)}MB or smaller")
 
     if extension in {"jpg", "png", "webp", "avif"}:
         detected_type = detect_image_type(content)
         if detected_type not in ALLOWED_IMAGE_TYPES:
             raise HTTPException(status_code=400, detail="Invalid image file")
         extension = ALLOWED_IMAGE_TYPES[detected_type]
+    elif is_video:
+        detected_type = detect_video_type(content)
+        if detected_type is None:
+            raise HTTPException(status_code=400, detail="Invalid video file")
+        extension = detected_type
     elif not content.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="Invalid PDF file")
 

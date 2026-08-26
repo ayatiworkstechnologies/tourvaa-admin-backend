@@ -118,6 +118,10 @@ DEFAULT_API_SETTINGS = [
     {"api_name": "email_service", "api_key": "", "api_secret": "", "api_url": "", "is_enabled": False},
     {"api_name": "sms_service", "api_key": "", "api_secret": "", "api_url": "", "is_enabled": False},
     {"api_name": "brightlane", "api_key": "", "api_secret": "", "api_url": "", "is_enabled": False},
+    # api_key = Viator exp-api-key, api_secret = Viator affiliate Partner ID
+    # (PID). Read at runtime by app/services/viator.py for the public
+    # "External Day Trips" section.
+    {"api_name": "viator", "api_key": "", "api_secret": "", "api_url": "", "is_enabled": False},
 ]
 
 
@@ -638,10 +642,16 @@ def get_api_settings_payload(db: Session):
     email_service = rows.get("email_service")
     sms_service = rows.get("sms_service")
     brightlane = rows.get("brightlane")
+    viator = rows.get("viator")
 
     gm_key = decrypt_secret(google_maps.api_key if google_maps else "")
     em_key = decrypt_secret(email_service.api_key if email_service else "")
     sms_key = decrypt_secret(sms_service.api_key if sms_service else "")
+    viator_key = decrypt_secret(viator.api_key if viator else "")
+    # The Partner ID isn't a secret (it shows up in outbound URLs), so unlike
+    # api_key above it's returned in full rather than masked - the admin
+    # needs to be able to read it back to verify it, not just confirm it's set.
+    viator_pid = decrypt_secret(viator.api_secret if viator else "")
     return {
         "google_map_api_key": mask_secret(gm_key),
         "google_maps_api_placeholder": mask_secret(gm_key),
@@ -651,6 +661,9 @@ def get_api_settings_payload(db: Session):
         "sms_api_placeholder": mask_secret(sms_key),
         "brightlane_external_link": brightlane.api_url if brightlane else "",
         "brightlane_external_link_placeholder": brightlane.api_url if brightlane else "",
+        "viator_api_key": mask_secret(viator_key),
+        "viator_api_key_placeholder": mask_secret(viator_key),
+        "viator_affiliate_pid": viator_pid,
     }
 
 
@@ -669,6 +682,9 @@ def update_api_settings_payload(
         "sms_api_placeholder": ("sms_service", "api_key"),
         "brightlane_external_link": ("brightlane", "api_url"),
         "brightlane_external_link_placeholder": ("brightlane", "api_url"),
+        "viator_api_key": ("viator", "api_key"),
+        "viator_api_key_placeholder": ("viator", "api_key"),
+        "viator_affiliate_pid": ("viator", "api_secret"),
     }
 
     updates_by_api = {}
