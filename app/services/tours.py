@@ -12,6 +12,7 @@ from app.models.tours import (
     TourAccommodationExtra,
     TourCalendar,
     TourDiscount,
+    TourDiscountHistory,
     TourExclusion,
     TourExtension,
     TourGalleryImage,
@@ -28,6 +29,7 @@ from app.models.tours import (
 from app.schemas.tours import (
     AccommodationExtraPayload,
     CalendarPayload,
+    DiscountAmendment,
     DiscountPayload,
     ExtensionPayload,
     GalleryImagePayload,
@@ -641,6 +643,52 @@ def list_discounts(db: Session, tour_id: int) -> list[dict]:
     return [_ser_discount(o) for o in db.query(TourDiscount).filter(TourDiscount.tour_id == tour_id).all()]
 
 
+def _ser_discount_history(o: TourDiscountHistory) -> dict:
+    return {
+        "id": o.id, "discount_id": o.discount_id, "version_number": o.version_number,
+        "change_type": o.change_type, "discount_type": o.discount_type, "discount_value": o.discount_value,
+        "start_date": o.start_date, "end_date": o.end_date, "reason": o.reason,
+        "changed_by": o.changed_by, "changed_by_name": o.changed_by_user.name if o.changed_by_user else None,
+        "created_at": o.created_at,
+    }
+
+
+def _record_discount_version(db: Session, discount: TourDiscount, change_type: str, actor: User | None, reason: str | None = None) -> None:
+    """Append-only history row snapshotting the discount's state right after
+    a create/amend. The live TourDiscount row is still the one every pricing
+    and display code path reads (_active_discount, storefront pricing, etc)
+    -- this table exists so no change silently overwrites the prior state
+    without a record of what it was and who changed it."""
+    last_version = (
+        db.query(TourDiscountHistory.version_number)
+        .filter(TourDiscountHistory.discount_id == discount.id)
+        .order_by(TourDiscountHistory.version_number.desc())
+        .first()
+    )
+    db.add(TourDiscountHistory(
+        discount_id=discount.id,
+        version_number=(last_version[0] + 1) if last_version else 1,
+        change_type=change_type,
+        discount_name=discount.discount_name,
+        discount_type=discount.discount_type,
+        discount_value=discount.discount_value,
+        start_date=discount.start_date,
+        end_date=discount.end_date,
+        reason=reason,
+        changed_by=actor.id if actor else None,
+    ))
+
+
+def list_discount_history(db: Session, disc_id: int) -> list[dict]:
+    return [
+        _ser_discount_history(o) for o in
+        db.query(TourDiscountHistory)
+        .filter(TourDiscountHistory.discount_id == disc_id)
+        .order_by(TourDiscountHistory.version_number.desc())
+        .all()
+    ]
+
+
 def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: User, request: Request | None = None) -> dict:
     _require_tour(db, tour_id)
     if data.discount_code:
@@ -650,6 +698,8 @@ def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: Use
     payload = data.model_dump()
     o = TourDiscount(tour_id=tour_id, **payload)
     db.add(o)
+    db.flush()
+    _record_discount_version(db, o, "created", actor)
     log_audit(db, actor=actor, action="create_discount", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
@@ -657,27 +707,29 @@ def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: Use
     return _ser_discount(o)
 
 
-def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPayload, actor: User, request: Request | None = None) -> dict:
+def amend_discount(db: Session, tour_id: int, disc_id: int, data: DiscountAmendment, actor: User, request: Request | None = None) -> dict:
+    """Replaces free-form Edit: only a percentage/value change and/or a later
+    end date are allowed, and every amendment is recorded as a new
+    TourDiscountHistory version (see _record_discount_version) rather than
+    silently overwriting the original record."""
     o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
-    if data.discount_code and data.discount_code != o.discount_code:
-        existing = db.query(TourDiscount).filter(TourDiscount.discount_code == data.discount_code, TourDiscount.id != disc_id).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Discount code already exists")
-    for key, value in data.model_dump().items():
-        setattr(o, key, value)
-    log_audit(db, actor=actor, action="update_discount", entity_type="tour", entity_id=tour_id, request=request)
+    change_kinds = []
+    if data.new_end_date is not None:
+        if o.end_date is not None and data.new_end_date <= o.end_date:
+            raise HTTPException(status_code=400, detail="New end date must be later than the current end date")
+        o.end_date = data.new_end_date
+        change_kinds.append("validity_extended")
+    if data.new_discount_value is not None:
+        if o.discount_type == "percentage" and data.new_discount_value > 100:
+            raise HTTPException(status_code=400, detail="A percentage discount_value cannot exceed 100")
+        o.discount_value = data.new_discount_value
+        change_kinds.append("percentage_changed")
+    _record_discount_version(db, o, "_".join(change_kinds) or "amended", actor, reason=data.reason)
+    log_audit(db, actor=actor, action="amend_discount", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
     return _ser_discount(o)
-
-
-def delete_discount(db: Session, tour_id: int, disc_id: int, actor: User, request: Request | None = None):
-    o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
-    log_audit(db, actor=actor, action="delete_discount", entity_type="tour", entity_id=tour_id, request=request)
-    db.delete(o)
-    maybe_resubmit_for_review(db, tour_id, actor)
-    db.commit()
 
 
 # group-size discount tiers (supplier-defined, scoped to the whole Tour --
@@ -709,16 +761,11 @@ def list_group_discount_tiers(db: Session, tour_id: int) -> list[dict]:
 
 
 def create_group_discount_tier(db: Session, tour_id: int, data: GroupDiscountTierPayload, actor: User, request: Request | None = None) -> dict:
-    _require_tour(db, tour_id)
-    if data.status == "active":
-        _assert_no_tier_overlap(db, tour_id, data.min_pax, data.max_pax)
-    o = TourGroupDiscountTier(tour_id=tour_id, **data.model_dump())
-    db.add(o)
-    log_audit(db, actor=actor, action="create_group_discount_tier", entity_type="tour", entity_id=tour_id, request=request)
-    maybe_resubmit_for_review(db, tour_id, actor)
-    db.commit()
-    db.refresh(o)
-    return _ser_group_discount_tier(o)
+    # Group Discount is discontinued -- existing tiers on already-configured
+    # tours keep working (see services.bookings._resolve_group_discount) so
+    # historical pricing/commission math is untouched, but no new tier may
+    # be created.
+    raise HTTPException(status_code=410, detail="Group discount is no longer available. Use a tour discount instead.")
 
 
 def update_group_discount_tier(db: Session, tour_id: int, tier_id: int, data: GroupDiscountTierPayload, actor: User, request: Request | None = None) -> dict:
@@ -778,40 +825,34 @@ def create_global_discount(db: Session, data, actor: User, request: Request | No
             raise HTTPException(status_code=409, detail="Discount code already exists")
     o = TourDiscount(**data.model_dump())
     db.add(o)
+    db.flush()
+    _record_discount_version(db, o, "created", actor)
     log_audit(db, actor=actor, action="create_discount", entity_type="discount", entity_id=0, request=request)
     db.commit()
     db.refresh(o)
     return _ser_discount(o)
 
 
-def update_global_discount(db: Session, discount_id: int, data, actor: User, request: Request | None = None) -> dict:
+def amend_global_discount(db: Session, discount_id: int, data: DiscountAmendment, actor: User, request: Request | None = None) -> dict:
     o = db.query(TourDiscount).filter(TourDiscount.id == discount_id).first()
     if not o:
         raise HTTPException(status_code=404, detail="Discount not found")
-    _validate_discount_scope(data)
-    if data.tour_id:
-        _require_tour(db, data.tour_id)
-    if data.discount_code and data.discount_code != o.discount_code:
-        existing = db.query(TourDiscount).filter(
-            TourDiscount.discount_code == data.discount_code, TourDiscount.id != discount_id
-        ).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Discount code already exists")
-    for key, value in data.model_dump().items():
-        setattr(o, key, value)
-    log_audit(db, actor=actor, action="update_discount", entity_type="discount", entity_id=discount_id, request=request)
+    change_kinds = []
+    if data.new_end_date is not None:
+        if o.end_date is not None and data.new_end_date <= o.end_date:
+            raise HTTPException(status_code=400, detail="New end date must be later than the current end date")
+        o.end_date = data.new_end_date
+        change_kinds.append("validity_extended")
+    if data.new_discount_value is not None:
+        if o.discount_type == "percentage" and data.new_discount_value > 100:
+            raise HTTPException(status_code=400, detail="A percentage discount_value cannot exceed 100")
+        o.discount_value = data.new_discount_value
+        change_kinds.append("percentage_changed")
+    _record_discount_version(db, o, "_".join(change_kinds) or "amended", actor, reason=data.reason)
+    log_audit(db, actor=actor, action="amend_discount", entity_type="discount", entity_id=discount_id, request=request)
     db.commit()
     db.refresh(o)
     return _ser_discount(o)
-
-
-def delete_global_discount(db: Session, discount_id: int, actor: User, request: Request | None = None):
-    o = db.query(TourDiscount).filter(TourDiscount.id == discount_id).first()
-    if not o:
-        raise HTTPException(status_code=404, detail="Discount not found")
-    log_audit(db, actor=actor, action="delete_discount", entity_type="discount", entity_id=discount_id, request=request)
-    db.delete(o)
-    db.commit()
 
 
 # price calculation

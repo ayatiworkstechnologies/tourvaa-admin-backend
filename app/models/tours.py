@@ -321,6 +321,35 @@ class TourDiscount(Base):
     country = relationship("Country", foreign_keys=[country_id])
 
 
+class TourDiscountHistory(Base):
+    """Append-only version log for TourDiscount. Editing a discount no longer
+    mutates it freely (see services.tours.amend_discount) -- only extending
+    the validity window or changing the percentage/value is allowed, and each
+    such change writes a new row here (version_number incrementing) instead
+    of just overwriting the live TourDiscount row silently. The live
+    TourDiscount row is still updated in place so existing pricing/display
+    code (_active_discount, storefront pricing) keeps reading current values
+    without any change; this table exists purely as the audit trail."""
+
+    __tablename__ = "tour_discount_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    discount_id = Column(Integer, ForeignKey("tour_discounts.id"), nullable=False, index=True)
+    version_number = Column(Integer, nullable=False)
+    change_type = Column(String(30), nullable=False)  # created | validity_extended | percentage_changed
+    discount_name = Column(String(255), nullable=False)
+    discount_type = Column(String(20), nullable=False)
+    discount_value = Column(Numeric(12, 2), nullable=False)
+    start_date = Column(DateTime(timezone=True), nullable=True)
+    end_date = Column(DateTime(timezone=True), nullable=True)
+    reason = Column(String(500), nullable=True)
+    changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    discount = relationship("TourDiscount", foreign_keys=[discount_id])
+    changed_by_user = relationship("User", foreign_keys=[changed_by])
+
+
 class TourGroupDiscountTier(Base):
     """Supplier-defined group-size discount, scoped to the whole Tour (not a
     single TourPricing slab). When a booking's total traveller count

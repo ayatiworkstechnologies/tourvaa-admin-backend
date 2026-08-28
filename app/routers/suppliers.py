@@ -197,6 +197,7 @@ def my_commission_calculator(
         storefront_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
         storefront_base = money(storefront_adult) * adults + money(storefront_child) * children
         _tier, _amount, group_discount_ratio = _resolve_group_discount(db, tour_id, seat_travellers, storefront_base)
+        currency = slab.currency or tour.currency or "USD"
     else:
         if adult_price is None:
             raise HTTPException(status_code=400, detail="adult_price is required when tour_id is not provided")
@@ -204,6 +205,10 @@ def my_commission_calculator(
         resolved_child_price = money(child_price or 0)
         group_discount_ratio = money(0)
         slab = None
+        # No tour/slab given -- there is no currency to derive this manual
+        # estimate from, so it is explicitly labeled as the platform base
+        # currency rather than silently assumed.
+        currency = "USD"
 
     effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
 
@@ -225,6 +230,7 @@ def my_commission_calculator(
         "data": {
             "adults": adults,
             "children": children,
+            "currency": currency,
             "adult_price": str(resolved_adult_price),
             "child_price": str(resolved_child_price),
             # Requirement: show the commission calculation separately for

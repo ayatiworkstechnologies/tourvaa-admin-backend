@@ -18,7 +18,7 @@ from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.services.cms import _category, _city, _country, _subcategory, _tour
 from app.services.reviews import get_review_stats, list_tour_reviews
 from app.services.settings import sanitize_public_contact_setting
-from app.services.viator import is_configured as is_viator_configured, search_day_trips
+from app.services.viator import build_generic_affiliate_url, is_configured as is_viator_configured, search_day_trips
 from app.schemas.cms import slugify
 from app.utils.ratelimit import check_rate_limit
 from app.models.tours import (
@@ -543,6 +543,9 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "seo_title": tour.seo_title,
             "seo_description": tour.seo_description,
             "booking_deposit": tour.booking_deposit or None,
+            "deposit_type": tour.deposit_type,
+            "deposit_percentage": tour.deposit_percentage,
+            "deposit_cutoff_days": tour.deposit_cutoff_days,
             "balance_payment_deadline_days": tour.balance_payment_deadline_days,
             "tour_video_url": tour.tour_video_url or None,
             "overview": _ser_overview(overview) if overview else None,
@@ -671,3 +674,15 @@ def public_external_day_trips(db: Session = Depends(get_db)):
         "stale": result["stale"],
         "items": result["products"],
     }
+
+
+@router.get("/viator/redirect-url")
+def public_viator_redirect_url(db: Session = Depends(get_db)):
+    """Affiliate-tagged link straight to viator.com, for hand-offs not tied
+    to one product (see services.viator.build_generic_affiliate_url). The
+    affiliate PID alone is enough to attribute the click even without a
+    Partner API key configured."""
+    from app.services.viator import _credentials
+
+    _api_key, affiliate_pid = _credentials(db)
+    return {"status": "success", "url": build_generic_affiliate_url(affiliate_pid)}
