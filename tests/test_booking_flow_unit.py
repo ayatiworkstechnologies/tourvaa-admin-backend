@@ -169,9 +169,29 @@ def customer_user(user_id=42):
     return SimpleNamespace(id=user_id, role=SimpleNamespace(slug="customer"))
 
 
-def test_gateway_accepts_partial_payment_within_outstanding_balance():
-    amount = _validate_payment_request(payment_booking(), "300.00", customer_user())
+def test_gateway_rejects_partial_payment_without_a_configured_deposit():
+    # No tour attached (or a tour with no deposit configured) means the
+    # booking has no supplier-defined deposit floor, so any amount below
+    # the full outstanding balance must be rejected rather than accepted
+    # as an arbitrary partial payment.
+    with pytest.raises(HTTPException) as exc:
+        _validate_payment_request(payment_booking(), "300.00", customer_user())
+    assert exc.value.status_code == 400
+
+
+def test_gateway_accepts_a_deposit_at_or_above_the_configured_minimum():
+    tour = SimpleNamespace(deposit_type="fixed", booking_deposit=200, deposit_cutoff_days=None)
+    row = payment_booking(tour=tour)
+    amount = _validate_payment_request(row, "300.00", customer_user())
     assert str(amount) == "300.00"
+
+
+def test_gateway_rejects_a_deposit_below_the_configured_minimum():
+    tour = SimpleNamespace(deposit_type="fixed", booking_deposit=200, deposit_cutoff_days=None)
+    row = payment_booking(tour=tour)
+    with pytest.raises(HTTPException) as exc:
+        _validate_payment_request(row, "100.00", customer_user())
+    assert exc.value.status_code == 400
 
 
 def test_gateway_rejects_overpayment():

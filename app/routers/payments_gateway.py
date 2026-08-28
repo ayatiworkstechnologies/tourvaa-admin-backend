@@ -24,7 +24,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.bookings import Booking
 from app.auth.permissions import get_current_user
-from app.utils.money import money, utcnow
+from app.utils.money import as_aware_utc, money, utcnow
 from app.utils.ratelimit import check_rate_limit
 from app.services.payments_gateway import get_paypal, get_stripe
 from app.models.payments import Payment, PaymentTransaction
@@ -122,6 +122,37 @@ def _pending_gateway_payments_total(db: Session, booking_id: int) -> Decimal:
     return money(total or 0)
 
 
+def _minimum_deposit_amount(booking: Booking) -> Decimal:
+    """The lowest amount the tour's supplier-configured deposit rule allows
+    for this booking, or the full amount_pending if a deposit is no longer
+    allowed (cutoff passed, or no deposit configured). Does not touch the
+    balance-due-date itself -- only the deposit floor and its own
+    days-before-departure cutoff, which are independent client-confirmed
+    knobs (see Tour.deposit_type/deposit_percentage/deposit_cutoff_days)."""
+    full = money(booking.amount_pending or 0)
+    tour = getattr(booking, "tour", None)
+    if not tour:
+        return full
+
+    cutoff_days = getattr(tour, "deposit_cutoff_days", None)
+    if cutoff_days is not None and booking.tour_start_date is not None:
+        days_to_departure = (as_aware_utc(booking.tour_start_date) - utcnow()).days
+        if days_to_departure < cutoff_days:
+            return full
+
+    deposit_type = getattr(tour, "deposit_type", "fixed") or "fixed"
+    if deposit_type == "percentage":
+        pct = getattr(tour, "deposit_percentage", None)
+        if not pct:
+            return full
+        return money(full * Decimal(str(pct)) / Decimal("100"))
+
+    fixed = getattr(tour, "booking_deposit", None)
+    if not fixed:
+        return full
+    return money(min(Decimal(str(fixed)), full))
+
+
 def _validate_payment_request(booking: Booking, amount: Decimal, current_user, already_pending: Decimal = Decimal("0")) -> Decimal:
     _ensure_booking_payment_access(booking, current_user)
     if booking.booking_status in {"cancelled", "declined", "completed", "refunded"}:
@@ -135,6 +166,12 @@ def _validate_payment_request(booking: Booking, amount: Decimal, current_user, a
         raise HTTPException(status_code=409, detail="This booking has no outstanding balance")
     if requested > outstanding:
         raise HTTPException(status_code=400, detail=f"Payment amount cannot exceed the outstanding balance of {outstanding:.2f}")
+    if requested < outstanding:
+        minimum = _minimum_deposit_amount(booking)
+        if minimum >= money(booking.amount_pending or 0):
+            raise HTTPException(status_code=400, detail="A deposit is no longer available for this booking -- full payment is required")
+        if requested < minimum:
+            raise HTTPException(status_code=400, detail=f"Deposit must be at least {minimum:.2f}")
     return requested
 
 

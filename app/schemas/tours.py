@@ -387,6 +387,23 @@ class GlobalDiscountPayload(DiscountPayload):
         return v
 
 
+class DiscountAmendment(BaseModel):
+    """Replaces free-form editing of a discount: a supplier/admin may only
+    extend the validity window and/or change the percentage/value, and each
+    amendment is recorded as a new TourDiscountHistory version rather than
+    silently overwriting the original record."""
+
+    new_discount_value: float | None = Field(default=None, ge=0)
+    new_end_date: datetime | None = None
+    reason: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def require_a_change(self) -> "DiscountAmendment":
+        if self.new_discount_value is None and self.new_end_date is None:
+            raise ValueError("Provide a new percentage/value and/or a new (later) end date")
+        return self
+
+
 # group-size discount tier, scoped to the whole Tour (not a pricing slab) -
 # see models.tours.TourGroupDiscountTier for why this is a separate concept
 # from DiscountPayload (promo codes).

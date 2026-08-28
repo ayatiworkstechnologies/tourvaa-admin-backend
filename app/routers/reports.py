@@ -643,20 +643,29 @@ def my_earnings_report(
     from app.services.supplier_ledger import get_supplier_statement
     supplier = get_actor_supplier(db, current_user)
     statement = get_supplier_statement(db, supplier.id)
+    # Grouped by currency -- a supplier with bookings in more than one
+    # currency must never have those totals blended into one unlabeled
+    # number (see services.supplier_ledger.get_supplier_statement).
     return {
         "status": "success",
         "data": {
-            "total_sales": statement["total_gross"],
-            "platform_commission": statement["total_commission"],
-            # No adjustment/refund-deduction line-item model exists yet (see
-            # the equivalent note on /reports/supplier-payout-report) - a
-            # refunded pending ledger row is simply excluded from the totals
-            # above rather than itemized, so this is honestly 0.
-            "refund_deductions": _money(0),
-            "adjustments": _money(0),
-            "net_earnings": statement["total_net_payable"],
-            "paid_earnings": statement["total_paid"],
-            "pending_earnings": statement["total_pending"],
+            "by_currency": [
+                {
+                    "currency": t["currency"],
+                    "total_sales": t["total_gross"],
+                    "platform_commission": t["total_commission"],
+                    # No adjustment/refund-deduction line-item model exists yet
+                    # (see the equivalent note on /reports/supplier-payout-report)
+                    # - a refunded pending ledger row is simply excluded from the
+                    # totals above rather than itemized, so this is honestly 0.
+                    "refund_deductions": _money(0),
+                    "adjustments": _money(0),
+                    "net_earnings": t["total_net_payable"],
+                    "paid_earnings": t["total_paid"],
+                    "pending_earnings": t["total_pending"],
+                }
+                for t in statement["totals_by_currency"]
+            ],
         },
     }
 
@@ -714,7 +723,7 @@ REPORT_FETCHERS = {
     "tour-performance-report": lambda db, params, actor: tour_performance_report(None, None, None, db, actor)["data"],
     "cancellation-refund-report": lambda db, params, actor: cancellation_refund_report(params, None, db, actor)["data"],
     "my-bookings": lambda db, params, actor: my_bookings_report("", "", "", "", db, actor)["data"],
-    "my-earnings": lambda db, params, actor: [my_earnings_report(db, actor)["data"]],
+    "my-earnings": lambda db, params, actor: my_earnings_report(db, actor)["data"]["by_currency"],
     "my-travellers": lambda db, params, actor: my_travellers_report(db, actor)["data"],
 }
 

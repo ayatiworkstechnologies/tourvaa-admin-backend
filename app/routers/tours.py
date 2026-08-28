@@ -9,6 +9,7 @@ from app.schemas.tours import (
     AccommodationExtraPayload,
     AvailabilityConfigPayload,
     CalendarPayload,
+    DiscountAmendment,
     DiscountPayload,
     ExtensionPayload,
     GalleryImagePayload,
@@ -28,6 +29,8 @@ from app.schemas.tours import (
 from app.services.tour_availability import get_availability_config, save_availability_config
 from app.services.tours import (
     add_similar_tour,
+    amend_discount,
+    amend_global_discount,
     calculate_price,
     create_accommodation,
     create_activity,
@@ -46,11 +49,9 @@ from app.services.tours import (
     delete_accommodation,
     delete_activity,
     delete_calendar_entry,
-    delete_discount,
     delete_exclusion,
     delete_extension,
     delete_gallery_image,
-    delete_global_discount,
     delete_group_discount_tier,
     delete_highlight,
     delete_inclusion,
@@ -63,6 +64,7 @@ from app.services.tours import (
     list_activities,
     list_all_discounts,
     list_calendar,
+    list_discount_history,
     list_discounts,
     list_group_discount_tiers,
     list_exclusions,
@@ -79,11 +81,9 @@ from app.services.tours import (
     update_accommodation,
     update_activity,
     update_calendar_entry,
-    update_discount,
     update_exclusion,
     update_extension,
     update_gallery_image,
-    update_global_discount,
     update_group_discount_tier,
     update_highlight,
     update_inclusion,
@@ -509,17 +509,19 @@ def add_discount(tour_id: int, data: DiscountPayload, request: Request, db: Sess
     return {"status": "success", "data": create_discount(db, tour_id, data, current_user, request)}
 
 
-@router.put("/{tour_id}/discounts/{discount_id}")
-def edit_discount(tour_id: int, discount_id: int, data: DiscountPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+@router.patch("/{tour_id}/discounts/{discount_id}/amend")
+def amend_tour_discount(tour_id: int, discount_id: int, data: DiscountAmendment, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
     _assert_supplier_owns_tour(db, tour_id, current_user)
-    return {"status": "success", "data": update_discount(db, tour_id, discount_id, data, current_user, request)}
+    return {"status": "success", "data": amend_discount(db, tour_id, discount_id, data, current_user, request)}
 
 
-@router.delete("/{tour_id}/discounts/{discount_id}")
-def remove_discount(tour_id: int, discount_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
-    delete_discount(db, tour_id, discount_id, current_user, request)
-    return {"status": "success", "message": "Discount deleted"}
+@router.get("/{tour_id}/discounts/{discount_id}/history")
+def tour_discount_history(tour_id: int, discount_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
+    from app.services.tours import _child_or_404
+    from app.models.tours import TourDiscount
+    _child_or_404(db, TourDiscount, discount_id, tour_id, "Discount")
+    return {"status": "success", "data": list_discount_history(db, discount_id)}
 
 
 # group-size discount tiers -- supplier-defined, applies to the whole Tour
@@ -593,25 +595,23 @@ def add_global_discount(
     return {"status": "success", "data": create_global_discount(db, data, current_user, request)}
 
 
-@discounts_router.put("/{discount_id}")
-def edit_global_discount(
+@discounts_router.patch("/{discount_id}/amend")
+def amend_global_discount_route(
     discount_id: int,
-    data: GlobalDiscountPayload,
+    data: DiscountAmendment,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission(EDIT)),
 ):
     _reject_supplier_global_discount_access(current_user)
-    return {"status": "success", "data": update_global_discount(db, discount_id, data, current_user, request)}
+    return {"status": "success", "data": amend_global_discount(db, discount_id, data, current_user, request)}
 
 
-@discounts_router.delete("/{discount_id}")
-def remove_global_discount(
+@discounts_router.get("/{discount_id}/history")
+def global_discount_history(
     discount_id: int,
-    request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_any_permission(EDIT)),
+    current_user: User = Depends(require_any_permission(VIEW)),
 ):
     _reject_supplier_global_discount_access(current_user)
-    delete_global_discount(db, discount_id, current_user, request)
-    return {"status": "success", "message": "Discount deleted"}
+    return {"status": "success", "data": list_discount_history(db, discount_id)}

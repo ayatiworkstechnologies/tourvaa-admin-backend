@@ -63,6 +63,15 @@ def _headers(api_key: str) -> dict[str, str]:
     }
 
 
+def build_generic_affiliate_url(affiliate_pid: str) -> str:
+    """Affiliate-tagged link to viator.com's homepage, for hand-offs that
+    aren't about one specific product (e.g. the "Viator" duration option) --
+    same pid/mcid/medium/campaign convention as build_affiliate_url below."""
+    if not affiliate_pid:
+        return VIATOR_SITE_BASE
+    return f"{VIATOR_SITE_BASE}/?pid={affiliate_pid}&mcid=42383&medium=link&campaign=external-day-trips"
+
+
 def build_affiliate_url(product_url: str | None, product_code: str, affiliate_pid: str) -> str:
     """Deep-link out to viator.com, tagged with the affiliate PID when we have one.
 

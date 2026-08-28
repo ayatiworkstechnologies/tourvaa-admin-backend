@@ -153,23 +153,30 @@ def list_all_ledgers(db: Session, page: int = 1, limit: int = 20, supplier_id: O
 
 
 def get_supplier_statement(db: Session, supplier_id: int) -> dict:
+    """Per-currency totals -- a supplier with ledger entries in more than one
+    currency must never have those amounts summed into one blended,
+    unlabeled number, so totals are grouped by currency rather than a single
+    flat total_gross/total_commission/etc."""
     supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
     rows = db.query(SupplierLedger).options(joinedload(SupplierLedger.supplier), joinedload(SupplierLedger.booking)).filter(SupplierLedger.supplier_id == supplier_id).all()
-    total_gross = sum(money(r.gross_amount) for r in rows)
-    total_commission = sum(money(r.commission_amount) for r in rows)
-    total_net = sum(money(r.net_payable) for r in rows)
-    total_paid = sum(money(r.amount_paid) for r in rows)
-    total_pending = sum(money(r.amount_pending) for r in rows)
+    by_currency: dict[str, dict] = {}
+    for r in rows:
+        cur = r.currency or "USD"
+        totals = by_currency.setdefault(cur, {"currency": cur, "total_gross": Decimal("0"), "total_commission": Decimal("0"), "total_net_payable": Decimal("0"), "total_paid": Decimal("0"), "total_pending": Decimal("0")})
+        totals["total_gross"] = money(totals["total_gross"] + money(r.gross_amount))
+        totals["total_commission"] = money(totals["total_commission"] + money(r.commission_amount))
+        totals["total_net_payable"] = money(totals["total_net_payable"] + money(r.net_payable))
+        totals["total_paid"] = money(totals["total_paid"] + money(r.amount_paid))
+        totals["total_pending"] = money(totals["total_pending"] + money(r.amount_pending))
     return {
         "supplier_id": supplier_id,
         "supplier_name": supplier.supplier_name,
-        "total_gross": str(total_gross),
-        "total_commission": str(total_commission),
-        "total_net_payable": str(total_net),
-        "total_paid": str(total_paid),
-        "total_pending": str(total_pending),
+        "totals_by_currency": [
+            {**t, "total_gross": str(t["total_gross"]), "total_commission": str(t["total_commission"]), "total_net_payable": str(t["total_net_payable"]), "total_paid": str(t["total_paid"]), "total_pending": str(t["total_pending"])}
+            for t in by_currency.values()
+        ],
         "entries": [_serialize_ledger(r) for r in rows],
     }
 
@@ -237,7 +244,17 @@ def _select_payout_ledgers(db: Session, supplier_id: int, data: SupplierPayoutCr
         ledger_rows = query.filter(
             SupplierLedger.status.in_(("pending", "partial")),
             SupplierLedger.amount_pending > 0,
-        ).order_by(SupplierLedger.id.asc()).with_for_update().all()
+        )
+        # A supplier with ledger entries in more than one currency must have
+        # a currency picked (either explicitly or implied by the first
+        # matching row below) before auto-selecting rows -- otherwise the
+        # payout total would silently blend unlike-currency amounts.
+        if data.currency:
+            ledger_rows = ledger_rows.filter(SupplierLedger.currency == data.currency)
+        ledger_rows = ledger_rows.order_by(SupplierLedger.id.asc()).with_for_update().all()
+        if not data.currency and ledger_rows:
+            first_currency = ledger_rows[0].currency
+            ledger_rows = [r for r in ledger_rows if r.currency == first_currency]
         if data.amount is not None:
             requested = money(data.amount)
             selected: list[SupplierLedger] = []
@@ -250,6 +267,9 @@ def _select_payout_ledgers(db: Session, supplier_id: int, data: SupplierPayoutCr
             ledger_rows = selected
     if not ledger_rows:
         raise HTTPException(status_code=404, detail="No payable ledger entries found for this supplier")
+    currencies = {r.currency for r in ledger_rows}
+    if len(currencies) > 1:
+        raise HTTPException(status_code=400, detail=f"Selected ledger entries span multiple currencies ({', '.join(sorted(currencies))}); a payout must be in a single currency")
     return ledger_rows
 
 

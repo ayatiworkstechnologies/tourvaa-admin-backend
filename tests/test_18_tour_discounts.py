@@ -53,39 +53,42 @@ def test_discount_validation_missing_required(headers, first_tour_id):
 
 
 @skip_if_readonly()
-def test_update_discount(headers, first_tour_id):
+def test_amend_discount_changes_percentage(headers, first_tour_id):
+    # Free-form Edit is removed -- only an amendment (percentage and/or a
+    # later end date) is allowed, via PATCH .../amend.
     if not _DISCOUNT_ID:
         pytest.skip("No discount created")
-    resp = requests.put(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}",
-                        headers=headers, json={
-                            "discount_name": unique("UpdatedDiscount"),
-                            "discount_type": "percentage",
-                            "discount_value": 15.0,
-                            "valid_from": "2027-01-01T00:00:00",
-                            "valid_to": "2027-12-31T23:59:59",
-                        }, timeout=10)
-    assert resp.status_code in (200, 201, 204)
+    resp = requests.patch(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}/amend",
+                          headers=headers, json={"new_discount_value": 15.0}, timeout=10)
+    assert resp.status_code in (200, 201, 204), resp.text
 
 
 @skip_if_readonly()
-def test_update_discount_status_via_put(headers, first_tour_id):
+def test_amend_discount_requires_a_change(headers, first_tour_id):
     if not _DISCOUNT_ID:
         pytest.skip("No discount created")
-    # Status is updated via PUT (no separate PATCH/status endpoint for discounts)
-    resp = requests.put(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}",
-                        headers=headers, json={
-                            "discount_name": unique("StatusTest"),
-                            "discount_type": "percentage",
-                            "discount_value": 5.0,
-                            "status": "inactive",
-                        }, timeout=10)
-    assert resp.status_code in (200, 204), resp.text
+    resp = requests.patch(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}/amend",
+                          headers=headers, json={}, timeout=10)
+    assert resp.status_code in (400, 422), resp.text
 
 
-@skip_if_readonly()
-def test_delete_discount(headers, first_tour_id):
+def test_discount_history_lists_versions(headers, first_tour_id):
     if not _DISCOUNT_ID:
         pytest.skip("No discount created")
-    resp = requests.delete(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}",
-                           headers=headers, timeout=10)
-    assert resp.status_code in (200, 204)
+    resp = requests.get(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}/history",
+                        headers=headers, timeout=10)
+    assert resp.status_code == 200
+    data = resp.json().get("data", [])
+    assert isinstance(data, list)
+    assert len(data) >= 1
+
+
+def test_discount_edit_and_delete_are_removed(headers, first_tour_id):
+    if not _DISCOUNT_ID:
+        pytest.skip("No discount created")
+    put_resp = requests.put(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}",
+                            headers=headers, json={"discount_name": "x"}, timeout=10)
+    assert put_resp.status_code in (404, 405)
+    delete_resp = requests.delete(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}",
+                                  headers=headers, timeout=10)
+    assert delete_resp.status_code in (404, 405)

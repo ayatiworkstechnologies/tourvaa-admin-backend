@@ -128,6 +128,14 @@ class Tour(Base):
     tax_percentage = Column(Float, default=0, nullable=False)
     service_fee = Column(Float, default=0, nullable=False)
     booking_deposit = Column(Float, default=0, nullable=False)
+    # "percentage" -> deposit_percentage applies to the booking total; "fixed" (default,
+    # preserves existing behavior) -> booking_deposit is a flat currency amount.
+    deposit_type = Column(String(20), default="fixed", nullable=False)
+    deposit_percentage = Column(Float, nullable=True)
+    # How many days before departure a deposit is still offered to the customer; past
+    # this cutoff, full payment is required. Distinct from balance_payment_deadline_days,
+    # which governs when the remaining balance is due for a deposit already taken.
+    deposit_cutoff_days = Column(Integer, nullable=True)
     balance_payment_deadline_days = Column(Integer, nullable=True)
     # When True (default - preserves today's behavior for every existing tour),
     # a paid booking with an assigned supplier still waits on supplier

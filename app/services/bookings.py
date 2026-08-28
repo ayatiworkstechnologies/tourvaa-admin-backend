@@ -932,6 +932,18 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     db.commit()
     db.refresh(booking)
 
+    if booking.booking_source == "agent" and payment_status in {"credit_approval_pending", "bank_transfer_pending"}:
+        # Agent "Reserve Now" -- no deposit taken, so an invoice for the full
+        # outstanding amount is generated and emailed immediately rather than
+        # waiting on the on-demand Download Invoice action.
+        try:
+            from app.schemas.invoices import InvoiceEmailRequest, InvoiceGenerateRequest
+            from app.services.invoices import email_invoice_to_customer, generate_invoice
+            invoice = generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id), actor, request)
+            email_invoice_to_customer(db, invoice["id"], InvoiceEmailRequest(), actor, request)
+        except Exception:
+            logger.warning("Reservation invoice generation/email failed for booking %s", booking.id, exc_info=True)
+
     from app.utils.email_templates import booking_confirmation_email
     login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
     _send_booking_email(

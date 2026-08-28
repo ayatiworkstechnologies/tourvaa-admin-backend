@@ -137,6 +137,9 @@ class TourPayload(BaseModel):
     tax_percentage: float = Field(default=0, ge=0)
     service_fee: float = Field(default=0, ge=0)
     booking_deposit: float = Field(default=0, ge=0)
+    deposit_type: str = Field(default="fixed", max_length=20)
+    deposit_percentage: float | None = Field(default=None, ge=0, le=100)
+    deposit_cutoff_days: int | None = Field(default=None, ge=0)
     balance_payment_deadline_days: int | None = Field(default=None, ge=0)
     requires_supplier_confirmation: bool = Field(default=True)
     seo_title: str = Field(default="", max_length=180)
@@ -185,4 +188,12 @@ class TourPayload(BaseModel):
         value = value.strip().lower()
         if value not in TOUR_PRICING_TYPES:
             raise ValueError("Invalid pricing type")
+        return value
+
+    @field_validator("deposit_type")
+    @classmethod
+    def validate_deposit_type(cls, value: str):
+        value = value.strip().lower()
+        if value not in {"fixed", "percentage"}:
+            raise ValueError("Invalid deposit type")
         return value
