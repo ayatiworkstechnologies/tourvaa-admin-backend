@@ -62,8 +62,8 @@ def delete_destination(item_id: int, db: Session = Depends(get_db), _=Depends(re
 # popular tours
 
 @router.get("/popular-tours")
-def list_popular_tours(pagination=Depends(pagination_params), db: Session = Depends(get_db)):
-    return {"status": "success", **service.list_popular_tours(db, pagination["page"], pagination["limit"])}
+def list_popular_tours(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_popular_tours(db, pagination["page"], pagination["limit"], published_only, active_only)}
 
 @router.post("/popular-tours")
 def create_popular_tour(data: PopularTourPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
@@ -78,8 +78,8 @@ def delete_popular_tour(item_id: int, db: Session = Depends(get_db), _=Depends(r
 # tours on deals
 
 @router.get("/tours-on-deals")
-def list_deals(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
-    return {"status": "success", **service.list_deals(db, pagination["page"], pagination["limit"], active_only)}
+def list_deals(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_deals(db, pagination["page"], pagination["limit"], active_only, published_only)}
 
 @router.post("/tours-on-deals")
 def create_deal(data: TourOnDealPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):

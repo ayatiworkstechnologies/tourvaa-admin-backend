@@ -148,7 +148,20 @@ def delete_destination(db, item_id): _delete(db, PopularDestination, item_id, "D
 
 # popular tours
 
-def list_popular_tours(db, page, limit): return _list(db, PopularTour, lambda row: _s_popular_tour(row, db), page, limit)
+def list_popular_tours(db, page, limit, published_only=False, active_only=False):
+    # published_only=True (used by the public homepage) drops rows whose
+    # pinned tour is no longer published - a tour can be unpublished (or
+    # deleted then id-reused) after being pinned here, and without this
+    # filter the public site would try to fetch a tour it can't see,
+    # 404ing needlessly. Admin's CMS list still sees every row (including
+    # stale pins) so they can find and remove them.
+    q = db.query(PopularTour)
+    if active_only:
+        q = q.filter(PopularTour.is_active == True)  # noqa: E712
+    if published_only:
+        q = q.join(Tour, Tour.id == PopularTour.tour_id).filter(Tour.status == "published")
+    q = q.order_by(PopularTour.sort_order.asc())
+    return _paginate(q, page, limit, lambda row: _s_popular_tour(row, db))
 def create_popular_tour(db, data: PopularTourPayload):
     if not db.query(Tour).filter(Tour.id == data.tour_id).first():
         raise HTTPException(status_code=400, detail="Selected tour does not exist")
@@ -161,7 +174,16 @@ def delete_popular_tour(db, item_id): _delete(db, PopularTour, item_id, "Popular
 
 # tours on deals
 
-def list_deals(db, page, limit, active_only=False): return _list(db, TourOnDeal, lambda row: _s_deal(row, db), page, limit, active_only)
+def list_deals(db, page, limit, active_only=False, published_only=False):
+    # published_only - see the comment on list_popular_tours above; same
+    # stale-pin problem applies here.
+    q = db.query(TourOnDeal)
+    if active_only:
+        q = q.filter(TourOnDeal.is_active == True)  # noqa: E712
+    if published_only:
+        q = q.join(Tour, Tour.id == TourOnDeal.tour_id).filter(Tour.status == "published")
+    q = q.order_by(TourOnDeal.sort_order.asc())
+    return _paginate(q, page, limit, lambda row: _s_deal(row, db))
 def create_deal(db, data: TourOnDealPayload):
     if not db.query(Tour).filter(Tour.id == data.tour_id).first():
         raise HTTPException(status_code=400, detail="Selected tour does not exist")
