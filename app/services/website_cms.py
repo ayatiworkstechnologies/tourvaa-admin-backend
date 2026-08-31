@@ -3,6 +3,7 @@ from typing import Optional
 
 import bleach
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.utils.money import utcnow
@@ -111,7 +112,11 @@ def _list(db, model, serializer, page, limit, active_only=False):
 def _create(db, model, payload_dict, serializer):
     obj = model(**payload_dict)
     db.add(obj)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Invalid reference id (e.g. country/city/tour not found)")
     db.refresh(obj)
     return serializer(obj)
 
@@ -121,7 +126,11 @@ def _update(db, model, item_id, payload_dict, serializer, label):
     for k, v in payload_dict.items():
         if v is not None or k in payload_dict:
             setattr(obj, k, v)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Invalid reference id (e.g. country/city/tour not found)")
     db.refresh(obj)
     return serializer(obj)
 

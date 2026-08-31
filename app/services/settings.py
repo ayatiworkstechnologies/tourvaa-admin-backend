@@ -42,6 +42,18 @@ DEFAULT_SETTINGS = [
     # used directly. See services.settings.get_commission_percentage and
     # services.bookings.supplier_accept_booking (the ledger commission calc).
     {"key": "supplier_commission_percentage", "label": "Tourvaa Tour Commission - Minimum (%)", "value": "10", "group": "booking", "is_public": True},
+    # Platform-wide fallback deposit percentage, used only when a tour has no
+    # deposit_percentage/booking_deposit of its own set (Tour.deposit_type
+    # etc. - see models/cms.py). A supplier's own per-tour deposit config
+    # always takes priority over this. See get_default_deposit_percentage.
+    {"key": "default_deposit_percentage", "label": "Default Deposit Percentage (%)", "value": "20", "group": "booking", "is_public": True},
+    # Platform-wide fallback for how many days before departure a deposit is
+    # still offered (Tour.deposit_cutoff_days) and how many days before
+    # departure the remaining balance is due (Tour.balance_payment_deadline_days).
+    # Same fallback-only role as default_deposit_percentage above - a tour's
+    # own values always take priority.
+    {"key": "default_deposit_cutoff_days", "label": "Default Deposit Cutoff (days before departure)", "value": "30", "group": "booking", "is_public": True},
+    {"key": "default_balance_payment_deadline_days", "label": "Default Final Payment Due (days before departure)", "value": "14", "group": "booking", "is_public": True},
     # Admin-configured MAXIMUM commission Tourvaa pays out to an agent or
     # affiliate. Unlike the supplier minimum above, agent/affiliate
     # commission flows the other way (Tourvaa pays them), so the admin
@@ -227,6 +239,37 @@ def get_affiliate_commission_max(db: Session):
     AffiliateCommissionRule rows). Ceiling, not a floor - see
     services.affiliates and services.affiliate_commission_rules."""
     return _get_percentage_setting(db, "affiliate_commission_max_percentage", "20")
+
+
+def _get_int_setting(db: Session, key: str, default: int) -> int:
+    setting = db.query(AppSetting).filter(AppSetting.key == key).first()
+    try:
+        return int(setting.value) if setting and setting.value not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def get_default_deposit_percentage(db: Session):
+    """Admin-configured platform-wide fallback deposit percentage, used only
+    when a tour has no deposit_percentage/booking_deposit of its own set -
+    see services.bookings._deposit_config and
+    routers.payments_gateway._minimum_deposit_amount, the two places that
+    resolve a tour's effective deposit terms."""
+    return _get_percentage_setting(db, "default_deposit_percentage", "20")
+
+
+def get_default_deposit_cutoff_days(db: Session) -> int:
+    """Admin-configured fallback for how many days before departure a
+    deposit is still offered, used only when the tour itself has no
+    deposit_cutoff_days set. See get_default_deposit_percentage."""
+    return _get_int_setting(db, "default_deposit_cutoff_days", 30)
+
+
+def get_default_balance_payment_deadline_days(db: Session) -> int:
+    """Admin-configured fallback for how many days before departure the
+    remaining balance is due, used only when the tour itself has no
+    balance_payment_deadline_days set. See get_default_deposit_percentage."""
+    return _get_int_setting(db, "default_balance_payment_deadline_days", 14)
 
 
 def get_settings(db: Session):

@@ -29,7 +29,12 @@ from app.schemas.bookings import (
     SupplierDecisionRequest,
 )
 from app.models.cms import City, Country, Tour
-from app.utils.money import money, money_str, utcnow
+from app.utils.money import as_aware_utc, money, money_str, utcnow
+from app.services.settings import (
+    get_default_balance_payment_deadline_days,
+    get_default_deposit_cutoff_days,
+    get_default_deposit_percentage,
+)
 from app.models.customers import Customer
 from app.models.agents import Agent
 from app.models.suppliers import Supplier
@@ -278,7 +283,66 @@ def serialize_status_history(row: BookingStatusHistory) -> dict:
     }
 
 
-def serialize_booking(booking: Booking, detail: bool = False) -> dict:
+def _balance_due_date(db: Session, booking: Booking) -> Optional[datetime]:
+    """When a deposit is outstanding, the date the remaining balance is due,
+    per the tour's balance_payment_deadline_days (days before departure),
+    falling back to the admin-configured default_balance_payment_deadline_days
+    setting only when the tour itself hasn't set one. None if the booking is
+    fully paid/unpaid or there's no departure date to count back from."""
+    if money(booking.amount_paid or 0) <= 0 or money(booking.amount_pending or 0) <= 0:
+        return None
+    if booking.tour_start_date is None:
+        return None
+    tour = getattr(booking, "tour", None)
+    deadline_days = getattr(tour, "balance_payment_deadline_days", None) if tour else None
+    if deadline_days is None:
+        deadline_days = get_default_balance_payment_deadline_days(db)
+    if not deadline_days:
+        return None
+    return booking.tour_start_date - timedelta(days=deadline_days)
+
+
+def _deposit_config(db: Session, booking: Booking) -> Optional[dict]:
+    """Effective deposit terms for this booking's tour, with the tour's own
+    settings falling back to the admin-configured platform defaults
+    (default_deposit_percentage/default_deposit_cutoff_days) wherever the
+    tour hasn't set its own - mirroring
+    payments_gateway._minimum_deposit_amount, which resolves the same
+    fallback server-side when actually validating a payment. The cutoff is
+    already resolved against tour_start_date here too, so a client (e.g.
+    the customer portal's pay-balance modal) never has to reimplement the
+    days-to-departure math itself."""
+    tour = getattr(booking, "tour", None)
+    deposit_type = (getattr(tour, "deposit_type", "fixed") if tour else "fixed") or "fixed"
+    percentage = getattr(tour, "deposit_percentage", None) if tour else None
+    fixed = getattr(tour, "booking_deposit", None) if tour else None
+    if deposit_type != "percentage" and not fixed:
+        # Tour has no deposit of its own configured (or no tour at all) --
+        # fall back to the platform default percentage rather than treating
+        # "fixed" (the column default) as "no deposit offered".
+        deposit_type = "percentage"
+        percentage = float(get_default_deposit_percentage(db))
+    elif deposit_type == "percentage" and not percentage:
+        percentage = float(get_default_deposit_percentage(db))
+
+    cutoff_days = getattr(tour, "deposit_cutoff_days", None) if tour else None
+    if cutoff_days is None:
+        cutoff_days = get_default_deposit_cutoff_days(db)
+    still_available = True
+    if cutoff_days is not None and booking.tour_start_date is not None:
+        days_to_departure = (as_aware_utc(booking.tour_start_date) - utcnow()).days
+        still_available = days_to_departure >= cutoff_days
+    return {
+        "deposit_type": deposit_type,
+        "deposit_percentage": float(percentage) if percentage is not None else None,
+        "booking_deposit": money_str(fixed) if fixed else None,
+        "deposit_cutoff_days": cutoff_days,
+        "balance_payment_deadline_days": getattr(tour, "balance_payment_deadline_days", None) if tour else None,
+        "still_available": still_available,
+    }
+
+
+def serialize_booking(db: Session, booking: Booking, detail: bool = False) -> dict:
     data = {
         "id": booking.id,
         "booking_code": booking.booking_code or _booking_code(booking.id),
@@ -321,6 +385,7 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
         "customer_selling_price": money_str(booking.customer_selling_price),
         "amount_paid": money_str(booking.amount_paid),
         "amount_pending": money_str(booking.amount_pending),
+        "balance_due_date": _balance_due_date(db, booking),
         "booking_status": booking.booking_status,
         "supplier_acceptance_status": booking.supplier_acceptance_status,
         "payment_status": booking.payment_status,
@@ -371,7 +436,8 @@ def serialize_booking(booking: Booking, detail: bool = False) -> dict:
                 "agent_markup": money_str(booking.agent_markup),
                 "customer_selling_price": money_str(booking.customer_selling_price),
             },
-            "payment_summary": {"status": booking.payment_status, "paid": money_str(booking.amount_paid), "pending": money_str(booking.amount_pending)},
+            "payment_summary": {"status": booking.payment_status, "paid": money_str(booking.amount_paid), "pending": money_str(booking.amount_pending), "balance_due_date": _balance_due_date(db, booking)},
+            "deposit_config": _deposit_config(db, booking),
             "invoice_summary": None,
         })
     return data
@@ -748,7 +814,7 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
         query = query.filter(Booking.booking_status == booking_status.strip().lower())
     query = query.order_by(Booking.id.asc() if sort_by == "oldest" else Booking.id.desc())
     total = query.count()
-    items = [serialize_booking(b) for b in query.offset((page - 1) * limit).limit(limit).all()]
+    items = [serialize_booking(db, b) for b in query.offset((page - 1) * limit).limit(limit).all()]
     return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit)), "status_counts": status_counts}
 
 
@@ -757,7 +823,7 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
     _ensure_booking_access(booking, actor)
     log_audit(db, actor=actor, action="view_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit()
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def _validate_customer_travellers(data: BookingCreate, adults: int, children: int) -> None:
@@ -906,7 +972,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     customer.total_bookings = (customer.total_bookings or 0) + 1
     customer.upcoming_bookings = (customer.upcoming_bookings or 0) + 1
     customer.total_amount_pending = money(customer.total_amount_pending or 0) + customer_selling_price
-    log_audit(db, actor=actor, action="create_booking", entity_type="booking", entity_id=booking.id, new_values=serialize_booking(booking), request=request)
+    log_audit(db, actor=actor, action="create_booking", entity_type="booking", entity_id=booking.id, new_values=serialize_booking(db, booking), request=request)
     from app.services.notifications import enqueue_notification, notify_admins
     notify_admins(db, notification_type="new_booking", title="New booking created", message=f"Booking {booking.booking_code} was created", entity_type="booking", entity_id=booking.id)
     if customer.user_id:
@@ -985,7 +1051,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         new_booking_admin_email(booking.booking_code, booking.tour_name, booking.tour_date or "", customer.full_name, supplier_name, booking.adults_count, booking.currency, booking.final_amount, admin_url),
     )
 
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -1002,7 +1068,7 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
             status_code=409,
             detail="This booking already has a payment recorded, so its passenger counts and total cost can no longer be edited directly. Process a refund/adjustment or cancel and rebook instead.",
         )
-    old_values = serialize_booking(booking)
+    old_values = serialize_booking(db, booking)
     for field in ["tour_name", "tour_date", "country", "supplier_name", "notes", "customer_notes", "admin_notes"]:
         value = getattr(data, field)
         if value is not None:
@@ -1023,9 +1089,9 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
             booking.agent_net_price = money(0)
             booking.agent_markup = money(0)
         booking.amount_pending = max(money(0), new_total - money(booking.amount_paid))
-    log_audit(db, actor=actor, action="update_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
+    log_audit(db, actor=actor, action="update_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -1034,9 +1100,9 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
     if _user_role(actor) == "agent":
         raise HTTPException(status_code=403, detail="Agents cannot directly change booking status")
     _validate_booking_status_transition(booking.booking_status, data.booking_status)
-    old_values = serialize_booking(booking)
+    old_values = serialize_booking(db, booking)
     _set_status(db, booking, data.booking_status, actor, _user_role(actor), data.reason, data.metadata)
-    log_audit(db, actor=actor, action="update_booking_status", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
+    log_audit(db, actor=actor, action="update_booking_status", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
 
     if booking.customer and booking.customer.email:
@@ -1053,7 +1119,7 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
             booking.customer.email,
         )
 
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -1061,7 +1127,7 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
     _ensure_booking_access(booking, actor)
     if booking.booking_status == "cancelled":
         raise HTTPException(status_code=400, detail="Booking is already cancelled")
-    old_values = serialize_booking(booking)
+    old_values = serialize_booking(db, booking)
     _set_status(db, booking, "cancelled", actor, _user_role(actor), data.reason)
     booking.cancellation_reason = data.reason
     booking.cancelled_at = utcnow()
@@ -1091,7 +1157,7 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
             money(0),
             money(booking.customer.total_amount_pending or 0) - pending_before_cancel,
         )
-    log_audit(db, actor=actor, action="cancel_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
+    log_audit(db, actor=actor, action="cancel_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
 
     if booking.customer and booking.customer.email:
@@ -1126,7 +1192,7 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
 
     _email_admins_booking_event(db, "Booking cancelled", f"Booking {booking.booking_code} was cancelled. Reason: {data.reason or 'Cancelled'}", booking)
 
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> list[int]:
@@ -1205,11 +1271,11 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
     # terminal states block reassignment.
     if booking.booking_status in {"completed", "cancelled", "refunded"}:
         raise HTTPException(status_code=409, detail="A supplier cannot be assigned to a closed booking")
-    old_values = serialize_booking(booking)
+    old_values = serialize_booking(db, booking)
     booking.supplier_id = data.supplier_id
     booking.supplier_acceptance_status = "pending"
     _set_status(db, booking, "pending_supplier_acceptance", actor, "admin", data.reason)
-    log_audit(db, actor=actor, action="assign_supplier", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(booking), request=request)
+    log_audit(db, actor=actor, action="assign_supplier", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
 
     if booking.supplier and booking.supplier.user and booking.supplier.user.email:
@@ -1228,14 +1294,14 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
             booking.supplier.user.email,
         )
 
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecisionRequest, actor: User, request: Request | None = None) -> dict:
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _start_supplier_decision(booking, "accepted"):
-        return serialize_booking(booking, detail=True)
+        return serialize_booking(db, booking, detail=True)
     booking.supplier_acceptance_status = "accepted"
     _set_status(db, booking, "confirmed", actor, "supplier", data.reason or "Supplier accepted booking")
 
@@ -1330,14 +1396,14 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
 
     _email_admins_booking_event(db, "Supplier accepted booking", f"Supplier accepted booking {booking.booking_code}.", booking)
 
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisionRequest, actor: User, request: Request | None = None) -> dict:
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _start_supplier_decision(booking, "declined"):
-        return serialize_booking(booking, detail=True)
+        return serialize_booking(db, booking, detail=True)
     pending_before_decline = money(booking.amount_pending)
     booking.supplier_acceptance_status = "declined"
     _set_status(db, booking, "declined", actor, "supplier", data.reason or "Supplier declined booking")
@@ -1378,7 +1444,7 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
 
     _email_admins_booking_event(db, "Supplier declined booking", f"Supplier declined booking {booking.booking_code}. Reason: {data.reason or 'Declined by supplier'}", booking)
 
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def supplier_start_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
@@ -1388,9 +1454,9 @@ def supplier_start_booking(db: Session, booking_id: int, reason: str | None, act
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _validate_supplier_lifecycle_transition(booking, "ongoing"):
-        return serialize_booking(booking, detail=True)
+        return serialize_booking(db, booking, detail=True)
 
-    old_values = serialize_booking(booking)
+    old_values = serialize_booking(db, booking)
     transition_reason = reason or "Tour started by supplier"
     _set_status(db, booking, "ongoing", actor, "supplier", transition_reason)
     log_audit(db, actor=actor, action="supplier_start_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
@@ -1414,7 +1480,7 @@ def supplier_start_booking(db: Session, booking_id: int, reason: str | None, act
         )
     _email_agent_booking_status(db, booking, "ongoing", transition_reason)
     _email_admins_booking_event(db, "Tour started", f"Supplier started tour for booking {booking.booking_code}.", booking)
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
@@ -1423,8 +1489,8 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _validate_supplier_lifecycle_transition(booking, "completed"):
-        return serialize_booking(booking, detail=True)
-    old_values = serialize_booking(booking)
+        return serialize_booking(db, booking, detail=True)
+    old_values = serialize_booking(db, booking)
     _set_status(db, booking, "completed", actor, "supplier", reason or "Tour completed by supplier")
     log_audit(db, actor=actor, action="supplier_complete_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
     notify_admins(db, notification_type="booking_completed", title="Tour completed", message=f"Supplier marked {booking.booking_code} as completed", entity_type="booking", entity_id=booking.id)
@@ -1449,7 +1515,7 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
         )
     _email_agent_booking_status(db, booking, "completed", reason or "Tour completed")
     _email_admins_booking_event(db, "Tour completed", f"Supplier marked booking {booking.booking_code} as completed.", booking)
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: User, request: Request | None = None) -> dict:
@@ -1460,7 +1526,7 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
         raise HTTPException(status_code=400, detail="Booking is already cancelled")
     if booking.booking_status == "completed":
         raise HTTPException(status_code=400, detail="Completed bookings cannot be cancelled")
-    old_values = serialize_booking(booking)
+    old_values = serialize_booking(db, booking)
     _set_status(db, booking, "cancelled", actor, "supplier", reason)
     booking.cancellation_reason = reason
     booking.cancelled_at = utcnow()
@@ -1508,7 +1574,7 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
         )
     _email_agent_booking_status(db, booking, "cancelled", reason)
     _email_admins_booking_event(db, "Supplier cancelled booking", f"Supplier cancelled booking {booking.booking_code}. Reason: {reason}", booking)
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def supplier_postpone_booking(
@@ -1525,7 +1591,7 @@ def supplier_postpone_booking(
     _ensure_booking_access(booking, actor)
     if booking.booking_status in ("cancelled", "completed", "declined"):
         raise HTTPException(status_code=400, detail=f"Cannot postpone a {booking.booking_status} booking")
-    old_values = serialize_booking(booking)
+    old_values = serialize_booking(db, booking)
     parsed_new_date = None
     if new_tour_date:
         try:
@@ -1595,7 +1661,7 @@ def supplier_postpone_booking(
         )
     _email_agent_booking_status(db, booking, "postponed", reason)
     _email_admins_booking_event(db, "Booking postponed", f"Supplier postponed booking {booking.booking_code}. Reason: {reason}", booking)
-    return serialize_booking(booking, detail=True)
+    return serialize_booking(db, booking, detail=True)
 
 
 def supplier_notify_parties(db: Session, booking_id: int, message: str, notify_customer: bool, notify_agent: bool, actor: User, request: Request | None = None) -> dict:
