@@ -258,7 +258,7 @@ def get_customer_detail(db: Session, customer_id: int, actor: User | None = None
             .limit(3)
             .all()
         )
-        serialized_bookings = [serialize_booking(b) for b in recent_bookings]
+        serialized_bookings = [serialize_booking(db, b) for b in recent_bookings]
         serialized_payments = [serialize_payment(p) for p in recent_payments]
     except Exception:
         serialized_bookings = []

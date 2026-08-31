@@ -27,6 +27,7 @@ from app.auth.permissions import get_current_user
 from app.utils.money import as_aware_utc, money, utcnow
 from app.utils.ratelimit import check_rate_limit
 from app.services.payments_gateway import get_paypal, get_stripe
+from app.services.settings import get_default_deposit_cutoff_days, get_default_deposit_percentage
 from app.models.payments import Payment, PaymentTransaction
 from app.services.payments import _payment_code, _sync_booking_payment_fields
 
@@ -122,38 +123,53 @@ def _pending_gateway_payments_total(db: Session, booking_id: int) -> Decimal:
     return money(total or 0)
 
 
-def _minimum_deposit_amount(booking: Booking) -> Decimal:
+def _minimum_deposit_amount(db: Session, booking: Booking) -> Decimal:
     """The lowest amount the tour's supplier-configured deposit rule allows
     for this booking, or the full amount_pending if a deposit is no longer
-    allowed (cutoff passed, or no deposit configured). Does not touch the
-    balance-due-date itself -- only the deposit floor and its own
+    allowed (cutoff passed, or no deposit configured anywhere). Does not
+    touch the balance-due-date itself -- only the deposit floor and its own
     days-before-departure cutoff, which are independent client-confirmed
-    knobs (see Tour.deposit_type/deposit_percentage/deposit_cutoff_days)."""
+    knobs (see Tour.deposit_type/deposit_percentage/deposit_cutoff_days).
+
+    Falls back to the admin-configured default_deposit_percentage/
+    default_deposit_cutoff_days settings only for whichever of those the
+    tour itself hasn't set - a supplier's own per-tour values always win."""
     full = money(booking.amount_pending or 0)
     tour = getattr(booking, "tour", None)
-    if not tour:
-        return full
 
-    cutoff_days = getattr(tour, "deposit_cutoff_days", None)
+    cutoff_days = getattr(tour, "deposit_cutoff_days", None) if tour else None
+    if cutoff_days is None:
+        cutoff_days = get_default_deposit_cutoff_days(db)
     if cutoff_days is not None and booking.tour_start_date is not None:
         days_to_departure = (as_aware_utc(booking.tour_start_date) - utcnow()).days
         if days_to_departure < cutoff_days:
             return full
 
-    deposit_type = getattr(tour, "deposit_type", "fixed") or "fixed"
+    deposit_type = getattr(tour, "deposit_type", "fixed") if tour else "fixed"
+    deposit_type = deposit_type or "fixed"
+    pct = getattr(tour, "deposit_percentage", None) if tour else None
+    fixed = getattr(tour, "booking_deposit", None) if tour else None
+
     if deposit_type == "percentage":
-        pct = getattr(tour, "deposit_percentage", None)
+        if not pct:
+            pct = get_default_deposit_percentage(db)
         if not pct:
             return full
         return money(full * Decimal(str(pct)) / Decimal("100"))
 
-    fixed = getattr(tour, "booking_deposit", None)
     if not fixed:
-        return full
+        # No fixed deposit amount configured on the tour either - fall back
+        # to the platform default *percentage* rather than leaving the
+        # deposit option unavailable just because "fixed" is the (default)
+        # deposit_type on a tour that never touched these fields at all.
+        pct = get_default_deposit_percentage(db)
+        if not pct:
+            return full
+        return money(full * Decimal(str(pct)) / Decimal("100"))
     return money(min(Decimal(str(fixed)), full))
 
 
-def _validate_payment_request(booking: Booking, amount: Decimal, current_user, already_pending: Decimal = Decimal("0")) -> Decimal:
+def _validate_payment_request(db: Session, booking: Booking, amount: Decimal, current_user, already_pending: Decimal = Decimal("0")) -> Decimal:
     _ensure_booking_payment_access(booking, current_user)
     if booking.booking_status in {"cancelled", "declined", "completed", "refunded"}:
         raise HTTPException(status_code=409, detail="This booking is not eligible for payment")
@@ -167,7 +183,7 @@ def _validate_payment_request(booking: Booking, amount: Decimal, current_user, a
     if requested > outstanding:
         raise HTTPException(status_code=400, detail=f"Payment amount cannot exceed the outstanding balance of {outstanding:.2f}")
     if requested < outstanding:
-        minimum = _minimum_deposit_amount(booking)
+        minimum = _minimum_deposit_amount(db, booking)
         if minimum >= money(booking.amount_pending or 0):
             raise HTTPException(status_code=400, detail="A deposit is no longer available for this booking -- full payment is required")
         if requested < minimum:
@@ -219,7 +235,7 @@ def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gate
 def stripe_create_session(body: StripeSessionRequest, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     check_rate_limit(request, "payment-create", max_calls=10, window_seconds=60)
     booking = _booking_or_404(db, body.booking_id, for_update=True)
-    amount = _validate_payment_request(booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
+    amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
     currency = _validate_payment_currency(booking, body.currency)
     stripe = get_stripe(db)
     amount_cents = int(amount * 100)
@@ -407,7 +423,7 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
 def paypal_create_order(body: PayPalOrderRequest, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     check_rate_limit(request, "payment-create", max_calls=10, window_seconds=60)
     booking = _booking_or_404(db, body.booking_id, for_update=True)
-    amount = _validate_payment_request(booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
+    amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
     currency = _validate_payment_currency(booking, body.currency)
     paypal = get_paypal(db)
     amount_str = f"{amount:.2f}"
@@ -618,7 +634,7 @@ def test_simulate_payment(
         raise HTTPException(status_code=403, detail="Test payments are not available in production.")
 
     booking = _booking_or_404(db, body.booking_id)
-    amount = _validate_payment_request(booking, body.amount, current_user)
+    amount = _validate_payment_request(db, booking, body.amount, current_user)
     fake_ref = f"TEST-{uuid.uuid4().hex[:10].upper()}"
 
     payment = Payment(

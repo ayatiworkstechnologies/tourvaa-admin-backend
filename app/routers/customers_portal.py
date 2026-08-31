@@ -266,10 +266,10 @@ def record_customer_manual_payment(booking_id: int, data: CustomerManualPaymentR
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
     if money(booking.amount_pending) <= 0:
-        return {"status": "success", "message": "Booking is already paid", "data": serialize_booking(booking, detail=True)}
+        return {"status": "success", "message": "Booking is already paid", "data": serialize_booking(db, booking, detail=True)}
     payment = create_payment(db, PaymentCreate(booking_id=booking.id, customer_id=customer.id, payment_method=data.payment_method, payment_type=booking.payment_type or "full", total_amount=money(booking.final_amount), paid_amount=money(booking.amount_pending), gateway=data.gateway, transaction_id=data.transaction_id, notes="Customer checkout payment"), actor=current_user, request=request)
     db.refresh(booking)
-    return {"status": "success", "message": "Payment recorded successfully", "data": {"payment": payment, "booking": serialize_booking(booking, detail=True)}}
+    return {"status": "success", "message": "Payment recorded successfully", "data": {"payment": payment, "booking": serialize_booking(db, booking, detail=True)}}
 
 
 @router.get("/payments")
