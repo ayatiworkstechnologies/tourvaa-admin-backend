@@ -47,9 +47,14 @@ def _serialize_request(r: CancellationRequest) -> dict:
 
 
 def _serialize_rule(r: RefundRule) -> dict:
+    tour = r.tour
+    supplier = tour.supplier if tour else None
     return {
         "id": r.id,
         "tour_id": r.tour_id,
+        "tour_title": tour.title if tour else None,
+        "supplier_id": tour.supplier_id if tour else None,
+        "supplier_name": supplier.supplier_name if supplier else None,
         "days_before_tour_min": r.days_before_tour_min,
         "days_before_tour_max": r.days_before_tour_max,
         "refund_percentage": str(r.refund_percentage),
@@ -413,10 +418,13 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
     return _serialize_request(req)
 
 
-def list_rules(db: Session, tour_id: Optional[int] = None) -> list:
+def list_rules(db: Session, tour_id: Optional[int] = None, supplier_id: Optional[int] = None) -> list:
     q = db.query(RefundRule)
     if tour_id:
         q = q.filter(RefundRule.tour_id == tour_id)
+    if supplier_id:
+        from app.models.cms import Tour
+        q = q.join(Tour, Tour.id == RefundRule.tour_id).filter(Tour.supplier_id == supplier_id)
     return [_serialize_rule(r) for r in q.order_by(RefundRule.days_before_tour_min.desc()).all()]
 
 

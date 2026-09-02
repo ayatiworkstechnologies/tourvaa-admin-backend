@@ -946,15 +946,11 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
             raise HTTPException(status_code=400, detail="Invalid or expired promo code")
 
     if not discount:
-        # Best automatic discount for this tour
-        discount = (
-            db.query(TourDiscount)
-            .filter(
-                TourDiscount.status == "active",
-                (TourDiscount.tour_id == tour_id) | (TourDiscount.discount_scope == "all_tours"),
-            )
-            .first()
-        )
+        # Best automatic discount for this tour -- shares services.discounts
+        # with the storefront display and actual booking-creation charge, so
+        # this preview can never show a different discount than either.
+        from app.services.discounts import find_best_discount_row
+        discount = find_best_discount_row(db, tour)
 
     if discount:
         discount_value = float(discount.discount_value)
@@ -978,8 +974,11 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
                 "amount": discount_amount,
             }
 
-    tax_amount = 0.0
-    final_total = max(subtotal - discount_amount, 0.0)
+    taxable_amount = max(subtotal - discount_amount, 0.0)
+    tax_percentage = float(tour.tax_percentage or 0)
+    tax_amount = round(taxable_amount * tax_percentage / 100, 2) if tax_percentage > 0 else 0.0
+    service_fee = float(tour.service_fee or 0)
+    final_total = max(subtotal - discount_amount + tax_amount + service_fee, 0.0)
 
     return {
         "currency": currency,
@@ -997,6 +996,7 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
         "discount_amount": discount_amount,
         "discount": discount_info,
         "tax_amount": tax_amount,
+        "service_fee": service_fee,
         "final_total": final_total,
         "price_breakdown": {
             "activities": activity_breakdown,

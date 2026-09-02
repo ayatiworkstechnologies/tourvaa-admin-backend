@@ -845,8 +845,14 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # the customer was never actually going to pay.
     subtotal = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total)
     discount = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount)
-    tax = money(0)
-    surcharge = money(0)
+    # tax_percentage applies to the discounted subtotal (never on top of a
+    # discount the customer isn't actually being charged); service_fee is a
+    # flat per-booking amount, not per-traveller -- mirrors the group-discount
+    # -then-promo-code ordering just above.
+    taxable_amount = money(subtotal - discount)
+    tax_percentage = money(getattr(tour, "tax_percentage", 0) or 0) if tour else money(0)
+    tax = money(taxable_amount * tax_percentage / money(100)) if tax_percentage > 0 else money(0)
+    surcharge = money(getattr(tour, "service_fee", 0) or 0) if tour else money(0)
     final = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total - discount + tax + surcharge)
     if final < 0:
         raise HTTPException(status_code=400, detail="Final amount cannot be negative")
@@ -965,6 +971,21 @@ def _validate_customer_travellers(data: BookingCreate, adults: int, children: in
             raise HTTPException(status_code=400, detail="Child traveller age must be between 3 and 11")
 
 
+def _validate_agreements(db: Session, data: BookingCreate, tour) -> None:
+    """Enforces the booking flow's Review-step accept/agree checkboxes
+    server-side -- the frontend already disables the submit button on these,
+    but that alone doesn't stop a direct API call from skipping them."""
+    if data.booking_source not in {"customer", "agent"}:
+        return
+    if not data.agreed_terms:
+        raise HTTPException(status_code=400, detail="You must agree to the booking terms and cancellation policy to continue")
+    if tour and tour.id:
+        from app.models.cancellations import RefundRule
+        has_policy = db.query(RefundRule.id).filter(RefundRule.tour_id == tour.id).first() is not None
+        if has_policy and not data.agreed_cancellation_policy:
+            raise HTTPException(status_code=400, detail="You must agree to this tour's cancellation & refund policy to continue")
+
+
 def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     if data.booking_source == "customer" and not data.customer_id:
         raise HTTPException(status_code=400, detail="customer_id is required for customer bookings")
@@ -1035,6 +1056,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
                         detail="This tour is now too close to departure for a no-deposit reservation -- pay in full to confirm this booking.",
                     )
     _validate_customer_travellers(data, adults, children)
+    _validate_agreements(db, data, tour)
     country = db.query(Country).filter(Country.id == (data.country_id or (tour.country_id if tour else None))).first() if (data.country_id or tour) else None
     city = db.query(City).filter(City.id == (data.city_id or (tour.city_id if tour else None))).first() if (data.city_id or tour) else None
     supplier = tour.supplier if tour and tour.supplier else None
