@@ -80,6 +80,12 @@ class BookingCreate(BaseModel):
     customer_notes: Optional[str] = None
     admin_notes: Optional[str] = None
     notes: Optional[str] = None
+    # Explicit accept/agree checkboxes from the booking flow's Review step --
+    # enforced server-side in services.bookings.create_booking so a booking
+    # can't be created without them (the frontend already disables the
+    # submit button on this, but that alone doesn't stop a direct API call).
+    agreed_terms: bool = False
+    agreed_cancellation_policy: bool = False
 
     @field_validator("booking_source")
     @classmethod

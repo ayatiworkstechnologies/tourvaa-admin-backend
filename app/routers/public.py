@@ -193,21 +193,30 @@ def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscou
                 "persons_from": slab.passenger_from,
                 "persons_to": slab.passenger_to,
                 "price_per_person": float(slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price),
+                "child_price_per_person": float(slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price or 0),
                 "currency": slab.currency,
             }
             for slab in pricing
         ]
     base = pricing[0]
     base_adult = float(base.storefront_adult_price if base.storefront_adult_price is not None else base.adult_price)
+    base_child = float(base.storefront_child_price if base.storefront_child_price is not None else base.child_price or 0)
     rows = []
     solo_upper = (tiers[0].min_pax - 1) if tiers else base.passenger_to
-    rows.append({"persons_from": base.passenger_from, "persons_to": solo_upper, "price_per_person": base_adult, "currency": base.currency})
+    rows.append({"persons_from": base.passenger_from, "persons_to": solo_upper, "price_per_person": base_adult, "child_price_per_person": base_child, "currency": base.currency})
     for tier in tiers:
         if tier.discount_type == "percentage":
             price = base_adult * (1 - float(tier.discount_value) / 100)
+            child_price = base_child * (1 - float(tier.discount_value) / 100)
         else:
             price = base_adult - float(tier.discount_value)
-        rows.append({"persons_from": tier.min_pax, "persons_to": tier.max_pax, "price_per_person": round(max(0.0, price), 2), "currency": base.currency})
+            child_price = base_child - float(tier.discount_value)
+        rows.append({
+            "persons_from": tier.min_pax, "persons_to": tier.max_pax,
+            "price_per_person": round(max(0.0, price), 2),
+            "child_price_per_person": round(max(0.0, child_price), 2),
+            "currency": base.currency,
+        })
     return rows
 
 
@@ -531,6 +540,8 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "deposit_percentage": tour.deposit_percentage,
             "deposit_cutoff_days": tour.deposit_cutoff_days,
             "balance_payment_deadline_days": tour.balance_payment_deadline_days,
+            "tax_percentage": tour.tax_percentage or 0,
+            "service_fee": tour.service_fee or 0,
             "tour_video_url": tour.tour_video_url or None,
             "overview": _ser_overview(overview) if overview else None,
             "itineraries": [

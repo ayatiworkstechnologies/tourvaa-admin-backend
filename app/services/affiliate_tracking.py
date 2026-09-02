@@ -354,7 +354,12 @@ def track_click(db: Session, ref_code: str, ip_address: Optional[str] = None, us
     click = AffiliateClick(link_id=link.id, affiliate_id=link.affiliate_id, ip_address=ip_address, user_agent=user_agent, referrer=referrer)
     db.add(click)
     db.commit()
-    return {"ref_code": ref_code, "redirect_url": link.destination_url or "/", "tracked": True}
+    # Returned so the client-side referral-code cache (affiliateReferral.ts)
+    # can expire itself after this link's own configured window instead of a
+    # hardcoded guess -- it's the only gate on the direct-ref_code path since
+    # record_conversion doesn't re-validate window there (unlike the
+    # cookie-based resolve_attribution_from_request path, which does).
+    return {"ref_code": ref_code, "redirect_url": link.destination_url or "/", "tracked": True, "attribution_window_days": link.attribution_window_days or 30}
 
 
 # clicks & conversions

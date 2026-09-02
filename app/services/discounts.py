@@ -5,9 +5,11 @@ and to compute what's actually charged at booking creation
 (services.bookings._resolve_discount), so the two can never diverge.
 
 A discount applies to a tour either directly (discount_scope="tour",
-tour_id set) or scope-wide across every tour in a category/country
-(discount_scope="category"/"country", tour_id left null) - see
-app.models.tours.TourDiscount.
+tour_id set), scope-wide across every tour in a category/country
+(discount_scope="category"/"country", tour_id left null), or platform-wide
+across every tour (discount_scope="all_tours", tour_id left null) - see
+app.models.tours.TourDiscount and the admin-wide creation UI at
+routers.tours' global-discounts endpoints (services.tours.create_global_discount).
 """
 from datetime import datetime, timezone
 
@@ -24,7 +26,7 @@ def find_best_discount_row(session: Session, tour) -> TourDiscount | None:
     if not tour or not tour.id:
         return None
     now = datetime.now(timezone.utc)
-    scope_conditions = [TourDiscount.tour_id == tour.id]
+    scope_conditions = [TourDiscount.tour_id == tour.id, TourDiscount.discount_scope == "all_tours"]
     if tour.category_id:
         scope_conditions.append(and_(
             TourDiscount.tour_id.is_(None),

@@ -37,7 +37,11 @@ def split_gst_inclusive(gross_amount, gst_rate) -> tuple[Decimal, Decimal]:
     return subtotal, money(gross - subtotal)
 
 
-def _balance_due_date(booking: Booking, requested=None):
+def _invoice_due_date(booking: Booking, requested=None):
+    """The date printed on the invoice document itself -- unrelated to
+    services.bookings._balance_due_date (the actual deposit/balance-payment
+    deadline computation); named differently to avoid the two being confused
+    for the same function."""
     if requested:
         return requested
     return booking.tour_start_date
@@ -191,7 +195,7 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
         total_amount=invoice_total,
         amount_paid=paid,
         amount_due=balance_due,
-        balance_due_date=_balance_due_date(booking, data.balance_due_date) if balance_due > 0 else None,
+        balance_due_date=_invoice_due_date(booking, data.balance_due_date) if balance_due > 0 else None,
         created_by=actor.id if actor else None,
     )
     db.add(inv)
