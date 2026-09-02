@@ -124,46 +124,31 @@ def _pending_review_kind(item: Tour) -> str | None:
 
 
 def _active_discount(item: Tour) -> dict | None:
-    """Best currently-active, tour-scoped TourDiscount expressed as a
-    percentage off price_start_per_person - mirrors public.py's
-    _active_discount_map so the admin/supplier "Basic tour details" preview
-    matches exactly what customers see on the storefront."""
-    if not item.id:
-        return None
-    from datetime import datetime, timezone
-    from sqlalchemy import or_
+    """Best currently-active discount applicable to this tour (tour-specific,
+    or category/country-wide), expressed as a percentage off
+    price_start_per_person - mirrors public.py's _active_discount_map, and
+    services.bookings._resolve_discount's auto-apply fallback, so the
+    admin/supplier "Basic tour details" preview, the public storefront, and
+    what's actually charged at booking creation always agree."""
     from sqlalchemy.orm import object_session
-    from app.models.tours import TourDiscount
+    from app.services.discounts import find_best_discount_row, discount_percent_for_display
     session = object_session(item)
     if session is None:
         return None
-    now = datetime.now(timezone.utc)
-    rows = (
-        session.query(TourDiscount)
-        .filter(
-            TourDiscount.tour_id == item.id,
-            TourDiscount.status == "active",
-            or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= now),
-            or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= now),
-        )
-        .all()
-    )
-    base_price = float(item.price_start_per_person or 0)
-    if not rows or base_price <= 0:
+    row = find_best_discount_row(session, item)
+    if not row:
         return None
-    best: dict | None = None
-    for row in rows:
-        pct = float(row.discount_value) if row.discount_type == "percentage" else (float(row.discount_value) / base_price) * 100
-        pct = round(min(90.0, max(0.0, pct)))
-        if pct <= 0:
-            continue
-        if not best or pct > best["discount_percentage"]:
-            best = {
-                "discount_percentage": pct,
-                "original_price_per_person": base_price,
-                "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
-            }
-    return best
+    base_price = float(item.price_start_per_person or 0)
+    if base_price <= 0:
+        return None
+    pct = discount_percent_for_display(row, base_price)
+    if pct <= 0:
+        return None
+    return {
+        "discount_percentage": pct,
+        "original_price_per_person": base_price,
+        "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
+    }
 
 
 def _unique_slug(db: Session, model, slug: str, current_id: int | None = None):

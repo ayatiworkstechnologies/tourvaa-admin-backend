@@ -146,46 +146,30 @@ def _ser_overview(o: TourOverview):
 
 
 def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
-    """Best active tour-scoped discount per tour, expressed as a percentage
-    off price_start_per_person (a fixed-amount discount is converted to its
-    percentage-equivalent for the "Save X% today" badge). Mirrors the
-    active-window filter in public_tour_detail's own discounts query, but
-    only ever matches TourDiscount.tour_id directly - category/country-scoped
-    discounts (discount_scope) are not resolved here, consistent with the
-    detail endpoint's existing behavior."""
-    tour_ids = [t.id for t in tours]
-    if not tour_ids:
-        return {}
-    now = datetime.now(timezone.utc)
-    rows = (
-        db.query(TourDiscount)
-        .filter(
-            TourDiscount.tour_id.in_(tour_ids),
-            TourDiscount.status == "active",
-            or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= now),
-            or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= now),
-        )
-        .all()
-    )
-    if not rows:
-        return {}
-    price_by_tour = {t.id: float(t.price_start_per_person or 0) for t in tours}
+    """Best active discount per tour (tour-specific, or category/country-
+    wide), expressed as a percentage off price_start_per_person (a
+    fixed-amount discount is converted to its percentage-equivalent for the
+    "Save X% today" badge). Shares services.discounts.find_best_discount_row
+    with the admin/supplier preview (services.cms._active_discount) and
+    booking-creation's auto-apply (services.bookings._resolve_discount) so
+    all three always agree."""
+    from app.services.discounts import find_best_discount_row, discount_percent_for_display
     best: dict[int, dict] = {}
-    for row in rows:
-        base_price = price_by_tour.get(row.tour_id, 0)
+    for tour in tours:
+        row = find_best_discount_row(db, tour)
+        if not row:
+            continue
+        base_price = float(tour.price_start_per_person or 0)
         if base_price <= 0:
             continue
-        pct = float(row.discount_value) if row.discount_type == "percentage" else (float(row.discount_value) / base_price) * 100
-        pct = round(min(90.0, max(0.0, pct)))
+        pct = discount_percent_for_display(row, base_price)
         if pct <= 0:
             continue
-        existing = best.get(row.tour_id)
-        if not existing or pct > existing["discount_percentage"]:
-            best[row.tour_id] = {
-                "discount_percentage": pct,
-                "original_price_per_person": base_price,
-                "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
-            }
+        best[tour.id] = {
+            "discount_percentage": pct,
+            "original_price_per_person": base_price,
+            "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
+        }
     return best
 
 
@@ -585,6 +569,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "discounts": [{"label": d.discount_name, "discount_type": d.discount_type, "value": float(d.discount_value), "valid_from": str(d.start_date) if d.start_date else None, "valid_to": str(d.end_date) if d.end_date else None} for d in discounts],
             "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": max(0, c.available_seats - c.booked_seats), "status": c.status} for c in calendar],
             "min_advance_booking_days": availability_config.min_advance_booking_days if availability_config else 0,
+            "agent_no_deposit_buffer_weeks": availability_config.agent_no_deposit_buffer_weeks if availability_config else 4,
             "availability_end_date": str(availability_config.availability_end_date.date()) if availability_config and availability_config.availability_end_date else None,
             "similar_tours": similar_tours,
             "cancellation_policy": [
@@ -602,12 +587,26 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/categories")
-def public_categories(db: Session = Depends(get_db)):
-    cats = db.query(TourCategory).filter(TourCategory.status == "active").order_by(TourCategory.category_name.asc()).all()
-    counts = dict(
-        db.query(Tour.category_id, func.count(Tour.id))
-        .filter(Tour.status == "published")
-        .group_by(Tour.category_id)
+def public_categories(db: Session = Depends(get_db), country: str = Query(default="")):
+    """Categories with at least one published tour -- scoped to `country`
+    when given (same country-resolution and "published" definition as
+    /tours, so a category only ever appears where it's actually bookable).
+    Empty categories are dropped entirely rather than shown with a 0 count,
+    per the client's "hide empty categories" requirement."""
+    tour_count_query = db.query(Tour.category_id, func.count(Tour.id).label("count")).filter(Tour.status == "published")
+    if country:
+        c = db.query(Country).filter(Country.country_name.ilike(country)).first()
+        if not c:
+            c = next((item for item in db.query(Country).all() if slugify(item.country_name) == slugify(country)), None)
+        tour_count_query = tour_count_query.filter(Tour.country_id == (c.id if c else -1))
+    counts = dict(tour_count_query.group_by(Tour.category_id).all())
+    if not counts:
+        return {"status": "success", "items": []}
+
+    cats = (
+        db.query(TourCategory)
+        .filter(TourCategory.status == "active", TourCategory.id.in_(counts.keys()))
+        .order_by(TourCategory.category_name.asc())
         .all()
     )
     items = [{**_category(c), "tour_count": counts.get(c.id, 0)} for c in cats]

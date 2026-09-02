@@ -46,6 +46,7 @@ def _ser_config(o: TourAvailabilityConfig) -> dict:
         "availability_start_date": o.availability_start_date,
         "availability_end_date": o.availability_end_date,
         "min_advance_booking_days": o.min_advance_booking_days,
+        "agent_no_deposit_buffer_weeks": o.agent_no_deposit_buffer_weeks,
         "frequency": o.frequency,
         "frequency_week": o.frequency_week,
         "frequency_days": o.frequency_days or [],
@@ -110,6 +111,7 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
     o.availability_start_date = data.availability_start_date
     o.availability_end_date = data.availability_end_date
     o.min_advance_booking_days = data.min_advance_booking_days
+    o.agent_no_deposit_buffer_weeks = data.agent_no_deposit_buffer_weeks
     o.frequency = data.frequency
     o.frequency_week = data.frequency_week
     o.frequency_days = data.frequency_days
@@ -167,6 +169,27 @@ def assert_meets_advance_booking_window(db: Session, tour_id: int, tour_date: da
             status_code=400,
             detail=f"This tour requires booking at least {days} day(s) in advance - the earliest bookable date is {earliest_bookable.isoformat()}.",
         )
+
+
+def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
+    """Whether an agent booking this tour today may Reserve Now with no
+    deposit, and the balance due date if so.
+
+    Client rule: an agent is eligible only if today is more than
+    agent_no_deposit_buffer_weeks weeks before the tour's min-advance-booking
+    cutoff date (travel_date - min_advance_booking_days). When eligible, the
+    balance is due agent_no_deposit_buffer_weeks weeks before the travel date."""
+    o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
+    buffer_weeks = o.agent_no_deposit_buffer_weeks if o else 4
+    advance_days = o.min_advance_booking_days if o else 0
+    buffer_days = buffer_weeks * 7
+
+    travel = _as_date(travel_date)
+    cutoff_date = travel - timedelta(days=advance_days)
+    eligible = (cutoff_date - date.today()).days > buffer_days
+    due_date = travel - timedelta(days=buffer_days) if eligible else None
+
+    return {"eligible": eligible, "due_date": due_date, "buffer_weeks": buffer_weeks}
 
 
 def check_availability_end_date_reminders(db: Session) -> None:

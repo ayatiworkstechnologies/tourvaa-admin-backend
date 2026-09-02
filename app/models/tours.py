@@ -267,6 +267,10 @@ class TourAvailabilityConfig(Base):
     availability_start_date = Column(DateTime(timezone=True), nullable=True)
     availability_end_date = Column(DateTime(timezone=True), nullable=True)
     min_advance_booking_days = Column(Integer, default=0, nullable=False)
+    # How many weeks before the min-advance-booking cutoff date an agent may
+    # still Reserve Now with no deposit; closer than that they only see Pay
+    # in Full Today. See services.tour_availability.agent_reserve_eligibility.
+    agent_no_deposit_buffer_weeks = Column(Integer, default=4, nullable=False)
     # "weekly" | "fortnightly" | "monthly", NULL until a schedule is saved.
     frequency = Column(String(20), nullable=True)
     # Week 1/2 for fortnightly, Week 1-4 for monthly; unused for weekly.
