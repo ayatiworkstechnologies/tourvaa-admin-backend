@@ -302,6 +302,7 @@ class AvailabilityConfigPayload(BaseModel):
     availability_start_date: datetime | None = None
     availability_end_date: datetime | None = None
     min_advance_booking_days: int = Field(default=0, ge=0)
+    agent_no_deposit_buffer_weeks: int = Field(default=4, ge=0)
     frequency: str | None = None
     frequency_week: int | None = Field(default=None, ge=1, le=4)
     frequency_days: list[int] = Field(default_factory=list)

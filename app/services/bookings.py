@@ -283,12 +283,42 @@ def serialize_status_history(row: BookingStatusHistory) -> dict:
     }
 
 
+def _resolve_agent_invoice_email(db: Session, agent_id: int | None) -> str | None:
+    """Best email to send an agent's own invoices to: their dedicated
+    billing contact (AgentInvoicing.email) first, falling back to their
+    login email, then their primary AgentContact - mirrors the fallback
+    order already used to reach a supplier's billing contact elsewhere."""
+    if not agent_id:
+        return None
+    from app.models.agents import Agent, AgentInvoicing
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        return None
+    invoicing = db.query(AgentInvoicing).filter(AgentInvoicing.agent_id == agent_id).first()
+    if invoicing and invoicing.email:
+        return invoicing.email
+    if agent.user and agent.user.email:
+        return agent.user.email
+    primary_contact = next((c for c in agent.contacts if c.is_primary and c.email), None) or next((c for c in agent.contacts if c.email), None)
+    return primary_contact.email if primary_contact else None
+
+
 def _balance_due_date(db: Session, booking: Booking) -> Optional[datetime]:
     """When a deposit is outstanding, the date the remaining balance is due,
     per the tour's balance_payment_deadline_days (days before departure),
     falling back to the admin-configured default_balance_payment_deadline_days
     setting only when the tour itself hasn't set one. None if the booking is
     fully paid/unpaid or there's no departure date to count back from."""
+    # Agent "Reserve Now" bookings carry no deposit at all (amount_paid stays
+    # 0 until the invoice is settled), so the deposit branch below never
+    # applies to them -- the due date instead comes from the agent no-deposit
+    # buffer window (services.tour_availability.agent_reserve_eligibility).
+    if booking.booking_source == "agent" and booking.agent_payment_method in {"pay_later", "credit"} and money(booking.amount_paid or 0) <= 0:
+        if booking.tour_id is None or booking.tour_start_date is None:
+            return None
+        from app.services.tour_availability import agent_reserve_eligibility
+        return agent_reserve_eligibility(db, booking.tour_id, booking.tour_start_date)["due_date"]
+
     if money(booking.amount_paid or 0) <= 0 or money(booking.amount_pending or 0) <= 0:
         return None
     if booking.tour_start_date is None:
@@ -342,7 +372,7 @@ def _deposit_config(db: Session, booking: Booking) -> Optional[dict]:
     }
 
 
-def serialize_booking(db: Session, booking: Booking, detail: bool = False) -> dict:
+def serialize_booking(db: Session, booking: Booking, detail: bool = False, include_supplier_breakdown: bool = False) -> dict:
     data = {
         "id": booking.id,
         "booking_code": booking.booking_code or _booking_code(booking.id),
@@ -440,6 +470,26 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False) -> di
             "deposit_config": _deposit_config(db, booking),
             "invoice_summary": None,
         })
+        # Admin-only: what the supplier is owed after commission, alongside
+        # the customer-facing price, in the booking's own currency -- never
+        # exposed to the customer/agent/supplier's own view of this same
+        # serializer (see get_booking_detail's include_supplier_breakdown gate).
+        if include_supplier_breakdown:
+            breakdown = compute_booking_supplier_financials(db, booking)
+            data["supplier_breakdown"] = {
+                "currency": breakdown["currency"],
+                "gross_amount": money_str(breakdown["gross_amount"]),
+                "commission_percentage": money_str(breakdown["commission_percentage"]),
+                "commission_amount": money_str(breakdown["commission_amount"]),
+                "net_payable": money_str(breakdown["net_payable"]),
+                "customer_price": money_str(breakdown["customer_price"]),
+                "customer_price_currency": breakdown["customer_price_currency"],
+                # Tourvaa's total take on this booking: the admin markup baked
+                # into the customer price PLUS the commission held back from
+                # the supplier's share -- i.e. everything left after paying
+                # the supplier what they're actually owed.
+                "tourvaa_margin": money_str(money(breakdown["customer_price"]) - money(breakdown["net_payable"])),
+            } if breakdown else None
     return data
 
 
@@ -529,9 +579,24 @@ def _validate_supplier_lifecycle_transition(booking: Booking, target_status: str
 
 def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consume: bool = False):
     """Look up and validate a promo code against tour_discounts. Raises 400 if the
-    code doesn't exist or doesn't apply; returns 0 if no code was supplied."""
+    code doesn't exist or doesn't apply. When no code is supplied, auto-applies
+    the same best-active discount the storefront/booking-flow already
+    highlighted for this tour (services.discounts.find_best_discount_row) --
+    so the discounted price a customer/agent sees is always what they're
+    actually charged, with no separate promo code required."""
     if not promo_code or not promo_code.strip():
-        return money(0)
+        if not tour:
+            return money(0)
+        from app.services.discounts import find_best_discount_row, discount_amount_for
+        row = find_best_discount_row(db, tour)
+        if not row or money(subtotal) < money(row.minimum_booking_amount or 0):
+            return money(0)
+        if row.usage_limit is not None and (row.used_count or 0) >= row.usage_limit:
+            return money(0)
+        amount = min(money(discount_amount_for(row, float(subtotal))), money(subtotal))
+        if consume and amount > 0:
+            row.used_count = (row.used_count or 0) + 1
+        return money(amount)
     code = promo_code.strip()
     discount = db.query(TourDiscount).filter(TourDiscount.discount_code == code, TourDiscount.status == "active").first()
     if not discount:
@@ -638,6 +703,55 @@ def compute_supplier_commission_breakdown(raw_supplier_amount, group_discount_ra
         "commission_percentage": commission_percentage,
         "commission_amount": commission_amount,
         "net_earnings": net_earnings,
+    }
+
+
+def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict | None:
+    """Supplier gross/commission/net-payable breakdown for a booking, valid
+    at any point in its lifecycle (not just after acceptance) -- reconstructed
+    from the pricing slab snapshotted at booking creation
+    (booking.pricing_slab_id), never the tour's live/changed pricing, so it
+    always matches what supplier_accept_booking later ledgers. Returns None
+    when the booking has no supplier assigned. Amounts are in the same
+    currency as the booking (booking.currency), consistent with every other
+    figure on the booking record."""
+    if not booking.supplier_id:
+        return None
+    # For agent bookings, final_amount/total_cost is the customer-facing price
+    # INCLUDING the agent's own markup - the supplier never sees that markup,
+    # so the payout must be based on agent_net_price (the actual tour cost).
+    if booking.booking_source == "agent" and booking.agent_net_price:
+        gross_amount = money(booking.agent_net_price)
+    else:
+        gross_amount = money(booking.final_amount or booking.total_cost or 0)
+
+    supplier_gross_share = gross_amount
+    slab = db.query(TourPricing).filter(TourPricing.id == booking.pricing_slab_id).first() if booking.pricing_slab_id else None
+    if slab:
+        adults = booking.adults_count if booking.adults_count is not None else (booking.no_of_adults or 0)
+        children = booking.children_count if booking.children_count is not None else (booking.no_of_children or 0)
+        raw_tour_amount = money(money(slab.adult_price) * adults + money(slab.child_price) * children)
+        marked_up_adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
+        marked_up_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
+        marked_up_tour_amount = money(money(marked_up_adult) * adults + money(marked_up_child) * children)
+        addon_amount = gross_amount - marked_up_tour_amount
+        group_discount_ratio = money(booking.group_discount_amount or 0) / money(booking.base_amount) if booking.base_amount else money(0)
+        discounted_raw_tour_amount = raw_tour_amount * (money(1) - group_discount_ratio)
+        supplier_gross_share = money(discounted_raw_tour_amount + addon_amount)
+
+    supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first()
+    tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
+    effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
+    breakdown = compute_supplier_commission_breakdown(supplier_gross_share, money(0), effective_commission_percentage)
+    currency = booking.currency or (slab.currency if slab else "USD")
+    return {
+        "currency": currency,
+        "gross_amount": breakdown["discounted_amount"],
+        "commission_percentage": breakdown["commission_percentage"],
+        "commission_amount": breakdown["commission_amount"],
+        "net_payable": breakdown["net_earnings"],
+        "customer_price": money(booking.customer_selling_price or booking.final_amount or booking.total_cost or 0),
+        "customer_price_currency": currency,
     }
 
 
@@ -823,7 +937,7 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
     _ensure_booking_access(booking, actor)
     log_audit(db, actor=actor, action="view_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit()
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, include_supplier_breakdown=_user_role(actor) == "admin")
 
 
 def _validate_customer_travellers(data: BookingCreate, adults: int, children: int) -> None:
@@ -912,8 +1026,14 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         # advance-booking window is enforced either way.
         booked_date = calendar.tour_date if calendar and calendar.tour_date else (_parse_dt(data.tour_date) if data.tour_date else None)
         if booked_date:
-            from app.services.tour_availability import assert_meets_advance_booking_window
+            from app.services.tour_availability import assert_meets_advance_booking_window, agent_reserve_eligibility
             assert_meets_advance_booking_window(db, tour.id, booked_date)
+            if data.booking_source == "agent" and data.agent_payment_method in {"pay_later", "credit"}:
+                if not agent_reserve_eligibility(db, tour.id, booked_date)["eligible"]:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This tour is now too close to departure for a no-deposit reservation -- pay in full to confirm this booking.",
+                    )
     _validate_customer_travellers(data, adults, children)
     country = db.query(Country).filter(Country.id == (data.country_id or (tour.country_id if tour else None))).first() if (data.country_id or tour) else None
     city = db.query(City).filter(City.id == (data.city_id or (tour.city_id if tour else None))).first() if (data.city_id or tour) else None
@@ -1001,12 +1121,17 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     if booking.booking_source == "agent" and payment_status in {"credit_approval_pending", "bank_transfer_pending"}:
         # Agent "Reserve Now" -- no deposit taken, so an invoice for the full
         # outstanding amount is generated and emailed immediately rather than
-        # waiting on the on-demand Download Invoice action.
+        # waiting on the on-demand Download Invoice action. The agent who
+        # made the reservation needs it just as much as the customer (they're
+        # the one who owes Tourvaa, not the traveller), so it's sent to both.
         try:
             from app.schemas.invoices import InvoiceEmailRequest, InvoiceGenerateRequest
             from app.services.invoices import email_invoice_to_customer, generate_invoice
             invoice = generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id), actor, request)
             email_invoice_to_customer(db, invoice["id"], InvoiceEmailRequest(), actor, request)
+            agent_email = _resolve_agent_invoice_email(db, booking.agent_id)
+            if agent_email:
+                email_invoice_to_customer(db, invoice["id"], InvoiceEmailRequest(email=agent_email), actor, request)
         except Exception:
             logger.warning("Reservation invoice generation/email failed for booking %s", booking.id, exc_info=True)
 
@@ -1327,41 +1452,9 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         from app.services.supplier_ledger import create_ledger_entry
         existing_ledger = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking.id).first()
         if not existing_ledger:
-            # For agent bookings, final_amount/total_cost is the customer-facing
-            # price INCLUDING the agent's own markup (see create_booking) - the
-            # supplier never sees that markup, so the payout must be based on
-            # agent_net_price (the actual tour cost) instead.
-            if booking.booking_source == "agent" and booking.agent_net_price:
-                gross_amount = money(booking.agent_net_price)
-            else:
-                gross_amount = money(booking.final_amount or booking.total_cost or 0)
-            # The supplier's own share of the booking is reconstructed from
-            # the pricing slab (raw supplier prices), the same way the
-            # per-tour admin markup used to be backed out here. Add-ons
-            # (activities/accommodation/extensions), tax and surcharge carry
-            # no Tourvaa markup and pass through to the supplier untouched;
-            # any Tour-level group discount (see TourGroupDiscountTier)
-            # reduces only the tour-slab portion, matching how it was
-            # applied to the customer at checkout in _price_booking.
-            supplier_gross_share = gross_amount
-            slab = db.query(TourPricing).filter(TourPricing.id == booking.pricing_slab_id).first() if booking.pricing_slab_id else None
-            if slab:
-                adults = booking.adults_count if booking.adults_count is not None else (booking.no_of_adults or 0)
-                children = booking.children_count if booking.children_count is not None else (booking.no_of_children or 0)
-                raw_tour_amount = money(money(slab.adult_price) * adults + money(slab.child_price) * children)
-                marked_up_adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
-                marked_up_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
-                marked_up_tour_amount = money(money(marked_up_adult) * adults + money(marked_up_child) * children)
-                addon_amount = gross_amount - marked_up_tour_amount
-                group_discount_ratio = money(booking.group_discount_amount or 0) / money(booking.base_amount) if booking.base_amount else money(0)
-                discounted_raw_tour_amount = raw_tour_amount * (money(1) - group_discount_ratio)
-                supplier_gross_share = money(discounted_raw_tour_amount + addon_amount)
-            supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first()
-            tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
-            effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
-            breakdown = compute_supplier_commission_breakdown(supplier_gross_share, money(0), effective_commission_percentage)
+            breakdown = compute_booking_supplier_financials(db, booking)
             try:
-                create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=breakdown["discounted_amount"], commission_amount=breakdown["commission_amount"])
+                create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=breakdown["gross_amount"], commission_amount=breakdown["commission_amount"])
             except Exception as error:
                 logger.warning("Supplier ledger entry creation failed for booking %s: %s", booking.id, error)
 

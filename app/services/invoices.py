@@ -262,7 +262,7 @@ def email_invoice_to_customer(db: Session, invoice_id: int, data: InvoiceEmailRe
     subject = f"Your Invoice {inv.invoice_number} from Tourvaa"
     personal_message = f"<p>{escape(data.message)}</p>" if data.message else ""
     body = f"""
-<p>Dear Customer,</p>
+<p>Hello,</p>
 <p>Please find attached your invoice <b>{inv.invoice_number}</b>.</p>
 {personal_message}
 <p>Total Amount: <b>{inv.currency} {money_str(inv.total_amount)}</b></p>
