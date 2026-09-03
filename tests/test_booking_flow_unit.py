@@ -19,6 +19,18 @@ from app.schemas.agents import AgentSelfUpdate
 from app.schemas.suppliers import SupplierSelfUpdate
 from app.services.agent_scope import is_agent_user
 from app.services.supplier_scope import is_supplier_user, reject_supplier_review_action
+# `_validate_payment_request` now takes (db, booking, amount, current_user)
+# and falls back to the admin-configured platform deposit defaults
+# (default_deposit_percentage / default_deposit_cutoff_days) when a tour has
+# none of its own. These unit tests exercise the *tour-level* deposit rules,
+# so neutralize the platform fallbacks to keep the original expectations
+# (no tour deposit configured -> partial payment rejected) intact.
+@pytest.fixture(autouse=True)
+def _no_platform_deposit_defaults(monkeypatch):
+    from app.routers import payments_gateway
+
+    monkeypatch.setattr(payments_gateway, "get_default_deposit_cutoff_days", lambda db: None)
+    monkeypatch.setattr(payments_gateway, "get_default_deposit_percentage", lambda db: None)
 
 
 def booking(**overrides):
