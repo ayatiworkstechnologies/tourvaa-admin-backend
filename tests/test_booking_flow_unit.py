@@ -187,14 +187,14 @@ def test_gateway_rejects_partial_payment_without_a_configured_deposit():
     # the full outstanding balance must be rejected rather than accepted
     # as an arbitrary partial payment.
     with pytest.raises(HTTPException) as exc:
-        _validate_payment_request(payment_booking(), "300.00", customer_user())
+        _validate_payment_request(None, payment_booking(), "300.00", customer_user())
     assert exc.value.status_code == 400
 
 
 def test_gateway_accepts_a_deposit_at_or_above_the_configured_minimum():
     tour = SimpleNamespace(deposit_type="fixed", booking_deposit=200, deposit_cutoff_days=None)
     row = payment_booking(tour=tour)
-    amount = _validate_payment_request(row, "300.00", customer_user())
+    amount = _validate_payment_request(None, row, "300.00", customer_user())
     assert str(amount) == "300.00"
 
 
@@ -202,13 +202,13 @@ def test_gateway_rejects_a_deposit_below_the_configured_minimum():
     tour = SimpleNamespace(deposit_type="fixed", booking_deposit=200, deposit_cutoff_days=None)
     row = payment_booking(tour=tour)
     with pytest.raises(HTTPException) as exc:
-        _validate_payment_request(row, "100.00", customer_user())
+        _validate_payment_request(None, row, "100.00", customer_user())
     assert exc.value.status_code == 400
 
 
 def test_gateway_rejects_overpayment():
     with pytest.raises(HTTPException) as exc:
-        _validate_payment_request(payment_booking(), "1000.01", customer_user())
+        _validate_payment_request(None, payment_booking(), "1000.01", customer_user())
     assert exc.value.status_code == 400
 
 
@@ -221,7 +221,7 @@ def test_gateway_requires_the_immutable_booking_currency():
 
 def test_gateway_rejects_payment_from_another_customer():
     with pytest.raises(HTTPException) as exc:
-        _validate_payment_request(payment_booking(), "300.00", customer_user(99))
+        _validate_payment_request(None, payment_booking(), "300.00", customer_user(99))
     assert exc.value.status_code == 403
 
 
@@ -241,7 +241,7 @@ def test_agent_cannot_pay_another_agents_booking():
 
 def test_gateway_rejects_cancelled_booking_payment():
     with pytest.raises(HTTPException) as exc:
-        _validate_payment_request(payment_booking(booking_status="cancelled"), "300.00", customer_user())
+        _validate_payment_request(None, payment_booking(booking_status="cancelled"), "300.00", customer_user())
     assert exc.value.status_code == 409
 
 
