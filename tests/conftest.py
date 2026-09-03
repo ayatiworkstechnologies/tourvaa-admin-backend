@@ -31,7 +31,7 @@ def unique_phone(country_code: str = "+91") -> str:
 
 
 def get_admin_token() -> str:
-    resp = login_with_retry(ADMIN_EMAIL, ADMIN_PASSWORD, attempts=12, backoff=6.0)
+    resp = login_with_retry(ADMIN_EMAIL, ADMIN_PASSWORD)
     assert resp.status_code == 200, f"Login failed: {resp.text}"
     data = resp.json()
     token = data.get("data", {}).get("access_token") or data.get("access_token")
@@ -43,7 +43,7 @@ def auth_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def login_with_retry(email: str, password: str, attempts: int = 6, backoff: float = 6.0):
+def login_with_retry(email: str, password: str, attempts: int = 12, backoff: float = 6.0):
     """POST /auth/login, retrying past transient 429s.
 
     /auth/login is IP-rate-limited (10 calls/60s). Full-suite runs make far more
@@ -52,6 +52,11 @@ def login_with_retry(email: str, password: str, attempts: int = 6, backoff: floa
     the login itself would otherwise succeed. This is not a bug to test around
     with a looser assertion (that would mask a real 401/403) - it's a timing
     issue, so retry with backoff instead.
+
+    Defaults (12 attempts x 6s = up to 72s) match what get_admin_token() already
+    needed in practice - other role logins (e.g. test_37_agent_portal.py's
+    agent_ctx fixture) hit the exact same shared-IP rate-limit bucket during a
+    full-suite run and need the same headroom, not just the admin login path.
     """
     last = None
     for _ in range(attempts):
