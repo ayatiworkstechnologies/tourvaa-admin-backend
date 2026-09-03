@@ -484,7 +484,7 @@ def login_user(db: Session, data, request=None):
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if user.locked_until and user.locked_until > utcnow():
+    if user.locked_until and as_aware_utc(user.locked_until) > utcnow():
         _record_login_history(db, data=data, email=email, status="failed", user=user, failure_reason="account_locked", request=request)
         db.commit()
         raise HTTPException(
