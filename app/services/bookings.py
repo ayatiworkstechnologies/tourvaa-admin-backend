@@ -27,6 +27,7 @@ from app.schemas.bookings import (
     BookingStatusUpdate,
     BookingUpdate,
     SupplierDecisionRequest,
+    SupplierDueDateUpdate,
 )
 from app.models.cms import City, Country, Tour
 from app.utils.money import as_aware_utc, money, money_str, utcnow
@@ -416,6 +417,7 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "amount_paid": money_str(booking.amount_paid),
         "amount_pending": money_str(booking.amount_pending),
         "balance_due_date": _balance_due_date(db, booking),
+        "payment_due_date": booking.payment_due_date,
         "booking_status": booking.booking_status,
         "supplier_acceptance_status": booking.supplier_acceptance_status,
         "payment_status": booking.payment_status,
@@ -1511,6 +1513,22 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
 
     _email_admins_booking_event(db, "Supplier accepted booking", f"Supplier accepted booking {booking.booking_code}.", booking)
 
+    return serialize_booking(db, booking, detail=True)
+
+
+def supplier_set_due_date(db: Session, booking_id: int, data: SupplierDueDateUpdate, actor: User, request: Request | None = None) -> dict:
+    booking = get_booking_by_id(db, booking_id, for_update=True)
+    _ensure_booking_access(booking, actor)
+    if booking.supplier_acceptance_status != "accepted" or money(booking.amount_pending or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Due date can only be set on an accepted booking with an outstanding balance")
+
+    due_date = _parse_dt(data.due_date)
+    if due_date is None:
+        raise HTTPException(status_code=400, detail="Invalid due_date")
+
+    booking.payment_due_date = due_date
+    log_audit(db, actor=actor, action="supplier_set_due_date", entity_type="booking", entity_id=booking.id, request=request)
+    db.commit(); db.refresh(booking)
     return serialize_booking(db, booking, detail=True)
 
 

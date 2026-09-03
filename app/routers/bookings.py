@@ -15,6 +15,7 @@ from app.schemas.bookings import (
     BookingStatusUpdate,
     BookingUpdate,
     SupplierDecisionRequest,
+    SupplierDueDateUpdate,
     SupplierPostponeRequest,
     SupplierNotifyRequest,
 )
@@ -38,6 +39,7 @@ from app.services.bookings import (
     supplier_decline_booking,
     supplier_notify_parties,
     supplier_postpone_booking,
+    supplier_set_due_date,
     update_booking,
     update_booking_status,
 )
@@ -207,6 +209,11 @@ def supplier_start(booking_id: int, request: Request, data: SupplierDecisionRequ
     from app.services.bookings import supplier_start_booking
     reason = (data.reason if data else None) or "Tour started by supplier"
     return {"status": "success", "message": "Booking marked as ongoing", "data": supplier_start_booking(db, booking_id, reason, current_user, request)}
+
+
+@supplier_router.patch("/{booking_id}/due-date")
+def supplier_set_due_date_endpoint(booking_id: int, data: SupplierDueDateUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
+    return {"status": "success", "message": "Due date updated", "data": supplier_set_due_date(db, booking_id, data, current_user, request)}
 
 
 @supplier_router.patch("/{booking_id}/cancel")
