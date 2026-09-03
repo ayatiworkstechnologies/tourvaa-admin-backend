@@ -83,21 +83,120 @@ jobs:
       - name: API suite batch 1 (test_01-test_10)
         if: always()
         run: python -m pytest -q tests/test_0[1-9]_* tests/test_10_*
-      - name: API suite batch 2 (test_11-test_20)
+      - name: B2 - 11_cities
         if: always()
-        run: python -m pytest -q tests/test_1[1-9]_* tests/test_20_*
-      - name: API suite batch 3 (test_21-test_30)
+        run: python -m pytest -q tests/test_11_cities.py
+      - name: B2 - 12_tour_categories
         if: always()
-        run: python -m pytest -q tests/test_2[1-9]_* tests/test_26a_* tests/test_30_*
+        run: python -m pytest -q tests/test_12_tour_categories.py
+      - name: B2 - 13_tour_subcategories
+        if: always()
+        run: python -m pytest -q tests/test_13_tour_subcategories.py
+      - name: B2 - 14_basic_tours
+        if: always()
+        run: python -m pytest -q tests/test_14_basic_tours.py
+      - name: B2 - 15_advanced_tour_cms
+        if: always()
+        run: python -m pytest -q tests/test_15_advanced_tour_cms.py
+      - name: B2 - 16_tour_pricing
+        if: always()
+        run: python -m pytest -q tests/test_16_tour_pricing.py
+      - name: B2 - 17_tour_calendar
+        if: always()
+        run: python -m pytest -q tests/test_17_tour_calendar.py
+      - name: B2 - 18_tour_discounts
+        if: always()
+        run: python -m pytest -q tests/test_18_tour_discounts.py
+      - name: B2 - 19_uploads
+        if: always()
+        run: python -m pytest -q tests/test_19_uploads.py
+      - name: B2 - 20_bookings
+        if: always()
+        run: python -m pytest -q tests/test_20_bookings.py
+      - name: B3 - 21_supplier_acceptance
+        if: always()
+        run: python -m pytest -q tests/test_21_supplier_acceptance.py
+      - name: B3 - 22_payments
+        if: always()
+        run: python -m pytest -q tests/test_22_payments.py
+      - name: B3 - 23_invoices
+        if: always()
+        run: python -m pytest -q tests/test_23_invoices.py
+      - name: B3 - 24_communications
+        if: always()
+        run: python -m pytest -q tests/test_24_communications.py
+      - name: B3 - 25_notifications_reports_sessions
+        if: always()
+        run: python -m pytest -q tests/test_25_notifications_reports_sessions.py
+      - name: B3 - 26_handover_guards
+        if: always()
+        run: python -m pytest -q tests/test_26_handover_guards.py
+      - name: B3 - 26a_states
+        if: always()
+        run: python -m pytest -q tests/test_26a_states.py
+      - name: B3 - 27_geo_reference
+        if: always()
+        run: python -m pytest -q tests/test_27_geo_reference.py
+      - name: B3 - 28_public_settings
+        if: always()
+        run: python -m pytest -q tests/test_28_public_settings.py
+      - name: B3 - 29_chatbot
+        if: always()
+        run: python -m pytest -q tests/test_29_chatbot.py
+      - name: B3 - 30_cancellations
+        if: always()
+        run: python -m pytest -q tests/test_30_cancellations.py
       - name: API suite batch 4 (test_31-test_40)
         if: always()
         run: python -m pytest -q tests/test_3[1-9]_* tests/test_40_*
-      - name: API suite batch 5 (test_41-test_44)
+      - name: B5 - 41_affiliate_module_v2
         if: always()
-        run: python -m pytest -q tests/test_4[1-4]_*
-      - name: API suite batch 6 (unit tests)
+        run: python -m pytest -q tests/test_41_affiliate_module_v2.py
+      - name: B5 - 42_reviews
         if: always()
-        run: python -m pytest -q tests/test_auth_login_lockout_unit.py tests/test_booking_flow_unit.py tests/test_checkout_flow_unit.py tests/test_currency_unit.py tests/test_dashboard_role_based.py tests/test_dashboard_summary_unit.py tests/test_invoice_gst_unit.py tests/test_registration_activation_unit.py tests/test_registration_policy_unit.py tests/test_registration_token_security_unit.py tests/test_supplier_approval_policy_unit.py tests/test_user_account_lifecycle_unit.py
+        run: python -m pytest -q tests/test_42_reviews.py
+      - name: B5 - 43_admin_reports
+        if: always()
+        run: python -m pytest -q tests/test_43_admin_reports.py
+      - name: B5 - 44_payment_workflow_e2e
+        if: always()
+        run: python -m pytest -q tests/test_44_payment_workflow_e2e.py
+      - name: B6 - auth_login_lockout_unit
+        if: always()
+        run: python -m pytest -q tests/test_auth_login_lockout_unit.py
+      - name: B6 - booking_flow_unit
+        if: always()
+        run: python -m pytest -q tests/test_booking_flow_unit.py
+      - name: B6 - checkout_flow_unit
+        if: always()
+        run: python -m pytest -q tests/test_checkout_flow_unit.py
+      - name: B6 - currency_unit
+        if: always()
+        run: python -m pytest -q tests/test_currency_unit.py
+      - name: B6 - dashboard_role_based
+        if: always()
+        run: python -m pytest -q tests/test_dashboard_role_based.py
+      - name: B6 - dashboard_summary_unit
+        if: always()
+        run: python -m pytest -q tests/test_dashboard_summary_unit.py
+      - name: B6 - invoice_gst_unit
+        if: always()
+        run: python -m pytest -q tests/test_invoice_gst_unit.py
+      - name: B6 - registration_activation_unit
+        if: always()
+        run: python -m pytest -q tests/test_registration_activation_unit.py
+      - name: B6 - registration_policy_unit
+        if: always()
+        run: python -m pytest -q tests/test_registration_policy_unit.py
+      - name: B6 - registration_token_security_unit
+        if: always()
+        run: python -m pytest -q tests/test_registration_token_security_unit.py
+      - name: B6 - supplier_approval_policy_unit
+        if: always()
+        run: python -m pytest -q tests/test_supplier_approval_policy_unit.py
+      - name: B6 - user_account_lifecycle_unit
+        if: always()
+        run: python -m pytest -q tests/test_user_account_lifecycle_unit.py
 
       - name: Show API log after failure
         if: failure()
