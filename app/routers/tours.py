@@ -6,7 +6,6 @@ from app.services.cms import list_categories
 from app.auth.permissions import require_any_permission
 from app.services.supplier_scope import is_supplier_user
 from app.schemas.tours import (
-    AccommodationExtraPayload,
     AvailabilityConfigPayload,
     CalendarPayload,
     DiscountAmendment,
@@ -18,7 +17,6 @@ from app.schemas.tours import (
     HighlightPayload,
     InclusionPayload,
     ItineraryPayload,
-    OptionalActivityPayload,
     PriceCalculationRequest,
     PricingPayload,
     ReorderPayload,
@@ -32,8 +30,6 @@ from app.services.tours import (
     amend_discount,
     amend_global_discount,
     calculate_price,
-    create_accommodation,
-    create_activity,
     create_calendar_entry,
     create_discount,
     create_exclusion,
@@ -46,8 +42,6 @@ from app.services.tours import (
     create_itinerary,
     create_pricing,
     create_unavailable_date,
-    delete_accommodation,
-    delete_activity,
     delete_calendar_entry,
     delete_exclusion,
     delete_extension,
@@ -60,8 +54,6 @@ from app.services.tours import (
     delete_similar_tour,
     delete_unavailable_date,
     get_overview,
-    list_accommodations,
-    list_activities,
     list_all_discounts,
     list_calendar,
     list_discount_history,
@@ -78,8 +70,6 @@ from app.services.tours import (
     list_unavailable_dates,
     reorder_itineraries,
     save_overview,
-    update_accommodation,
-    update_activity,
     update_calendar_entry,
     update_exclusion,
     update_extension,
@@ -382,57 +372,6 @@ def remove_pricing(tour_id: int, pricing_id: int, request: Request, db: Session 
     delete_pricing(db, tour_id, pricing_id, current_user, request)
     return {"status": "success", "message": "Pricing slab deleted"}
 
-
-# optional activities
-@router.get("/{tour_id}/optional-activities")
-def tour_activities(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
-    return {"status": "success", "data": list_activities(db, tour_id)}
-
-
-@router.post("/{tour_id}/optional-activities")
-def add_activity(tour_id: int, data: OptionalActivityPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
-    return {"status": "success", "data": create_activity(db, tour_id, data, current_user, request)}
-
-
-@router.put("/{tour_id}/optional-activities/{activity_id}")
-def edit_activity(tour_id: int, activity_id: int, data: OptionalActivityPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
-    return {"status": "success", "data": update_activity(db, tour_id, activity_id, data, current_user, request)}
-
-
-@router.delete("/{tour_id}/optional-activities/{activity_id}")
-def remove_activity(tour_id: int, activity_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
-    delete_activity(db, tour_id, activity_id, current_user, request)
-    return {"status": "success", "message": "Activity deleted"}
-
-
-# accommodation extras
-@router.get("/{tour_id}/accommodation-extras")
-def tour_accommodations(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
-    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
-    return {"status": "success", "data": list_accommodations(db, tour_id)}
-
-
-@router.post("/{tour_id}/accommodation-extras")
-def add_accommodation(tour_id: int, data: AccommodationExtraPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
-    return {"status": "success", "data": create_accommodation(db, tour_id, data, current_user, request)}
-
-
-@router.put("/{tour_id}/accommodation-extras/{extra_id}")
-def edit_accommodation(tour_id: int, extra_id: int, data: AccommodationExtraPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
-    return {"status": "success", "data": update_accommodation(db, tour_id, extra_id, data, current_user, request)}
-
-
-@router.delete("/{tour_id}/accommodation-extras/{extra_id}")
-def remove_accommodation(tour_id: int, extra_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
-    _assert_supplier_owns_tour(db, tour_id, current_user)
-    delete_accommodation(db, tour_id, extra_id, current_user, request)
-    return {"status": "success", "message": "Accommodation extra deleted"}
 
 
 # calendar

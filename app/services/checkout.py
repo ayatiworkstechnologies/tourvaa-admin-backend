@@ -181,8 +181,6 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
         tour_calendar_id=s.tour_calendar_id,
         customer_id=s.customer_id,
         travellers=travellers,
-        optional_activities=_addons(payload.get("optional_activities", [])),
-        accommodations=_addons(payload.get("accommodations", [])),
         extensions=_addons(payload.get("extensions", [])),
         notes=body.notes or payload.get("notes"),
         promo_code=body.promo_code or payload.get("promo_code"),

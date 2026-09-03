@@ -10,7 +10,6 @@ CALENDAR_STATUSES = {"available", "unavailable", "sold_out", "blocked"}
 AVAILABILITY_FREQUENCIES = {"weekly", "fortnightly", "monthly"}
 DISCOUNT_TYPES = {"percentage", "fixed"}
 DISCOUNT_SCOPES = {"tour", "all_tours", "category", "country"}
-PRICE_TYPES = {"per_person", "per_booking"}
 ADDON_CATEGORIES = {"pickup", "room_upgrade", "dining", "insurance", "extra_activity", "additional_night", "meal", "visa_assistance", "other"}
 
 
@@ -223,63 +222,6 @@ class PricingPayload(BaseModel):
         return v
 
 
-# optional activity
-class OptionalActivityPayload(BaseModel):
-    activity_name: str = Field(min_length=1, max_length=255)
-    description: str = Field(default="")
-    price_per_person: float = Field(default=0.0, ge=0)
-    image: str = Field(default="", max_length=255)
-    category: str = Field(default="other", max_length=30)
-    status: str = Field(default="active", max_length=20)
-
-    @field_validator("category")
-    @classmethod
-    def validate_category(cls, v: str):
-        if v not in ADDON_CATEGORIES:
-            raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
-        return v
-
-    @field_validator("status")
-    @classmethod
-    def validate_status(cls, v: str):
-        if v not in ITEM_STATUSES:
-            raise ValueError("Invalid status")
-        return v
-
-
-# accommodation extra
-class AccommodationExtraPayload(BaseModel):
-    accommodation_name: str = Field(min_length=1, max_length=255)
-    description: str = Field(default="")
-    extra_price: float = Field(default=0.0, ge=0)
-    price_type: str = Field(default="per_person", max_length=20)
-    image: str = Field(default="", max_length=255)
-    category: str = Field(default="room_upgrade", max_length=30)
-    is_default: bool = False
-    status: str = Field(default="active", max_length=20)
-
-    @field_validator("price_type")
-    @classmethod
-    def validate_price_type(cls, v: str):
-        if v not in PRICE_TYPES:
-            raise ValueError(f"price_type must be one of {PRICE_TYPES}")
-        return v
-
-    @field_validator("category")
-    @classmethod
-    def validate_category(cls, v: str):
-        if v not in ADDON_CATEGORIES:
-            raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
-        return v
-
-    @field_validator("status")
-    @classmethod
-    def validate_status(cls, v: str):
-        if v not in ITEM_STATUSES:
-            raise ValueError("Invalid status")
-        return v
-
-
 # calendar
 class CalendarPayload(BaseModel):
     tour_date: datetime
@@ -443,7 +385,5 @@ class PriceCalculationRequest(BaseModel):
     tour_date: datetime | None = None
     adults_count: int = Field(default=1, ge=1)
     children_count: int = Field(default=0, ge=0)
-    optional_activity_ids: list[int] = Field(default_factory=list)
-    accommodation_extra_ids: list[int] = Field(default_factory=list)
     tour_extension_ids: list[int] = Field(default_factory=list)
     promo_code: str | None = None

@@ -72,8 +72,6 @@ class BookingCreate(BaseModel):
     agent_payment_method: Optional[str] = None
     agent_reference: Optional[str] = Field(default=None, max_length=100)
     promo_code: Optional[str] = None
-    optional_activities: list[BookingAddonPayload] = Field(default_factory=list)
-    accommodations: list[BookingAddonPayload] = Field(default_factory=list)
     extensions: list[BookingAddonPayload] = Field(default_factory=list)
     travellers: list[BookingTravellerPayload] = Field(default_factory=list)
     total_cost: Decimal = Decimal("0")

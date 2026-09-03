@@ -13,7 +13,7 @@ from app.models.agent_ledger import AgentLedger, AgentPayout, AgentPayoutItem
 from app.models.agents import Agent, AgentBusinessInfo, AgentContact, AgentDocument, AgentInvoicing
 from app.models.audit import AuditLog
 from app.models.booking_calendar import BookingCalendarEvent
-from app.models.bookings import Booking, BookingAccommodation, BookingCommunication, BookingExtension, BookingOptionalActivity, BookingStatusHistory, BookingTraveller, EmailLog, MessageReply
+from app.models.bookings import Booking, BookingCommunication, BookingExtension, BookingStatusHistory, BookingTraveller, EmailLog, MessageReply
 from app.models.cancellations import CancellationRequest, RefundRule
 from app.models.chatbot import ChatEmbedding, ChatFAQ, ChatMessage, ChatSession
 from app.models.checkout import CheckoutSession
@@ -35,7 +35,6 @@ from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierP
 from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierBusinessInfo, SupplierContact, SupplierDocument, SupplierInvoicing, SupplierVehicle
 from app.models.tour_versions import TourReviewComment, TourVersion
 from app.models.tours import (
-    TourAccommodationExtra,
     TourCalendar,
     TourDiscount,
     TourExclusion,
@@ -44,7 +43,6 @@ from app.models.tours import (
     TourHighlight,
     TourInclusion,
     TourItinerary,
-    TourOptionalActivity,
     TourOverview,
     TourPricing,
     TourSimilar,
