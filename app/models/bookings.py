@@ -89,6 +89,10 @@ class Booking(Base):
     cancellation_reason = Column(String(255), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     cancelled_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Supplier-set date the remaining balance is due, distinct from
+    # Invoice.balance_due_date (which is auto-calculated) -- suppliers set
+    # this manually via PATCH /supplier/bookings/{id}/due-date.
+    payment_due_date = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

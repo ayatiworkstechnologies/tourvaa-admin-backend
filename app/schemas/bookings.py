@@ -159,6 +159,10 @@ class SupplierDecisionRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class SupplierDueDateUpdate(BaseModel):
+    due_date: str = Field(min_length=1)
+
+
 class SupplierPostponeRequest(BaseModel):
     reason: str = Field(min_length=1)
     new_tour_date: Optional[str] = None
