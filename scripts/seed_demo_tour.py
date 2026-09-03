@@ -21,7 +21,6 @@ from app.models.users import User
 
 from app.schemas.cms import StatusUpdate, TourPayload
 from app.schemas.tours import (
-    AccommodationExtraPayload,
     CalendarPayload,
     DiscountPayload,
     ExtensionPayload,
@@ -29,7 +28,6 @@ from app.schemas.tours import (
     HighlightPayload,
     InclusionPayload,
     ItineraryPayload,
-    OptionalActivityPayload,
     PricingPayload,
     TourOverviewPayload,
 )
@@ -254,22 +252,6 @@ def main():
             markup_value=supplier_commission, admin_markup_type="percentage", admin_markup_value=15,
         ), admin_user)
         print("  2 pricing slabs added")
-
-        # 8. Optional activities & accommodation extras -----------------------
-        activities = [
-            ("Queenstown Bungy Jump", "Take the leap at the original Kawarau Bridge Bungy.", 220, "extra_activity"),
-            ("Wellington Cable Car Return", "Round-trip ride with panoramic harbour views.", 25, "extra_activity"),
-            ("Private Photography Add-on", "A local photographer joins for the Cathedral Cove stop.", 95, "other"),
-        ]
-        for name, description, price, category_slug in activities:
-            tour_services.create_activity(db, tour_id, OptionalActivityPayload(activity_name=name, description=description, price_per_person=price, category=category_slug), admin_user)
-        accommodations = [
-            ("Sea View Room Upgrade", "Upgrade to a sea-facing room in Kaikoura.", 60, "room_upgrade"),
-            ("Extra Night in Queenstown", "Add one additional night at tour end, room only.", 180, "additional_night"),
-        ]
-        for name, description, price, category_slug in accommodations:
-            tour_services.create_accommodation(db, tour_id, AccommodationExtraPayload(accommodation_name=name, description=description, extra_price=price, category=category_slug), admin_user)
-        print(f"  {len(activities)} optional activities, {len(accommodations)} accommodation extras added")
 
         # 9. Extension (links to another existing tour) ----------------------
         if extension_target and extension_target.id != tour_id:

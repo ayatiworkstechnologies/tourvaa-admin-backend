@@ -42,8 +42,6 @@ class Booking(Base):
 
     total_cost = Column(Numeric(12, 2), default=0, nullable=False)
     base_amount = Column(Numeric(12, 2), default=0, nullable=False)
-    optional_activity_amount = Column(Numeric(12, 2), default=0, nullable=False)
-    accommodation_amount = Column(Numeric(12, 2), default=0, nullable=False)
     extension_amount = Column(Numeric(12, 2), default=0, nullable=False)
     discount_amount = Column(Numeric(12, 2), default=0, nullable=False)
     promo_code = Column(String(100), nullable=True)
@@ -105,8 +103,6 @@ class Booking(Base):
     creator = relationship("User", foreign_keys=[created_by])
     payments = relationship("Payment", back_populates="booking", cascade="all, delete-orphan")
     travellers = relationship("BookingTraveller", back_populates="booking", cascade="all, delete-orphan")
-    optional_activities = relationship("BookingOptionalActivity", back_populates="booking", cascade="all, delete-orphan")
-    accommodations = relationship("BookingAccommodation", back_populates="booking", cascade="all, delete-orphan")
     extensions = relationship("BookingExtension", back_populates="booking", cascade="all, delete-orphan")
     status_history = relationship("BookingStatusHistory", back_populates="booking", cascade="all, delete-orphan")
     communications = relationship("BookingCommunication", back_populates="booking", cascade="all, delete-orphan")
@@ -137,37 +133,6 @@ class BookingTraveller(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     booking = relationship("Booking", back_populates="travellers")
-
-
-class BookingOptionalActivity(Base):
-    __tablename__ = "booking_optional_activities"
-
-    id = Column(Integer, primary_key=True, index=True)
-    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
-    tour_optional_activity_id = Column(Integer, ForeignKey("tour_optional_activities.id"), nullable=True)
-    activity_name_snapshot = Column(String(255), nullable=False)
-    quantity = Column(Integer, default=1, nullable=False)
-    unit_price = Column(Numeric(12, 2), default=0, nullable=False)
-    total_price = Column(Numeric(12, 2), default=0, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    booking = relationship("Booking", back_populates="optional_activities")
-
-
-class BookingAccommodation(Base):
-    __tablename__ = "booking_accommodations"
-
-    id = Column(Integer, primary_key=True, index=True)
-    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
-    tour_accommodation_extra_id = Column(Integer, ForeignKey("tour_accommodation_extras.id"), nullable=True)
-    accommodation_name_snapshot = Column(String(255), nullable=False)
-    quantity = Column(Integer, default=1, nullable=False)
-    price_type = Column(String(30), default="per_person", nullable=False)
-    unit_price = Column(Numeric(12, 2), default=0, nullable=False)
-    total_price = Column(Numeric(12, 2), default=0, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    booking = relationship("Booking", back_populates="accommodations")
 
 
 class BookingExtension(Base):

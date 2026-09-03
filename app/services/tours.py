@@ -9,7 +9,6 @@ from app.services.audit import log_audit
 from app.models.cms import Tour
 from app.utils.operations import get_or_404
 from app.models.tours import (
-    TourAccommodationExtra,
     TourCalendar,
     TourDiscount,
     TourDiscountHistory,
@@ -20,14 +19,12 @@ from app.models.tours import (
     TourHighlight,
     TourInclusion,
     TourItinerary,
-    TourOptionalActivity,
     TourOverview,
     TourPricing,
     TourSimilar,
     TourUnavailableDate,
 )
 from app.schemas.tours import (
-    AccommodationExtraPayload,
     CalendarPayload,
     DiscountAmendment,
     DiscountPayload,
@@ -37,7 +34,6 @@ from app.schemas.tours import (
     HighlightPayload,
     InclusionPayload,
     ItineraryPayload,
-    OptionalActivityPayload,
     PriceCalculationRequest,
     PricingPayload,
     ReorderPayload,
@@ -502,59 +498,6 @@ def delete_pricing(db: Session, tour_id: int, rid: int, actor: User, request: Re
     db.commit()
 
 
-# optional activity
-def _ser_activity(o: TourOptionalActivity) -> dict:
-    return {"id": o.id, "tour_id": o.tour_id, "activity_name": o.activity_name, "description": o.description, "price_per_person": o.price_per_person, "image": o.image, "category": o.category, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
-
-_list_activities_fn, _create_activity_fn, _update_activity_fn, _delete_activity_fn = _simple_crud(TourOptionalActivity, _ser_activity)
-
-def list_activities(db, tour_id): return _list_activities_fn(db, tour_id)
-def create_activity(db, tour_id, data, actor, request=None): return _create_activity_fn(db, tour_id, data, actor, "create_optional_activity", request)
-def update_activity(db, tour_id, rid, data, actor, request=None): return _update_activity_fn(db, tour_id, rid, data, actor, "update_optional_activity", "Activity", request)
-def delete_activity(db, tour_id, rid, actor, request=None): return _delete_activity_fn(db, tour_id, rid, actor, "delete_optional_activity", "Activity", request)
-
-
-# accommodation extra
-def _ser_accommodation(o: TourAccommodationExtra) -> dict:
-    return {"id": o.id, "tour_id": o.tour_id, "accommodation_name": o.accommodation_name, "description": o.description, "extra_price": o.extra_price, "price_type": o.price_type, "image": o.image or "", "category": o.category, "is_default": bool(o.is_default), "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
-
-
-def list_accommodations(db: Session, tour_id: int) -> list[dict]:
-    _require_tour(db, tour_id)
-    return [_ser_accommodation(o) for o in db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour_id).all()]
-
-
-def create_accommodation(db: Session, tour_id: int, data: AccommodationExtraPayload, actor: User, request: Request | None = None) -> dict:
-    _require_tour(db, tour_id)
-    payload = data.model_dump()
-    payload["is_default"] = 1 if payload.pop("is_default") else 0
-    o = TourAccommodationExtra(tour_id=tour_id, **payload)
-    db.add(o)
-    log_audit(db, actor=actor, action="create_accommodation_extra", entity_type="tour", entity_id=tour_id, request=request)
-    db.commit()
-    db.refresh(o)
-    return _ser_accommodation(o)
-
-
-def update_accommodation(db: Session, tour_id: int, extra_id: int, data: AccommodationExtraPayload, actor: User, request: Request | None = None) -> dict:
-    o = _child_or_404(db, TourAccommodationExtra, extra_id, tour_id, "Accommodation extra")
-    payload = data.model_dump()
-    payload["is_default"] = 1 if payload.pop("is_default") else 0
-    for key, value in payload.items():
-        setattr(o, key, value)
-    log_audit(db, actor=actor, action="update_accommodation_extra", entity_type="tour", entity_id=tour_id, request=request)
-    db.commit()
-    db.refresh(o)
-    return _ser_accommodation(o)
-
-
-def delete_accommodation(db: Session, tour_id: int, extra_id: int, actor: User, request: Request | None = None):
-    o = _child_or_404(db, TourAccommodationExtra, extra_id, tour_id, "Accommodation extra")
-    log_audit(db, actor=actor, action="delete_accommodation_extra", entity_type="tour", entity_id=tour_id, request=request)
-    db.delete(o)
-    db.commit()
-
-
 # calendar
 def _ser_calendar(o: TourCalendar) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "tour_date": o.tour_date, "start_date": o.start_date, "end_date": o.end_date, "available_seats": o.available_seats, "booked_seats": o.booked_seats, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
@@ -877,44 +820,16 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
     # storefront_* (falling back to the raw price if unset) is what
     # _price_booking actually charges at checkout - this preview must match
     # that.
-    # float(...) throughout this function: TourPricing/TourOptionalActivity/
-    # TourAccommodationExtra/TourExtension/TourDiscount amount columns are all
-    # Numeric (Decimal on read) - this function otherwise does plain float
-    # arithmetic (0.0 accumulators), and Decimal + float raises TypeError.
+    # float(...) throughout this function: TourPricing/TourExtension/
+    # TourDiscount amount columns are all Numeric (Decimal on read) - this
+    # function otherwise does plain float arithmetic (0.0 accumulators), and
+    # Decimal + float raises TypeError.
     adult_unit = float((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else tour.price_start_per_person)
     child_unit = float((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0.0)
 
     adult_total = adult_unit * req.adults_count
     child_total = child_unit * req.children_count
     base_price = adult_total + child_total
-
-    # Optional activities
-    activity_total = 0.0
-    activity_breakdown = []
-    if req.optional_activity_ids:
-        acts = db.query(TourOptionalActivity).filter(
-            TourOptionalActivity.id.in_(req.optional_activity_ids),
-            TourOptionalActivity.tour_id == tour_id,
-            TourOptionalActivity.status == "active",
-        ).all()
-        for act in acts:
-            cost = float(act.price_per_person) * total_pax
-            activity_total += cost
-            activity_breakdown.append({"id": act.id, "name": act.activity_name, "amount": cost})
-
-    # Accommodation extras
-    accommodation_total = 0.0
-    accommodation_breakdown = []
-    if req.accommodation_extra_ids:
-        extras = db.query(TourAccommodationExtra).filter(
-            TourAccommodationExtra.id.in_(req.accommodation_extra_ids),
-            TourAccommodationExtra.tour_id == tour_id,
-            TourAccommodationExtra.status == "active",
-        ).all()
-        for extra in extras:
-            cost = float(extra.extra_price) * (total_pax if extra.price_type == "per_person" else 1)
-            accommodation_total += cost
-            accommodation_breakdown.append({"id": extra.id, "name": extra.accommodation_name, "amount": cost})
 
     # Tour extensions
     extension_total = 0.0
@@ -930,7 +845,7 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
             extension_total += amount
             extension_breakdown.append({"id": ext.id, "title": ext.extension_title, "amount": amount})
 
-    subtotal = base_price + activity_total + accommodation_total + extension_total
+    subtotal = base_price + extension_total
 
     # Apply discount / promo code
     discount_amount = 0.0
@@ -989,8 +904,6 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
         "adult_price": adult_total,
         "child_price": child_total,
         "base_price": base_price,
-        "optional_activity_total": activity_total,
-        "accommodation_extra_total": accommodation_total,
         "tour_extension_total": extension_total,
         "subtotal": subtotal,
         "discount_amount": discount_amount,
@@ -999,8 +912,6 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
         "service_fee": service_fee,
         "final_total": final_total,
         "price_breakdown": {
-            "activities": activity_breakdown,
-            "accommodations": accommodation_breakdown,
             "extensions": extension_breakdown,
         },
     }

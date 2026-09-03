@@ -10,7 +10,6 @@ from pydantic import ValidationError
 
 from app.models.cms import City, Country, State, Tour, TourCategory
 from app.models.tours import (
-    TourAccommodationExtra,
     TourCalendar,
     TourDiscount,
     TourExclusion,
@@ -18,7 +17,6 @@ from app.models.tours import (
     TourHighlight,
     TourInclusion,
     TourItinerary,
-    TourOptionalActivity,
     TourOverview,
     TourPricing,
 )
@@ -184,17 +182,6 @@ def build_tour_detail_workbook(db: Session, tour: Tour) -> io.BytesIO:
          p.supplier_final_adult_price, p.supplier_final_child_price, p.final_price,
          p.storefront_adult_price, p.storefront_child_price, p.currency, p.status]
         for p in pricing
-    ])
-
-    activities = db.query(TourOptionalActivity).filter(TourOptionalActivity.tour_id == tour.id).all()
-    _write_sheet(wb, "Optional Activities", ["Name", "Description", "Price Per Person", "Category", "Status"], [
-        [a.activity_name, a.description, a.price_per_person, a.category, a.status] for a in activities
-    ])
-
-    accommodation_extras = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour.id).all()
-    _write_sheet(wb, "Accommodation Extras", ["Name", "Description", "Extra Price", "Price Type", "Category", "Default", "Status"], [
-        [a.accommodation_name, a.description, a.extra_price, a.price_type, a.category, "Yes" if a.is_default else "No", a.status]
-        for a in accommodation_extras
     ])
 
     calendar = db.query(TourCalendar).filter(TourCalendar.tour_id == tour.id).order_by(TourCalendar.tour_date.asc()).all()

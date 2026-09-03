@@ -22,7 +22,6 @@ from app.services.viator import build_generic_affiliate_url, is_configured as is
 from app.schemas.cms import slugify
 from app.utils.ratelimit import check_rate_limit
 from app.models.tours import (
-    TourAccommodationExtra,
     TourCalendar,
     TourDiscount,
     TourExtension,
@@ -32,7 +31,6 @@ from app.models.tours import (
     TourHighlight,
     TourInclusion,
     TourItinerary,
-    TourOptionalActivity,
     TourOverview,
     TourPricing,
     TourSimilar,
@@ -473,8 +471,6 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
         .order_by(TourGroupDiscountTier.min_pax.asc())
         .all()
     )
-    activities = db.query(TourOptionalActivity).filter(TourOptionalActivity.tour_id == tour_id).all()
-    accommodations = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour_id).all()
     extensions = db.query(TourExtension).filter(TourExtension.tour_id == tour_id).all()
     # status == "active" alone isn't enough - an admin-created discount stays
     # "active" across its whole lifecycle, so a since-expired or not-yet-started
@@ -574,8 +570,6 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             # how the base price + group discount tiers are expanded into
             # these traveller-count rows.
             "pricing": _public_pricing_rows(pricing, group_discount_tiers),
-            "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
-            "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],
             "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other", "image": (e.extension_tour.banner_image or None) if e.extension_tour else None} for e in extensions],
             "discounts": [{"label": d.discount_name, "discount_type": d.discount_type, "value": float(d.discount_value), "valid_from": str(d.start_date) if d.start_date else None, "valid_to": str(d.end_date) if d.end_date else None} for d in discounts],
             "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": max(0, c.available_seats - c.booked_seats), "status": c.status} for c in calendar],

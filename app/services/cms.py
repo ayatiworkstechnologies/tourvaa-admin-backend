@@ -400,7 +400,6 @@ def delete_tour(db: Session, tour_id: int, actor: User, request: Request | None 
     from app.models.customers import CustomerWishlistItem
     from app.models.tour_versions import TourReviewComment, TourVersion
     from app.models.tours import (
-        TourAccommodationExtra,
         TourAvailabilityConfig,
         TourCalendar,
         TourDiscount,
@@ -410,7 +409,6 @@ def delete_tour(db: Session, tour_id: int, actor: User, request: Request | None 
         TourHighlight,
         TourInclusion,
         TourItinerary,
-        TourOptionalActivity,
         TourOverview,
         TourPricing,
         TourSimilar,
@@ -429,8 +427,6 @@ def delete_tour(db: Session, tour_id: int, actor: User, request: Request | None 
         (TourHighlight, TourHighlight.tour_id),
         (TourGalleryImage, TourGalleryImage.tour_id),
         (TourPricing, TourPricing.tour_id),
-        (TourOptionalActivity, TourOptionalActivity.tour_id),
-        (TourAccommodationExtra, TourAccommodationExtra.tour_id),
         (TourCalendar, TourCalendar.tour_id),
         (TourAvailabilityConfig, TourAvailabilityConfig.tour_id),
         (TourUnavailableDate, TourUnavailableDate.tour_id),

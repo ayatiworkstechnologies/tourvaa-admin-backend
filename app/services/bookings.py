@@ -12,10 +12,8 @@ from app.services.audit import log_audit
 from app.services.payments import serialize_payment
 from app.models.bookings import (
     Booking,
-    BookingAccommodation,
     BookingCommunication,
     BookingExtension,
-    BookingOptionalActivity,
     BookingStatusHistory,
     BookingTraveller,
 )
@@ -39,7 +37,7 @@ from app.services.settings import (
 from app.models.customers import Customer
 from app.models.agents import Agent
 from app.models.suppliers import Supplier
-from app.models.tours import TourAccommodationExtra, TourCalendar, TourDiscount, TourExtension, TourGroupDiscountTier, TourOptionalActivity, TourPricing, TourUnavailableDate
+from app.models.tours import TourCalendar, TourDiscount, TourExtension, TourGroupDiscountTier, TourPricing, TourUnavailableDate
 from app.models.users import User
 
 logger = logging.getLogger(__name__)
@@ -404,8 +402,6 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "currency": booking.currency,
         "total_cost": money_str(booking.total_cost),
         "base_amount": money_str(booking.base_amount),
-        "optional_activity_amount": money_str(booking.optional_activity_amount),
-        "accommodation_amount": money_str(booking.accommodation_amount),
         "extension_amount": money_str(booking.extension_amount),
         "discount_amount": money_str(booking.discount_amount),
         "tax_amount": money_str(booking.tax_amount),
@@ -449,16 +445,12 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
             "customer": {"id": booking.customer.id, "name": booking.customer.full_name, "email": booking.customer.email} if booking.customer else None,
             "supplier": {"id": booking.supplier.id, "supplier_name": booking.supplier.supplier_name} if booking.supplier else None,
             "travellers": [serialize_traveller(t) for t in booking.travellers],
-            "optional_activities": [serialize_activity(a) for a in booking.optional_activities],
-            "accommodations": [serialize_accommodation(a) for a in booking.accommodations],
             "extensions": [serialize_extension(e) for e in booking.extensions],
             "payments": [serialize_payment(p) for p in booking.payments],
             "status_history": [serialize_status_history(h) for h in booking.status_history],
             "communications": [serialize_communication(c) for c in booking.communications],
             "price_breakdown": {
                 "base_amount": money_str(booking.base_amount),
-                "optional_activity_amount": _money_total(booking.optional_activities),
-                "accommodation_amount": _money_total(booking.accommodations),
                 "extension_amount": _money_total(booking.extensions),
                 "discount_amount": money_str(booking.discount_amount),
                 "tax_amount": money_str(booking.tax_amount),
@@ -497,14 +489,6 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
 
 def serialize_traveller(t: BookingTraveller) -> dict:
     return {"id": t.id, "traveller_type": t.traveller_type, "first_name": t.first_name, "last_name": t.last_name, "full_name": t.full_name, "age": t.age, "gender": t.gender, "nationality": t.nationality, "passport_number": _mask_passport(t.passport_number), "email": t.email, "phone": t.phone, "is_primary_contact": bool(t.is_primary_contact), "special_requirements": t.special_requirements, "pickup_location": t.pickup_location, "emergency_contact": t.emergency_contact}
-
-
-def serialize_activity(a: BookingOptionalActivity) -> dict:
-    return {"id": a.id, "tour_optional_activity_id": a.tour_optional_activity_id, "activity_name_snapshot": a.activity_name_snapshot, "quantity": a.quantity, "unit_price": money_str(a.unit_price), "total_price": money_str(a.total_price)}
-
-
-def serialize_accommodation(a: BookingAccommodation) -> dict:
-    return {"id": a.id, "tour_accommodation_extra_id": a.tour_accommodation_extra_id, "accommodation_name_snapshot": a.accommodation_name_snapshot, "quantity": a.quantity, "price_type": a.price_type, "unit_price": money_str(a.unit_price), "total_price": money_str(a.total_price)}
 
 
 def serialize_extension(e: BookingExtension) -> dict:
@@ -808,29 +792,6 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     base_amount = money(adult_unit * adults + child_unit * children)
     group_tier, group_discount_amount, _group_discount_ratio = _resolve_group_discount(db, data.tour_id, seat_travellers, base_amount)
 
-    activity_rows = []
-    activity_total = money(0)
-    for item in data.optional_activities:
-        row = db.query(TourOptionalActivity).filter(TourOptionalActivity.id == item.id, TourOptionalActivity.status == "active").first() if item.id else None
-        if not row or (data.tour_id and row.tour_id != data.tour_id):
-            raise HTTPException(status_code=400, detail="Invalid optional activity")
-        unit = money(row.price_per_person)
-        total = money(unit * item.quantity)
-        activity_total += total
-        activity_rows.append((row, item.quantity, unit, total))
-
-    accommodation_rows = []
-    accommodation_total = money(0)
-    for item in data.accommodations:
-        row = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.id == item.id, TourAccommodationExtra.status == "active").first() if item.id else None
-        if not row or (data.tour_id and row.tour_id != data.tour_id):
-            raise HTTPException(status_code=400, detail="Invalid accommodation extra")
-        unit = money(row.extra_price)
-        qty = seat_travellers if row.price_type == "per_person" else item.quantity
-        total = money(unit * qty)
-        accommodation_total += total
-        accommodation_rows.append((row, qty, unit, total))
-
     extension_rows = []
     extension_total = money(0)
     for item in data.extensions:
@@ -845,7 +806,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # Group discount is applied before the promo code, off the group-discounted
     # subtotal, so a promo percentage never gets computed against an amount
     # the customer was never actually going to pay.
-    subtotal = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total)
+    subtotal = money(base_amount - group_discount_amount + extension_total)
     discount = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount)
     # tax_percentage applies to the discounted subtotal (never on top of a
     # discount the customer isn't actually being charged); service_fee is a
@@ -855,14 +816,14 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     tax_percentage = money(getattr(tour, "tax_percentage", 0) or 0) if tour else money(0)
     tax = money(taxable_amount * tax_percentage / money(100)) if tax_percentage > 0 else money(0)
     surcharge = money(getattr(tour, "service_fee", 0) or 0) if tour else money(0)
-    final = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total - discount + tax + surcharge)
+    final = money(base_amount - group_discount_amount + extension_total - discount + tax + surcharge)
     if final < 0:
         raise HTTPException(status_code=400, detail="Final amount cannot be negative")
-    return tour, calendar, adults, children, total_travellers, currency, base_amount, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activity_rows, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount
+    return tour, calendar, adults, children, total_travellers, currency, base_amount, extension_total, discount, tax, surcharge, final, extension_rows, slab, group_tier, group_discount_amount
 
 
 def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
-    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount = _price_booking(db, data)
+    tour, calendar, adults, children, total_travellers, currency, base, extension_total, discount, tax, surcharge, final, extensions, slab, group_tier, group_discount_amount = _price_booking(db, data)
     agent_markup = money(data.agent_markup if data.booking_source == "agent" else 0)
     customer_selling_price = money(final + agent_markup)
     return {
@@ -873,8 +834,6 @@ def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
         "child_count": children,
         "total_passengers": total_travellers,
         "base_amount": money_str(base),
-        "optional_activity_amount": money_str(activity_total),
-        "accommodation_amount": money_str(accommodation_total),
         "extension_amount": money_str(extension_total),
         "group_discount_tier_id": group_tier.id if group_tier else None,
         "group_discount_amount": money_str(group_discount_amount),
@@ -889,8 +848,6 @@ def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
         "tour_name": tour.title if tour else data.tour_name,
         "tour_date": calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else data.tour_date,
         "line_items": {
-            "optional_activities": [{"id": row.id, "name": row.activity_name, "quantity": qty, "unit_price": money_str(unit), "total_price": money_str(total)} for row, qty, unit, total in activities],
-            "accommodations": [{"id": row.id, "name": row.accommodation_name, "quantity": qty, "unit_price": money_str(unit), "total_price": money_str(total)} for row, qty, unit, total in accommodations],
             "extensions": [{"id": row.id, "name": row.extension_title, "quantity": qty, "unit_price": money_str(unit), "total_price": money_str(total)} for row, qty, unit, total in extensions],
         },
     }
@@ -1041,7 +998,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         except Exception:
             logger.warning("Affiliate attribution lookup failed for booking creation", exc_info=True)
 
-    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount = _price_booking(db, data, lock_calendar=True, consume_discount=True)
+    tour, calendar, adults, children, total_travellers, currency, base, extension_total, discount, tax, surcharge, final, extensions, slab, group_tier, group_discount_amount = _price_booking(db, data, lock_calendar=True, consume_discount=True)
     if tour:
         # calendar is only set when the caller passed tour_calendar_id - fall
         # back to the raw tour_date string (checkout/admin bookings that
@@ -1077,7 +1034,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, affiliate_attribution_id=resolved_attribution.id if resolved_attribution else None, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
         no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, no_of_rooms=data.no_of_rooms, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
-        total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, group_discount_tier_id=group_tier.id if group_tier else None, group_discount_amount=group_discount_amount, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
+        total_cost=customer_selling_price, base_amount=base, extension_amount=extension_total, group_discount_tier_id=group_tier.id if group_tier else None, group_discount_amount=group_discount_amount, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
         booking_status=booking_status, supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status=payment_status, payment_type=data.payment_type, agent_payment_method=data.agent_payment_method if data.booking_source == "agent" else None, agent_reference=data.agent_reference if data.booking_source == "agent" else None, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
         # Pricing/currency snapshot -- captured once here and never touched
         # again, even if the slab, commission, or exchange rates change
@@ -1106,10 +1063,6 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     for t in data.travellers:
         full = t.full_name or f"{t.first_name} {t.last_name}".strip()
         db.add(BookingTraveller(booking_id=booking.id, traveller_type=t.traveller_type, first_name=t.first_name, last_name=t.last_name, full_name=full, age=t.age, gender=t.gender, nationality=t.nationality, passport_number=t.passport_number, email=t.email, phone=t.phone, is_primary_contact=1 if t.is_primary_contact else 0, special_requirements=t.special_requirements))
-    for row, qty, unit, total in activities:
-        db.add(BookingOptionalActivity(booking_id=booking.id, tour_optional_activity_id=row.id, activity_name_snapshot=row.activity_name, quantity=qty, unit_price=unit, total_price=total))
-    for row, qty, unit, total in accommodations:
-        db.add(BookingAccommodation(booking_id=booking.id, tour_accommodation_extra_id=row.id, accommodation_name_snapshot=row.accommodation_name, quantity=qty, price_type=row.price_type, unit_price=unit, total_price=total))
     for row, qty, unit, total in extensions:
         db.add(BookingExtension(booking_id=booking.id, tour_extension_id=row.id, extension_tour_id=row.extension_tour_id, extension_name_snapshot=row.extension_title, quantity=qty, unit_price=unit, total_price=total))
     _history(db, booking, None, booking.booking_status, actor, _user_role(actor), "Booking created")
