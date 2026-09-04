@@ -9,7 +9,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = "http://127.0.0.1:8000/api"
+BASE_URL = os.environ.get("TOURVAA_TEST_BASE_URL", "http://127.0.0.1:8000/api").rstrip("/")
 ADMIN_EMAIL = "admin@tourvaa.com"
 ADMIN_PASSWORD = "Admin@123"
 
