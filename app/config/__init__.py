@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     # Local/dev workflows are unaffected - .env and .env.example both set
     # APP_ENV=development explicitly.
     APP_ENV: str = "production"
-    APP_DEBUG: bool = True
+    # Fail closed here too: debug should only turn on when explicitly
+    # requested (local .env sets APP_DEBUG=True), never by default.
+    APP_DEBUG: bool = False
 
     DATABASE_URL: str
 

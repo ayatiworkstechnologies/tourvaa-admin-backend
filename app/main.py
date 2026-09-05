@@ -8,6 +8,7 @@ import logging
 from app.database import SessionLocal, engine
 from app.config import get_storage_root, settings
 from app.middleware.cors import setup_cors
+from app.middleware.csrf import CsrfMiddleware
 from app.middleware.error_handlers import register_error_handlers
 
 from app.models.roles import Role
@@ -437,6 +438,7 @@ async def start_background_jobs():
         asyncio.create_task(_wishlist_reminder_loop())
 
 setup_cors(app)
+app.add_middleware(CsrfMiddleware)
 
 storage_root = get_storage_root()
 storage_root.joinpath("uploads", "profile-images").mkdir(parents=True, exist_ok=True)

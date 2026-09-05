@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -50,6 +52,7 @@ from app.services.auth import (
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 ACCESS_COOKIE_NAME = "tourvaa_access"
 REFRESH_COOKIE_NAME = "tourvaa_refresh"
+CSRF_COOKIE_NAME = "tourvaa_csrf"
 
 
 def _set_auth_cookies(response: Response, result: dict, *, expose_access_token: bool = True) -> dict:
@@ -58,6 +61,9 @@ def _set_auth_cookies(response: Response, result: dict, *, expose_access_token: 
     secure = settings.APP_ENV.lower() == "production"
     response.set_cookie(ACCESS_COOKIE_NAME, access_token, max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60, httponly=True, secure=secure, samesite="lax", path="/")
     response.set_cookie(REFRESH_COOKIE_NAME, refresh_token, max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, httponly=True, secure=secure, samesite="lax", path="/api/auth")
+    # Not httponly - the frontend reads this cookie and echoes it back as an
+    # X-CSRF-Token header on state-changing requests (see CsrfMiddleware).
+    response.set_cookie(CSRF_COOKIE_NAME, secrets.token_urlsafe(32), max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, httponly=False, secure=secure, samesite="lax", path="/")
     if not expose_access_token:
         result.pop("access_token", None)
         result.pop("token_type", None)
@@ -68,6 +74,7 @@ def _clear_auth_cookies(response: Response) -> None:
     secure = settings.APP_ENV.lower() == "production"
     response.delete_cookie(ACCESS_COOKIE_NAME, path="/", httponly=True, secure=secure, samesite="lax")
     response.delete_cookie(REFRESH_COOKIE_NAME, path="/api/auth", httponly=True, secure=secure, samesite="lax")
+    response.delete_cookie(CSRF_COOKIE_NAME, path="/", httponly=False, secure=secure, samesite="lax")
 
 
 def _registration_response(user: User):
@@ -272,7 +279,7 @@ def refresh_token(
         raise HTTPException(status_code=401, detail="Refresh session expired. Please log in again.")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    if request.cookies.get(REFRESH_COOKIE_NAME) and payload.get("token_type") != "refresh":
+    if payload.get("token_type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     user_id = payload.get("user_id")

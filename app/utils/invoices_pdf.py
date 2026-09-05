@@ -57,93 +57,212 @@ def _plain_text_pdf(path: Path, data: dict) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+BRAND = colors.HexColor("#1b5e46")
+BRAND_DARK = colors.HexColor("#0f3d2c")
+INK = colors.HexColor("#1f2937")
+MUTED = colors.HexColor("#6b7280")
+LINE = colors.HexColor("#e2e8e5")
+ROW_ALT = colors.HexColor("#f4f8f6")
+PANEL = colors.HexColor("#f0f5f2")
+PAID_BG = colors.HexColor("#e6f4ea")
+PAID_FG = colors.HexColor("#1e7a3d")
+DUE_BG = colors.HexColor("#fdecea")
+DUE_FG = colors.HexColor("#b3261e")
+
+
+def _money(inv: dict, value) -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        amount = 0.0
+    return f"{inv.get('currency', '')} {amount:,.2f}".strip()
+
+
 def _reportlab_pdf(path: Path, data: dict) -> None:
-    doc = SimpleDocTemplate(str(path), pagesize=A4, rightMargin=2 * cm, leftMargin=2 * cm, topMargin=2 * cm, bottomMargin=2 * cm)
+    doc = SimpleDocTemplate(str(path), pagesize=A4, rightMargin=1.8 * cm, leftMargin=1.8 * cm, topMargin=1.6 * cm, bottomMargin=1.6 * cm)
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("title", parent=styles["Heading1"], fontSize=20, textColor=colors.HexColor("#1a365d"))
-    right_style = ParagraphStyle("right", parent=styles["Normal"], alignment=TA_RIGHT)
-    center_style = ParagraphStyle("center", parent=styles["Normal"], alignment=TA_CENTER)
+    brand_style = ParagraphStyle("brand", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=22, textColor=BRAND_DARK, leading=26)
+    tagline_style = ParagraphStyle("tagline", parent=styles["Normal"], fontSize=8.5, textColor=MUTED, leading=11)
+    invoice_title_style = ParagraphStyle("invtitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=16, textColor=INK, alignment=TA_RIGHT, leading=19)
+    invoice_meta_style = ParagraphStyle("invmeta", parent=styles["Normal"], fontSize=9.5, textColor=MUTED, alignment=TA_RIGHT, leading=13)
+    section_label_style = ParagraphStyle("seclabel", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=8.5, textColor=BRAND, leading=11)
+    body_style = ParagraphStyle("body", parent=styles["Normal"], fontSize=9.5, textColor=INK, leading=14)
+    body_bold_style = ParagraphStyle("bodyb", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=9.5, textColor=INK, leading=14)
+    center_style = ParagraphStyle("center", parent=styles["Normal"], fontSize=8.5, textColor=MUTED, alignment=TA_CENTER, leading=12)
+    item_desc_style = ParagraphStyle("itemdesc", parent=styles["Normal"], fontSize=9, textColor=INK, leading=12)
 
     inv = data
+    is_paid = float(inv.get("amount_due") or 0) <= 0
+    status_bg, status_fg = (PAID_BG, PAID_FG) if is_paid else (DUE_BG, DUE_FG)
+    status_label = "PAID" if is_paid else inv["status"].upper()
+
     story = []
 
-    # Header
-    story.append(Paragraph("TOURVAA", title_style))
-    story.append(Paragraph(f"<b>INVOICE</b>  #{inv['invoice_number']}", styles["Heading2"]))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#2d6a4f")))
-    story.append(Spacer(1, 0.3 * cm))
-
-    # Meta table
-    meta = [
-        ["Invoice Date:", inv["invoice_date"], "Booking Code:", inv["booking_code"]],
-        ["Customer:", inv["customer_name"], "Status:", inv["status"].upper()],
-        ["Tour:", inv.get("tour_name", "-"), "Payment Method:", inv.get("payment_method", "-")],
-        ["Traveller(s):", inv.get("traveller_names", "-"), "", ""],
+    # ---- Header: brand block (left) + invoice title block (right) ----
+    header_left = [
+        Paragraph("TOURVAA", brand_style),
+        Spacer(1, 0.1 * cm),
+        Paragraph("Curated journeys, effortlessly booked.", tagline_style),
     ]
-    meta_table = Table(meta, colWidths=[3.5 * cm, 7 * cm, 3.5 * cm, 4 * cm])
-    meta_table.setStyle(TableStyle([
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("SPAN", (1, 3), (3, 3)),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    header_right = [
+        Paragraph("INVOICE", invoice_title_style),
+        Spacer(1, 0.15 * cm),
+        Paragraph(f"#{inv['invoice_number']}", invoice_meta_style),
+        Paragraph(f"Date: {inv['invoice_date']}", invoice_meta_style),
+    ]
+    header_table = Table([[header_left, header_right]], colWidths=[10.4 * cm, 6.8 * cm])
+    header_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
     ]))
-    story.append(meta_table)
+    story.append(header_table)
+    story.append(Spacer(1, 0.35 * cm))
+    story.append(HRFlowable(width="100%", thickness=1.4, color=BRAND))
     story.append(Spacer(1, 0.5 * cm))
 
-    # Line items
-    table_data = [["#", "Description", "Qty", "Unit Price", "Tax", "Total"]]
+    # ---- Status badge + booking code row ----
+    badge_table = Table([[f"  {status_label}  "]], colWidths=[None])
+    badge_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), status_bg),
+        ("TEXTCOLOR", (0, 0), (-1, -1), status_fg),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    booking_para = Paragraph(f"<b>Booking Code:</b> {inv['booking_code']}", body_style)
+    status_row = Table([[badge_table, booking_para]], colWidths=[4 * cm, 13.2 * cm])
+    status_row.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(status_row)
+    story.append(Spacer(1, 0.5 * cm))
+
+    # ---- Billed To / Trip details panels ----
+    billed_to = [
+        Paragraph("BILLED TO", section_label_style),
+        Spacer(1, 0.15 * cm),
+        Paragraph(inv["customer_name"], body_bold_style),
+        Paragraph(f"Traveller(s): {inv.get('traveller_names', '-')}", body_style),
+    ]
+    trip_details = [
+        Paragraph("TRIP DETAILS", section_label_style),
+        Spacer(1, 0.15 * cm),
+        Paragraph(inv.get("tour_name", "-"), body_bold_style),
+        Paragraph(f"Payment Method: {inv.get('payment_method', '-')}", body_style),
+    ]
+    panels = Table([[billed_to, trip_details]], colWidths=[8.6 * cm, 8.6 * cm])
+    panels.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), PANEL),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (0, 0), 12),
+        ("LEFTPADDING", (1, 0), (1, 0), 16),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LINEBEFORE", (1, 0), (1, 0), 0.75, LINE),
+    ]))
+    story.append(panels)
+    story.append(Spacer(1, 0.6 * cm))
+
+    # ---- Line items ----
+    header_row = [
+        Paragraph("#", ParagraphStyle("th", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold")),
+        Paragraph("Description", ParagraphStyle("th", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold")),
+        Paragraph("Qty", ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
+        Paragraph("Unit Price", ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
+        Paragraph("Tax", ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
+        Paragraph("Total", ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
+    ]
+    table_data = [header_row]
+    amt_right = ParagraphStyle("amtr", parent=item_desc_style, alignment=TA_RIGHT)
     for i, item in enumerate(inv.get("items", []), 1):
         table_data.append([
-            str(i),
-            item["description"],
-            str(item["quantity"]),
-            f"{inv['currency']} {item['unit_price']}",
-            f"{inv['currency']} {item['tax_amount']}",
-            f"{inv['currency']} {item['total_price']}",
+            Paragraph(str(i), item_desc_style),
+            Paragraph(item["description"], item_desc_style),
+            Paragraph(str(item["quantity"]), amt_right),
+            Paragraph(_money(inv, item["unit_price"]), amt_right),
+            Paragraph(_money(inv, item["tax_amount"]), amt_right),
+            Paragraph(_money(inv, item["total_price"]), amt_right),
         ])
 
-    items_table = Table(table_data, colWidths=[0.8 * cm, 8.2 * cm, 1.5 * cm, 3 * cm, 2.5 * cm, 3 * cm])
+    items_table = Table(table_data, colWidths=[0.8 * cm, 7.2 * cm, 1.4 * cm, 2.8 * cm, 2.4 * cm, 2.6 * cm], repeatRows=1)
     items_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2d6a4f")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f0f4f8")]),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
-        ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BACKGROUND", (0, 0), (-1, 0), BRAND_DARK),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ROW_ALT]),
+        ("LINEBELOW", (0, 0), (-1, 0), 0, colors.white),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.5, LINE),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.5, LINE),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("LEFTPADDING", (0, 0), (0, -1), 10),
+        ("LEFTPADDING", (1, 0), (1, -1), 8),
     ]))
     story.append(items_table)
     story.append(Spacer(1, 0.5 * cm))
 
-    # Totals
-    totals_data = [
-        ["Subtotal", f"{inv['currency']} {inv['subtotal_amount']}"],
-        [f"Tax / GST ({inv.get('gst_rate', '0.18')})", f"{inv['currency']} {inv['gst_amount']}"],
-        ["Total", f"{inv['currency']} {inv['total_amount']}"],
-        ["Amount Paid", f"{inv['currency']} {inv['amount_paid']}"],
-        ["Amount Due", f"{inv['currency']} {inv['amount_due']}"],
+    # ---- Totals ----
+    gst_rate = inv.get("gst_rate", "0.18")
+    try:
+        gst_pct = f"{float(gst_rate) * 100:.0f}%"
+    except (TypeError, ValueError):
+        gst_pct = str(gst_rate)
+
+    totals_rows = [
+        ["Subtotal", _money(inv, inv["subtotal_amount"])],
+        [f"Tax / GST ({gst_pct})", _money(inv, inv["gst_amount"])],
+        ["Total", _money(inv, inv["total_amount"])],
+        ["Amount Paid", _money(inv, inv["amount_paid"])],
+        ["Amount Due", _money(inv, inv["amount_due"])],
         ["Balance Due Date", inv.get("balance_due_date") or "Fully paid"],
     ]
-    totals_table = Table(totals_data, colWidths=[14 * cm, 5 * cm])
+    totals_table = Table(totals_rows, colWidths=[5.4 * cm, 4.0 * cm])
     totals_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+        ("TEXTCOLOR", (0, 0), (-1, -1), INK),
         ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        # Total row emphasis
+        ("BACKGROUND", (0, 2), (-1, 2), PANEL),
+        ("FONTNAME", (0, 2), (-1, 2), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 2), (-1, 2), 11),
+        ("TEXTCOLOR", (0, 2), (-1, 2), BRAND_DARK),
+        ("TOPPADDING", (0, 2), (-1, 2), 7),
+        ("BOTTOMPADDING", (0, 2), (-1, 2), 7),
+        ("LEFTPADDING", (0, 2), (0, 2), 8),
+        ("RIGHTPADDING", (1, 2), (1, 2), 8),
+        # Amount due emphasis
+        ("TEXTCOLOR", (0, 4), (-1, 4), (DUE_FG if not is_paid else INK)),
+        ("FONTNAME", (0, 4), (-1, 4), "Helvetica-Bold"),
+        # Rules
+        ("LINEABOVE", (0, 2), (-1, 2), 0.75, BRAND),
+        ("LINEBELOW", (0, 2), (-1, 2), 0.75, BRAND),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.75, LINE),
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("LINEABOVE", (0, -1), (-1, -1), 1, colors.HexColor("#2d6a4f")),
-        ("LINEABOVE", (0, 2), (-1, 2), 0.5, colors.HexColor("#cccccc")),
     ]))
-    story.append(totals_table)
+    totals_wrapper = Table([["", totals_table]], colWidths=[7.8 * cm, 9.4 * cm])
+    totals_wrapper.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(totals_wrapper)
     story.append(Spacer(1, 1 * cm))
 
-    # Footer
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.gray))
-    story.append(Spacer(1, 0.2 * cm))
-    story.append(Paragraph("Thank you for booking with <b>Tourvaa</b>. For queries contact support@tourvaa.com", center_style))
+    # ---- Footer ----
+    story.append(HRFlowable(width="100%", thickness=0.5, color=LINE))
+    story.append(Spacer(1, 0.3 * cm))
+    story.append(Paragraph("Thank you for booking with <b>Tourvaa</b>.", center_style))
+    story.append(Paragraph("For queries contact support@tourvaa.com &nbsp;|&nbsp; www.tourvaa.com", center_style))
+    story.append(Spacer(1, 0.15 * cm))
+    story.append(Paragraph("This is a system-generated invoice and does not require a signature.", center_style))
 
     doc.build(story)
 
