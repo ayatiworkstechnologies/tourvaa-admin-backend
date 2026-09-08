@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.checkout import CheckoutSession
 from app.schemas.checkout import CheckoutConfirm, CheckoutStart, CheckoutUpdate
-from app.utils.money import utcnow
+from app.utils.money import as_aware_utc, utcnow
 from app.models.users import User
 
 SESSION_TTL_HOURS = 24
@@ -25,7 +25,7 @@ def _ensure_session_owner(s: CheckoutSession, current_user: Optional[User]) -> N
 
 def _ensure_session_not_expired(s: CheckoutSession) -> None:
     """Reject an expired session before it can be resumed or mutated."""
-    if s.expires_at and s.expires_at <= utcnow():
+    if s.expires_at and as_aware_utc(s.expires_at) <= utcnow():
         raise HTTPException(status_code=410, detail="Checkout session has expired")
 
 
@@ -144,7 +144,12 @@ def update_session(db: Session, session_key: str, body: CheckoutUpdate, current_
     if body.step:
         s.step = body.step
     if body.data is not None:
-        existing = s.data or {}
+        # Always build a fresh dict (never mutate s.data in place): when
+        # s.data is already non-empty, `s.data or {}` returns that same
+        # object, so `s.data = existing` re-assigns the identical object and
+        # SQLAlchemy's change tracking on the JSON column never sees a
+        # difference - the update silently never gets persisted.
+        existing = dict(s.data or {})
         existing.update(body.data)
         s.data = existing
     if current_user and not s.user_id:
@@ -172,6 +177,8 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
     payload = s.data or {}
     travellers_raw = payload.get("travellers", [])
     travellers = [BookingTravellerPayload(**t) for t in travellers_raw]
+    adults = int(payload.get("adults") or 1)
+    children = int(payload.get("children") or 0)
 
     def _addons(raw_list):
         return [BookingAddonPayload(**a) if isinstance(a, dict) else BookingAddonPayload(id=int(a)) for a in (raw_list or [])]
@@ -180,11 +187,17 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
         tour_id=s.tour_id,
         tour_calendar_id=s.tour_calendar_id,
         customer_id=s.customer_id,
+        no_of_adults=adults,
+        no_of_children=children,
+        adults_count=adults,
+        children_count=children,
         travellers=travellers,
         extensions=_addons(payload.get("extensions", [])),
         notes=body.notes or payload.get("notes"),
         promo_code=body.promo_code or payload.get("promo_code"),
         booking_source="customer",
+        agreed_terms=body.agreed_terms,
+        agreed_cancellation_policy=body.agreed_cancellation_policy,
     )
 
     booking = create_booking(db, booking_data, actor=current_user)

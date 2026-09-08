@@ -89,6 +89,21 @@ def test_active_checkout_session_is_not_expired():
     _ensure_session_not_expired(session())
 
 
+def test_naive_database_expiry_is_treated_as_utc():
+    """MySQL can return DateTime(timezone=True) columns without tzinfo."""
+    naive_expired = (utcnow() - timedelta(seconds=1)).replace(tzinfo=None)
+
+    with pytest.raises(HTTPException) as exc:
+        _ensure_session_not_expired(session(expires_at=naive_expired))
+
+    assert exc.value.status_code == 410
+
+
+def test_naive_active_database_expiry_can_be_resumed():
+    naive_active = (utcnow() + timedelta(hours=1)).replace(tzinfo=None)
+    _ensure_session_not_expired(session(expires_at=naive_active))
+
+
 def test_start_cannot_resume_another_users_session():
     row = session(user_id=7)
     db = _ExistingSessionDb(row)
