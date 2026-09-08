@@ -20,12 +20,12 @@ from app.models.email_templates import EmailTemplate
 from app.models.audit import AuditLog
 from app.models.customers import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerCancellationRequest, CustomerWishlistItem
 from app.models.cms import Country, State, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour
-from app.models.bookings import Booking, BookingTraveller, BookingExtension, BookingStatusHistory, BookingCommunication, MessageReply, EmailLog
+from app.models.bookings import Booking, BookingTraveller, BookingOptionalActivity, BookingAccommodation, BookingExtension, BookingStatusHistory, BookingCommunication, MessageReply, EmailLog
 from app.models.payments import Payment, PaymentTransaction, PaymentHold
 from app.models.tours import (
     TourOverview, TourItinerary, TourInclusion, TourExclusion, TourHighlight,
     TourSimilar, TourExtension, TourGalleryImage,
-    TourPricing,
+    TourPricing, TourOptionalActivity, TourAccommodationExtra,
     TourCalendar, TourUnavailableDate, TourDiscount,
 )
 from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierContact, SupplierBusinessInfo, SupplierVehicle, SupplierInvoicing, SupplierDocument
@@ -189,6 +189,8 @@ def schema_is_ready():
         "bookings",
         "payments",
         "booking_travellers",
+        "booking_optional_activities",
+        "booking_accommodations",
         "booking_extensions",
         "booking_status_history",
         "booking_communications",
