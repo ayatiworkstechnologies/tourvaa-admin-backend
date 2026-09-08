@@ -18,3 +18,8 @@ class CheckoutConfirm(BaseModel):
     """Final confirmation - creates the actual booking from the session."""
     notes: Optional[str] = None
     promo_code: Optional[str] = None
+    # Required by services.bookings.create_booking's _validate_agreements for
+    # customer/agent bookings - without these the checkout flow can never
+    # actually confirm a booking, regardless of what the frontend UI shows.
+    agreed_terms: bool = False
+    agreed_cancellation_policy: bool = False

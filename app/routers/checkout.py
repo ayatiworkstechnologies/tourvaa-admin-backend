@@ -1,12 +1,11 @@
-from typing import Optional
-
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.services import checkout as service
 from app.schemas.checkout import CheckoutConfirm, CheckoutStart, CheckoutUpdate
-from app.auth.permissions import get_current_user, require_any_permission
+from app.auth.permissions import bearer_scheme, get_current_user, require_any_permission
 from app.utils.pagination import pagination_params
 
 router = APIRouter(prefix="/checkout", tags=["Checkout"])
@@ -22,12 +21,14 @@ def admin_list_checkout_sessions(
     return {"status": "success", **service.list_sessions(db, page=params["page"], limit=params["limit"], status=status)}
 
 
-def _optional_user(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
-    """Returns the current user or None for guest callers."""
-    if not authorization:
-        return None
+def _optional_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """Returns the current user (from bearer token or the session cookie) or None for guest callers."""
     try:
-        return get_current_user(authorization=authorization, db=db)
+        return get_current_user(request=request, credentials=credentials, db=db)
     except Exception:
         return None
 
