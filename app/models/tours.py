@@ -200,6 +200,42 @@ class TourPricing(Base):
     tour = relationship("Tour")
 
 
+class TourOptionalActivity(Base):
+    __tablename__ = "tour_optional_activities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
+    activity_name = Column(String(255), nullable=False)
+    description = Column(Text, default="", nullable=True)
+    price_per_person = Column(Numeric(12, 2), default=0, nullable=False)
+    image = Column(String(255), default="", nullable=False)
+    category = Column(String(30), default="other", nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    tour = relationship("Tour")
+
+
+class TourAccommodationExtra(Base):
+    __tablename__ = "tour_accommodation_extras"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
+    accommodation_name = Column(String(255), nullable=False)
+    description = Column(Text, default="", nullable=True)
+    extra_price = Column(Numeric(12, 2), default=0, nullable=False)
+    price_type = Column(String(20), default="per_person", nullable=False)
+    image = Column(String(255), default="", nullable=True)
+    category = Column(String(30), default="room_upgrade", nullable=False)
+    is_default = Column(Integer, default=0, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    tour = relationship("Tour")
+
+
 class TourCalendar(Base):
     __tablename__ = "tour_calendar"
 

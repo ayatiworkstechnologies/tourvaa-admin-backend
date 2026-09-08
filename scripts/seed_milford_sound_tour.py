@@ -18,12 +18,14 @@ from app.models.users import User
 
 from app.schemas.cms import StatusUpdate, TourPayload
 from app.schemas.tours import (
+    AccommodationExtraPayload,
     CalendarPayload,
     DiscountPayload,
     GalleryImagePayload,
     HighlightPayload,
     InclusionPayload,
     ItineraryPayload,
+    OptionalActivityPayload,
     PricingPayload,
     TourOverviewPayload,
 )
@@ -209,6 +211,20 @@ def main():
             markup_value=supplier_commission, admin_markup_type="percentage", admin_markup_value=15,
         ), admin_user)
         print("  2 pricing slabs added")
+
+        # 8. Optional activities & accommodation extras -------------------------
+        activities = [
+            ("Queenstown Gondola & Luge", "Ride the gondola for alpine views, then race down the luge track.", 55, "extra_activity"),
+            ("Milford Sound Overnight Cruise Upgrade", "Swap the day cruise for an overnight stay aboard the boat.", 240, "other"),
+        ]
+        for name, description, price, category_slug in activities:
+            tour_services.create_activity(db, tour_id, OptionalActivityPayload(activity_name=name, description=description, price_per_person=price, category=category_slug), admin_user)
+        accommodations = [
+            ("Lake View Room Upgrade", "Upgrade to a lake-facing room in Te Anau.", 45, "room_upgrade"),
+        ]
+        for name, description, price, category_slug in accommodations:
+            tour_services.create_accommodation(db, tour_id, AccommodationExtraPayload(accommodation_name=name, description=description, extra_price=price, category=category_slug), admin_user)
+        print(f"  {len(activities)} optional activities, {len(accommodations)} accommodation extras added")
 
         # 9. Calendar departures (one low-stock, to exercise "Seats Left") ------
         now = datetime.now(timezone.utc)

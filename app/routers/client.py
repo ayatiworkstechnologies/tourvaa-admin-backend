@@ -12,6 +12,7 @@ from app.services.tours import (
     list_highlights,
     list_similar_tours,
     list_gallery,
+    list_activities,
     list_calendar,
     list_pricing,
 )
@@ -121,6 +122,11 @@ def public_tour_similar_tours(tour_id: int, db: Session = Depends(get_db)):
 def public_tour_gallery(tour_id: int, db: Session = Depends(get_db)):
     _ensure_published(db, tour_id)
     return {"status": "success", "data": list_gallery(db, tour_id)}
+
+@router.get("/tours/{tour_id}/optional-activities")
+def public_tour_activities(tour_id: int, db: Session = Depends(get_db)):
+    _ensure_published(db, tour_id)
+    return {"status": "success", "data": list_activities(db, tour_id)}
 
 @router.get("/tours/{tour_id}/calendar")
 def public_tour_calendar(tour_id: int, db: Session = Depends(get_db)):
