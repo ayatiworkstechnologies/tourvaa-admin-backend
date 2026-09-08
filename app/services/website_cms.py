@@ -9,15 +9,21 @@ from sqlalchemy.orm import Session
 from app.utils.money import utcnow
 from app.models.cms import Tour
 from app.models.website_cms import (
-    Blog, CmsPolicy, CustomerReview, ExternalLink, HelpCentreArticle,
-    HomepageBanner, PopularDestination, PopularTour, PromotionalPopup,
-    SitemapEntry, TourOnDeal,
+    Blog, CmsPolicy, CustomerReview, ExternalLink, FavouriteCountryEntry,
+    HandpickedTour, HelpCentreArticle, HomepageBanner, HomepageContentBlock,
+    PopularDestination, PopularTour, PromotionalPopup, SitemapEntry,
+    TourOnDeal,
 )
 from app.schemas.website_cms import (
-    BannerPayload, BlogPayload, ExternalLinkPayload, HelpArticlePayload,
+    BannerPayload, BlogPayload, ContentBlockPayload, ExternalLinkPayload,
+    FavouriteCountryPayload, HandpickedTourPayload, HelpArticlePayload,
     PolicyPayload, PopularDestinationPayload, PopularTourPayload,
     PopupPayload, ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
 )
+
+# The only keys HomepageContentBlock rows may use - keeps the generic
+# key/JSON store from accumulating arbitrary, unrendered keys over time.
+ALLOWED_CONTENT_BLOCK_KEYS = {"hero_extras", "about_section", "blog_teaser", "airport_transfer"}
 
 
 def _paginate(q, page: int, limit: int, serializer) -> dict:
@@ -97,6 +103,11 @@ def _s_policy(r: CmsPolicy): return {"id": r.id, "slug": r.slug, "title": r.titl
 def _s_popup(r: PromotionalPopup): return {"id": r.id, "title": r.title, "content": r.content, "image": r.image, "cta_text": r.cta_text, "cta_url": r.cta_url, "display_after_seconds": r.display_after_seconds, "display_frequency": r.display_frequency, "is_active": r.is_active, "valid_from": r.valid_from, "valid_until": r.valid_until, "created_at": r.created_at}
 def _s_link(r: ExternalLink): return {"id": r.id, "label": r.label, "url": r.url, "open_in_new_tab": r.open_in_new_tab, "location": r.location, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_sitemap(r: SitemapEntry): return {"id": r.id, "url": r.url, "change_frequency": r.change_frequency, "priority": r.priority, "last_modified": r.last_modified, "is_active": r.is_active, "created_at": r.created_at}
+def _s_handpicked(r: HandpickedTour, db: Session | None = None):
+    tour = _tour_label(db, r.tour_id) if db else {"tour_title": "", "tour_code": ""}
+    return {"id": r.id, "tour_id": r.tour_id, **tour, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
+def _s_favourite_country(r: FavouriteCountryEntry): return {"id": r.id, "country_id": r.country_id, "title": r.title, "snippet": r.snippet, "image": r.image, "href": r.href, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
+def _s_content_block(r: HomepageContentBlock | None, key: str): return {"key": key, "data": r.data if r else {}, "updated_at": r.updated_at if r else None}
 
 
 # generic crud factory
@@ -321,6 +332,56 @@ def list_sitemap(db, page, limit): return _list(db, SitemapEntry, _s_sitemap, pa
 def create_sitemap_entry(db, data: SitemapEntryPayload): return _create(db, SitemapEntry, data.model_dump(), _s_sitemap)
 def update_sitemap_entry(db, item_id, data: SitemapEntryPayload): return _update(db, SitemapEntry, item_id, data.model_dump(exclude_unset=True), _s_sitemap, "Sitemap Entry")
 def delete_sitemap_entry(db, item_id): _delete(db, SitemapEntry, item_id, "Sitemap Entry")
+
+# handpicked tours
+
+def list_handpicked_tours(db, page, limit, published_only=False, active_only=False):
+    # Same stale-pin problem as list_popular_tours - see the comment there.
+    q = db.query(HandpickedTour)
+    if active_only:
+        q = q.filter(HandpickedTour.is_active == True)  # noqa: E712
+    if published_only:
+        q = q.join(Tour, Tour.id == HandpickedTour.tour_id).filter(Tour.status == "published")
+    q = q.order_by(HandpickedTour.sort_order.asc())
+    return _paginate(q, page, limit, lambda row: _s_handpicked(row, db))
+def create_handpicked_tour(db, data: HandpickedTourPayload):
+    if not db.query(Tour).filter(Tour.id == data.tour_id).first():
+        raise HTTPException(status_code=400, detail="Selected tour does not exist")
+    obj = HandpickedTour(**data.model_dump())
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return _s_handpicked(obj, db)
+def delete_handpicked_tour(db, item_id): _delete(db, HandpickedTour, item_id, "Handpicked Tour")
+
+# favourite countries
+
+def list_favourite_countries(db, page, limit, active_only=False): return _list(db, FavouriteCountryEntry, _s_favourite_country, page, limit, active_only)
+def create_favourite_country(db, data: FavouriteCountryPayload): return _create(db, FavouriteCountryEntry, data.model_dump(), _s_favourite_country)
+def update_favourite_country(db, item_id, data: FavouriteCountryPayload): return _update(db, FavouriteCountryEntry, item_id, data.model_dump(exclude_unset=True), _s_favourite_country, "Favourite Country")
+def delete_favourite_country(db, item_id): _delete(db, FavouriteCountryEntry, item_id, "Favourite Country")
+
+# generic homepage content blocks (hero_extras, about_section, blog_teaser, airport_transfer)
+
+def get_content_block(db, key: str):
+    if key not in ALLOWED_CONTENT_BLOCK_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown content block")
+    obj = db.query(HomepageContentBlock).filter(HomepageContentBlock.key == key).first()
+    return _s_content_block(obj, key)
+
+def upsert_content_block(db, key: str, data: ContentBlockPayload):
+    if key not in ALLOWED_CONTENT_BLOCK_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown content block")
+    obj = db.query(HomepageContentBlock).filter(HomepageContentBlock.key == key).first()
+    if obj:
+        obj.data = data.data
+    else:
+        obj = HomepageContentBlock(key=key, data=data.data)
+        db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return _s_content_block(obj, key)
+
 
 def get_sitemap_xml(db) -> str:
     entries = db.query(SitemapEntry).filter(SitemapEntry.is_active == True).all()

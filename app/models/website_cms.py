@@ -49,6 +49,55 @@ class PopularTour(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class HandpickedTour(Base):
+    """Backs the homepage's 'Handpicked Tours for You' carousel - a
+    separate curated list from PopularTour ('Trending Tour Packages') so an
+    admin can pin different tours to each section instead of the two
+    sections silently mirroring each other."""
+    __tablename__ = "cms_handpicked_tours"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class FavouriteCountryEntry(Base):
+    """Backs the homepage's 'Favourite Countries for Travellers' editorial
+    list - distinct from PopularDestination (the 'Countries Worth
+    Exploring' carousel, which is generated from real tour counts): this
+    one is a hand-picked list with its own custom snippet copy per
+    country."""
+    __tablename__ = "cms_favourite_countries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    country_id = Column(Integer, ForeignKey("countries.id"), nullable=True, index=True)
+    title = Column(String(200), nullable=False)
+    snippet = Column(Text, nullable=True)
+    image = Column(String(255), nullable=True)
+    href = Column(String(500), nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class HomepageContentBlock(Base):
+    """Generic key/JSON-value store for one-off homepage content blocks that
+    don't need their own table (hero trust badge + offer strip, the About
+    Tourvaa section, the blog teaser banner, the airport-transfers banner).
+    One row per `key`; `data` shape is whatever that block's admin form and
+    the homepage renderer agree on - see ALLOWED_CONTENT_BLOCK_KEYS in
+    app/services/website_cms.py for the recognised keys."""
+    __tablename__ = "cms_homepage_content_blocks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String(60), unique=True, nullable=False, index=True)
+    data = Column(JSON, nullable=False, default=dict)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class TourOnDeal(Base):
     __tablename__ = "cms_tours_on_deals"
 

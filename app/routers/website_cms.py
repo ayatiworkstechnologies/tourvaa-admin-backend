@@ -7,7 +7,8 @@ from app.auth.permissions import require_any_permission
 from app.utils.pagination import pagination_params
 from app.services import website_cms as service
 from app.schemas.website_cms import (
-    BannerPayload, BlogPayload, ExternalLinkPayload, HelpArticlePayload,
+    BannerPayload, BlogPayload, ContentBlockPayload, ExternalLinkPayload,
+    FavouriteCountryPayload, HandpickedTourPayload, HelpArticlePayload,
     PolicyPayload, PopularDestinationPayload, PopularTourPayload,
     PopupPayload, ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
 )
@@ -93,6 +94,53 @@ def update_deal(item_id: int, data: TourOnDealPayload, db: Session = Depends(get
 def delete_deal(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
     service.delete_deal(db, item_id)
     return {"status": "success", "message": "Deal removed"}
+
+
+# handpicked tours
+
+@router.get("/handpicked-tours")
+def list_handpicked_tours(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_handpicked_tours(db, pagination["page"], pagination["limit"], published_only, active_only)}
+
+@router.post("/handpicked-tours")
+def create_handpicked_tour(data: HandpickedTourPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
+    return {"status": "success", "data": service.create_handpicked_tour(db, data)}
+
+@router.delete("/handpicked-tours/{item_id}")
+def delete_handpicked_tour(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
+    service.delete_handpicked_tour(db, item_id)
+    return {"status": "success", "message": "Deleted"}
+
+
+# favourite countries
+
+@router.get("/favourite-countries")
+def list_favourite_countries(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_favourite_countries(db, pagination["page"], pagination["limit"], active_only)}
+
+@router.post("/favourite-countries")
+def create_favourite_country(data: FavouriteCountryPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
+    return {"status": "success", "data": service.create_favourite_country(db, data)}
+
+@router.put("/favourite-countries/{item_id}")
+def update_favourite_country(item_id: int, data: FavouriteCountryPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS))):
+    return {"status": "success", "data": service.update_favourite_country(db, item_id, data)}
+
+@router.delete("/favourite-countries/{item_id}")
+def delete_favourite_country(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
+    service.delete_favourite_country(db, item_id)
+    return {"status": "success", "message": "Deleted"}
+
+
+# generic homepage content blocks
+
+@router.get("/content-blocks/{key}")
+def get_content_block(key: str, db: Session = Depends(get_db)):
+    return {"status": "success", "data": service.get_content_block(db, key)}
+
+@router.put("/content-blocks/{key}")
+def upsert_content_block(key: str, data: ContentBlockPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS, *CMS_CREATE_PERMS))):
+    return {"status": "success", "data": service.upsert_content_block(db, key, data)}
 
 
 # blogs
