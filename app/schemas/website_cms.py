@@ -45,6 +45,26 @@ class TourOnDealPayload(BaseModel):
     is_active: bool = True
 
 
+class HandpickedTourPayload(BaseModel):
+    tour_id: int
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class FavouriteCountryPayload(BaseModel):
+    country_id: Optional[int] = None
+    title: str
+    snippet: Optional[str] = None
+    image: Optional[str] = None
+    href: Optional[str] = None
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class ContentBlockPayload(BaseModel):
+    data: Dict[str, Any] = {}
+
+
 class BlogPayload(BaseModel):
     title: str
     slug: Optional[str] = None
