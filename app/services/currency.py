@@ -48,6 +48,55 @@ FALLBACK_USD_RATES: dict[str, Decimal] = {
 _cache_lock = Lock()
 _cache: dict[str, object] = {}
 
+GEOIP_URL = "http://ip-api.com/json/{ip}"
+GEOIP_TTL = timedelta(hours=1)
+
+_geoip_cache_lock = Lock()
+_geoip_cache: dict[str, tuple[str, datetime]] = {}
+
+# Loopback/private ranges ip-api.com cannot resolve to a country - looking
+# these up would just waste a request against its free-tier rate limit.
+_PRIVATE_IP_PREFIXES = ("127.", "10.", "192.168.", "::1", "0.")
+_PRIVATE_IP_172_RANGE = range(16, 32)
+
+
+def _is_private_ip(ip: str) -> bool:
+    if not ip or ip.startswith(_PRIVATE_IP_PREFIXES):
+        return True
+    if ip.startswith("172."):
+        parts = ip.split(".")
+        if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) in _PRIVATE_IP_172_RANGE:
+            return True
+    return False
+
+
+def geolocate_ip(ip: str) -> str:
+    """Best-effort IP -> ISO country code lookup via ip-api.com. Returns "" on
+    any failure (private IP, network error, rate limit, unparseable body) so
+    callers can fall back to their own default rather than raising."""
+    ip = (ip or "").strip()
+    if _is_private_ip(ip):
+        return ""
+    now = datetime.now(timezone.utc)
+    with _geoip_cache_lock:
+        cached = _geoip_cache.get(ip)
+        if cached and cached[1] > now:
+            return cached[0]
+    try:
+        response = httpx.get(GEOIP_URL.format(ip=ip), params={"fields": "status,countryCode"}, timeout=3.0)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("status") != "success":
+            return ""
+        raw_code = str(payload.get("countryCode") or "").strip().upper()
+        country_code = raw_code if len(raw_code) == 2 and raw_code.isalpha() else ""
+    except (httpx.HTTPError, ValueError, TypeError):
+        return ""
+    if country_code:
+        with _geoip_cache_lock:
+            _geoip_cache[ip] = (country_code, now + GEOIP_TTL)
+    return country_code
+
 
 def normalize_currency(code: str | None, fallback: str = BASE_CURRENCY) -> str:
     value = (code or fallback).strip().upper()

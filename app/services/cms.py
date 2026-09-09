@@ -5,14 +5,18 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.services.audit import log_audit
-from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
-from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourPayload, slugify
+from app.models.cms import City, Country, Currency, State, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
+from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, CurrencyPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourPayload, slugify
 from app.utils.operations import get_or_404, simple_paginate
 from app.models.users import User
 
 
 def _country(item: Country):
     return {"id": item.id, "country_name": item.country_name, "country_code": item.country_code, "phone_code": item.phone_code, "currency_code": item.currency_code, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
+
+
+def _currency(item: Currency):
+    return {"id": item.id, "name": item.name, "code": item.code, "symbol": item.symbol, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
 
 
 def _state(item: State):
@@ -184,6 +188,27 @@ def save_country(db: Session, data: CountryPayload, actor: User, request: Reques
     db.commit()
     db.refresh(item)
     return _country(item)
+
+
+def list_currencies(db: Session, page: int, limit: int, search: str = ""):
+    query = db.query(Currency)
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.filter(or_(Currency.name.ilike(pattern), Currency.code.ilike(pattern)))
+    return simple_paginate(query.order_by(Currency.name.asc()), page, limit, _currency)
+
+
+def save_currency(db: Session, data: CurrencyPayload, actor: User, request: Request | None = None, currency_id: int | None = None):
+    item = get_or_404(db, Currency, currency_id, "Currency") if currency_id else Currency()
+    old = _currency(item) if currency_id else None
+    for key, value in data.model_dump().items():
+        setattr(item, key, value)
+    db.add(item)
+    db.flush()
+    log_audit(db, actor=actor, action="update_currency" if currency_id else "create_currency", entity_type="currency", entity_id=item.id, old_values=old, new_values=_currency(item), request=request)
+    db.commit()
+    db.refresh(item)
+    return _currency(item)
 
 
 def list_states(db: Session, page: int, limit: int, search: str = "", country_id: str = ""):

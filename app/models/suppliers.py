@@ -15,6 +15,11 @@ class Supplier(Base):
     supplier_type = Column(String(75), default="", nullable=False)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True, index=True)
     city_id = Column(Integer, ForeignKey("cities.id"), nullable=True, index=True)
+    # Supplier's operating currency. Auto-derived from the country's
+    # currency_code when country_id is set/changed and no explicit value was
+    # given, but a supplier may override it manually - see
+    # services.suppliers.create_supplier/update_supplier.
+    currency = Column(String(10), nullable=True)
     years_in_operation = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="inactive", nullable=False, index=True)
     approval_status = Column(String(30), default="pending", nullable=False, index=True)

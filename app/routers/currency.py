@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.auth.permissions import require_permission
-from app.services.currency import BASE_CURRENCY, convert_amount, currency_for_country, get_usd_rates, rates_for
+from app.services.currency import BASE_CURRENCY, convert_amount, currency_for_country, geolocate_ip, get_usd_rates, rates_for
 
 router = APIRouter(prefix="/currency", tags=["Currency"])
 
@@ -57,6 +57,10 @@ def currency_context(request: Request, country: str = Query(default=""), db: Ses
         or request.headers.get("cf-ipcountry", "")
         or request.headers.get("x-vercel-ip-country", "")
     ).upper()
+    if not detected_country:
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (request.client.host if request.client else "")
+        detected_country = geolocate_ip(client_ip)
     return {
         "status": "success",
         "data": {

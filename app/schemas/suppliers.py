@@ -17,6 +17,9 @@ class SupplierCreate(BaseModel):
     user_id: int | None = None
     country_id: int | None = None
     city_id: int | None = None
+    # Operating currency. When omitted, services.suppliers.create_supplier
+    # auto-derives it from the country's currency_code.
+    currency: str | None = Field(default=None, max_length=10)
     years_in_operation: int = Field(default=0, ge=0)
     status: str = Field(default="inactive", max_length=20)
     approval_status: str = Field(default="pending", max_length=30)
@@ -25,6 +28,11 @@ class SupplierCreate(BaseModel):
     @classmethod
     def trim_text(cls, value: str):
         return value.strip()
+
+    @field_validator("currency")
+    @classmethod
+    def trim_currency(cls, value: str | None):
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator("status")
     @classmethod
@@ -95,6 +103,7 @@ class SupplierUpdate(BaseModel):
     supplier_type: str | None = Field(default=None, max_length=75)
     country_id: int | None = None
     city_id: int | None = None
+    currency: str | None = Field(default=None, max_length=10)
     years_in_operation: int | None = Field(default=None, ge=0)
     status: str | None = Field(default=None, max_length=20)
     admin_comments: str | None = Field(default=None, max_length=5000)
@@ -111,6 +120,11 @@ class SupplierUpdate(BaseModel):
     @classmethod
     def trim_optional_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("currency")
+    @classmethod
+    def trim_currency(cls, value: str | None):
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator("status")
     @classmethod
@@ -130,6 +144,7 @@ class SupplierSelfUpdate(BaseModel):
     supplier_type: str | None = Field(default=None, max_length=75)
     country_id: int | None = None
     city_id: int | None = None
+    currency: str | None = Field(default=None, max_length=10)
     years_in_operation: int | None = Field(default=None, ge=0)
     # Suppliers may raise their own commission above the admin-set platform
     # minimum, but never lower it below that minimum - see SupplierUpdate's
@@ -143,6 +158,11 @@ class SupplierSelfUpdate(BaseModel):
     @classmethod
     def trim_self_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("currency")
+    @classmethod
+    def trim_currency(cls, value: str | None):
+        return value.strip().upper() if isinstance(value, str) else value
 
 
 class VehicleCreate(BaseModel):

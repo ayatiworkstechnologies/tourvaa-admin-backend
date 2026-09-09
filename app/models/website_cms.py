@@ -1,4 +1,5 @@
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -208,6 +209,35 @@ class ExternalLink(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class FooterSection(Base):
+    __tablename__ = "cms_footer_sections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(120), nullable=False)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    links = relationship("FooterLink", back_populates="section", cascade="all, delete-orphan", order_by="FooterLink.sort_order")
+
+
+class FooterLink(Base):
+    __tablename__ = "cms_footer_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    section_id = Column(Integer, ForeignKey("cms_footer_sections.id"), nullable=False, index=True)
+    label = Column(String(120), nullable=False)
+    url = Column(String(500), nullable=False)
+    open_in_new_tab = Column(Boolean, default=False, nullable=False)
+    sort_order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    section = relationship("FooterSection", back_populates="links")
 
 
 class SitemapEntry(Base):

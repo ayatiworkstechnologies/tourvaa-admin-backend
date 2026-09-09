@@ -14,9 +14,12 @@ if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
   done
 fi
 
-# Keep the default at one worker: the application currently owns scheduled
-# loops and WebSocket connections in process memory. Scale only after those
-# responsibilities use a shared worker/pub-sub system.
+# Default stays one worker for a zero-config deployment. Scheduled sweep
+# locking and WebSocket pub/sub (app/utils/distributed_lock.py,
+# app/services/messaging_ws.py) now use Redis when REDIS_URL is set, so
+# WEB_CONCURRENCY may be raised above 1 once REDIS_URL points at a real
+# shared Redis instance - app.main.validate_worker_concurrency() enforces
+# this at startup.
 exec uvicorn app.main:app \
   --host 0.0.0.0 \
   --port "${PORT:-8000}" \

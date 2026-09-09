@@ -17,7 +17,7 @@ from app.models.bookings import Booking, BookingAccommodation, BookingCommunicat
 from app.models.cancellations import CancellationRequest, RefundRule
 from app.models.chatbot import ChatEmbedding, ChatFAQ, ChatMessage, ChatSession
 from app.models.checkout import CheckoutSession
-from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
+from app.models.cms import City, Country, Currency, State, Tour, TourCategory, TourSubcategory, TourSubcategoryMap
 from app.models.customers import Customer, CustomerCancellationRequest, CustomerCommunication, CustomerSavedTraveller, CustomerWishlistItem
 from app.models.email_templates import EmailTemplate
 from app.models.invoices import Invoice, InvoiceItem
@@ -51,7 +51,7 @@ from app.models.tours import (
     TourUnavailableDate,
 )
 from app.models.users import User, UserRole, UserStatusHistory
-from app.models.website_cms import Blog, CmsPolicy, CustomerReview, ExternalLink, HelpCentreArticle, HomepageBanner, PopularDestination, PopularTour, PromotionalPopup, SitemapEntry, TourOnDeal
+from app.models.website_cms import Blog, CmsPolicy, CustomerReview, ExternalLink, FooterLink, FooterSection, HelpCentreArticle, HomepageBanner, PopularDestination, PopularTour, PromotionalPopup, SitemapEntry, TourOnDeal
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

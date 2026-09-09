@@ -3,9 +3,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.cms import City, Country, State, Tour, TourCategory, TourSubcategory
-from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourCommissionUpdate, TourPayload
-from app.services.cms import _category, _city, _country, _state, _subcategory, _tour, delete_tour, get_tour, list_categories, list_cities, list_countries, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_state, save_subcategory, save_tour, update_status, update_tour_commission
+from app.models.cms import City, Country, Currency, State, Tour, TourCategory, TourSubcategory
+from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, CurrencyPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourCommissionUpdate, TourPayload
+from app.services.cms import _category, _city, _country, _currency, _state, _subcategory, _tour, delete_tour, get_tour, list_categories, list_cities, list_countries, list_currencies, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_currency, save_state, save_subcategory, save_tour, update_status, update_tour_commission
 from app.services.tour_import_export import build_import_template_workbook, build_tour_detail_workbook, import_tours, parse_tour_import_rows
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.pagination import pagination_params
@@ -58,6 +58,32 @@ def edit_country(country_id: int, data: CountryPayload, request: Request, db: Se
 @router.patch("/countries/{country_id}/status")
 def country_status(country_id: int, data: StatusUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("countries.disable", "countries.edit"))):
     return {"status": "success", "data": update_status(db, Country, _country, country_id, data, current_user, "country", request)}
+
+
+@router.get("/currencies")
+def currencies(params: dict = Depends(pagination_params), db: Session = Depends(get_db)):
+    return {"status": "success", **list_currencies(db, params["page"], params["limit"], params["search"])}
+
+
+@router.post("/currencies")
+def add_currency(data: CurrencyPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("currencies.create"))):
+    return {"status": "success", "data": save_currency(db, data, current_user, request)}
+
+
+@router.get("/currencies/{currency_id}")
+def currency_detail(currency_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.utils.operations import get_or_404
+    return {"status": "success", "data": _currency(get_or_404(db, Currency, currency_id, "Currency"))}
+
+
+@router.put("/currencies/{currency_id}")
+def edit_currency(currency_id: int, data: CurrencyPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("currencies.edit"))):
+    return {"status": "success", "data": save_currency(db, data, current_user, request, currency_id)}
+
+
+@router.patch("/currencies/{currency_id}/status")
+def currency_status(currency_id: int, data: StatusUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("currencies.disable", "currencies.edit"))):
+    return {"status": "success", "data": update_status(db, Currency, _currency, currency_id, data, current_user, "currency", request)}
 
 
 @router.get("/states")

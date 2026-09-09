@@ -8,9 +8,10 @@ from app.utils.pagination import pagination_params
 from app.services import website_cms as service
 from app.schemas.website_cms import (
     BannerPayload, BlogPayload, ContentBlockPayload, ExternalLinkPayload,
-    FavouriteCountryPayload, HandpickedTourPayload, HelpArticlePayload,
-    PolicyPayload, PopularDestinationPayload, PopularTourPayload,
-    PopupPayload, ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
+    FavouriteCountryPayload, FooterLinkPayload, FooterSectionPayload,
+    HandpickedTourPayload, HelpArticlePayload, PolicyPayload,
+    PopularDestinationPayload, PopularTourPayload, PopupPayload,
+    ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
 )
 
 router = APIRouter(prefix="/cms", tags=["Website CMS"])
@@ -265,6 +266,49 @@ def update_link(item_id: int, data: ExternalLinkPayload, db: Session = Depends(g
 def delete_link(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
     service.delete_external_link(db, item_id)
     return {"status": "success", "message": "Link deleted"}
+
+
+# footer sections & links
+
+@router.get("/footer")
+def public_footer(db: Session = Depends(get_db)):
+    """Public, no-auth: the site footer's active sections + active links, in
+    display order. This is what PublicFooter.tsx fetches on every render."""
+    return {"status": "success", "data": service.get_public_footer(db)}
+
+@router.get("/footer-sections")
+def list_footer_sections(pagination=Depends(pagination_params), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_footer_sections(db, pagination["page"], pagination["limit"])}
+
+@router.post("/footer-sections")
+def create_footer_section(data: FooterSectionPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
+    return {"status": "success", "data": service.create_footer_section(db, data)}
+
+@router.put("/footer-sections/{item_id}")
+def update_footer_section(item_id: int, data: FooterSectionPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS))):
+    return {"status": "success", "data": service.update_footer_section(db, item_id, data)}
+
+@router.delete("/footer-sections/{item_id}")
+def delete_footer_section(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
+    service.delete_footer_section(db, item_id)
+    return {"status": "success", "message": "Footer section deleted"}
+
+@router.get("/footer-links")
+def list_footer_links(pagination=Depends(pagination_params), section_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_footer_links(db, pagination["page"], pagination["limit"], section_id)}
+
+@router.post("/footer-links")
+def create_footer_link(data: FooterLinkPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
+    return {"status": "success", "data": service.create_footer_link(db, data)}
+
+@router.put("/footer-links/{item_id}")
+def update_footer_link(item_id: int, data: FooterLinkPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS))):
+    return {"status": "success", "data": service.update_footer_link(db, item_id, data)}
+
+@router.delete("/footer-links/{item_id}")
+def delete_footer_link(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
+    service.delete_footer_link(db, item_id)
+    return {"status": "success", "message": "Footer link deleted"}
 
 
 # sitemap

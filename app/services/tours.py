@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import log_audit
@@ -499,7 +500,17 @@ def delete_pricing(db: Session, tour_id: int, rid: int, actor: User, request: Re
     db.delete(o)
     recalculate_price_start(db, tour_id)
     mark_repricing_required(db, tour_id, actor)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        from app.models.bookings import Booking
+        booking_count = db.query(Booking).filter(Booking.pricing_slab_id == rid).count()
+        raise HTTPException(
+            status_code=400,
+            detail=f"This pricing slab can't be deleted: it's referenced by {booking_count} existing booking{'s' if booking_count != 1 else ''}. "
+            "Bookings keep a permanent record of the price they were made at, so the slab must stay in place.",
+        )
 
 
 # optional activity
