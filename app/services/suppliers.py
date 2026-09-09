@@ -146,6 +146,7 @@ def serialize_supplier(item: Supplier):
     data.update(
         {
             "supplier_type": item.supplier_type,
+            "currency": item.currency,
             "commission_percentage": str(item.commission_percentage) if item.commission_percentage is not None else None,
             "onboarding_completed_at": item.onboarding_completed_at,
             "commission_accepted_at": item.commission_accepted_at,
@@ -236,8 +237,19 @@ def export_suppliers_directory(db: Session) -> list[dict]:
     return rows
 
 
+def _derive_currency_for_country(db: Session, country_id: int | None) -> str | None:
+    """Best-effort auto-fill: the country's own currency_code, or None."""
+    if not country_id:
+        return None
+    from app.models.cms import Country
+    country = db.query(Country).filter(Country.id == country_id).first()
+    return country.currency_code or None if country else None
+
+
 def create_supplier(db: Session, data: SupplierCreate, actor: User, request: Request | None = None):
     supplier_data = data.model_dump(exclude={"email", "password"})
+    if not supplier_data.get("currency"):
+        supplier_data["currency"] = _derive_currency_for_country(db, supplier_data.get("country_id"))
     if data.user_id is not None:
         linked_user = db.query(User).filter(User.id == data.user_id).first()
         if not linked_user or linked_user.user_type != "SUPPLIER":
@@ -293,6 +305,14 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
         minimum = get_commission_percentage(db)
         if Decimal(str(update_data["commission_percentage"])) < minimum:
             raise HTTPException(status_code=400, detail=f"Commission percentage cannot be lower than the platform minimum of {minimum}%")
+
+    # If the country changed and the caller didn't also explicitly set a
+    # currency in this same request, re-derive the currency from the new
+    # country - a manually-set currency (present in update_data) always wins.
+    if "country_id" in update_data and "currency" not in update_data:
+        derived = _derive_currency_for_country(db, update_data["country_id"])
+        if derived:
+            update_data["currency"] = derived
 
     for key, value in update_data.items():
         setattr(item, key, value)

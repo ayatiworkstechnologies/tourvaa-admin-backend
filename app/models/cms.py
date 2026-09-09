@@ -21,6 +21,18 @@ class Country(Base):
     cities = relationship("City", back_populates="country")
 
 
+class Currency(Base):
+    __tablename__ = "currencies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False)
+    code = Column(String(10), nullable=False, unique=True)
+    symbol = Column(String(10), nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class State(Base):
     __tablename__ = "states"
 

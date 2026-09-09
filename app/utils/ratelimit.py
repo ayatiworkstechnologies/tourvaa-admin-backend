@@ -11,29 +11,9 @@ from collections import defaultdict, deque
 
 from fastapi import HTTPException, Request
 
+from app.utils.redis_client import get_redis_sync
+
 logger = logging.getLogger(__name__)
-
-# redis client (optional)
-
-_redis = None
-
-
-def _get_redis():
-    global _redis
-    if _redis is not None:
-        return _redis
-    try:
-        from app.config import settings
-        if not settings.REDIS_URL:
-            return None
-        import redis as redis_lib
-        _redis = redis_lib.from_url(settings.REDIS_URL, decode_responses=True, socket_connect_timeout=2)
-        _redis.ping()
-        logger.info("Rate limiter: using Redis at %s", settings.REDIS_URL)
-    except Exception as exc:
-        logger.warning("Rate limiter: Redis unavailable (%s), falling back to in-memory", exc)
-        _redis = None
-    return _redis
 
 
 # in-memory fallback (single-process only)
@@ -130,7 +110,7 @@ def check_rate_limit(request: Request, key: str, max_calls: int, window_seconds:
     """
     ip = _client_ip(request)
     bucket = f"rl:{ip}:{key}"
-    r = _get_redis()
+    r = get_redis_sync()
     if r:
         _check_redis(r, bucket, max_calls, window_seconds)
     else:

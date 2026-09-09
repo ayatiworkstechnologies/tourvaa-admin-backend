@@ -10,15 +10,16 @@ from app.utils.money import utcnow
 from app.models.cms import Tour
 from app.models.website_cms import (
     Blog, CmsPolicy, CustomerReview, ExternalLink, FavouriteCountryEntry,
-    HandpickedTour, HelpCentreArticle, HomepageBanner, HomepageContentBlock,
-    PopularDestination, PopularTour, PromotionalPopup, SitemapEntry,
-    TourOnDeal,
+    FooterLink, FooterSection, HandpickedTour, HelpCentreArticle,
+    HomepageBanner, HomepageContentBlock, PopularDestination, PopularTour,
+    PromotionalPopup, SitemapEntry, TourOnDeal,
 )
 from app.schemas.website_cms import (
     BannerPayload, BlogPayload, ContentBlockPayload, ExternalLinkPayload,
-    FavouriteCountryPayload, HandpickedTourPayload, HelpArticlePayload,
-    PolicyPayload, PopularDestinationPayload, PopularTourPayload,
-    PopupPayload, ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
+    FavouriteCountryPayload, FooterLinkPayload, FooterSectionPayload,
+    HandpickedTourPayload, HelpArticlePayload, PolicyPayload,
+    PopularDestinationPayload, PopularTourPayload, PopupPayload,
+    ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
 )
 
 # The only keys HomepageContentBlock rows may use - keeps the generic
@@ -102,6 +103,12 @@ def _s_help(r: HelpCentreArticle): return {"id": r.id, "category": r.category, "
 def _s_policy(r: CmsPolicy): return {"id": r.id, "slug": r.slug, "title": r.title, "content": r.content, "last_updated": r.last_updated, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_popup(r: PromotionalPopup): return {"id": r.id, "title": r.title, "content": r.content, "image": r.image, "cta_text": r.cta_text, "cta_url": r.cta_url, "display_after_seconds": r.display_after_seconds, "display_frequency": r.display_frequency, "is_active": r.is_active, "valid_from": r.valid_from, "valid_until": r.valid_until, "created_at": r.created_at}
 def _s_link(r: ExternalLink): return {"id": r.id, "label": r.label, "url": r.url, "open_in_new_tab": r.open_in_new_tab, "location": r.location, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
+def _s_footer_link(r: FooterLink): return {"id": r.id, "section_id": r.section_id, "label": r.label, "url": r.url, "open_in_new_tab": r.open_in_new_tab, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
+def _s_footer_section(r: FooterSection, include_links: bool = False):
+    data = {"id": r.id, "title": r.title, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
+    if include_links:
+        data["links"] = [_s_footer_link(link) for link in r.links]
+    return data
 def _s_sitemap(r: SitemapEntry): return {"id": r.id, "url": r.url, "change_frequency": r.change_frequency, "priority": r.priority, "last_modified": r.last_modified, "is_active": r.is_active, "created_at": r.created_at}
 def _s_handpicked(r: HandpickedTour, db: Session | None = None):
     tour = _tour_label(db, r.tour_id) if db else {"tour_title": "", "tour_code": ""}
@@ -325,6 +332,47 @@ def list_external_links(db, page, limit, location: str = ""):
 def create_external_link(db, data: ExternalLinkPayload): return _create(db, ExternalLink, data.model_dump(), _s_link)
 def update_external_link(db, item_id, data: ExternalLinkPayload): return _update(db, ExternalLink, item_id, data.model_dump(exclude_unset=True), _s_link, "External Link")
 def delete_external_link(db, item_id): _delete(db, ExternalLink, item_id, "External Link")
+
+# footer sections & links
+
+def list_footer_sections(db, page, limit): return _list(db, FooterSection, _s_footer_section, page, limit)
+def create_footer_section(db, data: FooterSectionPayload): return _create(db, FooterSection, data.model_dump(), _s_footer_section)
+def update_footer_section(db, item_id, data: FooterSectionPayload): return _update(db, FooterSection, item_id, data.model_dump(exclude_unset=True), _s_footer_section, "Footer Section")
+def delete_footer_section(db, item_id): _delete(db, FooterSection, item_id, "Footer Section")
+
+def list_footer_links(db, page, limit, section_id: int | None = None):
+    q = db.query(FooterLink)
+    if section_id is not None:
+        q = q.filter(FooterLink.section_id == section_id)
+    q = q.order_by(FooterLink.sort_order, FooterLink.id)
+    return _paginate(q, page, limit, _s_footer_link)
+
+def create_footer_link(db, data: FooterLinkPayload): return _create(db, FooterLink, data.model_dump(), _s_footer_link)
+def update_footer_link(db, item_id, data: FooterLinkPayload): return _update(db, FooterLink, item_id, data.model_dump(exclude_unset=True), _s_footer_link, "Footer Link")
+def delete_footer_link(db, item_id): _delete(db, FooterLink, item_id, "Footer Link")
+
+def get_public_footer(db):
+    """Active sections (ordered) each with their active links (ordered) - a
+    single read for the public site's footer, so it never has to make one
+    request per section."""
+    sections = (
+        db.query(FooterSection)
+        .filter(FooterSection.is_active == True)  # noqa: E712
+        .order_by(FooterSection.sort_order, FooterSection.id)
+        .all()
+    )
+    return [
+        {
+            "id": section.id,
+            "title": section.title,
+            "links": [
+                {"id": link.id, "label": link.label, "url": link.url, "open_in_new_tab": link.open_in_new_tab}
+                for link in sorted(section.links, key=lambda l: (l.sort_order, l.id))
+                if link.is_active
+            ],
+        }
+        for section in sections
+    ]
 
 # sitemap
 

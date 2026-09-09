@@ -548,6 +548,8 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
                 {
                     "day": i.day_number,
                     "title": i.day_title,
+                    "short_description": i.short_description or "",
+                    "long_description": i.long_description or "",
                     "description": i.long_description or i.short_description or "",
                     "location": i.location_name or "",
                     "accommodation": i.accommodation or "",

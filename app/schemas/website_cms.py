@@ -125,6 +125,21 @@ class ExternalLinkPayload(BaseModel):
     is_active: bool = True
 
 
+class FooterSectionPayload(BaseModel):
+    title: str
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class FooterLinkPayload(BaseModel):
+    section_id: int
+    label: str
+    url: str
+    open_in_new_tab: bool = False
+    sort_order: int = 0
+    is_active: bool = True
+
+
 class SitemapEntryPayload(BaseModel):
     url: str
     change_frequency: str = "weekly"

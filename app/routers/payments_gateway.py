@@ -64,6 +64,7 @@ class StripeSessionRequest(BaseModel):
     success_url: str
     cancel_url: str
     idempotency_key: Optional[str] = None
+    test_only: bool = False
 
 
 class StripeReturnConfirmRequest(BaseModel):
@@ -78,6 +79,7 @@ class PayPalOrderRequest(BaseModel):
     return_url: str
     cancel_url: str
     idempotency_key: Optional[str] = None
+    test_only: bool = False
 
 
 class PayPalCaptureRequest(BaseModel):
@@ -238,6 +240,8 @@ def stripe_create_session(body: StripeSessionRequest, request: Request, db: Sess
     amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
     currency = _validate_payment_currency(booking, body.currency)
     stripe = get_stripe(db)
+    if body.test_only and not stripe.secret_key.startswith(("sk_test_", "rk_test_")):
+        raise HTTPException(status_code=400, detail="Stripe test credentials are required")
     amount_cents = int(amount * 100)
 
     session_data = stripe.create_checkout_session(
@@ -426,6 +430,8 @@ def paypal_create_order(body: PayPalOrderRequest, request: Request, db: Session 
     amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
     currency = _validate_payment_currency(booking, body.currency)
     paypal = get_paypal(db)
+    if getattr(body, "test_only", False) and "sandbox" not in paypal.base_url:
+        raise HTTPException(status_code=400, detail="PayPal sandbox credentials are required")
     amount_str = f"{amount:.2f}"
 
     order = paypal.create_order(
@@ -594,19 +600,27 @@ def gateways_status(db: Session = Depends(get_db), current_user=Depends(get_curr
     from app.services.payments_gateway import _load_setting
     stripe_ok = False
     paypal_ok = False
+    stripe_test = False
+    paypal_test = False
     try:
         s = _load_setting(db, "stripe")
         stripe_ok = bool(s and s.secret_key)
+        if stripe_ok:
+            from app.utils.crypto import decrypt_secret
+            stripe_test = decrypt_secret(s.secret_key).startswith(("sk_test_", "rk_test_"))
     except Exception:
         pass
     try:
         p = _load_setting(db, "paypal")
         paypal_ok = bool(p and p.public_key and p.secret_key)
+        paypal_test = paypal_ok and (getattr(p, "mode", "sandbox") or "sandbox") == "sandbox"
     except Exception:
         pass
     return {
         "status": "success",
         "data": {
+            "stripe_test": stripe_test,
+            "paypal_test": paypal_test,
             "stripe": stripe_ok,
             "paypal": paypal_ok,
             "test_mode_available": settings.APP_ENV != "production",

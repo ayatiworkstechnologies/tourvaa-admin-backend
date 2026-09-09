@@ -120,23 +120,25 @@ def validate_production_config() -> None:
 
 
 def validate_worker_concurrency() -> None:
-    """Refuse to start if more than one worker process was requested.
+    """Refuse to start with more than one worker process unless Redis is
+    configured to back the state that would otherwise be process-local.
 
-    Scheduled sweeps (`start_background_jobs`, below) and the /ws/messages
-    ticket store + socket registry (`app/services/messaging_ws.py`) are kept
-    in process memory - each worker would run its own independent copy of
-    the sweeps (duplicate emails/refunds/status flips) and would only see
-    the WebSocket connections opened against itself (breaking realtime
-    delivery to users connected to a different worker). Until those move to
-    a shared store (Redis pub/sub / locks), WEB_CONCURRENCY must stay 1.
+    Scheduled sweeps (`start_background_jobs`, below) take a Redis-backed
+    per-tick lock (`app/utils/distributed_lock.py`) so only one worker runs
+    each sweep per interval, and the /ws/messages ticket store + socket
+    registry (`app/services/messaging_ws.py`) fall back to Redis-backed
+    tickets plus a Redis pub/sub relay so a message reaches a user's socket
+    regardless of which worker holds it. Both degrade to their original
+    process-local behavior when REDIS_URL is unset, which is only safe for
+    WEB_CONCURRENCY=1 - hence this still requires Redis for anything more.
     """
     workers = int(os.environ.get("WEB_CONCURRENCY", "1") or "1")
-    if workers > 1:
+    if workers > 1 and not settings.REDIS_URL:
         raise RuntimeError(
-            f"WEB_CONCURRENCY={workers} is not supported: background job sweeps and "
-            "/ws/messages state are process-local and would run/behave incorrectly "
-            "across multiple workers. Scale horizontally with separate single-worker "
-            "instances behind a load balancer instead, or set WEB_CONCURRENCY=1."
+            f"WEB_CONCURRENCY={workers} requires REDIS_URL to be set: background job "
+            "sweeps and /ws/messages state fall back to process-local behavior without "
+            "Redis, which is only correct for a single worker/instance. Set REDIS_URL "
+            "to a shared Redis instance, or set WEB_CONCURRENCY=1."
         )
 
 
@@ -293,9 +295,20 @@ def schema_is_ready():
     return True
 
 
+# The interactive docs (/docs, /redoc) and the raw schema (/openapi.json)
+# are disabled in production - they're a public, unauthenticated map of
+# every route/model in the API, and were being hit repeatedly with no
+# legitimate frontend caller (the admin/portal UIs never fetch this schema
+# at runtime; only a human or a scanner browsing /docs would). Still fully
+# available in non-production for local development and API exploration.
+_docs_enabled = settings.APP_ENV != "production"
+
 app = FastAPI(
     title="Tourvaa Backend",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 
@@ -335,10 +348,13 @@ BOOKING_EXPIRY_HOLD_MINUTES = 60
 
 async def _expire_stale_bookings_loop():
     from app.services.bookings import expire_stale_pending_bookings
+    from app.utils.distributed_lock import acquire_sweep_lock
 
     while True:
         await asyncio.sleep(BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS)
         try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "expire_stale_bookings", BOOKING_EXPIRY_SWEEP_INTERVAL_SECONDS - 60):
+                continue
             db = SessionLocal()
             try:
                 # Run the blocking DB work off the event loop thread.
@@ -356,10 +372,13 @@ REPORT_SCHEDULE_SWEEP_INTERVAL_SECONDS = 60 * 60
 
 async def _report_schedule_loop():
     from app.services.reports import run_due_report_schedules
+    from app.utils.distributed_lock import acquire_sweep_lock
 
     while True:
         await asyncio.sleep(REPORT_SCHEDULE_SWEEP_INTERVAL_SECONDS)
         try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "report_schedule", REPORT_SCHEDULE_SWEEP_INTERVAL_SECONDS - 60):
+                continue
             db = SessionLocal()
             try:
                 await asyncio.to_thread(run_due_report_schedules, db)
@@ -376,10 +395,13 @@ BALANCE_DUE_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
 
 async def _balance_due_reminder_loop():
     from app.services.invoices import check_balance_due_reminders
+    from app.utils.distributed_lock import acquire_sweep_lock
 
     while True:
         await asyncio.sleep(BALANCE_DUE_REMINDER_SWEEP_INTERVAL_SECONDS)
         try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "balance_due_reminder", BALANCE_DUE_REMINDER_SWEEP_INTERVAL_SECONDS - 60):
+                continue
             db = SessionLocal()
             try:
                 await asyncio.to_thread(check_balance_due_reminders, db)
@@ -396,10 +418,13 @@ TOUR_AVAILABILITY_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
 
 async def _tour_availability_reminder_loop():
     from app.services.tour_availability import check_availability_end_date_reminders
+    from app.utils.distributed_lock import acquire_sweep_lock
 
     while True:
         await asyncio.sleep(TOUR_AVAILABILITY_REMINDER_SWEEP_INTERVAL_SECONDS)
         try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "tour_availability_reminder", TOUR_AVAILABILITY_REMINDER_SWEEP_INTERVAL_SECONDS - 60):
+                continue
             db = SessionLocal()
             try:
                 await asyncio.to_thread(check_availability_end_date_reminders, db)
@@ -417,10 +442,13 @@ WISHLIST_REMINDER_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
 
 async def _wishlist_reminder_loop():
     from app.services.wishlist_reminders import check_wishlist_reminders
+    from app.utils.distributed_lock import acquire_sweep_lock
 
     while True:
         await asyncio.sleep(WISHLIST_REMINDER_SWEEP_INTERVAL_SECONDS)
         try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "wishlist_reminder", WISHLIST_REMINDER_SWEEP_INTERVAL_SECONDS - 300):
+                continue
             db = SessionLocal()
             try:
                 await asyncio.to_thread(check_wishlist_reminders, db)
@@ -438,6 +466,9 @@ async def start_background_jobs():
         asyncio.create_task(_balance_due_reminder_loop())
         asyncio.create_task(_tour_availability_reminder_loop())
         asyncio.create_task(_wishlist_reminder_loop())
+
+    from app.services.messaging_ws import start_redis_subscriber
+    asyncio.create_task(start_redis_subscriber())
 
 setup_cors(app)
 app.add_middleware(CsrfMiddleware)

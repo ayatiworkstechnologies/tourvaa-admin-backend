@@ -54,6 +54,18 @@ class CountryPayload(BaseModel):
         return value.strip()
 
 
+class CurrencyPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    code: str = Field(min_length=1, max_length=10)
+    symbol: str = Field(min_length=1, max_length=10)
+    status: str = Field(default="active", max_length=20)
+
+    @field_validator("name", "code", "symbol", "status")
+    @classmethod
+    def trim_text(cls, value: str):
+        return value.strip()
+
+
 class StatePayload(BaseModel):
     country_id: int
     state_name: str = Field(min_length=1, max_length=150)

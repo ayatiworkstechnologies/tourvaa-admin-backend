@@ -149,6 +149,7 @@ OPERATIONAL_PERMISSIONS = [
     ("affiliate_reports", "Affiliate Reports", ["view"]),
     ("affiliate_settings", "Affiliate Settings", ["manage"]),
     ("countries", "Countries", ["view", "create", "edit", "disable"]),
+    ("currencies", "Currencies", ["view", "create", "edit", "disable"]),
     ("cities", "Cities", ["view", "create", "edit", "disable"]),
     ("categories", "Categories", ["view", "create", "edit", "disable"]),
     ("subcategories", "Sub-Categories", ["view", "create", "edit", "disable"]),
