@@ -80,13 +80,20 @@ def public_tours(
         **list_tours(db, page, limit, search, country_id, city_id, category_id, status="published")
     }
 
+_CLIENT_INTERNAL_FIELDS = ("commission_percentage", "created_by", "updated_by")
+
+
 @router.get("/tours/{tour_id}")
 def public_tour_detail(tour_id: int, db: Session = Depends(get_db)):
     tour = get_tour(db, tour_id)
     if tour.status != "published":
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Tour not found")
-    return {"status": "success", "data": _tour(tour)}
+    # _tour() is the admin CMS serializer and includes internal fields
+    # (commission rate, audit user ids) that must not reach an unauthenticated
+    # caller -- strip them here rather than changing the shared serializer.
+    data = {k: v for k, v in _tour(tour).items() if k not in _CLIENT_INTERNAL_FIELDS}
+    return {"status": "success", "data": data}
 
 @router.get("/tours/{tour_id}/overview")
 def public_tour_overview(tour_id: int, db: Session = Depends(get_db)):
@@ -136,13 +143,25 @@ def public_tour_calendar(tour_id: int, db: Session = Depends(get_db)):
 @router.get("/tours/{tour_id}/pricing")
 def public_tour_pricing(tour_id: int, db: Session = Depends(get_db)):
     _ensure_published(db, tour_id)
-    # Strip internal cost/margin fields (supplier_price, markup_type, markup_value)
-    # before returning pricing slabs to unauthenticated public clients.
+    # Return the storefront (admin-marked-up) price -- the same price
+    # bookings.py._price_booking actually charges at checkout (see
+    # public.py's slab selection) -- never the supplier's raw net cost in
+    # adult_price/child_price, which would leak margin and quote the wrong
+    # price to an unauthenticated caller.
     rows = list_pricing(db, tour_id)
-    public_fields = (
-        "id", "tour_id", "passenger_from", "passenger_to",
-        "adult_price", "child_price", "final_price", "currency", "status",
-        "created_at", "updated_at",
-    )
-    safe_rows = [{k: row.get(k) for k in public_fields} for row in rows]
+    safe_rows = [
+        {
+            "id": row.get("id"),
+            "tour_id": row.get("tour_id"),
+            "passenger_from": row.get("passenger_from"),
+            "passenger_to": row.get("passenger_to"),
+            "adult_price": row.get("storefront_adult_price") if row.get("storefront_adult_price") is not None else row.get("adult_price"),
+            "child_price": row.get("storefront_child_price") if row.get("storefront_child_price") is not None else row.get("child_price"),
+            "currency": row.get("currency"),
+            "status": row.get("status"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+        for row in rows
+    ]
     return {"status": "success", "data": safe_rows}

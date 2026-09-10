@@ -39,7 +39,7 @@ from app.services.settings import (
 from app.models.customers import Customer
 from app.models.agents import Agent
 from app.models.suppliers import Supplier
-from app.models.tours import TourAccommodationExtra, TourCalendar, TourDiscount, TourExtension, TourGroupDiscountTier, TourOptionalActivity, TourPricing, TourUnavailableDate
+from app.models.tours import TourAccommodationExtra, TourCalendar, TourDatePrice, TourDiscount, TourExtension, TourGroupDiscountTier, TourOptionalActivity, TourPricing, TourUnavailableDate
 from app.models.users import User
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,23 @@ def _parse_dt(value: str | None):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _resolve_date_price(db: Session, tour_id: int | None, date_value):
+    """Seasonal/peak-date override: if an active TourDatePrice row exists for
+    this exact departure date, its adult_price/child_price are used verbatim
+    as the final customer-facing per-person price for that date, taking
+    priority over the pax-count slab (see TourDatePrice docstring)."""
+    if not tour_id or not date_value:
+        return None
+    if isinstance(date_value, str):
+        parsed = _parse_dt(date_value)
+        if not parsed:
+            return None
+        target_date = parsed.date()
+    else:
+        target_date = date_value.date() if hasattr(date_value, "date") else date_value
+    return db.query(TourDatePrice).filter(TourDatePrice.tour_id == tour_id, TourDatePrice.price_date == target_date, TourDatePrice.status == "active").first()
 
 
 def _mask_passport(value: str | None) -> str | None:
@@ -805,8 +822,22 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
     adult_unit = money((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else (tour.price_start_per_person if tour else 0))
     child_unit = money((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0)
-    base_amount = money(adult_unit * adults + child_unit * children)
-    group_tier, group_discount_amount, _group_discount_ratio = _resolve_group_discount(db, data.tour_id, seat_travellers, base_amount)
+    date_override = _resolve_date_price(db, data.tour_id, calendar.tour_date if calendar else data.tour_start_date)
+    if date_override:
+        adult_unit = money(date_override.adult_price)
+        child_unit = money(date_override.child_price)
+    per_person_amount = money(adult_unit * adults + child_unit * children)
+    # Group discount is a percentage of the seat-paying (adult+child) price
+    # only -- infants and the solo single-supplement below are resolved
+    # after this call so the discount % is never applied to them.
+    group_tier, group_discount_amount, _group_discount_ratio = _resolve_group_discount(db, data.tour_id, seat_travellers, per_person_amount)
+    infant_unit = money(getattr(tour, "infant_price", 0) or 0) if tour else money(0)
+    infant_total = money(infant_unit * data.no_of_infants)
+    # Single supplement: a lone adult (no children, no co-travellers) is
+    # charged the tour's solo-occupancy surcharge on top of the per-person
+    # price, matching standard travel-industry practice.
+    single_supplement_amount = money(getattr(tour, "single_supplement", 0) or 0) if tour and seat_travellers == 1 else money(0)
+    base_amount = money(per_person_amount + infant_total + single_supplement_amount)
 
     activity_rows = []
     activity_total = money(0)
@@ -854,7 +885,14 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     taxable_amount = money(subtotal - discount)
     tax_percentage = money(getattr(tour, "tax_percentage", 0) or 0) if tour else money(0)
     tax = money(taxable_amount * tax_percentage / money(100)) if tax_percentage > 0 else money(0)
-    surcharge = money(getattr(tour, "service_fee", 0) or 0) if tour else money(0)
+    service_fee = money(getattr(tour, "service_fee", 0) or 0) if tour else money(0)
+    # Gateway fee is a percentage of the taxed subtotal so the displayed
+    # total matches what the payment gateway (Stripe/PayPal) actually
+    # deducts, instead of only carrying the flat service_fee (see ID 04 in
+    # pricing-audit/07-pricing-bugs.md).
+    gateway_fee_percentage = money(getattr(tour, "gateway_fee_percentage", 0) or 0) if tour else money(0)
+    gateway_fee = money((taxable_amount + tax) * gateway_fee_percentage / money(100)) if gateway_fee_percentage > 0 else money(0)
+    surcharge = money(service_fee + gateway_fee)
     final = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total - discount + tax + surcharge)
     if final < 0:
         raise HTTPException(status_code=400, detail="Final amount cannot be negative")

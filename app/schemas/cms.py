@@ -148,6 +148,7 @@ class TourPayload(BaseModel):
     single_supplement: float = Field(default=0, ge=0)
     tax_percentage: float = Field(default=0, ge=0)
     service_fee: float = Field(default=0, ge=0)
+    gateway_fee_percentage: float = Field(default=0, ge=0, le=100)
     booking_deposit: float = Field(default=0, ge=0)
     deposit_type: str = Field(default="fixed", max_length=20)
     deposit_percentage: float | None = Field(default=None, ge=0, le=100)

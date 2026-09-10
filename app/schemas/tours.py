@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -218,6 +218,21 @@ class PricingPayload(BaseModel):
     @field_validator("status")
     @classmethod
     def validate_status(cls, v: str):
+        if v not in ITEM_STATUSES:
+            raise ValueError("Invalid status")
+        return v
+
+
+# per-date seasonal/peak price override (admin only) - see models.tours.TourDatePrice
+class DatePricePayload(BaseModel):
+    price_date: date
+    adult_price: float = Field(ge=0)
+    child_price: float = Field(default=0.0, ge=0)
+    status: str = Field(default="active", max_length=20)
+
+    @field_validator("status")
+    @classmethod
+    def validate_date_price_status(cls, v: str):
         if v not in ITEM_STATUSES:
             raise ValueError("Invalid status")
         return v
