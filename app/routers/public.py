@@ -173,7 +173,7 @@ def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
     return best
 
 
-def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscountTier]) -> list[dict]:
+def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscountTier], discount_percentage: float = 0.0) -> list[dict]:
     """A tour can have several independently-priced pax-range TourPricing
     slabs (see services.tours._apply_pricing_computation) -- when it does,
     each slab already IS a row of the public price ladder, so this just
@@ -188,7 +188,7 @@ def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscou
     if not pricing:
         return []
     if len(pricing) > 1:
-        return [
+        rows = [
             {
                 "persons_from": slab.passenger_from,
                 "persons_to": slab.passenger_to,
@@ -198,25 +198,41 @@ def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscou
             }
             for slab in pricing
         ]
-    base = pricing[0]
-    base_adult = float(base.storefront_adult_price if base.storefront_adult_price is not None else base.adult_price)
-    base_child = float(base.storefront_child_price if base.storefront_child_price is not None else base.child_price or 0)
-    rows = []
-    solo_upper = (tiers[0].min_pax - 1) if tiers else base.passenger_to
-    rows.append({"persons_from": base.passenger_from, "persons_to": solo_upper, "price_per_person": base_adult, "child_price_per_person": base_child, "currency": base.currency})
-    for tier in tiers:
-        if tier.discount_type == "percentage":
-            price = base_adult * (1 - float(tier.discount_value) / 100)
-            child_price = base_child * (1 - float(tier.discount_value) / 100)
-        else:
-            price = base_adult - float(tier.discount_value)
-            child_price = base_child - float(tier.discount_value)
-        rows.append({
-            "persons_from": tier.min_pax, "persons_to": tier.max_pax,
-            "price_per_person": round(max(0.0, price), 2),
-            "child_price_per_person": round(max(0.0, child_price), 2),
-            "currency": base.currency,
-        })
+    else:
+        base = pricing[0]
+        base_adult = float(base.storefront_adult_price if base.storefront_adult_price is not None else base.adult_price)
+        base_child = float(base.storefront_child_price if base.storefront_child_price is not None else base.child_price or 0)
+        rows = []
+        solo_upper = (tiers[0].min_pax - 1) if tiers else base.passenger_to
+        rows.append({"persons_from": base.passenger_from, "persons_to": solo_upper, "price_per_person": base_adult, "child_price_per_person": base_child, "currency": base.currency})
+        for tier in tiers:
+            if tier.discount_type == "percentage":
+                price = base_adult * (1 - float(tier.discount_value) / 100)
+                child_price = base_child * (1 - float(tier.discount_value) / 100)
+            else:
+                price = base_adult - float(tier.discount_value)
+                child_price = base_child - float(tier.discount_value)
+            rows.append({
+                "persons_from": tier.min_pax, "persons_to": tier.max_pax,
+                "price_per_person": round(max(0.0, price), 2),
+                "child_price_per_person": round(max(0.0, child_price), 2),
+                "currency": base.currency,
+            })
+
+    # An active tour-wide discount (see _active_discount_map) applies the same
+    # percentage the admin/supplier pricing screen shows as "PRICE AFTER
+    # DISCOUNT" against every pax-range row here, not just the headline
+    # price_start_per_person -- otherwise the public group-pricing ladder
+    # would show pre-discount numbers while the admin screen and the
+    # storefront's own "Save X% today" badge both already reflect the
+    # discounted price.
+    if discount_percentage:
+        factor = 1 - discount_percentage / 100
+        for row in rows:
+            row["original_price_per_person"] = row["price_per_person"]
+            row["original_child_price_per_person"] = row["child_price_per_person"]
+            row["price_per_person"] = round(max(0.0, row["price_per_person"] * factor), 2)
+            row["child_price_per_person"] = round(max(0.0, row["child_price_per_person"] * factor), 2)
     return rows
 
 
@@ -575,7 +591,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             # actually charges at checkout - see _public_pricing_rows for
             # how the base price + group discount tiers are expanded into
             # these traveller-count rows.
-            "pricing": _public_pricing_rows(pricing, group_discount_tiers),
+            "pricing": _public_pricing_rows(pricing, group_discount_tiers, (own_discount_map.get(tour_id) or {}).get("discount_percentage") or 0),
             "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],
             "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other", "image": (e.extension_tour.banner_image or None) if e.extension_tour else None} for e in extensions],

@@ -7,10 +7,10 @@ from app.auth.permissions import require_any_permission
 from app.utils.pagination import pagination_params
 from app.services import website_cms as service
 from app.schemas.website_cms import (
-    BannerPayload, BlogPayload, ContentBlockPayload, ExternalLinkPayload,
-    FavouriteCountryPayload, FooterLinkPayload, FooterSectionPayload,
-    HandpickedTourPayload, HelpArticlePayload, PolicyPayload,
-    PopularDestinationPayload, PopularTourPayload, PopupPayload,
+    BannerPayload, BlogPayload, CmsPagePayload, ContentBlockPayload,
+    ExternalLinkPayload, FavouriteCountryPayload, FooterLinkPayload,
+    FooterSectionPayload, HandpickedTourPayload, HelpArticlePayload,
+    PolicyPayload, PopularDestinationPayload, PopularTourPayload, PopupPayload,
     ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
 )
 
@@ -166,6 +166,32 @@ def update_blog(item_id: int, data: BlogPayload, db: Session = Depends(get_db), 
 def delete_blog(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
     service.delete_blog(db, item_id)
     return {"status": "success", "message": "Blog deleted"}
+
+
+# cms pages
+
+@router.get("/pages")
+def list_cms_pages(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_cms_pages(db, pagination["page"], pagination["limit"], active_only)}
+
+@router.post("/pages")
+def create_cms_page(data: CmsPagePayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
+    return {"status": "success", "data": service.create_cms_page(db, data)}
+
+@router.put("/pages/{item_id}")
+def update_cms_page(item_id: int, data: CmsPagePayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS))):
+    return {"status": "success", "data": service.update_cms_page(db, item_id, data)}
+
+@router.delete("/pages/{item_id}")
+def delete_cms_page(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
+    service.delete_cms_page(db, item_id)
+    return {"status": "success", "message": "Page deleted"}
+
+@router.get("/pages/by-slug/{slug}")
+def public_cms_page(slug: str, db: Session = Depends(get_db)):
+    """Public, no auth: a published page's content by slug - what the site's
+    dynamic [slug] route fetches. A draft page 404s here."""
+    return {"status": "success", "data": service.get_cms_page_by_slug(db, slug)}
 
 
 # customer reviews

@@ -1,4 +1,5 @@
 from datetime import timezone
+from decimal import Decimal
 
 from fastapi import HTTPException, Request
 from sqlalchemy import or_
@@ -369,6 +370,24 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     # Pricing slab (see services.tours.recalculate_price_start) -- never a
     # client-editable marketing field, so any submitted value is ignored.
     payload.pop("price_start_per_person", None)
+    # USD is the platform's single accounting currency (app/services/currency.py) --
+    # TourPricing slabs already normalize to it (services.tours._normalize_pricing_to_usd).
+    # Tour itself carries two real money fields alongside the currency picker
+    # (booking_deposit, service_fee), which were previously being persisted
+    # verbatim in whatever currency the form's picker showed -- e.g. a
+    # supplier entering "500" under AED got 500 stored and later treated as
+    # $500. Convert them here, then force currency to USD, so the picker
+    # stays a pure input convenience and every stored amount is USD.
+    from app.services.currency import BASE_CURRENCY, convert_amount, normalize_currency
+
+    entered_currency = normalize_currency(payload.get("currency"), BASE_CURRENCY)
+    if entered_currency != BASE_CURRENCY:
+        for field in ("booking_deposit", "service_fee"):
+            value = payload.get(field)
+            if value:
+                converted, _, _ = convert_amount(Decimal(str(value)), entered_currency, BASE_CURRENCY)
+                payload[field] = float(converted)
+    payload["currency"] = BASE_CURRENCY
 
     # Validate FK IDs exist before attempting insert
     if payload.get("supplier_id"):

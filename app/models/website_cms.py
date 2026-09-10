@@ -163,6 +163,28 @@ class HelpCentreArticle(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class CmsPage(Base):
+    """Admin-authored pages created dynamically (not the small fixed set of
+    legal documents CmsPolicy covers) - title/content/SEO, an enable/disable
+    status, and an optional footer section assignment so a published page
+    can automatically appear as a footer link (see get_public_footer)."""
+    __tablename__ = "cms_pages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200), nullable=False)
+    slug = Column(String(220), unique=True, nullable=False, index=True)
+    content = Column(Text, nullable=True)
+    seo_title = Column(String(200), nullable=True)
+    seo_description = Column(String(400), nullable=True)
+    status = Column(String(20), default="draft", nullable=False)
+    # draft, published - "published" is what makes a page reachable at its
+    # slug URL and eligible to appear in its assigned footer section.
+    footer_section_id = Column(Integer, ForeignKey("cms_footer_sections.id"), nullable=True, index=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class CmsPolicy(Base):
     """Stores Terms & Conditions, Cookie Policy, Cancellation Policy, etc."""
     __tablename__ = "cms_policies"
