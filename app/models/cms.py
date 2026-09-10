@@ -139,6 +139,10 @@ class Tour(Base):
     single_supplement = Column(Float, default=0, nullable=False)
     tax_percentage = Column(Float, default=0, nullable=False)
     service_fee = Column(Float, default=0, nullable=False)
+    # Percentage payment-gateway/transaction fee, applied on top of
+    # service_fee so the total charged to the customer matches what the
+    # gateway (Stripe/PayPal) actually deducts -- see bookings._price_booking.
+    gateway_fee_percentage = Column(Float, default=0, nullable=False)
     booking_deposit = Column(Float, default=0, nullable=False)
     # "percentage" -> deposit_percentage applies to the booking total; "fixed" (default,
     # preserves existing behavior) -> booking_deposit is a flat currency amount.

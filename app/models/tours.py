@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -193,6 +193,25 @@ class TourPricing(Base):
     storefront_adult_price = Column(Numeric(12, 2), nullable=True)
     storefront_child_price = Column(Numeric(12, 2), nullable=True)
     currency = Column(String(10), default="USD", nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class TourDatePrice(Base):
+    """A per-date storefront price override for a tour, layered on top of the
+    normal TourPricing slab -- e.g. a peak-season surcharge or off-peak
+    discount for a specific departure date. When present for a booking's
+    date, adult_price/child_price here are used verbatim as the final
+    customer-facing price (already inclusive of any markup an admin wants),
+    exactly like storefront_adult_price/storefront_child_price on the slab."""
+    __tablename__ = "tour_date_prices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
+    price_date = Column(Date, nullable=False, index=True)
+    adult_price = Column(Numeric(12, 2), nullable=False)
+    child_price = Column(Numeric(12, 2), default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

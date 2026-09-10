@@ -76,6 +76,7 @@ def _tour(item: Tour):
         "single_supplement": item.single_supplement,
         "tax_percentage": item.tax_percentage,
         "service_fee": item.service_fee,
+        "gateway_fee_percentage": item.gateway_fee_percentage,
         "booking_deposit": item.booking_deposit,
         "deposit_type": item.deposit_type,
         "deposit_percentage": item.deposit_percentage,

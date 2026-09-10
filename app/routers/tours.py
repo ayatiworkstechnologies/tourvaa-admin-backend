@@ -9,6 +9,7 @@ from app.schemas.tours import (
     AccommodationExtraPayload,
     AvailabilityConfigPayload,
     CalendarPayload,
+    DatePricePayload,
     DiscountAmendment,
     DiscountPayload,
     ExtensionPayload,
@@ -35,6 +36,7 @@ from app.services.tours import (
     create_accommodation,
     create_activity,
     create_calendar_entry,
+    create_date_price,
     create_discount,
     create_exclusion,
     create_extension,
@@ -49,6 +51,7 @@ from app.services.tours import (
     delete_accommodation,
     delete_activity,
     delete_calendar_entry,
+    delete_date_price,
     delete_exclusion,
     delete_extension,
     delete_gallery_image,
@@ -65,6 +68,7 @@ from app.services.tours import (
     list_all_discounts,
     list_calendar,
     list_discount_history,
+    list_date_prices,
     list_discounts,
     list_group_discount_tiers,
     list_exclusions,
@@ -81,6 +85,7 @@ from app.services.tours import (
     update_accommodation,
     update_activity,
     update_calendar_entry,
+    update_date_price,
     update_exclusion,
     update_extension,
     update_gallery_image,
@@ -381,6 +386,30 @@ def remove_pricing(tour_id: int, pricing_id: int, request: Request, db: Session 
     _assert_supplier_owns_tour(db, tour_id, current_user)
     delete_pricing(db, tour_id, pricing_id, current_user, request)
     return {"status": "success", "message": "Pricing slab deleted"}
+
+
+# seasonal/peak per-date price overrides -- admin only, unlike the slab CRUD
+# above there is no supplier-owned variant of this: date pricing is an
+# ops/admin pricing decision, not something a supplier sets.
+@router.get("/{tour_id}/date-prices")
+def tour_date_prices(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    return {"status": "success", "data": list_date_prices(db, tour_id)}
+
+
+@router.post("/{tour_id}/date-prices")
+def add_date_price(tour_id: int, data: DatePricePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    return {"status": "success", "data": create_date_price(db, tour_id, data, current_user, request)}
+
+
+@router.put("/{tour_id}/date-prices/{date_price_id}")
+def edit_date_price(tour_id: int, date_price_id: int, data: DatePricePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    return {"status": "success", "data": update_date_price(db, tour_id, date_price_id, data, current_user, request)}
+
+
+@router.delete("/{tour_id}/date-prices/{date_price_id}")
+def remove_date_price(tour_id: int, date_price_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    delete_date_price(db, tour_id, date_price_id, current_user, request)
+    return {"status": "success", "message": "Date price override deleted"}
 
 
 # optional activities

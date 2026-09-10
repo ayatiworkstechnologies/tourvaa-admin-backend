@@ -13,6 +13,7 @@ from app.utils.operations import get_or_404
 from app.models.tours import (
     TourAccommodationExtra,
     TourCalendar,
+    TourDatePrice,
     TourDiscount,
     TourDiscountHistory,
     TourExclusion,
@@ -31,6 +32,7 @@ from app.models.tours import (
 from app.schemas.tours import (
     AccommodationExtraPayload,
     CalendarPayload,
+    DatePricePayload,
     DiscountAmendment,
     DiscountPayload,
     ExtensionPayload,
@@ -540,6 +542,18 @@ def delete_pricing(db: Session, tour_id: int, rid: int, actor: User, request: Re
             detail=f"This pricing slab can't be deleted: it's referenced by {booking_count} existing booking{'s' if booking_count != 1 else ''}. "
             "Bookings keep a permanent record of the price they were made at, so the slab must stay in place.",
         )
+
+
+# seasonal/peak per-date price override (see models.tours.TourDatePrice)
+def _ser_date_price(o: TourDatePrice) -> dict:
+    return {"id": o.id, "tour_id": o.tour_id, "price_date": o.price_date, "adult_price": o.adult_price, "child_price": o.child_price, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
+
+_list_date_prices_fn, _create_date_price_fn, _update_date_price_fn, _delete_date_price_fn = _simple_crud(TourDatePrice, _ser_date_price)
+
+def list_date_prices(db, tour_id): return _list_date_prices_fn(db, tour_id)
+def create_date_price(db, tour_id, data, actor, request=None): return _create_date_price_fn(db, tour_id, data, actor, "create_date_price", request)
+def update_date_price(db, tour_id, rid, data, actor, request=None): return _update_date_price_fn(db, tour_id, rid, data, actor, "update_date_price", "Date price", request)
+def delete_date_price(db, tour_id, rid, actor, request=None): return _delete_date_price_fn(db, tour_id, rid, actor, "delete_date_price", "Date price", request)
 
 
 # optional activity
