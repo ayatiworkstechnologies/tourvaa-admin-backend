@@ -51,7 +51,7 @@ from app.models.tours import (
     TourUnavailableDate,
 )
 from app.models.users import User, UserRole, UserStatusHistory
-from app.models.website_cms import Blog, CmsPolicy, CustomerReview, ExternalLink, FooterLink, FooterSection, HelpCentreArticle, HomepageBanner, PopularDestination, PopularTour, PromotionalPopup, SitemapEntry, TourOnDeal
+from app.models.website_cms import Blog, CmsPage, CmsPolicy, CustomerReview, ExternalLink, FooterLink, FooterSection, HelpCentreArticle, HomepageBanner, PopularDestination, PopularTour, PromotionalPopup, SitemapEntry, TourOnDeal
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

@@ -78,6 +78,17 @@ class BlogPayload(BaseModel):
     status: str = "draft"
 
 
+class CmsPagePayload(BaseModel):
+    title: str
+    slug: Optional[str] = None
+    content: Optional[str] = None
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
+    status: str = "draft"
+    footer_section_id: Optional[int] = None
+    sort_order: int = 0
+
+
 class ReviewPayload(BaseModel):
     reviewer_name: str
     reviewer_image: Optional[str] = None

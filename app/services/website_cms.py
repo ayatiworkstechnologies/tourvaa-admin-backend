@@ -9,17 +9,18 @@ from sqlalchemy.orm import Session
 from app.utils.money import utcnow
 from app.models.cms import Tour
 from app.models.website_cms import (
-    Blog, CmsPolicy, CustomerReview, ExternalLink, FavouriteCountryEntry,
-    FooterLink, FooterSection, HandpickedTour, HelpCentreArticle,
-    HomepageBanner, HomepageContentBlock, PopularDestination, PopularTour,
-    PromotionalPopup, SitemapEntry, TourOnDeal,
+    Blog, CmsPage, CmsPolicy, CustomerReview, ExternalLink,
+    FavouriteCountryEntry, FooterLink, FooterSection, HandpickedTour,
+    HelpCentreArticle, HomepageBanner, HomepageContentBlock,
+    PopularDestination, PopularTour, PromotionalPopup, SitemapEntry,
+    TourOnDeal,
 )
 from app.schemas.website_cms import (
-    BannerPayload, BlogPayload, ContentBlockPayload, ExternalLinkPayload,
-    FavouriteCountryPayload, FooterLinkPayload, FooterSectionPayload,
-    HandpickedTourPayload, HelpArticlePayload, PolicyPayload,
-    PopularDestinationPayload, PopularTourPayload, PopupPayload,
-    ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
+    BannerPayload, BlogPayload, CmsPagePayload, ContentBlockPayload,
+    ExternalLinkPayload, FavouriteCountryPayload, FooterLinkPayload,
+    FooterSectionPayload, HandpickedTourPayload, HelpArticlePayload,
+    PolicyPayload, PopularDestinationPayload, PopularTourPayload,
+    PopupPayload, ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
 )
 
 # The only keys HomepageContentBlock rows may use - keeps the generic
@@ -98,6 +99,7 @@ def _s_deal(r: TourOnDeal, db: Session | None = None):
     tour = _tour_label(db, r.tour_id) if db else {"tour_title": "", "tour_code": ""}
     return {"id": r.id, "tour_id": r.tour_id, **tour, "deal_label": r.deal_label, "discount_percentage": r.discount_percentage, "valid_until": r.valid_until, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_blog(r: Blog): return {"id": r.id, "title": r.title, "slug": r.slug, "excerpt": r.excerpt, "content": r.content, "featured_image": r.featured_image, "author": r.author, "tags": r.tags, "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "published_at": r.published_at, "created_at": r.created_at, "updated_at": r.updated_at}
+def _s_cms_page(r: CmsPage): return {"id": r.id, "title": r.title, "slug": r.slug, "content": r.content, "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "footer_section_id": r.footer_section_id, "sort_order": r.sort_order, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_review(r: CustomerReview): return {"id": r.id, "reviewer_name": r.reviewer_name, "reviewer_image": r.reviewer_image, "rating": r.rating, "review_text": r.review_text, "tour_name": r.tour_name, "country": r.country, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_help(r: HelpCentreArticle): return {"id": r.id, "category": r.category, "question": r.question, "answer": r.answer, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_policy(r: CmsPolicy): return {"id": r.id, "slug": r.slug, "title": r.title, "content": r.content, "last_updated": r.last_updated, "created_at": r.created_at, "updated_at": r.updated_at}
@@ -224,7 +226,7 @@ def delete_deal(db, item_id): _delete(db, TourOnDeal, item_id, "Deal")
 
 # blogs
 
-def _slugify_blog(title: str) -> str:
+def _slugify(title: str) -> str:
     import re
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
 
@@ -241,7 +243,7 @@ def create_blog(db, data: BlogPayload):
     d = data.model_dump()
     d["content"] = _sanitize_html(d.get("content"))
     if not d.get("slug"):
-        d["slug"] = _slugify_blog(data.title)
+        d["slug"] = _slugify(data.title)
     if data.status == "published" and not d.get("published_at"):
         d["published_at"] = utcnow()
     return _create(db, Blog, d, _s_blog)
@@ -258,6 +260,39 @@ def update_blog(db, item_id, data: BlogPayload):
 
 def delete_blog(db, item_id): _delete(db, Blog, item_id, "Blog")
 def get_blog(db, item_id): return _s_blog(_get_or_404(db, Blog, item_id, "Blog"))
+
+# cms pages (dynamically admin-created pages, distinct from the small fixed
+# set of legal documents CmsPolicy covers)
+
+def list_cms_pages(db, page, limit, active_only=False):
+    q = db.query(CmsPage)
+    if active_only:
+        q = q.filter(CmsPage.status == "published")
+    q = q.order_by(CmsPage.sort_order, CmsPage.id.desc())
+    return _paginate(q, page, limit, _s_cms_page)
+
+def create_cms_page(db, data: CmsPagePayload):
+    d = data.model_dump()
+    d["content"] = _sanitize_html(d.get("content"))
+    if not d.get("slug"):
+        d["slug"] = _slugify(data.title)
+    return _create(db, CmsPage, d, _s_cms_page)
+
+def update_cms_page(db, item_id, data: CmsPagePayload):
+    d = data.model_dump(exclude_unset=True)
+    if "content" in d:
+        d["content"] = _sanitize_html(d.get("content"))
+    return _update(db, CmsPage, item_id, d, _s_cms_page, "Page")
+
+def delete_cms_page(db, item_id): _delete(db, CmsPage, item_id, "Page")
+def get_cms_page(db, item_id): return _s_cms_page(_get_or_404(db, CmsPage, item_id, "Page"))
+
+def get_cms_page_by_slug(db, slug: str):
+    """Public lookup - a draft page is never reachable at its URL."""
+    page = db.query(CmsPage).filter(CmsPage.slug == slug, CmsPage.status == "published").first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    return _s_cms_page(page)
 
 # customer reviews
 
@@ -354,25 +389,39 @@ def delete_footer_link(db, item_id): _delete(db, FooterLink, item_id, "Footer Li
 def get_public_footer(db):
     """Active sections (ordered) each with their active links (ordered) - a
     single read for the public site's footer, so it never has to make one
-    request per section."""
+    request per section. Each section's links are the union of hand-authored
+    FooterLink rows and any published CmsPage assigned to that section
+    (footer_section_id) - a page is just referenced by FK here, not
+    duplicated into a FooterLink row, so editing the page is the only place
+    its footer label/URL needs to change."""
     sections = (
         db.query(FooterSection)
         .filter(FooterSection.is_active == True)  # noqa: E712
         .order_by(FooterSection.sort_order, FooterSection.id)
         .all()
     )
-    return [
-        {
+    pages_by_section: dict[int, list[CmsPage]] = {}
+    for cms_page in db.query(CmsPage).filter(CmsPage.status == "published", CmsPage.footer_section_id.isnot(None)).all():
+        pages_by_section.setdefault(cms_page.footer_section_id, []).append(cms_page)
+
+    result = []
+    for section in sections:
+        entries = [
+            {"id": f"link-{link.id}", "label": link.label, "url": link.url, "open_in_new_tab": link.open_in_new_tab, "sort_order": link.sort_order}
+            for link in section.links
+            if link.is_active
+        ]
+        entries += [
+            {"id": f"page-{cms_page.id}", "label": cms_page.title, "url": f"/{cms_page.slug}", "open_in_new_tab": False, "sort_order": cms_page.sort_order}
+            for cms_page in pages_by_section.get(section.id, [])
+        ]
+        entries.sort(key=lambda e: (e["sort_order"], e["id"]))
+        result.append({
             "id": section.id,
             "title": section.title,
-            "links": [
-                {"id": link.id, "label": link.label, "url": link.url, "open_in_new_tab": link.open_in_new_tab}
-                for link in sorted(section.links, key=lambda l: (l.sort_order, l.id))
-                if link.is_active
-            ],
-        }
-        for section in sections
-    ]
+            "links": [{"id": e["id"], "label": e["label"], "url": e["url"], "open_in_new_tab": e["open_in_new_tab"]} for e in entries],
+        })
+    return result
 
 # sitemap
 
