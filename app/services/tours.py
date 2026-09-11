@@ -37,6 +37,7 @@ from app.schemas.tours import (
     DiscountPayload,
     ExtensionPayload,
     GalleryImagePayload,
+    GlobalDiscountPayload,
     GroupDiscountTierPayload,
     HighlightPayload,
     InclusionPayload,
