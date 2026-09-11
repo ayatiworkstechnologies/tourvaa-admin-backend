@@ -28,7 +28,8 @@ from app.schemas.website_cms import (
 # key/JSON store from accumulating arbitrary, unrendered keys over time.
 ALLOWED_CONTENT_BLOCK_KEYS = {
     "hero_extras", "about_section", "blog_teaser", "airport_transfer",
-    "travel_support", "newsletter_banner",
+    "travel_support", "newsletter_banner", "top_deals_section",
+    "trending_section",
 }
 
 
