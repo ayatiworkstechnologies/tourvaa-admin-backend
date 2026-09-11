@@ -7,9 +7,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.utils.money import utcnow
-from app.models.cms import Tour
+from app.models.cms import Country, Tour
 from app.models.website_cms import (
-    Blog, CmsPage, CmsPolicy, CustomerReview, ExternalLink,
+    Blog, CmsPage, CmsPolicy, CountryPage, CustomerReview, ExternalLink,
     FavouriteCountryEntry, FooterLink, FooterSection, HandpickedTour,
     HelpCentreArticle, HomepageBanner, HomepageContentBlock,
     PopularDestination, PopularTour, PromotionalPopup, SitemapEntry,
@@ -17,15 +17,19 @@ from app.models.website_cms import (
 )
 from app.schemas.website_cms import (
     BannerPayload, BlogPayload, CmsPagePayload, ContentBlockPayload,
-    ExternalLinkPayload, FavouriteCountryPayload, FooterLinkPayload,
-    FooterSectionPayload, HandpickedTourPayload, HelpArticlePayload,
-    PolicyPayload, PopularDestinationPayload, PopularTourPayload,
-    PopupPayload, ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
+    CountryPagePayload, ExternalLinkPayload, FavouriteCountryPayload,
+    FooterLinkPayload, FooterSectionPayload, HandpickedTourPayload,
+    HelpArticlePayload, PolicyPayload, PopularDestinationPayload,
+    PopularTourPayload, PopupPayload, ReviewPayload, SitemapEntryPayload,
+    TourOnDealPayload,
 )
 
 # The only keys HomepageContentBlock rows may use - keeps the generic
 # key/JSON store from accumulating arbitrary, unrendered keys over time.
-ALLOWED_CONTENT_BLOCK_KEYS = {"hero_extras", "about_section", "blog_teaser", "airport_transfer"}
+ALLOWED_CONTENT_BLOCK_KEYS = {
+    "hero_extras", "about_section", "blog_teaser", "airport_transfer",
+    "travel_support", "newsletter_banner",
+}
 
 
 def _paginate(q, page: int, limit: int, serializer) -> dict:
@@ -117,6 +121,12 @@ def _s_handpicked(r: HandpickedTour, db: Session | None = None):
     return {"id": r.id, "tour_id": r.tour_id, **tour, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_favourite_country(r: FavouriteCountryEntry): return {"id": r.id, "country_id": r.country_id, "title": r.title, "snippet": r.snippet, "image": r.image, "href": r.href, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_content_block(r: HomepageContentBlock | None, key: str): return {"key": key, "data": r.data if r else {}, "updated_at": r.updated_at if r else None}
+def _s_country_page(r: CountryPage, db: Session | None = None):
+    country_name = None
+    if db is not None:
+        country = db.query(Country).filter(Country.id == r.country_id).first()
+        country_name = country.country_name if country else None
+    return {"id": r.id, "country_id": r.country_id, "country_name": country_name, "hero_title": r.hero_title, "hero_description": r.hero_description, "hero_image": r.hero_image, "showcase_title": r.showcase_title, "showcase_description": r.showcase_description, "showcase_image": r.showcase_image, "seo_title": r.seo_title, "seo_description": r.seo_description, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
 
 
 # generic crud factory
@@ -458,7 +468,46 @@ def create_favourite_country(db, data: FavouriteCountryPayload): return _create(
 def update_favourite_country(db, item_id, data: FavouriteCountryPayload): return _update(db, FavouriteCountryEntry, item_id, data.model_dump(exclude_unset=True), _s_favourite_country, "Favourite Country")
 def delete_favourite_country(db, item_id): _delete(db, FavouriteCountryEntry, item_id, "Favourite Country")
 
-# generic homepage content blocks (hero_extras, about_section, blog_teaser, airport_transfer)
+# country landing pages (/tours/{country})
+
+def list_country_pages(db, page, limit, active_only=False):
+    q = db.query(CountryPage)
+    if active_only:
+        q = q.filter(CountryPage.is_active == True)  # noqa: E712
+    q = q.order_by(CountryPage.id.desc())
+    return _paginate(q, page, limit, lambda row: _s_country_page(row, db))
+def create_country_page(db, data: CountryPagePayload):
+    if not db.query(Country).filter(Country.id == data.country_id).first():
+        raise HTTPException(status_code=400, detail="Selected country does not exist")
+    obj = CountryPage(**data.model_dump())
+    db.add(obj)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="This country already has a landing page")
+    db.refresh(obj)
+    return _s_country_page(obj, db)
+def update_country_page(db, item_id, data: CountryPagePayload): return _update(db, CountryPage, item_id, data.model_dump(exclude_unset=True), lambda row: _s_country_page(row, db), "Country Page")
+def delete_country_page(db, item_id): _delete(db, CountryPage, item_id, "Country Page")
+
+def list_active_country_pages_public(db):
+    # Public consumer (GET /public/country-pages): the country landing page
+    # itself resolves country by name/slug (see countryMetadataFor and
+    # CountryTourListing), so this returns country_name alongside each row
+    # rather than requiring a second lookup.
+    rows = (
+        db.query(CountryPage, Country.country_name)
+        .join(Country, Country.id == CountryPage.country_id)
+        .filter(CountryPage.is_active == True)  # noqa: E712
+        .all()
+    )
+    return [
+        {**_s_country_page(row), "country_name": country_name}
+        for row, country_name in rows
+    ]
+
+# generic homepage content blocks (see ALLOWED_CONTENT_BLOCK_KEYS above)
 
 def get_content_block(db, key: str):
     if key not in ALLOWED_CONTENT_BLOCK_KEYS:

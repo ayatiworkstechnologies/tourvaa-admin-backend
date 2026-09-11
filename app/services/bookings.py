@@ -21,6 +21,7 @@ from app.models.bookings import (
 )
 from app.schemas.bookings import (
     AssignSupplierRequest,
+    BookingAddonPayload,
     BookingCancelRequest,
     BookingCommunicationCreate,
     BookingCreate,
@@ -839,16 +840,49 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     single_supplement_amount = money(getattr(tour, "single_supplement", 0) or 0) if tour and seat_travellers == 1 else money(0)
     base_amount = money(per_person_amount + infant_total + single_supplement_amount)
 
+    # Nights, for accommodation/extension extras priced per night. Only
+    # resolvable when both ends of the stay are known; a *_per_night item is
+    # rejected below rather than silently guessed at 1 night when they aren't.
+    _trip_start = _parse_dt(data.tour_start_date)
+    _trip_end = _parse_dt(data.tour_end_date)
+    nights = (_trip_end - _trip_start).days if _trip_start and _trip_end else None
+    room_count = data.no_of_rooms or 1
+
+    def _addon_quantity(price_type: str, requested_quantity: int, *, label: str) -> int:
+        if price_type == "per_person":
+            return seat_travellers
+        if price_type == "per_room":
+            return room_count
+        if price_type in {"per_person_per_night", "per_room_per_night"}:
+            if not nights or nights < 1:
+                raise HTTPException(status_code=400, detail=f"{label} is priced per night, but this booking has no resolvable number of nights (tour_start_date/tour_end_date required)")
+            return (seat_travellers if price_type == "per_person_per_night" else room_count) * nights
+        return requested_quantity
+
     activity_rows = []
     activity_total = money(0)
     for item in data.optional_activities:
         row = db.query(TourOptionalActivity).filter(TourOptionalActivity.id == item.id, TourOptionalActivity.status == "active").first() if item.id else None
         if not row or (data.tour_id and row.tour_id != data.tour_id):
             raise HTTPException(status_code=400, detail="Invalid optional activity")
-        unit = money(row.price_per_person)
-        total = money(unit * item.quantity)
-        activity_total += total
-        activity_rows.append((row, item.quantity, unit, total))
+        if row.pricing_mode == "per_passenger_type":
+            # Ignores the client-supplied quantity entirely -- the booking's
+            # own passenger counts are authoritative, same as accommodation's
+            # per_person auto-quantity above. A null child/infant price
+            # means "not priced separately": child falls back to the adult
+            # rate, infant falls back to free (0) -- deliberate opt-in, see
+            # OptionalActivityPayload.
+            adult_unit = money(row.price_per_person)
+            child_unit = money(row.child_price_per_person) if row.child_price_per_person is not None else adult_unit
+            infant_unit = money(row.infant_price_per_person) if row.infant_price_per_person is not None else money(0)
+            total = money(adult_unit * adults + child_unit * children + infant_unit * data.no_of_infants)
+            activity_total += total
+            activity_rows.append((row, adults + children + data.no_of_infants, adult_unit, total))
+        else:
+            unit = money(row.price_per_person)
+            total = money(unit * item.quantity)
+            activity_total += total
+            activity_rows.append((row, item.quantity, unit, total))
 
     accommodation_rows = []
     accommodation_total = money(0)
@@ -857,7 +891,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         if not row or (data.tour_id and row.tour_id != data.tour_id):
             raise HTTPException(status_code=400, detail="Invalid accommodation extra")
         unit = money(row.extra_price)
-        qty = seat_travellers if row.price_type == "per_person" else item.quantity
+        qty = _addon_quantity(row.price_type, item.quantity, label=f"Accommodation extra '{row.accommodation_name}'")
         total = money(unit * qty)
         accommodation_total += total
         accommodation_rows.append((row, qty, unit, total))
@@ -869,9 +903,10 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         if not row or (data.tour_id and row.tour_id != data.tour_id):
             raise HTTPException(status_code=400, detail="Invalid tour extension")
         unit = money(row.extra_price)
-        total = money(unit * item.quantity)
+        qty = _addon_quantity(row.price_type, item.quantity, label=f"Extension '{row.extension_title}'")
+        total = money(unit * qty)
         extension_total += total
-        extension_rows.append((row, item.quantity, unit, total))
+        extension_rows.append((row, qty, unit, total))
 
     # Group discount is applied before the promo code, off the group-discounted
     # subtotal, so a promo percentage never gets computed against an amount
@@ -1241,6 +1276,103 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     return serialize_booking(db, booking, detail=True)
 
 
+def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdate) -> None:
+    """Rebuilds a booking's passenger counts, add-ons, and every derived price
+    field from scratch through _price_booking -- the same function
+    create_booking/calculate_booking_price use -- so an edited booking's total
+    can never drift from what a fresh calculate-price call for the same
+    inputs would produce. Only called when the request didn't also pass an
+    explicit total_cost (see update_booking's ambiguity check)."""
+    adults = data.no_of_adults if data.no_of_adults is not None else (booking.adults_count if booking.adults_count is not None else booking.no_of_adults)
+    children = data.no_of_children if data.no_of_children is not None else (booking.children_count if booking.children_count is not None else booking.no_of_children)
+    infants = data.no_of_infants if data.no_of_infants is not None else booking.no_of_infants
+
+    def _existing_addons(rows, id_attr):
+        return [BookingAddonPayload(id=getattr(row, id_attr), quantity=row.quantity) for row in rows if getattr(row, id_attr)]
+
+    optional_activities = data.optional_activities if data.optional_activities is not None else _existing_addons(booking.optional_activities, "tour_optional_activity_id")
+    accommodations = data.accommodations if data.accommodations is not None else _existing_addons(booking.accommodations, "tour_accommodation_extra_id")
+    extensions = data.extensions if data.extensions is not None else _existing_addons(booking.extensions, "tour_extension_id")
+    promo_code = data.promo_code if data.promo_code is not None else booking.promo_code
+
+    booking_create = BookingCreate(
+        customer_id=booking.customer_id,
+        tour_id=booking.tour_id,
+        tour_calendar_id=booking.tour_calendar_id,
+        booking_source=booking.booking_source or "admin",
+        tour_start_date=booking.tour_start_date.isoformat() if booking.tour_start_date else None,
+        tour_end_date=booking.tour_end_date.isoformat() if booking.tour_end_date else None,
+        no_of_adults=adults,
+        no_of_children=children,
+        no_of_infants=infants,
+        no_of_rooms=booking.no_of_rooms,
+        adults_count=adults,
+        children_count=children,
+        currency=booking.currency or "USD",
+        promo_code=promo_code,
+        optional_activities=optional_activities,
+        accommodations=accommodations,
+        extensions=extensions,
+    )
+
+    old_seat_travellers = (booking.adults_count if booking.adults_count is not None else booking.no_of_adults) + (booking.children_count if booking.children_count is not None else booking.no_of_children)
+    calendar_row = None
+    if booking.tour_calendar_id:
+        # Net this booking's own already-booked seats out of the calendar
+        # count before re-validating capacity, otherwise editing a booking
+        # that already holds seats would double-count them against its own
+        # new total and spuriously reject a perfectly fittable change.
+        calendar_row = db.query(TourCalendar).filter(TourCalendar.id == booking.tour_calendar_id).with_for_update().first()
+        if calendar_row:
+            calendar_row.booked_seats = max(0, (calendar_row.booked_seats or 0) - old_seat_travellers)
+
+    tour, calendar, new_adults, new_children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount = _price_booking(db, booking_create, lock_calendar=False, consume_discount=False)
+
+    if calendar_row:
+        calendar_row.booked_seats = (calendar_row.booked_seats or 0) + new_adults + new_children
+
+    agent_net_price = final if booking.booking_source == "agent" else money(0)
+    agent_markup = money(booking.agent_markup or 0) if booking.booking_source == "agent" else money(0)
+    customer_selling_price = money(final + agent_markup) if booking.booking_source == "agent" else final
+
+    booking.no_of_adults = new_adults
+    booking.no_of_children = new_children
+    booking.no_of_infants = infants
+    booking.adults_count = new_adults
+    booking.children_count = new_children
+    booking.total_travellers = total_travellers
+    booking.base_amount = base
+    booking.optional_activity_amount = activity_total
+    booking.accommodation_amount = accommodation_total
+    booking.extension_amount = extension_total
+    booking.group_discount_tier_id = group_tier.id if group_tier else None
+    booking.group_discount_amount = group_discount_amount
+    booking.discount_amount = discount
+    booking.promo_code = promo_code
+    booking.tax_amount = tax
+    booking.surcharge_amount = surcharge
+    booking.total_cost = customer_selling_price
+    booking.final_amount = customer_selling_price
+    booking.agent_net_price = agent_net_price
+    booking.agent_markup = agent_markup
+    booking.customer_selling_price = customer_selling_price
+    booking.amount_pending = max(money(0), customer_selling_price - money(booking.amount_paid or 0))
+
+    for existing in list(booking.optional_activities):
+        db.delete(existing)
+    for existing in list(booking.accommodations):
+        db.delete(existing)
+    for existing in list(booking.extensions):
+        db.delete(existing)
+    db.flush()
+    for row, qty, unit, total in activities:
+        db.add(BookingOptionalActivity(booking_id=booking.id, tour_optional_activity_id=row.id, activity_name_snapshot=row.activity_name, quantity=qty, unit_price=unit, total_price=total))
+    for row, qty, unit, total in accommodation_rows:
+        db.add(BookingAccommodation(booking_id=booking.id, tour_accommodation_extra_id=row.id, accommodation_name_snapshot=row.accommodation_name, quantity=qty, price_type=row.price_type, unit_price=unit, total_price=total))
+    for row, qty, unit, total in extension_rows:
+        db.add(BookingExtension(booking_id=booking.id, tour_extension_id=row.id, extension_tour_id=row.extension_tour_id, extension_name_snapshot=row.extension_title, quantity=qty, unit_price=unit, total_price=total))
+
+
 def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
@@ -1249,22 +1381,38 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
         restricted = set(data.model_fields_set) - agent_editable
         if restricted:
             raise HTTPException(status_code=403, detail="Agents may only update booking notes")
-    financial_fields = {"no_of_adults", "no_of_children", "no_of_infants", "total_cost"}
-    if money(booking.amount_paid or 0) > money(0) and financial_fields & set(data.model_fields_set):
+
+    fields_set = set(data.model_fields_set)
+    recalc_fields = {"no_of_adults", "no_of_children", "no_of_infants", "optional_activities", "accommodations", "extensions", "promo_code"}
+    wants_recalc = bool(recalc_fields & fields_set)
+    wants_manual_total = data.total_cost is not None
+
+    if wants_recalc and wants_manual_total:
+        raise HTTPException(
+            status_code=400,
+            detail="Pass either updated passenger/add-on selections to recalculate the price, or an explicit total_cost override -- not both in the same request.",
+        )
+
+    financial_fields = recalc_fields | {"total_cost"}
+    if money(booking.amount_paid or 0) > money(0) and financial_fields & fields_set:
         raise HTTPException(
             status_code=409,
-            detail="This booking already has a payment recorded, so its passenger counts and total cost can no longer be edited directly. Process a refund/adjustment or cancel and rebook instead.",
+            detail="This booking already has a payment recorded, so its passenger counts, add-ons, and total cost can no longer be edited directly. Process a refund/adjustment or cancel and rebook instead.",
         )
+
     old_values = serialize_booking(db, booking)
     for field in ["tour_name", "tour_date", "country", "supplier_name", "notes", "customer_notes", "admin_notes"]:
         value = getattr(data, field)
         if value is not None:
             setattr(booking, field, value.strip() if isinstance(value, str) else value)
-    for field in ["no_of_adults", "no_of_children", "no_of_infants", "supplier_id", "agent_id", "affiliate_id"]:
+    for field in ["supplier_id", "agent_id", "affiliate_id"]:
         value = getattr(data, field)
         if value is not None:
             setattr(booking, field, value)
-    if data.total_cost is not None:
+
+    if wants_recalc:
+        _recalculate_booking_price(db, booking, data)
+    elif wants_manual_total:
         new_total = money(data.total_cost)
         booking.total_cost = new_total
         booking.final_amount = new_total
@@ -1276,6 +1424,7 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
             booking.agent_net_price = money(0)
             booking.agent_markup = money(0)
         booking.amount_pending = max(money(0), new_total - money(booking.amount_paid))
+
     log_audit(db, actor=actor, action="update_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
     return serialize_booking(db, booking, detail=True)
