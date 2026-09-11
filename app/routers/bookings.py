@@ -117,7 +117,7 @@ def expire_stale_bookings_endpoint(
 
 
 @router.post("/calculate-price")
-def calculate_price(data: BookingCreate, db: Session = Depends(get_db)):
+def calculate_price(data: BookingCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return {"status": "success", "data": calculate_booking_price(db, data)}
 
 

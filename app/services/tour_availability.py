@@ -18,6 +18,7 @@ from app.models.suppliers import Supplier
 from app.models.tours import TourAvailabilityConfig, TourCalendar
 from app.models.users import User
 from app.schemas.tours import AvailabilityConfigPayload
+from app.utils.money import as_aware_utc
 from app.services.audit import log_audit
 from app.services.tour_versions import maybe_resubmit_for_review
 
@@ -122,20 +123,39 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
     end = _as_date(o.availability_end_date)
     if o.frequency and o.frequency_days and start and end:
         candidate_dates = _generate_dates(start, end, o.frequency, o.frequency_week, set(o.frequency_days))
-        existing_dates = {
-            _as_date(d) for (d,) in db.query(TourCalendar.tour_date).filter(TourCalendar.tour_id == tour_id).all()
+        existing_entries = {
+            _as_date(c.tour_date): c for c in db.query(TourCalendar).filter(TourCalendar.tour_id == tour_id).all()
         }
-        # Only ever ADD missing generated dates - never delete or overwrite
-        # an existing entry (it may already have real bookings against it).
+        # Add missing generated dates, and update capacity for existing dates
         for candidate in candidate_dates:
-            if candidate in existing_dates:
+            existing = existing_entries.get(candidate)
+            if existing:
+                if existing.status != "blocked":
+                    new_seats = max(existing.booked_seats or 0, o.seats_per_occurrence)
+                    if existing.available_seats != new_seats:
+                        existing.available_seats = new_seats
+                        if (existing.booked_seats or 0) >= new_seats and new_seats > 0:
+                            existing.status = "sold_out"
+                        elif existing.status == "sold_out" and new_seats > (existing.booked_seats or 0):
+                            existing.status = "available"
+                        updated_count += 1
                 continue
+
             entry_dt = datetime.combine(candidate, datetime.min.time())
             db.add(TourCalendar(
                 tour_id=tour_id, tour_date=entry_dt, start_date=entry_dt, end_date=entry_dt,
                 available_seats=o.seats_per_occurrence, booked_seats=0, status="available",
             ))
             created_count += 1
+
+        # Also update any other unblocked calendar entries with 0 bookings for this tour
+        for existing in existing_entries.values():
+            if existing.status != "blocked" and (existing.booked_seats or 0) == 0:
+                if existing.available_seats != o.seats_per_occurrence:
+                    existing.available_seats = o.seats_per_occurrence
+                    if existing.status == "sold_out" and o.seats_per_occurrence > 0:
+                        existing.status = "available"
+                    updated_count += 1
 
     log_audit(
         db, actor=actor, action="save_availability_config", entity_type="tour", entity_id=tour_id,
@@ -212,7 +232,7 @@ def check_availability_end_date_reminders(db: Session) -> None:
     )
 
     for config in configs:
-        if config.last_end_date_reminder_at and (now - config.last_end_date_reminder_at) < _END_DATE_REMINDER_RESEND_INTERVAL:
+        if config.last_end_date_reminder_at and (now - as_aware_utc(config.last_end_date_reminder_at)) < _END_DATE_REMINDER_RESEND_INTERVAL:
             continue
         try:
             tour = db.query(Tour).filter(Tour.id == config.tour_id).first()

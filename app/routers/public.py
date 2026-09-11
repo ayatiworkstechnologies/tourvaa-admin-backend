@@ -16,6 +16,7 @@ from app.models.cms import City, Country, Tour, TourCategory, TourSubcategory
 from app.models.cancellations import RefundRule
 from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.services.cms import _category, _city, _country, _subcategory, _tour
+from app.services.website_cms import list_active_country_pages_public
 from app.services.reviews import get_review_stats, list_tour_reviews
 from app.services.settings import sanitize_public_contact_setting
 from app.services.viator import build_generic_affiliate_url, is_configured as is_viator_configured, search_day_trips
@@ -668,6 +669,16 @@ def public_countries(db: Session = Depends(get_db)):
     items = [{**_country(c), "tour_count": counts.get(c.id, 0)} for c in countries]
     items.sort(key=lambda item: (-item["tour_count"], item["country_name"]))
     return {"status": "success", "items": items}
+
+
+@router.get("/country-pages")
+def public_country_pages(db: Session = Depends(get_db)):
+    # Admin-authored per-country landing page content (hero/showcase copy +
+    # SEO overrides) for /tours/{country} - see CountryPage in
+    # app/models/website_cms.py. Only active rows, joined with the
+    # country's name so the frontend can match it against the slug in the
+    # URL the same way it already resolves /public/countries.
+    return {"status": "success", "items": list_active_country_pages_public(db)}
 
 
 @router.get("/cities")

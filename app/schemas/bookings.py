@@ -123,6 +123,10 @@ class BookingUpdate(BaseModel):
     no_of_adults: Optional[int] = None
     no_of_children: Optional[int] = None
     no_of_infants: Optional[int] = None
+    optional_activities: Optional[list[BookingAddonPayload]] = None
+    accommodations: Optional[list[BookingAddonPayload]] = None
+    extensions: Optional[list[BookingAddonPayload]] = None
+    promo_code: Optional[str] = None
     total_cost: Optional[Decimal] = None
     notes: Optional[str] = None
     customer_notes: Optional[str] = None

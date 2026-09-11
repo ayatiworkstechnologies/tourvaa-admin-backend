@@ -306,7 +306,7 @@ def _ser_extension(o: TourExtension) -> dict:
         "id": o.id, "tour_id": o.tour_id, "extension_tour_id": o.extension_tour_id,
         "extension_tour_title": o.extension_tour.title if o.extension_tour else "",
         "extension_title": o.extension_title, "extension_note": o.extension_note,
-        "extra_price": o.extra_price, "category": o.category, "display_order": o.display_order, "status": o.status,
+        "extra_price": o.extra_price, "price_type": o.price_type, "category": o.category, "display_order": o.display_order, "status": o.status,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
@@ -558,7 +558,7 @@ def delete_date_price(db, tour_id, rid, actor, request=None): return _delete_dat
 
 # optional activity
 def _ser_activity(o: TourOptionalActivity) -> dict:
-    return {"id": o.id, "tour_id": o.tour_id, "activity_name": o.activity_name, "description": o.description, "price_per_person": o.price_per_person, "image": o.image, "category": o.category, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
+    return {"id": o.id, "tour_id": o.tour_id, "activity_name": o.activity_name, "description": o.description, "price_per_person": o.price_per_person, "child_price_per_person": o.child_price_per_person, "infant_price_per_person": o.infant_price_per_person, "pricing_mode": o.pricing_mode, "image": o.image, "category": o.category, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
 _list_activities_fn, _create_activity_fn, _update_activity_fn, _delete_activity_fn = _simple_crud(TourOptionalActivity, _ser_activity)
 
@@ -761,11 +761,35 @@ def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: Use
     return _ser_discount(o)
 
 
+def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPayload, actor: User, request: Request | None = None) -> dict:
+    """Full edit of every field (name, code, type, value, dates, min amount,
+    status -- including reactivating an inactive discount by setting status
+    back to "active"), same as every other tour sub-resource's update
+    endpoint. Still recorded as a new TourDiscountHistory version so the
+    audit trail (list_discount_history) keeps showing what changed and when,
+    it's just no longer restricted to only value/end-date like amend_discount
+    below (kept for any existing callers, but the UI now uses this instead)."""
+    o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
+    if data.discount_code and data.discount_code != o.discount_code:
+        existing = db.query(TourDiscount).filter(TourDiscount.discount_code == data.discount_code, TourDiscount.id != disc_id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Discount code already exists")
+    for key, value in data.model_dump().items():
+        setattr(o, key, value)
+    _record_discount_version(db, o, "edited", actor)
+    log_audit(db, actor=actor, action="update_discount", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
+    db.commit()
+    db.refresh(o)
+    return _ser_discount(o)
+
+
 def amend_discount(db: Session, tour_id: int, disc_id: int, data: DiscountAmendment, actor: User, request: Request | None = None) -> dict:
-    """Replaces free-form Edit: only a percentage/value change and/or a later
-    end date are allowed, and every amendment is recorded as a new
-    TourDiscountHistory version (see _record_discount_version) rather than
-    silently overwriting the original record."""
+    """Superseded by update_discount above for the admin/supplier UI, kept
+    for any existing callers -- only a percentage/value change and/or a
+    later end date are allowed here, and every amendment is recorded as a
+    new TourDiscountHistory version (see _record_discount_version) rather
+    than silently overwriting the original record."""
     o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
     change_kinds = []
     if data.new_end_date is not None:
@@ -780,6 +804,25 @@ def amend_discount(db: Session, tour_id: int, disc_id: int, data: DiscountAmendm
         change_kinds.append("percentage_changed")
     _record_discount_version(db, o, "_".join(change_kinds) or "amended", actor, reason=data.reason)
     log_audit(db, actor=actor, action="amend_discount", entity_type="tour", entity_id=tour_id, request=request)
+    maybe_resubmit_for_review(db, tour_id, actor)
+    db.commit()
+    db.refresh(o)
+    return _ser_discount(o)
+
+
+def deactivate_discount(db: Session, tour_id: int, disc_id: int, actor: User, reason: str | None = None, request: Request | None = None) -> dict:
+    """Soft-delete: flips status to inactive so it stops applying to new
+    bookings, without touching the row or its history -- a discount that has
+    already been used (TourDiscount.used_count > 0, or referenced by a real
+    booking's discount_amount) must keep existing so past bookings' price
+    breakdowns still resolve correctly. Reactivating isn't exposed here;
+    that would need its own confirmation flow if ever needed."""
+    o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
+    if o.status == "inactive":
+        raise HTTPException(status_code=409, detail="This discount is already inactive")
+    o.status = "inactive"
+    _record_discount_version(db, o, "deactivated", actor, reason=reason)
+    log_audit(db, actor=actor, action="deactivate_discount", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
@@ -904,6 +947,46 @@ def amend_global_discount(db: Session, discount_id: int, data: DiscountAmendment
         change_kinds.append("percentage_changed")
     _record_discount_version(db, o, "_".join(change_kinds) or "amended", actor, reason=data.reason)
     log_audit(db, actor=actor, action="amend_discount", entity_type="discount", entity_id=discount_id, request=request)
+    db.commit()
+    db.refresh(o)
+    return _ser_discount(o)
+
+
+def update_global_discount(db: Session, discount_id: int, data: GlobalDiscountPayload, actor: User, request: Request | None = None) -> dict:
+    """Full edit counterpart to update_discount (tour-scoped) for the
+    top-level /admin/discounts page -- every field including scope/status,
+    same "still recorded as a history version, no longer restricted to
+    value/end-date only" reasoning."""
+    o = db.query(TourDiscount).filter(TourDiscount.id == discount_id).first()
+    if not o:
+        raise HTTPException(status_code=404, detail="Discount not found")
+    _validate_discount_scope(data)
+    if data.tour_id:
+        _require_tour(db, data.tour_id)
+    if data.discount_code and data.discount_code != o.discount_code:
+        existing = db.query(TourDiscount).filter(TourDiscount.discount_code == data.discount_code, TourDiscount.id != discount_id).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Discount code already exists")
+    for key, value in data.model_dump().items():
+        setattr(o, key, value)
+    _record_discount_version(db, o, "edited", actor)
+    log_audit(db, actor=actor, action="update_discount", entity_type="discount", entity_id=discount_id, request=request)
+    db.commit()
+    db.refresh(o)
+    return _ser_discount(o)
+
+
+def deactivate_global_discount(db: Session, discount_id: int, actor: User, reason: str | None = None, request: Request | None = None) -> dict:
+    """Soft-delete counterpart to deactivate_discount (tour-scoped) for the
+    top-level /admin/discounts page."""
+    o = db.query(TourDiscount).filter(TourDiscount.id == discount_id).first()
+    if not o:
+        raise HTTPException(status_code=404, detail="Discount not found")
+    if o.status == "inactive":
+        raise HTTPException(status_code=409, detail="This discount is already inactive")
+    o.status = "inactive"
+    _record_discount_version(db, o, "deactivated", actor, reason=reason)
+    log_audit(db, actor=actor, action="deactivate_discount", entity_type="discount", entity_id=discount_id, request=request)
     db.commit()
     db.refresh(o)
     return _ser_discount(o)

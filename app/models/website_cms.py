@@ -262,6 +262,29 @@ class FooterLink(Base):
     section = relationship("FooterSection", back_populates="links")
 
 
+class CountryPage(Base):
+    """Backs the dynamic /tours/{country} landing page - lets an admin
+    override the hero banner and showcase panel copy/images per country,
+    plus its SEO title/description, instead of the algorithmically
+    generated defaults CountryTourListing/countryMetadata.ts fall back to
+    when no row exists for a country (or it's inactive)."""
+    __tablename__ = "cms_country_pages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    country_id = Column(Integer, ForeignKey("countries.id"), unique=True, nullable=False, index=True)
+    hero_title = Column(String(200), nullable=True)
+    hero_description = Column(Text, nullable=True)
+    hero_image = Column(String(255), nullable=True)
+    showcase_title = Column(String(200), nullable=True)
+    showcase_description = Column(Text, nullable=True)
+    showcase_image = Column(String(255), nullable=True)
+    seo_title = Column(String(200), nullable=True)
+    seo_description = Column(String(400), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class SitemapEntry(Base):
     __tablename__ = "cms_sitemap_entries"
 

@@ -8,10 +8,11 @@ from app.utils.pagination import pagination_params
 from app.services import website_cms as service
 from app.schemas.website_cms import (
     BannerPayload, BlogPayload, CmsPagePayload, ContentBlockPayload,
-    ExternalLinkPayload, FavouriteCountryPayload, FooterLinkPayload,
-    FooterSectionPayload, HandpickedTourPayload, HelpArticlePayload,
-    PolicyPayload, PopularDestinationPayload, PopularTourPayload, PopupPayload,
-    ReviewPayload, SitemapEntryPayload, TourOnDealPayload,
+    CountryPagePayload, ExternalLinkPayload, FavouriteCountryPayload,
+    FooterLinkPayload, FooterSectionPayload, HandpickedTourPayload,
+    HelpArticlePayload, PolicyPayload, PopularDestinationPayload,
+    PopularTourPayload, PopupPayload, ReviewPayload, SitemapEntryPayload,
+    TourOnDealPayload,
 )
 
 router = APIRouter(prefix="/cms", tags=["Website CMS"])
@@ -130,6 +131,26 @@ def update_favourite_country(item_id: int, data: FavouriteCountryPayload, db: Se
 @router.delete("/favourite-countries/{item_id}")
 def delete_favourite_country(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
     service.delete_favourite_country(db, item_id)
+    return {"status": "success", "message": "Deleted"}
+
+
+# country landing pages (/tours/{country})
+
+@router.get("/country-pages")
+def list_country_pages(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+    return {"status": "success", **service.list_country_pages(db, pagination["page"], pagination["limit"], active_only)}
+
+@router.post("/country-pages")
+def create_country_page(data: CountryPagePayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
+    return {"status": "success", "data": service.create_country_page(db, data)}
+
+@router.put("/country-pages/{item_id}")
+def update_country_page(item_id: int, data: CountryPagePayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS))):
+    return {"status": "success", "data": service.update_country_page(db, item_id, data)}
+
+@router.delete("/country-pages/{item_id}")
+def delete_country_page(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
+    service.delete_country_page(db, item_id)
     return {"status": "success", "message": "Deleted"}
 
 

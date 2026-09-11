@@ -10,7 +10,7 @@ CALENDAR_STATUSES = {"available", "unavailable", "sold_out", "blocked"}
 AVAILABILITY_FREQUENCIES = {"weekly", "fortnightly", "monthly"}
 DISCOUNT_TYPES = {"percentage", "fixed"}
 DISCOUNT_SCOPES = {"tour", "all_tours", "category", "country"}
-PRICE_TYPES = {"per_person", "per_booking"}
+PRICE_TYPES = {"per_person", "per_booking", "per_room", "per_person_per_night", "per_room_per_night"}
 ADDON_CATEGORIES = {"pickup", "room_upgrade", "dining", "insurance", "extra_activity", "additional_night", "meal", "visa_assistance", "other"}
 
 
@@ -138,9 +138,17 @@ class ExtensionPayload(BaseModel):
     extension_title: str = Field(default="", max_length=255)
     extension_note: str = Field(default="")
     extra_price: float = Field(default=0.0, ge=0)
+    price_type: str = Field(default="per_booking", max_length=20)
     category: str = Field(default="other", max_length=30)
     display_order: int = Field(default=0, ge=0)
     status: str = Field(default="active", max_length=20)
+
+    @field_validator("price_type")
+    @classmethod
+    def validate_price_type(cls, v: str):
+        if v not in PRICE_TYPES:
+            raise ValueError(f"price_type must be one of {PRICE_TYPES}")
+        return v
 
     @field_validator("category")
     @classmethod
@@ -239,13 +247,31 @@ class DatePricePayload(BaseModel):
 
 
 # optional activity
+ACTIVITY_PRICING_MODES = {"flat", "per_passenger_type"}
+
+
 class OptionalActivityPayload(BaseModel):
     activity_name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="")
     price_per_person: float = Field(default=0.0, ge=0)
+    # Only read when pricing_mode == "per_passenger_type". None means "same
+    # as price_per_person" for child_price, and "free" (0) for infant_price
+    # -- an infant price left unset is a deliberate choice here, unlike the
+    # Tour.infant_price column bug (ID 01), because this field only exists
+    # once an admin has opted into per-passenger-type pricing at all.
+    child_price_per_person: float | None = Field(default=None, ge=0)
+    infant_price_per_person: float | None = Field(default=None, ge=0)
+    pricing_mode: str = Field(default="flat", max_length=20)
     image: str = Field(default="", max_length=255)
     category: str = Field(default="other", max_length=30)
     status: str = Field(default="active", max_length=20)
+
+    @field_validator("pricing_mode")
+    @classmethod
+    def validate_pricing_mode(cls, v: str):
+        if v not in ACTIVITY_PRICING_MODES:
+            raise ValueError(f"pricing_mode must be one of {ACTIVITY_PRICING_MODES}")
+        return v
 
     @field_validator("category")
     @classmethod
@@ -418,6 +444,10 @@ class DiscountAmendment(BaseModel):
         if self.new_discount_value is None and self.new_end_date is None:
             raise ValueError("Provide a new percentage/value and/or a new (later) end date")
         return self
+
+
+class DiscountDeactivateRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
 
 
 # group-size discount tier, scoped to the whole Tour (not a pricing slab) -

@@ -61,6 +61,19 @@ class FavouriteCountryPayload(BaseModel):
     is_active: bool = True
 
 
+class CountryPagePayload(BaseModel):
+    country_id: int
+    hero_title: Optional[str] = None
+    hero_description: Optional[str] = None
+    hero_image: Optional[str] = None
+    showcase_title: Optional[str] = None
+    showcase_description: Optional[str] = None
+    showcase_image: Optional[str] = None
+    seo_title: Optional[str] = None
+    seo_description: Optional[str] = None
+    is_active: bool = True
+
+
 class ContentBlockPayload(BaseModel):
     data: Dict[str, Any] = {}
 
