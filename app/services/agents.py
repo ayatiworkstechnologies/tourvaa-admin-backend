@@ -2,6 +2,7 @@ import logging
 from app.utils.money import utcnow
 
 from fastapi import HTTPException, Request
+from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.services.audit import log_audit
@@ -12,6 +13,8 @@ from app.models.users import User
 from app.auth.security import hash_password
 from app.models.roles import Role
 from app.models.users import UserRole
+from app.models.bookings import Booking
+from app.models.customers import Customer
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +99,87 @@ def serialize_agent(item: Agent):
         } if item.invoicing else None,
     })
     return data
+
+
+def get_agent_activity(db: Session, agent_id: int, recent_limit: int = 10):
+    """Return the operational data shown on the admin agent detail screen."""
+    get_agent(db, agent_id)
+    totals = (
+        db.query(
+            func.count(Booking.id),
+            func.count(distinct(Booking.customer_id)),
+            func.coalesce(func.sum(Booking.final_amount), 0),
+            func.coalesce(func.sum(Booking.amount_paid), 0),
+            func.coalesce(func.sum(Booking.amount_pending), 0),
+        )
+        .filter(Booking.agent_id == agent_id)
+        .one()
+    )
+    status_counts = dict(
+        db.query(Booking.booking_status, func.count(Booking.id))
+        .filter(Booking.agent_id == agent_id)
+        .group_by(Booking.booking_status)
+        .all()
+    )
+    recent = (
+        db.query(Booking)
+        .options(joinedload(Booking.customer))
+        .filter(Booking.agent_id == agent_id)
+        .order_by(Booking.created_at.desc(), Booking.id.desc())
+        .limit(recent_limit)
+        .all()
+    )
+    customer_rows = (
+        db.query(Customer, func.count(Booking.id).label("booking_count"), func.coalesce(func.sum(Booking.final_amount), 0).label("booking_value"))
+        .join(Booking, Booking.customer_id == Customer.id)
+        .filter(Booking.agent_id == agent_id)
+        .group_by(Customer.id)
+        .order_by(func.max(Booking.created_at).desc())
+        .limit(recent_limit)
+        .all()
+    )
+    return {
+        "summary": {
+            "total_bookings": totals[0],
+            "total_customers": totals[1],
+            "total_booking_value": str(totals[2]),
+            "amount_paid": str(totals[3]),
+            "amount_pending": str(totals[4]),
+            "confirmed_bookings": status_counts.get("confirmed", 0),
+            "completed_bookings": status_counts.get("completed", 0),
+            "cancelled_bookings": status_counts.get("cancelled", 0),
+        },
+        "recent_bookings": [
+            {
+                "id": row.id,
+                "booking_code": row.booking_code or f"BK-{row.id:06d}",
+                "customer_id": row.customer_id,
+                "customer_name": row.customer.full_name if row.customer else "",
+                "tour_id": row.tour_id,
+                "tour_name": row.tour_name,
+                "tour_start_date": row.tour_start_date,
+                "booking_status": row.booking_status,
+                "payment_status": row.payment_status,
+                "currency": row.currency,
+                "final_amount": str(row.final_amount),
+                "created_at": row.created_at,
+            }
+            for row in recent
+        ],
+        "customers": [
+            {
+                "id": customer.id,
+                "customer_code": customer.customer_code,
+                "full_name": customer.full_name,
+                "email": customer.email,
+                "phone": customer.phone,
+                "status": customer.status,
+                "booking_count": booking_count,
+                "booking_value": str(booking_value),
+            }
+            for customer, booking_count, booking_value in customer_rows
+        ],
+    }
 
 
 def list_agents(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = ""):

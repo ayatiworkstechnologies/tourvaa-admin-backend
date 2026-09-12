@@ -1,3 +1,4 @@
+import re
 from math import ceil
 from typing import Optional
 
@@ -29,8 +30,19 @@ from app.schemas.website_cms import (
 ALLOWED_CONTENT_BLOCK_KEYS = {
     "hero_extras", "about_section", "blog_teaser", "airport_transfer",
     "travel_support", "newsletter_banner", "top_deals_section",
-    "trending_section",
+    "trending_section", "favourite_countries_section",
 }
+
+# Per-country destination guide content (best time to visit, monsoon/season
+# info, temperature, best places, why-visit, travel info) - one block per
+# country, keyed dynamically by slug rather than a fixed key, so this can't
+# be a plain set membership check like the keys above. Backs the /destinations
+# /{slug} page and its admin editor (CountryDestinationInfoPanel).
+_COUNTRY_INFO_KEY_RE = re.compile(r"^country_info_[a-z0-9-]{1,45}$")
+
+
+def _is_allowed_content_block_key(key: str) -> bool:
+    return key in ALLOWED_CONTENT_BLOCK_KEYS or bool(_COUNTRY_INFO_KEY_RE.fullmatch(key))
 
 
 def _paginate(q, page: int, limit: int, serializer) -> dict:
@@ -511,13 +523,13 @@ def list_active_country_pages_public(db):
 # generic homepage content blocks (see ALLOWED_CONTENT_BLOCK_KEYS above)
 
 def get_content_block(db, key: str):
-    if key not in ALLOWED_CONTENT_BLOCK_KEYS:
+    if not _is_allowed_content_block_key(key):
         raise HTTPException(status_code=404, detail="Unknown content block")
     obj = db.query(HomepageContentBlock).filter(HomepageContentBlock.key == key).first()
     return _s_content_block(obj, key)
 
 def upsert_content_block(db, key: str, data: ContentBlockPayload):
-    if key not in ALLOWED_CONTENT_BLOCK_KEYS:
+    if not _is_allowed_content_block_key(key):
         raise HTTPException(status_code=404, detail="Unknown content block")
     obj = db.query(HomepageContentBlock).filter(HomepageContentBlock.key == key).first()
     if obj:

@@ -39,7 +39,9 @@ def _declared_operations():
     declared = defaultdict(list)
     for base, router in groups:
         for route in router.routes:
-            for method in route.methods:
+            # WebSocket routes share the router collection but do not expose
+            # HTTP methods and are audited separately by their own clients.
+            for method in getattr(route, "methods", ()):
                 path = f"{base}{router.prefix}{route.path}"
                 declared[(method.lower(), path)].append(route.name)
     return declared
