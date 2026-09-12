@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models.agents import Agent
 from pydantic import BaseModel
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentSelfUpdate, AgentUpdate
-from app.services.agents import AGENT_DOCUMENT_TYPES, accept_agent_commission, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, list_agents, partial_approve_agent, reject_agent, reject_agent_commission_request, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
+from app.services.agents import AGENT_DOCUMENT_TYPES, accept_agent_commission, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, get_agent_activity, list_agents, partial_approve_agent, reject_agent, reject_agent_commission_request, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
 from app.schemas.auth import UnifiedRegisterSchema, VerifyEmailSchema
 from app.services.auth import register_unified_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs, _is_agent
@@ -18,21 +18,33 @@ from app.models.users import User
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
 
-def _require_agent_owner_or_permission(db: Session, current_user: User, agent: Agent, *permission_slugs: str):
-    if agent.user_id == current_user.id:
-        return
+def _has_any_permission(db: Session, current_user: User, *permission_slugs: str) -> bool:
     role_ids = get_user_role_ids(current_user)
     allowed_slugs = expand_permission_slugs(permission_slugs)
-    allowed = (
+    return (
         db.query(Permission)
         .join(RolePermission, RolePermission.permission_id == Permission.id)
         .filter(RolePermission.role_id.in_(role_ids))
         .filter(Permission.slug.in_(allowed_slugs))
         .filter(Permission.is_active == True)
         .first()
-    )
-    if not allowed:
+    ) is not None
+
+
+def _require_agent_owner_or_permission(db: Session, current_user: User, agent: Agent, *permission_slugs: str):
+    if agent.user_id == current_user.id:
+        return
+    if not _has_any_permission(db, current_user, *permission_slugs):
         raise HTTPException(status_code=403, detail="Permission denied")
+
+
+def _agent_activity_for_actor(db: Session, current_user: User, agent_id: int):
+    activity = get_agent_activity(db, agent_id)
+    if not _has_any_permission(db, current_user, "bookings.view", "view-bookings"):
+        activity["recent_bookings"] = []
+    if not _has_any_permission(db, current_user, "customers.view", "view-customers"):
+        activity["customers"] = []
+    return activity
 
 
 @router.post("/register")
@@ -109,7 +121,9 @@ def my_agent(db: Session = Depends(get_db), current_user: User = Depends(get_cur
     agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent profile not found")
-    return {"status": "success", "data": serialize_agent(agent)}
+    data = serialize_agent(agent)
+    data["activity"] = _agent_activity_for_actor(db, current_user, agent.id)
+    return {"status": "success", "data": data}
 
 
 @router.get("/document-requirements")
@@ -183,7 +197,9 @@ def my_commission_calculator(
 def agent_detail(agent_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     agent = get_agent(db, agent_id)
     _require_agent_owner_or_permission(db, current_user, agent, "agents.view", "view-agents")
-    return {"status": "success", "data": serialize_agent(agent)}
+    data = serialize_agent(agent)
+    data["activity"] = _agent_activity_for_actor(db, current_user, agent_id)
+    return {"status": "success", "data": data}
 
 
 @router.put("/{agent_id}")

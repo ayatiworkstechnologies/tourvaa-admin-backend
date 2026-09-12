@@ -479,10 +479,10 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
 
     overview = db.query(TourOverview).filter(TourOverview.tour_id == tour_id).first()
     itineraries = db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id).order_by(TourItinerary.day_number.asc()).all()
-    highlights = db.query(TourHighlight).filter(TourHighlight.tour_id == tour_id).all()
-    inclusions = db.query(TourInclusion).filter(TourInclusion.tour_id == tour_id).all()
-    exclusions = db.query(TourExclusion).filter(TourExclusion.tour_id == tour_id).all()
-    gallery = db.query(TourGalleryImage).filter(TourGalleryImage.tour_id == tour_id).order_by(TourGalleryImage.display_order.asc()).all()
+    highlights = db.query(TourHighlight).filter(TourHighlight.tour_id == tour_id, TourHighlight.status == "active").all()
+    inclusions = db.query(TourInclusion).filter(TourInclusion.tour_id == tour_id, TourInclusion.status == "active").all()
+    exclusions = db.query(TourExclusion).filter(TourExclusion.tour_id == tour_id, TourExclusion.status == "active").all()
+    gallery = db.query(TourGalleryImage).filter(TourGalleryImage.tour_id == tour_id, TourGalleryImage.status == "active").order_by(TourGalleryImage.display_order.asc()).all()
     pricing = db.query(TourPricing).filter(TourPricing.tour_id == tour_id, TourPricing.status == "active").all()
     group_discount_tiers = (
         db.query(TourGroupDiscountTier)
@@ -490,9 +490,9 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
         .order_by(TourGroupDiscountTier.min_pax.asc())
         .all()
     )
-    activities = db.query(TourOptionalActivity).filter(TourOptionalActivity.tour_id == tour_id).all()
-    accommodations = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour_id).all()
-    extensions = db.query(TourExtension).filter(TourExtension.tour_id == tour_id).all()
+    activities = db.query(TourOptionalActivity).filter(TourOptionalActivity.tour_id == tour_id, TourOptionalActivity.status == "active").all()
+    accommodations = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour_id, TourAccommodationExtra.status == "active").all()
+    extensions = db.query(TourExtension).filter(TourExtension.tour_id == tour_id, TourExtension.status == "active").all()
     # status == "active" alone isn't enough - an admin-created discount stays
     # "active" across its whole lifecycle, so a since-expired or not-yet-started
     # offer would otherwise still be advertised here even though
@@ -548,10 +548,25 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "long_description": tour.long_description,
             "start_location": tour.start_location,
             "finish_location": tour.finish_location,
+            "number_of_nights": tour.number_of_nights,
+            "max_group_size": tour.max_group_size,
+            "min_booking_size": tour.min_booking_size,
+            "tour_language": tour.tour_language,
+            "suitable_age_range": tour.suitable_age_range,
+            "pricing_type": tour.pricing_type,
+            "offer_price": tour.offer_price,
+            "infant_price": tour.infant_price,
+            "single_supplement": tour.single_supplement,
             "map_image": tour.map_image,
+            "mobile_cover_image": tour.mobile_cover_image,
             "image_alt_text": tour.image_alt_text,
             "seo_title": tour.seo_title,
             "seo_description": tour.seo_description,
+            "seo_keywords": tour.seo_keywords,
+            "focus_keyword": tour.focus_keyword,
+            "canonical_url": tour.canonical_url,
+            "open_graph_image": tour.open_graph_image,
+            "search_visibility": tour.search_visibility,
             "booking_deposit": tour.booking_deposit or None,
             "deposit_type": tour.deposit_type,
             "deposit_percentage": tour.deposit_percentage,
@@ -560,6 +575,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "tax_percentage": tour.tax_percentage or 0,
             "service_fee": tour.service_fee or 0,
             "tour_video_url": tour.tour_video_url or None,
+            "brochure_pdf": tour.brochure_pdf or None,
             "overview": _ser_overview(overview) if overview else None,
             "itineraries": [
                 {
@@ -585,8 +601,8 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
                 for i in itineraries
             ],
             "highlights": [{"text": h.title, "title": h.title, "image": h.image or None, "description": h.short_description or ""} for h in highlights],
-            "inclusions": [{"text": i.title} for i in inclusions],
-            "exclusions": [{"text": e.title} for e in exclusions],
+            "inclusions": [{"text": i.title, "description": i.description or ""} for i in inclusions],
+            "exclusions": [{"text": e.title, "description": e.description or ""} for e in exclusions],
             "gallery": [{"image_url": g.image_path, "alt_text": g.image_alt_text, "is_banner": g.image_type == "banner"} for g in gallery],
             # price_per_person must match what _price_booking (bookings.py)
             # actually charges at checkout - see _public_pricing_rows for
