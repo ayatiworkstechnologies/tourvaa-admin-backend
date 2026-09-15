@@ -161,9 +161,9 @@ def _minimum_deposit_amount(db: Session, booking: Booking) -> Decimal:
     tour = getattr(booking, "tour", None)
 
     if (
-        booking.booking_source == "agent"
-        and booking.agent_payment_method == "pay_later"
-        and money(booking.amount_paid or 0) <= 0
+        getattr(booking, "booking_source", None) == "agent"
+        and getattr(booking, "agent_payment_method", None) == "pay_later"
+        and money(getattr(booking, "amount_paid", 0) or 0) <= 0
         and tour is not None
     ):
         from app.services.tour_availability import agent_reserve_deposit_amount
