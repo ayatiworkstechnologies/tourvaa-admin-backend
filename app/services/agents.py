@@ -182,7 +182,7 @@ def get_agent_activity(db: Session, agent_id: int, recent_limit: int = 10):
     }
 
 
-def list_agents(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = ""):
+def list_agents(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = "", sort_by: str = ""):
     query = db.query(Agent).options(
         joinedload(Agent.country),
         joinedload(Agent.city),
@@ -191,7 +191,7 @@ def list_agents(db: Session, page: int, limit: int, search: str = "", country_id
         selectinload(Agent.contacts),
         selectinload(Agent.documents),
     )
-    return simple_paginate(filter_review_query(query, Agent, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, name_field="agent_name"), page, limit, serialize_agent)
+    return simple_paginate(filter_review_query(query, Agent, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, sort_by=sort_by, name_field="agent_name"), page, limit, serialize_agent)
 
 
 def get_agent(db: Session, agent_id: int):

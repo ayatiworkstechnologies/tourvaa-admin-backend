@@ -182,7 +182,7 @@ def serialize_supplier(item: Supplier):
     return data
 
 
-def list_suppliers(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = ""):
+def list_suppliers(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = "", sort_by: str = ""):
     base_query = db.query(Supplier).options(
         joinedload(Supplier.country),
         joinedload(Supplier.city),
@@ -192,7 +192,7 @@ def list_suppliers(db: Session, page: int, limit: int, search: str = "", country
         selectinload(Supplier.vehicles),
         selectinload(Supplier.documents),
     )
-    query = filter_review_query(base_query, Supplier, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, name_field="supplier_name")
+    query = filter_review_query(base_query, Supplier, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, sort_by=sort_by, name_field="supplier_name")
     return simple_paginate(query, page, limit, serialize_supplier)
 
 

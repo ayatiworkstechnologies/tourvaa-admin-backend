@@ -596,20 +596,21 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
                     "activities": i.activities or "",
                     "optional_activities": i.optional_activities or "",
                     "image": i.image or None,
+                    "image_alt_text": i.image_alt_text or "",
                     "images": _safe_json_list(i.images),
                 }
                 for i in itineraries
             ],
             "highlights": [{"text": h.title, "title": h.title, "image": h.image or None, "description": h.short_description or ""} for h in highlights],
-            "inclusions": [{"text": i.title, "description": i.description or ""} for i in inclusions],
-            "exclusions": [{"text": e.title, "description": e.description or ""} for e in exclusions],
-            "gallery": [{"image_url": g.image_path, "alt_text": g.image_alt_text, "is_banner": g.image_type == "banner"} for g in gallery],
+            "inclusions": [{"text": i.title, "description": i.description or "", "icon": i.icon or None} for i in inclusions],
+            "exclusions": [{"text": e.title, "description": e.description or "", "icon": e.icon or None} for e in exclusions],
+            "gallery": [{"image_url": g.image_path, "alt_text": g.image_alt_text, "title": g.image_title or "", "caption": g.image_caption or "", "is_banner": g.image_type == "banner"} for g in gallery],
             # price_per_person must match what _price_booking (bookings.py)
             # actually charges at checkout - see _public_pricing_rows for
             # how the base price + group discount tiers are expanded into
             # these traveller-count rows.
             "pricing": _public_pricing_rows(pricing, group_discount_tiers, (own_discount_map.get(tour_id) or {}).get("discount_percentage") or 0),
-            "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
+            "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "child_price": float(a.child_price_per_person) if a.child_price_per_person else None, "infant_price": float(a.infant_price_per_person) if a.infant_price_per_person else None, "pricing_mode": a.pricing_mode or "flat", "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],
             "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other", "image": (e.extension_tour.banner_image or None) if e.extension_tour else None} for e in extensions],
             "discounts": [{"label": d.discount_name, "discount_type": d.discount_type, "value": float(d.discount_value), "valid_from": str(d.start_date) if d.start_date else None, "valid_to": str(d.end_date) if d.end_date else None} for d in discounts],

@@ -146,7 +146,7 @@ def serialize_common_review(item: Any, name_field: str, code_field: str):
     }
 
 
-def filter_review_query(query, model, *, search="", country_id="", status="", approval_status="", start_date="", end_date="", name_field=""):
+def filter_review_query(query, model, *, search="", country_id="", status="", approval_status="", start_date="", end_date="", sort_by="", name_field=""):
     if search:
         pattern = f"%{search.strip()}%"
         search_columns = [getattr(model, name_field)]
@@ -168,6 +168,10 @@ def filter_review_query(query, model, *, search="", country_id="", status="", ap
         query = query.filter(model.created_at >= start_date)
     if end_date:
         query = query.filter(model.created_at <= f"{end_date} 23:59:59")
+    if sort_by == "oldest":
+        return query.order_by(model.id.asc())
+    if sort_by == "name_az" and name_field:
+        return query.order_by(getattr(model, name_field).asc())
     return query.order_by(model.id.desc())
 
 
