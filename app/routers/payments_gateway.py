@@ -613,7 +613,10 @@ def gateways_status(db: Session = Depends(get_db), current_user=Depends(get_curr
     try:
         p = _load_setting(db, "paypal")
         paypal_ok = bool(p and p.public_key and p.secret_key)
-        paypal_test = paypal_ok and (getattr(p, "mode", "sandbox") or "sandbox") == "sandbox"
+        # Mirrors get_paypal()'s own rule (payments_gateway.py service): only
+        # the literal "live" is production, everything else (the seed script
+        # stores "test", not "sandbox") is sandbox.
+        paypal_test = paypal_ok and (getattr(p, "mode", "sandbox") or "sandbox") != "live"
     except Exception:
         pass
     return {

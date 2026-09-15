@@ -30,7 +30,7 @@ from app.schemas.website_cms import (
 ALLOWED_CONTENT_BLOCK_KEYS = {
     "hero_extras", "about_section", "blog_teaser", "airport_transfer",
     "travel_support", "newsletter_banner", "top_deals_section",
-    "trending_section", "favourite_countries_section",
+    "trending_section", "favourite_countries_section", "social_links",
 }
 
 # Per-country destination guide content (best time to visit, monsoon/season
