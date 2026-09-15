@@ -24,7 +24,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.bookings import Booking
 from app.auth.permissions import get_current_user
-from app.utils.money import as_aware_utc, money, utcnow
+from app.utils.money import as_aware_utc, money, to_minor_units, utcnow
 from app.utils.ratelimit import check_rate_limit
 from app.services.payments_gateway import get_paypal, get_stripe
 from app.services.settings import get_default_deposit_cutoff_days, get_default_deposit_percentage
@@ -33,6 +33,19 @@ from app.services.payments import _payment_code, _sync_booking_payment_fields
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/payments", tags=["Payment Gateways"])
+
+
+def _require_paypal_amount(amount_container: dict, context: str) -> Decimal:
+    """PayPal always includes resource.amount.value on real capture/refund
+    events - a missing or unparseable value means a malformed payload, which
+    must reject rather than silently move money at 0.00 (see PAY-02)."""
+    amount_value = amount_container.get("value")
+    if amount_value is None:
+        raise HTTPException(status_code=400, detail=f"PayPal {context} event is missing amount.value")
+    try:
+        return money(Decimal(str(amount_value)))
+    except (ArithmeticError, ValueError, TypeError) as error:
+        raise HTTPException(status_code=400, detail=f"PayPal {context} event has an unparseable amount.value") from error
 
 
 def _ensure_payment_invoice(db: Session, payment: Payment, actor=None, request: Request | None = None) -> None:
@@ -242,7 +255,7 @@ def stripe_create_session(body: StripeSessionRequest, request: Request, db: Sess
     stripe = get_stripe(db)
     if body.test_only and not stripe.secret_key.startswith(("sk_test_", "rk_test_")):
         raise HTTPException(status_code=400, detail="Stripe test credentials are required")
-    amount_cents = int(amount * 100)
+    amount_cents = to_minor_units(amount)
 
     session_data = stripe.create_checkout_session(
         amount_cents=amount_cents,
@@ -484,8 +497,7 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
         units = captured.get("purchase_units", [{}])
         captures = units[0].get("payments", {}).get("captures", [{}])
         capture_obj = captures[0] if captures else {}
-        amount_value = capture_obj.get("amount", {}).get("value", "0")
-        captured_amt = money(Decimal(amount_value))
+        captured_amt = _require_paypal_amount(capture_obj.get("amount", {}), "capture")
         capture_id = capture_obj.get("id", "")
 
         payment.captured_amount = captured_amt
@@ -549,8 +561,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
         resource = event.get("resource", {})
         capture_id = resource.get("id")
         order_id = resource.get("supplementary_data", {}).get("related_ids", {}).get("order_id")
-        amount_value = resource.get("amount", {}).get("value", "0")
-        captured_amt = money(Decimal(amount_value))
+        captured_amt = _require_paypal_amount(resource.get("amount", {}), "PAYMENT.CAPTURE.COMPLETED")
 
         payment = None
         if order_id:
@@ -568,8 +579,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
 
     elif event_type == "PAYMENT.CAPTURE.REFUNDED":
         resource = event.get("resource", {})
-        amount_value = resource.get("amount", {}).get("value", "0")
-        refunded_amt = money(Decimal(amount_value))
+        refunded_amt = _require_paypal_amount(resource.get("amount", {}), "PAYMENT.CAPTURE.REFUNDED")
         links = resource.get("links", [])
         capture_href = next((l["href"] for l in links if l.get("rel") == "up"), "")
         capture_id = capture_href.rstrip("/").split("/")[-1] if capture_href else None

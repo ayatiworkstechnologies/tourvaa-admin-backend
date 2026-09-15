@@ -1414,6 +1414,8 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
         _recalculate_booking_price(db, booking, data)
     elif wants_manual_total:
         new_total = money(data.total_cost)
+        if new_total <= money(0):
+            raise HTTPException(status_code=400, detail="total_cost must be a positive amount")
         booking.total_cost = new_total
         booking.final_amount = new_total
         if booking.booking_source == "agent":

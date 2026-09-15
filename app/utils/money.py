@@ -20,6 +20,16 @@ def money_str(value: Any = 0) -> str:
     return format(money(value), ".2f")
 
 
+def to_minor_units(value: Any = 0) -> int:
+    """Decimal-safe conversion to a gateway's smallest currency unit (cents).
+
+    Both Stripe and PayPal amounts are already quantized to 2dp by money()
+    before reaching here; this rounds rather than truncates so a future
+    3-decimal currency (KWD, BHD, etc.) doesn't silently lose a unit.
+    """
+    return int((money(value) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.services.audit import log_audit
 from app.models.bookings import Booking
 from app.models.customers import Customer
-from app.utils.money import money, money_str, utcnow
+from app.utils.money import money, money_str, to_minor_units, utcnow
 from app.models.payments import Payment, PaymentHold, PaymentTransaction
 from app.schemas.payments import PaymentAuthorize, PaymentCapture, PaymentCreate, PaymentStatusUpdate, PaymentUpdate, PaymentVoid, RefundRequest
 from app.models.users import User
@@ -441,7 +441,7 @@ def _issue_gateway_refund(db: Session, payment: Payment, amount, reason: str) ->
         stripe = get_stripe(db)
         result = stripe.create_refund(
             payment_intent_id=payment.gateway_payment_id,
-            amount_cents=int(round(float(amount) * 100)),
+            amount_cents=to_minor_units(amount),
             reason=reason or "requested_by_customer",
             idempotency_key=idempotency_key,
         )
