@@ -5,6 +5,9 @@ from pydantic import BaseModel
 class CheckoutStart(BaseModel):
     tour_id: int
     tour_calendar_id: Optional[int] = None
+    # Preserve the exact departure selected on the tour page when no calendar
+    # row is available (or while a session is resumed).
+    travel_date: Optional[str] = None
     # Carry an existing session key to resume (e.g., after login redirect)
     session_key: Optional[str] = None
 

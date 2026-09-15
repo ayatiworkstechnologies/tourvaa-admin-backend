@@ -98,7 +98,7 @@ def start_session(db: Session, body: CheckoutStart, current_user: Optional[User]
         tour_calendar_id=body.tour_calendar_id,
         step="travellers",
         status="active",
-        data={},
+        data={"travel_date": body.travel_date} if body.travel_date else {},
         expires_at=utcnow() + timedelta(hours=SESSION_TTL_HOURS),
     )
     if current_user:
@@ -186,6 +186,8 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
     booking_data = BookingCreate(
         tour_id=s.tour_id,
         tour_calendar_id=s.tour_calendar_id,
+        tour_date=payload.get("travel_date") or None,
+        tour_start_date=payload.get("travel_date") or None,
         customer_id=s.customer_id,
         no_of_adults=adults,
         no_of_children=children,

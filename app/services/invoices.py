@@ -216,6 +216,8 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
     notify_admins(db, notification_type="invoice_generated", title="Invoice generated", message=f"Invoice {inv.invoice_number} was generated", entity_type="invoice", entity_id=inv.id)
     if booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="invoice_generated", title="Invoice generated", message=f"Invoice {inv.invoice_number} is ready", entity_type="invoice", entity_id=inv.id)
+    if booking.agent and booking.agent.user_id:
+        enqueue_notification(db, user_id=booking.agent.user_id, notification_type="invoice_generated", title="Reservation invoice ready", message=f"Invoice {inv.invoice_number} for booking {booking.booking_code or booking.id} is ready", entity_type="invoice", entity_id=inv.id)
     log_audit(db, actor=actor, action="generate_invoice", entity_type="invoice", entity_id=inv.id, request=request)
     db.commit()
     db.refresh(inv)
