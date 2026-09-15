@@ -48,6 +48,7 @@ def _ser_config(o: TourAvailabilityConfig) -> dict:
         "availability_end_date": o.availability_end_date,
         "min_advance_booking_days": o.min_advance_booking_days,
         "agent_no_deposit_buffer_weeks": o.agent_no_deposit_buffer_weeks,
+        "agent_reserve_deposit_percentage": o.agent_reserve_deposit_percentage,
         "frequency": o.frequency,
         "frequency_week": o.frequency_week,
         "frequency_days": o.frequency_days or [],
@@ -113,6 +114,7 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
     o.availability_end_date = data.availability_end_date
     o.min_advance_booking_days = data.min_advance_booking_days
     o.agent_no_deposit_buffer_weeks = data.agent_no_deposit_buffer_weeks
+    o.agent_reserve_deposit_percentage = data.agent_reserve_deposit_percentage
     o.frequency = data.frequency
     o.frequency_week = data.frequency_week
     o.frequency_days = data.frequency_days
@@ -192,8 +194,9 @@ def assert_meets_advance_booking_window(db: Session, tour_id: int, tour_date: da
 
 
 def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
-    """Whether an agent booking this tour today may Reserve Now with no
-    deposit, and the balance due date if so.
+    """Whether an agent booking this tour today may Reserve Now with the
+    reduced agent_reserve_deposit_percentage deposit, and the balance due
+    date if so.
 
     Client rule: an agent is eligible only if today is more than
     agent_no_deposit_buffer_weeks weeks before the tour's min-advance-booking
@@ -202,6 +205,7 @@ def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime |
     o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
     buffer_weeks = o.agent_no_deposit_buffer_weeks if o else 4
     advance_days = o.min_advance_booking_days if o else 0
+    deposit_percentage = o.agent_reserve_deposit_percentage if o else 30.0
     buffer_days = buffer_weeks * 7
 
     travel = _as_date(travel_date)
@@ -209,7 +213,25 @@ def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime |
     eligible = (cutoff_date - date.today()).days > buffer_days
     due_date = travel - timedelta(days=buffer_days) if eligible else None
 
-    return {"eligible": eligible, "due_date": due_date, "buffer_weeks": buffer_weeks}
+    return {
+        "eligible": eligible,
+        "due_date": due_date,
+        "buffer_weeks": buffer_weeks,
+        "deposit_percentage": deposit_percentage,
+    }
+
+
+def agent_reserve_deposit_amount(db: Session, tour_id: int, total_amount) -> "Decimal":
+    """The minimum amount an agent must pay to Reserve Now this tour, given
+    the booking's total - agent_reserve_deposit_percentage of total_amount,
+    quantized to 2dp. Shared by booking creation (serialized for the
+    frontend to charge) and payment validation (the enforced floor)."""
+    from decimal import Decimal
+    from app.utils.money import money
+
+    o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
+    pct = o.agent_reserve_deposit_percentage if o else 30.0
+    return money(money(total_amount) * Decimal(str(pct)) / Decimal("100"))
 
 
 def check_availability_end_date_reminders(db: Session) -> None:

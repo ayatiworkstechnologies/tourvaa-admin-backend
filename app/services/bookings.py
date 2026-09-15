@@ -328,11 +328,19 @@ def _balance_due_date(db: Session, booking: Booking) -> Optional[datetime]:
     falling back to the admin-configured default_balance_payment_deadline_days
     setting only when the tour itself hasn't set one. None if the booking is
     fully paid/unpaid or there's no departure date to count back from."""
-    # Agent "Reserve Now" bookings carry no deposit at all (amount_paid stays
-    # 0 until the invoice is settled), so the deposit branch below never
-    # applies to them -- the due date instead comes from the agent no-deposit
-    # buffer window (services.tour_availability.agent_reserve_eligibility).
-    if booking.booking_source == "agent" and booking.agent_payment_method in {"pay_later", "credit"} and money(booking.amount_paid or 0) <= 0:
+    # Agent "credit" bookings carry no deposit at all (amount_paid stays 0
+    # until the invoice is settled), and "pay_later" (Reserve Now) always
+    # uses the agent buffer-window due date rather than the tour's own
+    # balance_payment_deadline_days -- even once its reduced
+    # agent_reserve_deposit_percentage deposit has been paid, since that
+    # deposit was against the agent-specific rule, not the tour's customer-
+    # facing deposit terms. See services.tour_availability.agent_reserve_eligibility.
+    if booking.booking_source == "agent" and (
+        booking.agent_payment_method == "pay_later"
+        or (booking.agent_payment_method == "credit" and money(booking.amount_paid or 0) <= 0)
+    ):
+        if money(booking.amount_pending or 0) <= 0:
+            return None
         if booking.tour_id is None or booking.tour_start_date is None:
             return None
         from app.services.tour_availability import agent_reserve_eligibility
@@ -389,6 +397,20 @@ def _deposit_config(db: Session, booking: Booking) -> Optional[dict]:
         "balance_payment_deadline_days": getattr(tour, "balance_payment_deadline_days", None) if tour else None,
         "still_available": still_available,
     }
+
+
+def _agent_reserve_deposit_info(db: Session, booking: Booking) -> Optional[dict]:
+    """For an agent 'Reserve Now' (pay_later) booking, the reduced deposit
+    it requires - the frontend uses minimum_amount as the amount to charge
+    right after booking creation, instead of the full total. None for any
+    other booking (the normal deposit_config above applies there)."""
+    if booking.booking_source != "agent" or booking.agent_payment_method != "pay_later" or booking.tour_id is None:
+        return None
+    from app.services.tour_availability import agent_reserve_deposit_amount, agent_reserve_eligibility
+    total = money(booking.customer_selling_price or booking.total_cost or 0)
+    minimum = agent_reserve_deposit_amount(db, booking.tour_id, total)
+    percentage = agent_reserve_eligibility(db, booking.tour_id, booking.tour_start_date)["deposit_percentage"] if booking.tour_start_date else None
+    return {"percentage": percentage, "minimum_amount": money_str(minimum)}
 
 
 def serialize_booking(db: Session, booking: Booking, detail: bool = False, include_supplier_breakdown: bool = False) -> dict:
@@ -488,6 +510,7 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
             },
             "payment_summary": {"status": booking.payment_status, "paid": money_str(booking.amount_paid), "pending": money_str(booking.amount_pending), "balance_due_date": _balance_due_date(db, booking)},
             "deposit_config": _deposit_config(db, booking),
+            "agent_reserve_deposit": _agent_reserve_deposit_info(db, booking),
             "invoice_summary": None,
         })
         # Admin-only: what the supplier is owed after commission, alongside
@@ -1141,11 +1164,16 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     customer_selling_price = money(final + agent_markup) if data.booking_source == "agent" else final
     payment_status = "pending"
     booking_status = "pending_payment"
-    if data.booking_source == "agent" and data.agent_payment_method in {"credit", "pay_later"}:
+    if data.booking_source == "agent" and data.agent_payment_method == "credit":
         payment_status = "credit_approval_pending"
         booking_status = "pending_credit_approval"
     elif data.booking_source == "agent" and data.agent_payment_method == "bank_transfer":
         payment_status = "bank_transfer_pending"
+    # "pay_later" (Reserve Now) used to skip payment entirely (same
+    # credit_approval_pending path as "credit"), but now requires an
+    # immediate agent_reserve_deposit_percentage deposit - so it follows the
+    # normal pending_payment/pending flow like a full-payment booking, just
+    # with a reduced minimum (enforced in payments_gateway._minimum_deposit_amount).
     booking = Booking(
         customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, affiliate_attribution_id=resolved_attribution.id if resolved_attribution else None, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),

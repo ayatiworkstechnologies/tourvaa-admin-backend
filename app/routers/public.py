@@ -617,6 +617,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": max(0, c.available_seats - c.booked_seats), "status": c.status} for c in calendar],
             "min_advance_booking_days": availability_config.min_advance_booking_days if availability_config else 0,
             "agent_no_deposit_buffer_weeks": availability_config.agent_no_deposit_buffer_weeks if availability_config else 4,
+            "agent_reserve_deposit_percentage": availability_config.agent_reserve_deposit_percentage if availability_config else 30.0,
             "availability_end_date": str(availability_config.availability_end_date.date()) if availability_config and availability_config.availability_end_date else None,
             "similar_tours": similar_tours,
             "cancellation_policy": [
