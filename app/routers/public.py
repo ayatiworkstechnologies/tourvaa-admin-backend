@@ -532,11 +532,14 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     review_stats = get_review_stats(db, [tour_id])
     reviews = list_tour_reviews(db, tour_id)
 
-    similar_tour_rows = []
-    for link in similar_links:
-        st = db.query(Tour).filter(Tour.id == link.similar_tour_id, Tour.status == "published").first()
-        if st:
-            similar_tour_rows.append(st)
+    similar_tour_ids = [link.similar_tour_id for link in similar_links]
+    similar_tours_by_id = {
+        st.id: st
+        for st in db.query(Tour).filter(Tour.id.in_(similar_tour_ids), Tour.status == "published").all()
+    } if similar_tour_ids else {}
+    similar_tour_rows = [
+        similar_tours_by_id[tid] for tid in similar_tour_ids if tid in similar_tours_by_id
+    ]
     similar_discount_map = _active_discount_map(db, similar_tour_rows)
     similar_tours = [_public_tour(st, discount_map=similar_discount_map) for st in similar_tour_rows]
     own_discount_map = _active_discount_map(db, [tour])

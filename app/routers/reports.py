@@ -2,6 +2,7 @@ import csv
 import io
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -318,10 +319,28 @@ def sales_revenue_report(
     discounts = float(booking_q.with_entities(func.coalesce(func.sum(Booking.discount_amount), 0)).scalar() or 0)
     taxes = float(booking_q.with_entities(func.coalesce(func.sum(Booking.tax_amount), 0)).scalar() or 0)
 
+    # Ledger entries can be booked in a supplier's own currency (Supplier.currency
+    # is never forced to USD, unlike Tour/TourPricing), so a platform-wide total
+    # must convert each row to USD before summing rather than blending raw
+    # amounts across currencies -- see services.supplier_ledger.get_supplier_statement
+    # for the same concern on a per-supplier statement.
+    from app.services.currency import BASE_CURRENCY, convert_amount, normalize_currency
+
     ledger_q = db.query(SupplierLedger).join(Booking, SupplierLedger.booking_id == Booking.id)
     ledger_q = _apply_range(ledger_q, Booking.created_at, start, end)
-    platform_commission = float(ledger_q.with_entities(func.coalesce(func.sum(SupplierLedger.commission_amount), 0)).scalar() or 0)
-    supplier_payable = float(ledger_q.with_entities(func.coalesce(func.sum(SupplierLedger.net_payable), 0)).scalar() or 0)
+    platform_commission = 0.0
+    supplier_payable = 0.0
+    for row in ledger_q.with_entities(SupplierLedger.currency, SupplierLedger.commission_amount, SupplierLedger.net_payable):
+        row_currency = normalize_currency(row.currency, BASE_CURRENCY)
+        commission_amount = row.commission_amount or 0
+        net_payable = row.net_payable or 0
+        if row_currency != BASE_CURRENCY:
+            if commission_amount:
+                commission_amount, _, _ = convert_amount(Decimal(str(commission_amount)), row_currency, BASE_CURRENCY)
+            if net_payable:
+                net_payable, _, _ = convert_amount(Decimal(str(net_payable)), row_currency, BASE_CURRENCY)
+        platform_commission += float(commission_amount)
+        supplier_payable += float(net_payable)
 
     captured = float(payment_q.with_entities(func.coalesce(func.sum(Payment.captured_amount), 0)).scalar() or 0)
     refunded = float(payment_q.with_entities(func.coalesce(func.sum(Payment.refunded_amount), 0)).scalar() or 0)

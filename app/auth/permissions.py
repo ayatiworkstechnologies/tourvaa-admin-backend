@@ -336,6 +336,8 @@ def require_any_permission(*permission_slugs: str):
             ensure_approved_supplier(db, current_user)
         if _is_agent(current_user) and not request.url.path.startswith(PENDING_AGENT_SAFE_API_PREFIXES):
             ensure_approved_agent(db, current_user)
+        if _is_affiliate(current_user):
+            ensure_approved_affiliate(db, current_user)
 
         role_ids = get_user_role_ids(current_user)
         allowed_slugs = expand_permission_slugs(permission_slugs)

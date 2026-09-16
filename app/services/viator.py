@@ -50,6 +50,13 @@ def _credentials(db: Session) -> tuple[str, str]:
 
 
 def is_configured(db: Session) -> bool:
+    # Viator is being taken forward separately (see Phase 1 review item 19) --
+    # the admin's is_enabled toggle must be honored on its own, not just
+    # inferred from an API key being present, so the integration can be
+    # switched off cleanly without clearing stored credentials.
+    row = db.query(ApiSetting).filter(ApiSetting.api_name == "viator").first()
+    if not row or not row.is_enabled:
+        return False
     api_key, _ = _credentials(db)
     return bool(api_key)
 
@@ -135,9 +142,9 @@ def search_day_trips(
             if isinstance(cached, dict) and cached.get("expires_at", now) > now:
                 return {"products": cached["products"], "destination_name": cached["destination_name"], "stale": False}
 
-    api_key, affiliate_pid = _credentials(db)
-    if not api_key:
+    if not is_configured(db):
         return {"products": [], "destination_name": DEFAULT_DESTINATION_NAME, "stale": False}
+    api_key, affiliate_pid = _credentials(db)
 
     try:
         response = httpx.post(

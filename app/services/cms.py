@@ -383,7 +383,7 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
 
     entered_currency = normalize_currency(payload.get("currency"), BASE_CURRENCY)
     if entered_currency != BASE_CURRENCY:
-        for field in ("booking_deposit", "service_fee"):
+        for field in ("booking_deposit", "service_fee", "offer_price", "infant_price", "single_supplement"):
             value = payload.get(field)
             if value:
                 converted, _, _ = convert_amount(Decimal(str(value)), entered_currency, BASE_CURRENCY)

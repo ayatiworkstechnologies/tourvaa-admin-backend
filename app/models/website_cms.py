@@ -34,6 +34,9 @@ class PopularDestination(Base):
     title = Column(String(200), nullable=False)
     image = Column(String(255), nullable=True)
     description = Column(Text, nullable=True)
+    # Destination link for this country's card, e.g. "/tours?country=Egypt".
+    # Falls back to an auto-generated country URL on the frontend when unset.
+    href = Column(String(500), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

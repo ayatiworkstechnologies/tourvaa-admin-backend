@@ -707,6 +707,7 @@ def get_api_settings_payload(db: Session):
         "viator_api_key": mask_secret(viator_key),
         "viator_api_key_placeholder": mask_secret(viator_key),
         "viator_affiliate_pid": viator_pid,
+        "viator_enabled": bool(viator.is_enabled) if viator else False,
     }
 
 
@@ -728,6 +729,7 @@ def update_api_settings_payload(
         "viator_api_key": ("viator", "api_key"),
         "viator_api_key_placeholder": ("viator", "api_key"),
         "viator_affiliate_pid": ("viator", "api_secret"),
+        "viator_enabled": ("viator", "is_enabled"),
     }
 
     updates_by_api = {}

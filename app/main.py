@@ -458,17 +458,28 @@ async def _wishlist_reminder_loop():
             logger.exception("Wishlist reminder sweep failed")
 
 
+_background_tasks: list[asyncio.Task] = []
+
+
 @app.on_event("startup")
 async def start_background_jobs():
     if schema_is_ready():
-        asyncio.create_task(_expire_stale_bookings_loop())
-        asyncio.create_task(_report_schedule_loop())
-        asyncio.create_task(_balance_due_reminder_loop())
-        asyncio.create_task(_tour_availability_reminder_loop())
-        asyncio.create_task(_wishlist_reminder_loop())
+        _background_tasks.append(asyncio.create_task(_expire_stale_bookings_loop()))
+        _background_tasks.append(asyncio.create_task(_report_schedule_loop()))
+        _background_tasks.append(asyncio.create_task(_balance_due_reminder_loop()))
+        _background_tasks.append(asyncio.create_task(_tour_availability_reminder_loop()))
+        _background_tasks.append(asyncio.create_task(_wishlist_reminder_loop()))
 
     from app.services.messaging_ws import start_redis_subscriber
-    asyncio.create_task(start_redis_subscriber())
+    _background_tasks.append(asyncio.create_task(start_redis_subscriber()))
+
+
+@app.on_event("shutdown")
+async def stop_background_jobs():
+    for task in _background_tasks:
+        task.cancel()
+    await asyncio.gather(*_background_tasks, return_exceptions=True)
+    _background_tasks.clear()
 
 setup_cors(app)
 app.add_middleware(CsrfMiddleware)

@@ -26,6 +26,7 @@ class PopularDestinationPayload(BaseModel):
     title: str
     image: Optional[str] = None
     description: Optional[str] = None
+    href: Optional[str] = None
     sort_order: int = 0
     is_active: bool = True
 

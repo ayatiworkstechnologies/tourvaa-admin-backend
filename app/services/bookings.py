@@ -843,6 +843,20 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             has_any_slab = db.query(TourPricing.id).filter(TourPricing.tour_id == data.tour_id, TourPricing.status == "active").first() is not None
             if has_any_slab:
                 raise HTTPException(status_code=400, detail=f"No pricing available for {seat_travellers} traveller(s) on this tour. Please choose a different traveller count or contact support.")
+    # The booking's real transaction currency is always the tour/slab's
+    # configured currency -- never the browsing/display currency the
+    # customer's frontend happened to be showing converted amounts in
+    # (data.currency, used only as a last-resort fallback when there's no
+    # tour/slab to price against at all). This is deliberate: it's the
+    # currency the payment gateway actually charges, the supplier is
+    # actually paid in, and every downstream view (admin, invoice, supplier
+    # ledger) consistently reads from booking.currency -- switching this to
+    # the customer's ambient display currency would require rate-locked
+    # re-pricing of every line item and gateway-side currency support
+    # checks, and would leave the supplier settlement currency inconsistent
+    # with what was actually charged. The customer-facing UI discloses the
+    # real charge currency explicitly when it differs from what they were
+    # browsing in (see the booking page's price breakdown).
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
     adult_unit = money((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else (tour.price_start_per_person if tour else 0))
     child_unit = money((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0)
