@@ -109,7 +109,7 @@ def _wallet_entry(db: Session, *, affiliate_id: int, transaction_type: str, amou
 
 
 def _s_payout(r: AffiliatePayout) -> dict:
-    return {"id": r.id, "payout_code": r.payout_code, "affiliate_id": r.affiliate_id, "total_amount": str(r.total_amount), "currency": r.currency, "payment_method": r.payment_method, "reference_number": r.reference_number, "status": r.status, "notes": r.notes, "paid_at": r.paid_at, "created_at": r.created_at}
+    return {"id": r.id, "payout_code": r.payout_code, "affiliate_id": r.affiliate_id, "total_amount": str(r.total_amount), "currency": r.currency, "payment_method": r.payment_method, "reference_number": r.reference_number, "status": r.status, "notes": r.notes, "rejection_reason": r.rejection_reason, "paid_at": r.paid_at, "created_at": r.created_at}
 
 
 # links

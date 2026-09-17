@@ -391,6 +391,9 @@ def complete_registration(db: Session, token: str, password: str):
             supplier_name=supplier.supplier_name,
             user_id=user.id,
         )
+    if agent:
+        from app.utils.notification_triggers import notify_agent_registered
+        notify_agent_registered(db, agent_id=agent.id, agent_name=agent.agent_name, user_id=user.id)
     if affiliate:
         from app.services.notifications import notify_admins
         notify_admins(db, notification_type="affiliate_application", title="New Affiliate Application", message=f"{affiliate.name} applied to become an affiliate.", entity_type="affiliate", entity_id=affiliate.id)
@@ -418,11 +421,16 @@ def complete_registration(db: Session, token: str, password: str):
 
 
 def resend_registration_verification(db: Session, email: str, redirect: str | None = None):
+    # Both "no such account" and "account exists but doesn't need
+    # verification" return the same True/no-op here, matching
+    # forgot_password's anti-enumeration approach - the router always
+    # returns one generic message regardless, so raising here would be the
+    # only thing that could leak which emails are registered.
     user = db.query(User).filter(User.email == email.strip().lower()).first()
     if not user:
         return True
     if user.account_status not in {"PENDING_EMAIL_VERIFICATION", "PENDING_PASSWORD_CREATION"}:
-        raise HTTPException(status_code=400, detail="This account no longer needs email verification")
+        return True
     token, token_hash = create_password_reset_token()
     user.account_status = "PENDING_EMAIL_VERIFICATION"
     user.email_verification_token = token_hash
@@ -940,8 +948,6 @@ def force_logout_user(db: Session, target_user: User, actor: User | None = None,
 
 
 def forgot_password(db: Session, email: str, client_type: str | None = "web", background_tasks=None):
-    from fastapi import HTTPException
-
     normalized_email = email.strip().lower()
     user = db.query(User).filter(User.email == normalized_email).first()
 
@@ -949,12 +955,18 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web", ba
         logger.info("Password reset requested for unknown email: %s", normalized_email)
         return False
 
+    # Every "can't actually send a reset link" case below returns False
+    # exactly like the unknown-email case above, rather than raising -
+    # raising here would surface a different HTTP status to the caller
+    # (e.g. 403 vs 200), letting /auth/forgot-password be used to enumerate
+    # which emails are registered and their verification/activation state.
     if settings.REQUIRE_EMAIL_VERIFICATION and user.user_type in {"CUSTOMER", "AGENT", "SUPPLIER", "AFFILIATE"} and not user.email_verified_at:
-        raise HTTPException(status_code=403, detail="Email verification is required before password reset")
+        logger.info("Password reset skipped for unverified user id=%s", user.id)
+        return False
 
     if user.account_status != "ACTIVE" or not user.is_active:
         logger.info("Password reset skipped for inactive user id=%s", user.id)
-        raise HTTPException(status_code=403, detail="Your account is inactive. Please contact support.")
+        return False
 
     token, token_hash = create_password_reset_token()
     user.reset_password_token = token_hash

@@ -467,6 +467,34 @@ def public_tour_detail_by_slug(country_slug: str, tour_slug: str, db: Session = 
     return public_tour_detail(tour.slug, db)
 
 
+@router.get("/tours/{tour_id}/deposit-options")
+def public_tour_deposit_options(tour_id: int, travel_date: str = Query(...), db: Session = Depends(get_db)):
+    """Whether 'pay a deposit now, balance later' can be offered for this
+    tour/travel date, for both the customer (Secure with a Deposit) and
+    agent (Reserve Now) booking flows - checked before booking creation so
+    the checkout page can show/hide the option rather than let the customer
+    pick it and then get rejected at booking-creation time (booking creation
+    itself still enforces this same rule server-side as the source of truth,
+    see services.bookings.create_booking)."""
+    from app.services.tour_availability import agent_reserve_eligibility, customer_deposit_eligibility
+
+    tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    try:
+        parsed_date = datetime.fromisoformat(travel_date).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="travel_date must be an ISO date (YYYY-MM-DD)")
+
+    return {
+        "status": "success",
+        "data": {
+            "customer": customer_deposit_eligibility(db, tour_id, parsed_date),
+            "agent": agent_reserve_eligibility(db, tour_id, parsed_date),
+        },
+    }
+
+
 @router.get("/tours/{tour_id}")
 def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     from fastapi import HTTPException

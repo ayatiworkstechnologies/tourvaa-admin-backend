@@ -19,10 +19,16 @@ from sqlalchemy.orm import Session
 from app.models.tours import TourDiscount
 
 
-def find_best_discount_row(session: Session, tour) -> TourDiscount | None:
+def find_best_discount_row(session: Session, tour, lock: bool = False) -> TourDiscount | None:
     """Best active TourDiscount applicable to `tour`, across all three
     scopes. Highest resulting percent-off wins; ties favor the tour-specific
-    discount over a category/country-wide one."""
+    discount over a category/country-wide one.
+
+    Pass lock=True when the caller is about to increment used_count (see
+    services.bookings._resolve_discount) - without a row lock, two
+    concurrent bookings can both read used_count < usage_limit and both
+    increment it, letting the code be used more times than usage_limit
+    permits (classic check-then-act race)."""
     if not tour or not tour.id:
         return None
     now = datetime.now(timezone.utc)
@@ -39,16 +45,15 @@ def find_best_discount_row(session: Session, tour) -> TourDiscount | None:
             TourDiscount.discount_scope == "country",
             TourDiscount.country_id == tour.country_id,
         ))
-    rows = (
-        session.query(TourDiscount)
-        .filter(
-            TourDiscount.status == "active",
-            or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= now),
-            or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= now),
-            or_(*scope_conditions),
-        )
-        .all()
+    query = session.query(TourDiscount).filter(
+        TourDiscount.status == "active",
+        or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= now),
+        or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= now),
+        or_(*scope_conditions),
     )
+    if lock:
+        query = query.with_for_update()
+    rows = query.all()
     if not rows:
         return None
 

@@ -142,8 +142,33 @@ def validate_worker_concurrency() -> None:
         )
 
 
+def validate_pdf_rendering_dependencies() -> None:
+    """Fail production startup instead of silently emitting invalid .pdf files."""
+    if settings.APP_ENV != "production":
+        return
+
+    from app.utils import invoices_pdf, itinerary_pdf
+
+    unavailable = []
+    for label, module in (
+        ("invoice", invoices_pdf),
+        ("itinerary", itinerary_pdf),
+    ):
+        if not module.REPORTLAB_AVAILABLE:
+            error = getattr(module, "REPORTLAB_IMPORT_ERROR", None)
+            detail = f"{type(error).__name__}: {error}" if error else "unknown import error"
+            unavailable.append(f"{label} PDFs ({detail})")
+
+    if unavailable:
+        raise RuntimeError(
+            "Refusing to start because PDF rendering dependencies are unavailable: "
+            + "; ".join(unavailable)
+        )
+
+
 validate_worker_concurrency()
 validate_production_config()
+validate_pdf_rendering_dependencies()
 
 
 def schema_is_ready():

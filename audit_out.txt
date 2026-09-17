@@ -1,0 +1,62 @@
+API_ROUTES=1
+---INVOICE_PDF---
+"""
+Invoice PDF generation.
+Uses reportlab if available; falls back to a plain-text PDF stub
+so the server starts even without reportlab installed.
+"""
+
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_RIGHT, TA_CENTER
+
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+    logger.warning("reportlab not installed - invoice PDFs will be plain text. Run: pip install reportlab")
+
+
+def _plain_text_pdf(path: Path, data: dict) -> None:
+    """Minimal fallback: write a readable text file with .pdf extension."""
+    inv = data
+    lines = [
+        "=" * 60,
+        f"INVOICE: {inv['invoice_number']}",
+        "=" * 60,
+        f"Booking:   {inv['booking_code']}",
+        f"Customer:  {inv['customer_name']}",
+        f"Tour:      {inv.get('tour_name', '-')}",
+        f"Traveller(s): {inv.get('traveller_names', '-')}",
+        f"Payment Method: {inv.get('payment_method', '-')}",
+        f"Date:      {inv['invoice_date']}",
+        "",
+        "-" * 60,
+        f"{'Description':<40} {'Amount':>10}",
+        "-" * 60,
+    ]
+    for item in inv.get("items", []):
+        lines.append(f"{item['description'][:40]:<40} {inv['currency']} {item['total_price']:>8}")
+    lines += [
+        "-" * 60,
+        f"{'Subtotal':<40} {inv['currency']} {inv['subtotal_amount']:>8}",
+        f"{'Tax / GST':<40} {inv['currency']} {inv['gst_amount']:>8}",
+        f"{'TOTAL':<40} {inv['currency']} {inv['total_amount']:>8}",
+        f"{'Amount Paid':<40} {inv['currency']} {inv['amount_paid']:>8}",
+        f"{'Amount Due':<40} {inv['currency']} {inv['amount_due']:>8}",
+        f"{'Balance Due Date':<40} {inv.get('balance_due_date') or 'Fully paid':>8}",
+        "=" * 60,
+        "Thank you for booking with Tourvaa.",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+BRAND = colors.HexColor("#1b5e46")

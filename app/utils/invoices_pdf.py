@@ -18,9 +18,31 @@ try:
     from reportlab.lib.enums import TA_RIGHT, TA_CENTER
 
     REPORTLAB_AVAILABLE = True
-except ImportError:
+
+    # These are only ever used inside the reportlab-rendered PDF path below,
+    # but must be defined inside this try block (not at module level) since
+    # they depend on `colors`, which doesn't exist when reportlab isn't
+    # installed -- see itinerary_pdf.py for the same pattern.
+    BRAND = colors.HexColor("#1b5e46")
+    BRAND_DARK = colors.HexColor("#0f3d2c")
+    INK = colors.HexColor("#1f2937")
+    MUTED = colors.HexColor("#6b7280")
+    LINE = colors.HexColor("#e2e8e5")
+    ROW_ALT = colors.HexColor("#f4f8f6")
+    PANEL = colors.HexColor("#f0f5f2")
+    PAID_BG = colors.HexColor("#e6f4ea")
+    PAID_FG = colors.HexColor("#1e7a3d")
+    DUE_BG = colors.HexColor("#fdecea")
+    DUE_FG = colors.HexColor("#b3261e")
+except ImportError as exc:
     REPORTLAB_AVAILABLE = False
-    logger.warning("reportlab not installed - invoice PDFs will be plain text. Run: pip install reportlab")
+    REPORTLAB_IMPORT_ERROR = exc
+    logger.warning(
+        "Invoice PDF rendering is unavailable because a ReportLab dependency failed "
+        "to import (%s: %s); invoice output will use the plain-text fallback.",
+        type(exc).__name__,
+        exc,
+    )
 
 
 def _plain_text_pdf(path: Path, data: dict) -> None:
@@ -55,19 +77,6 @@ def _plain_text_pdf(path: Path, data: dict) -> None:
         "Thank you for booking with Tourvaa.",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
-
-
-BRAND = colors.HexColor("#1b5e46")
-BRAND_DARK = colors.HexColor("#0f3d2c")
-INK = colors.HexColor("#1f2937")
-MUTED = colors.HexColor("#6b7280")
-LINE = colors.HexColor("#e2e8e5")
-ROW_ALT = colors.HexColor("#f4f8f6")
-PANEL = colors.HexColor("#f0f5f2")
-PAID_BG = colors.HexColor("#e6f4ea")
-PAID_FG = colors.HexColor("#1e7a3d")
-DUE_BG = colors.HexColor("#fdecea")
-DUE_FG = colors.HexColor("#b3261e")
 
 
 def _money(inv: dict, value) -> str:

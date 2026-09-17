@@ -260,20 +260,25 @@ def admin_unread_summary(db: Session) -> dict:
 
 # --- Booking-scoped direct messaging: customer/agent <-> supplier ---------
 
-def _serialize_booking_message(msg: BookingMessage) -> dict:
+def _serialize_booking_message(msg: BookingMessage, *, hide_supplier_identity: bool = False) -> dict:
+    is_supplier_message = msg.sender_role == "supplier"
     return {
         "id": msg.id,
         "conversation_id": msg.conversation_id,
         "sender_role": msg.sender_role,
         "sender_user_id": msg.sender_user_id,
-        "sender_name": msg.sender.name if msg.sender else None,
+        # Customer/agent viewers never learn the supplier's real name, even
+        # for their own messages in the thread (see hide_supplier_identity
+        # on _serialize_booking_conversation - same policy, this is the
+        # per-message counterpart of it).
+        "sender_name": None if (hide_supplier_identity and is_supplier_message) else (msg.sender.name if msg.sender else None),
         "body": None if msg.is_deleted else msg.body,
         "is_deleted": msg.is_deleted,
         "created_at": msg.created_at,
     }
 
 
-def _serialize_booking_conversation(conv: BookingConversation, *, with_messages: bool = False) -> dict:
+def _serialize_booking_conversation(conv: BookingConversation, *, with_messages: bool = False, hide_supplier_identity: bool = False) -> dict:
     data = {
         "id": conv.id,
         "booking_id": conv.booking_id,
@@ -283,7 +288,15 @@ def _serialize_booking_conversation(conv: BookingConversation, *, with_messages:
         "initiator_user_id": conv.initiator_user_id,
         "initiator_name": conv.initiator_user.name if conv.initiator_user else None,
         "supplier_user_id": conv.supplier_user_id,
-        "supplier_name": conv.supplier_user.name if conv.supplier_user else None,
+        # Presented to the customer/agent as a generic Tourvaa support
+        # channel, never the actual supplier's identity - see
+        # get_booking_conversation_thread_for_initiator and
+        # send_booking_message_as_supplier's broadcast (always sent TO the
+        # initiator), both of which pass hide_supplier_identity=True.
+        # get_booking_conversation_thread_for_supplier/
+        # list_booking_conversations_for_supplier (the supplier's own view)
+        # never set this flag.
+        "supplier_name": None if hide_supplier_identity else (conv.supplier_user.name if conv.supplier_user else None),
         "status": conv.status,
         "last_message_at": conv.last_message_at,
         "last_message_preview": conv.last_message_preview,
@@ -292,7 +305,7 @@ def _serialize_booking_conversation(conv: BookingConversation, *, with_messages:
         "created_at": conv.created_at,
     }
     if with_messages:
-        data["messages"] = [_serialize_booking_message(m) for m in conv.messages]
+        data["messages"] = [_serialize_booking_message(m, hide_supplier_identity=hide_supplier_identity) for m in conv.messages]
     return data
 
 
@@ -343,7 +356,7 @@ def get_booking_conversation_thread_for_initiator(db: Session, booking_id: int, 
     conv.initiator_unread_count = 0
     db.commit()
     db.refresh(conv)
-    return _serialize_booking_conversation(conv, with_messages=True)
+    return _serialize_booking_conversation(conv, with_messages=True, hide_supplier_identity=True)
 
 
 def _get_booking_conversation_for_supplier(db: Session, conversation_id: int, supplier_user: User) -> BookingConversation:
@@ -411,9 +424,17 @@ async def send_booking_message_as_supplier(db: Session, conversation_id: int, su
     db.refresh(msg)
     db.refresh(conv)
 
+    # Two serializations: the HTTP response goes back to the supplier who
+    # just sent this (their own identity, unhidden), but the websocket
+    # broadcast always goes to the initiator (customer/agent), who must
+    # never learn the supplier's real name/identity.
     serialized = _serialize_booking_message(msg)
     await ws_manager.notify_new_message(
-        {"type": "new_booking_message", "conversation": _serialize_booking_conversation(conv), "message": serialized},
+        {
+            "type": "new_booking_message",
+            "conversation": _serialize_booking_conversation(conv, hide_supplier_identity=True),
+            "message": _serialize_booking_message(msg, hide_supplier_identity=True),
+        },
         participant_user_id=conv.initiator_user_id,
     )
     return serialized

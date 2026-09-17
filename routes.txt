@@ -1,0 +1,7 @@
+/
+/api/health
+/docs
+/docs/oauth2-redirect
+/openapi.json
+/redoc
+/storage

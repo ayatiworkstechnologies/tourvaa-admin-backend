@@ -78,6 +78,25 @@ def _money(value):
     return money_str(value or 0)
 
 
+def _amount_to_usd(amount, currency: str | None) -> float:
+    """Booking.currency is always the tour/slab's currency, which is forced
+    to USD at save time for any booking tied to a real Tour (see
+    services.cms.save_tour / services.tours._normalize_pricing_to_usd) --
+    but a booking placed without a tour_id (a manual/back-office booking)
+    falls back to the client-supplied data.currency instead, so a report
+    that blends Booking.final_amount across bookings can still mix
+    currencies in that case. Convert every row to USD before summing rather
+    than assume the whole table is single-currency."""
+    if not amount:
+        return 0.0
+    from app.services.currency import BASE_CURRENCY, convert_amount, normalize_currency
+    normalized = normalize_currency(currency, BASE_CURRENCY)
+    if normalized == BASE_CURRENCY:
+        return float(amount)
+    converted, _, _ = convert_amount(Decimal(str(amount)), normalized, BASE_CURRENCY)
+    return float(converted)
+
+
 def _period_range(period: str, start_date: str = "", end_date: str = ""):
     """Return (start, end) datetimes for the given calendar-aligned period, or
     None for a bound that shouldn't be filtered (e.g. "all", or a custom bound
@@ -168,8 +187,13 @@ def summary(params: dict = Depends(_period_params), db: Session = Depends(get_db
 @router.get("/bookings")
 def booking_report(params: dict = Depends(_period_params), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.view", "reports.admin"))):
     query = _scope_bookings(_apply_range(db.query(Booking), Booking.created_at, params["start"], params["end"]), db, current_user)
-    rows = query.with_entities(Booking.booking_status, func.count(Booking.id), func.coalesce(func.sum(Booking.final_amount), 0)).group_by(Booking.booking_status).all()
-    return {"status": "success", "data": [{"status": status, "count": count, "amount": _money(amount)} for status, count, amount in rows]}
+    rows = query.with_entities(Booking.booking_status, Booking.currency, Booking.final_amount).all()
+    agg: dict[str, dict] = {}
+    for status, currency, amount in rows:
+        bucket = agg.setdefault(status, {"count": 0, "amount": 0.0})
+        bucket["count"] += 1
+        bucket["amount"] += _amount_to_usd(amount, currency)
+    return {"status": "success", "data": [{"status": status, "count": v["count"], "amount": _money(v["amount"])} for status, v in agg.items()]}
 
 
 @router.get("/payments")
@@ -198,11 +222,16 @@ def overdue_payments(db: Session = Depends(get_db), current_user: User = Depends
 
 @router.get("/country-wise")
 def country_wise(params: dict = Depends(_period_params), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.view", "reports.admin"))):
-    query = db.query(Country.country_name, func.count(Booking.id), func.coalesce(func.sum(Booking.final_amount), 0)).join(Booking, Booking.country_id == Country.id, isouter=True)
+    query = db.query(Country.country_name, Booking.id, Booking.currency, Booking.final_amount).join(Booking, Booking.country_id == Country.id, isouter=True)
     query = _apply_range(query, Booking.created_at, params["start"], params["end"])
     query = _scope_bookings(query, db, current_user)
-    rows = query.group_by(Country.country_name).all()
-    return {"status": "success", "data": [{"country": country, "bookings": count, "amount": _money(amount)} for country, count, amount in rows]}
+    agg: dict[str, dict] = {}
+    for country, booking_id, currency, amount in query.all():
+        bucket = agg.setdefault(country, {"count": 0, "amount": 0.0})
+        if booking_id is not None:
+            bucket["count"] += 1
+            bucket["amount"] += _amount_to_usd(amount, currency)
+    return {"status": "success", "data": [{"country": country, "bookings": v["count"], "amount": _money(v["amount"])} for country, v in agg.items()]}
 
 
 @router.get("/cancellations")
@@ -221,28 +250,44 @@ def supplier_report(
     current_user: User = Depends(require_any_permission("reports.view", "reports.supplier", "reports.admin")),
 ):
     _require_admin_report(current_user)
-    query = db.query(Supplier.id, Supplier.supplier_name, func.count(Booking.id), func.coalesce(func.sum(Booking.final_amount), 0)).join(Booking, Booking.supplier_id == Supplier.id, isouter=True)
+    query = db.query(Supplier.id, Supplier.supplier_name, Booking.id, Booking.currency, Booking.final_amount).join(Booking, Booking.supplier_id == Supplier.id, isouter=True)
     query = _apply_range(query, Booking.created_at, params["start"], params["end"])
-    rows = query.group_by(Supplier.id, Supplier.supplier_name).all()
-    return {"status": "success", "data": [{"supplier_id": sid, "supplier_name": name, "bookings": count, "amount": _money(amount)} for sid, name, count, amount in rows]}
+    agg: dict[int, dict] = {}
+    for sid, name, booking_id, currency, amount in query.all():
+        bucket = agg.setdefault(sid, {"name": name, "count": 0, "amount": 0.0})
+        if booking_id is not None:
+            bucket["count"] += 1
+            bucket["amount"] += _amount_to_usd(amount, currency)
+    return {"status": "success", "data": [{"supplier_id": sid, "supplier_name": v["name"], "bookings": v["count"], "amount": _money(v["amount"])} for sid, v in agg.items()]}
 
 
 @router.get("/agents")
 def agent_report(params: dict = Depends(_period_params), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.view", "reports.agent", "reports.admin"))):
     _require_admin_report(current_user)
-    query = db.query(Agent.id, Agent.agent_name, func.count(Booking.id), func.coalesce(func.sum(Booking.final_amount), 0)).join(Booking, Booking.agent_id == Agent.id, isouter=True)
+    query = db.query(Agent.id, Agent.agent_name, Booking.id, Booking.currency, Booking.final_amount).join(Booking, Booking.agent_id == Agent.id, isouter=True)
     query = _apply_range(query, Booking.created_at, params["start"], params["end"])
-    rows = query.group_by(Agent.id, Agent.agent_name).all()
-    return {"status": "success", "data": [{"agent_id": aid, "agent_name": name, "bookings": count, "amount": _money(amount)} for aid, name, count, amount in rows]}
+    agg: dict[int, dict] = {}
+    for aid, name, booking_id, currency, amount in query.all():
+        bucket = agg.setdefault(aid, {"name": name, "count": 0, "amount": 0.0})
+        if booking_id is not None:
+            bucket["count"] += 1
+            bucket["amount"] += _amount_to_usd(amount, currency)
+    return {"status": "success", "data": [{"agent_id": aid, "agent_name": v["name"], "bookings": v["count"], "amount": _money(v["amount"])} for aid, v in agg.items()]}
 
 
 @router.get("/customers")
 def customer_report(params: dict = Depends(_period_params), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.view", "reports.admin"))):
     _require_admin_report(current_user)
-    query = db.query(Customer.id, Customer.full_name, func.count(Booking.id), func.coalesce(func.sum(Booking.final_amount), 0), func.coalesce(func.sum(Booking.amount_pending), 0)).join(Booking, Booking.customer_id == Customer.id, isouter=True)
+    query = db.query(Customer.id, Customer.full_name, Booking.id, Booking.currency, Booking.final_amount, Booking.amount_pending).join(Booking, Booking.customer_id == Customer.id, isouter=True)
     query = _apply_range(query, Booking.created_at, params["start"], params["end"])
-    rows = query.group_by(Customer.id, Customer.full_name).all()
-    return {"status": "success", "data": [{"customer_id": cid, "customer_name": name, "bookings": count, "amount": _money(amount), "pending": _money(pending)} for cid, name, count, amount, pending in rows]}
+    agg: dict[int, dict] = {}
+    for cid, name, booking_id, currency, amount, pending in query.all():
+        bucket = agg.setdefault(cid, {"name": name, "count": 0, "amount": 0.0, "pending": 0.0})
+        if booking_id is not None:
+            bucket["count"] += 1
+            bucket["amount"] += _amount_to_usd(amount, currency)
+            bucket["pending"] += _amount_to_usd(pending, currency)
+    return {"status": "success", "data": [{"customer_id": cid, "customer_name": v["name"], "bookings": v["count"], "amount": _money(v["amount"]), "pending": _money(v["pending"])} for cid, v in agg.items()]}
 
 
 ROW_REPORT_LIMIT = 500

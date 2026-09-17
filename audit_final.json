@@ -1,0 +1,4 @@
+{
+  "invoices_pdf_import": "FAIL: NameError: name 'colors' is not defined",
+  "itinerary_pdf_import": "OK"
+}

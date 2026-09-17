@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth.permissions import require_any_permission
+from app.auth.permissions import get_current_user_optional, require_any_permission, user_has_any_permission
+from app.models.users import User
 from app.utils.pagination import pagination_params
 from app.services import website_cms as service
 from app.schemas.website_cms import (
@@ -20,12 +21,25 @@ router = APIRouter(prefix="/cms", tags=["Website CMS"])
 CMS_CREATE_PERMS = ("website_cms.create",)
 CMS_EDIT_PERMS = ("website_cms.edit",)
 CMS_DELETE_PERMS = ("website_cms.delete",)
+CMS_VIEW_PERMS = ("website_cms.view", "website_cms.edit", "website_cms.create")
+
+
+def _require_view_for_unfiltered(unfiltered: bool, current_user: "User | None", db: Session) -> None:
+    """These list endpoints double as the public site's data source (called
+    with active_only/published_only=True) and the admin CMS panel's data
+    source (called with those flags off, to also see drafts/inactive rows).
+    Anonymous/unprivileged callers may only use the filtered, public-safe
+    form - asking for the unfiltered admin view without website_cms.view
+    is rejected rather than silently exposing drafts."""
+    if unfiltered and not user_has_any_permission(db, current_user, *CMS_VIEW_PERMS):
+        raise HTTPException(status_code=403, detail="website_cms.view permission required to view unpublished/inactive content")
 
 
 # banners
 
 @router.get("/homepage-banners")
-def list_banners(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_banners(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_banners(db, pagination["page"], pagination["limit"], active_only)}
 
 @router.post("/homepage-banners")
@@ -45,7 +59,8 @@ def delete_banner(item_id: int, db: Session = Depends(get_db), _=Depends(require
 # popular destinations
 
 @router.get("/popular-destinations")
-def list_destinations(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_destinations(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_destinations(db, pagination["page"], pagination["limit"], active_only)}
 
 @router.post("/popular-destinations")
@@ -65,7 +80,8 @@ def delete_destination(item_id: int, db: Session = Depends(get_db), _=Depends(re
 # popular tours
 
 @router.get("/popular-tours")
-def list_popular_tours(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_popular_tours(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not (active_only and published_only), current_user, db)
     return {"status": "success", **service.list_popular_tours(db, pagination["page"], pagination["limit"], published_only, active_only)}
 
 @router.post("/popular-tours")
@@ -81,7 +97,8 @@ def delete_popular_tour(item_id: int, db: Session = Depends(get_db), _=Depends(r
 # tours on deals
 
 @router.get("/tours-on-deals")
-def list_deals(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_deals(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not (active_only and published_only), current_user, db)
     return {"status": "success", **service.list_deals(db, pagination["page"], pagination["limit"], active_only, published_only)}
 
 @router.post("/tours-on-deals")
@@ -101,7 +118,8 @@ def delete_deal(item_id: int, db: Session = Depends(get_db), _=Depends(require_a
 # handpicked tours
 
 @router.get("/handpicked-tours")
-def list_handpicked_tours(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_handpicked_tours(pagination=Depends(pagination_params), active_only: bool = Query(default=False), published_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not (active_only and published_only), current_user, db)
     return {"status": "success", **service.list_handpicked_tours(db, pagination["page"], pagination["limit"], published_only, active_only)}
 
 @router.post("/handpicked-tours")
@@ -117,7 +135,8 @@ def delete_handpicked_tour(item_id: int, db: Session = Depends(get_db), _=Depend
 # favourite countries
 
 @router.get("/favourite-countries")
-def list_favourite_countries(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_favourite_countries(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_favourite_countries(db, pagination["page"], pagination["limit"], active_only)}
 
 @router.post("/favourite-countries")
@@ -137,7 +156,8 @@ def delete_favourite_country(item_id: int, db: Session = Depends(get_db), _=Depe
 # country landing pages (/tours/{country})
 
 @router.get("/country-pages")
-def list_country_pages(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_country_pages(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_country_pages(db, pagination["page"], pagination["limit"], active_only)}
 
 @router.post("/country-pages")
@@ -168,12 +188,16 @@ def upsert_content_block(key: str, data: ContentBlockPayload, db: Session = Depe
 # blogs
 
 @router.get("/blogs")
-def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(default=False), slug: str = Query(default=""), db: Session = Depends(get_db)):
+def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(default=False), slug: str = Query(default=""), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_blogs(db, pagination["page"], pagination["limit"], active_only, slug)}
 
 @router.get("/blogs/{item_id}")
-def get_blog(item_id: int, db: Session = Depends(get_db)):
-    return {"status": "success", "data": service.get_blog(db, item_id)}
+def get_blog(item_id: int, db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    blog = service.get_blog(db, item_id)
+    if blog.get("status") != "published" and not user_has_any_permission(db, current_user, *CMS_VIEW_PERMS):
+        raise HTTPException(status_code=404, detail="Blog not found")
+    return {"status": "success", "data": blog}
 
 @router.post("/blogs")
 def create_blog(data: BlogPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
@@ -192,7 +216,8 @@ def delete_blog(item_id: int, db: Session = Depends(get_db), _=Depends(require_a
 # cms pages
 
 @router.get("/pages")
-def list_cms_pages(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_cms_pages(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_cms_pages(db, pagination["page"], pagination["limit"], active_only)}
 
 @router.post("/pages")
@@ -218,7 +243,8 @@ def public_cms_page(slug: str, db: Session = Depends(get_db)):
 # customer reviews
 
 @router.get("/customer-reviews")
-def list_reviews(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_reviews(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_reviews(db, pagination["page"], pagination["limit"], active_only)}
 
 @router.post("/customer-reviews")
@@ -243,7 +269,9 @@ def list_help(
     category: str = Query(default=""),
     active_only: bool = Query(default=False),
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
 ):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_help(db, pagination["page"], pagination["limit"], category, active_only)}
 
 @router.post("/help-centre")
@@ -278,7 +306,8 @@ def upsert_policy(data: PolicyPayload, db: Session = Depends(get_db), _=Depends(
 # promotional popups
 
 @router.get("/promotional-popups")
-def list_popups(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db)):
+def list_popups(pagination=Depends(pagination_params), active_only: bool = Query(default=False), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    _require_view_for_unfiltered(not active_only, current_user, db)
     return {"status": "success", **service.list_popups(db, pagination["page"], pagination["limit"], active_only)}
 
 @router.post("/promotional-popups")
@@ -324,7 +353,7 @@ def public_footer(db: Session = Depends(get_db)):
     return {"status": "success", "data": service.get_public_footer(db)}
 
 @router.get("/footer-sections")
-def list_footer_sections(pagination=Depends(pagination_params), db: Session = Depends(get_db)):
+def list_footer_sections(pagination=Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_VIEW_PERMS))):
     return {"status": "success", **service.list_footer_sections(db, pagination["page"], pagination["limit"])}
 
 @router.post("/footer-sections")
@@ -341,7 +370,7 @@ def delete_footer_section(item_id: int, db: Session = Depends(get_db), _=Depends
     return {"status": "success", "message": "Footer section deleted"}
 
 @router.get("/footer-links")
-def list_footer_links(pagination=Depends(pagination_params), section_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+def list_footer_links(pagination=Depends(pagination_params), section_id: int | None = Query(default=None), db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_VIEW_PERMS))):
     return {"status": "success", **service.list_footer_links(db, pagination["page"], pagination["limit"], section_id)}
 
 @router.post("/footer-links")
@@ -361,7 +390,7 @@ def delete_footer_link(item_id: int, db: Session = Depends(get_db), _=Depends(re
 # sitemap
 
 @router.get("/sitemap")
-def list_sitemap_entries(pagination=Depends(pagination_params), db: Session = Depends(get_db)):
+def list_sitemap_entries(pagination=Depends(pagination_params), db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_VIEW_PERMS))):
     return {"status": "success", **service.list_sitemap(db, pagination["page"], pagination["limit"])}
 
 @router.get("/sitemap.xml", response_class=Response)

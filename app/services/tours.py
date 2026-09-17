@@ -490,8 +490,28 @@ def recalculate_price_start(db: Session, tour_id: int) -> None:
     tour.price_start_per_person = lowest.storefront_adult_price if lowest else 0.0
 
 
+def _assert_no_pricing_overlap(db: Session, tour_id: int, passenger_from: int, passenger_to: int, exclude_id: int | None = None):
+    """bookings.py::_price_booking resolves the slab for a traveller count
+    with an unordered `.first()` query, so two active slabs whose
+    passenger_from/passenger_to ranges overlap make pricing
+    non-deterministic for any count inside the overlap - same reasoning as
+    _assert_no_tier_overlap for TourGroupDiscountTier."""
+    query = db.query(TourPricing).filter(
+        TourPricing.tour_id == tour_id,
+        TourPricing.status == "active",
+        TourPricing.passenger_from <= passenger_to,
+        TourPricing.passenger_to >= passenger_from,
+    )
+    if exclude_id is not None:
+        query = query.filter(TourPricing.id != exclude_id)
+    if query.first():
+        raise HTTPException(status_code=409, detail="This traveller-count range overlaps an existing active pricing slab for this tour")
+
+
 def create_pricing(db: Session, tour_id: int, data: PricingPayload, actor: User, request: Request | None = None) -> dict:
     _require_tour(db, tour_id)
+    if data.status == "active":
+        _assert_no_pricing_overlap(db, tour_id, data.passenger_from, data.passenger_to)
     o = TourPricing(tour_id=tour_id, admin_markup_type="percentage", admin_markup_value=0.0, **{key: getattr(data, key) for key in _PRICING_CLIENT_FIELDS})
     _normalize_pricing_to_usd(o)
     _apply_pricing_computation(db, tour_id, o, data, actor, is_update=False)
@@ -511,6 +531,8 @@ def create_pricing(db: Session, tour_id: int, data: PricingPayload, actor: User,
 
 def update_pricing(db: Session, tour_id: int, rid: int, data: PricingPayload, actor: User, request: Request | None = None) -> dict:
     o = _child_or_404(db, TourPricing, rid, tour_id, "Pricing slab")
+    if data.status == "active":
+        _assert_no_pricing_overlap(db, tour_id, data.passenger_from, data.passenger_to, exclude_id=rid)
     before = {field: getattr(o, field, None) for field in _PRICING_AUDIT_FIELDS if hasattr(o, field)}
     for key in _PRICING_CLIENT_FIELDS:
         setattr(o, key, getattr(data, key))

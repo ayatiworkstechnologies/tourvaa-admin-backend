@@ -121,6 +121,7 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
     o.seats_per_occurrence = data.seats_per_occurrence
 
     created_count = 0
+    updated_count = 0
     start = _as_date(o.availability_start_date)
     end = _as_date(o.availability_end_date)
     if o.frequency and o.frequency_days and start and end:
@@ -167,6 +168,7 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
             "min_advance_booking_days": o.min_advance_booking_days,
             "frequency": o.frequency, "frequency_week": o.frequency_week, "frequency_days": o.frequency_days,
             "calendar_entries_generated": created_count,
+            "calendar_entries_updated": updated_count,
         },
         request=request,
     )
@@ -193,19 +195,21 @@ def assert_meets_advance_booking_window(db: Session, tour_id: int, tour_date: da
         )
 
 
-def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
-    """Whether an agent booking this tour today may Reserve Now with the
-    reduced agent_reserve_deposit_percentage deposit, and the balance due
-    date if so.
-
-    Client rule: an agent is eligible only if today is more than
+def _deposit_window(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
+    """Shared eligibility window for "pay a deposit now, balance later"
+    across BOTH agent (Reserve Now) and customer (Secure with a Deposit)
+    booking flows - one rule, not two: eligible only if today is more than
     agent_no_deposit_buffer_weeks weeks before the tour's min-advance-booking
     cutoff date (travel_date - min_advance_booking_days). When eligible, the
-    balance is due agent_no_deposit_buffer_weeks weeks before the travel date."""
+    balance is due that many weeks before the travel date. The buffer-weeks/
+    min-advance-days knobs live on TourAvailabilityConfig and were
+    originally agent-only naming, but the client's rule is explicitly the
+    same window for customers too (see agent_reserve_eligibility /
+    customer_deposit_eligibility below, which each just attach their own
+    role-specific deposit amount to this shared window)."""
     o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
     buffer_weeks = o.agent_no_deposit_buffer_weeks if o else 4
     advance_days = o.min_advance_booking_days if o else 0
-    deposit_percentage = o.agent_reserve_deposit_percentage if o else 30.0
     buffer_days = buffer_weeks * 7
 
     travel = _as_date(travel_date)
@@ -213,11 +217,48 @@ def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime |
     eligible = (cutoff_date - date.today()).days > buffer_days
     due_date = travel - timedelta(days=buffer_days) if eligible else None
 
+    return {"eligible": eligible, "due_date": due_date, "buffer_weeks": buffer_weeks}
+
+
+def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
+    """Whether an agent booking this tour today may Reserve Now with the
+    reduced agent_reserve_deposit_percentage deposit, and the balance due
+    date if so. See _deposit_window for the eligibility rule itself."""
+    o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
+    deposit_percentage = o.agent_reserve_deposit_percentage if o else 30.0
+    window = _deposit_window(db, tour_id, travel_date)
+    return {**window, "deposit_percentage": deposit_percentage}
+
+
+def customer_deposit_eligibility(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
+    """Whether a customer booking this tour today may 'Secure with a
+    Deposit' instead of paying in full, and on what terms - same
+    eligibility window as agent_reserve_eligibility (see _deposit_window),
+    paired with the tour's own customer-facing deposit terms
+    (Tour.deposit_type/deposit_percentage/booking_deposit, set on the Tour
+    editor's Deposit & Cancellation step) rather than the agent-specific
+    agent_reserve_deposit_percentage."""
+    tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    window = _deposit_window(db, tour_id, travel_date)
+    if not window["eligible"] or tour is None:
+        return {**window, "deposit_type": None, "deposit_percentage": None, "booking_deposit": None}
+
+    from app.services.settings import get_default_deposit_percentage
+
+    deposit_type = (tour.deposit_type or "fixed")
+    percentage = tour.deposit_percentage
+    fixed = tour.booking_deposit
+    if deposit_type != "percentage" and not fixed:
+        deposit_type = "percentage"
+        percentage = float(get_default_deposit_percentage(db))
+    elif deposit_type == "percentage" and not percentage:
+        percentage = float(get_default_deposit_percentage(db))
+
     return {
-        "eligible": eligible,
-        "due_date": due_date,
-        "buffer_weeks": buffer_weeks,
-        "deposit_percentage": deposit_percentage,
+        **window,
+        "deposit_type": deposit_type,
+        "deposit_percentage": float(percentage) if percentage is not None else None,
+        "booking_deposit": float(fixed) if fixed else None,
     }
 
 

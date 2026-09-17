@@ -104,10 +104,14 @@ def reverse_ledger_entry(db: Session, booking_id: int) -> Optional[SupplierLedge
     cases are flagged in the entry's notes for manual reconciliation
     instead of being auto-adjusted.
 
-    Only "pending"/"partial" rows (not yet claimed by any payout) are safe
-    to reverse automatically - those get their outstanding balance zeroed
-    and moved to a terminal "refunded" status so they're excluded from
-    future payout selection.
+    Only a "pending" row (not yet claimed by any payout, and never paid any
+    amount) is safe to reverse automatically - that one gets its outstanding
+    balance zeroed and moved to a terminal "refunded" status so it's
+    excluded from future payout selection. "partial" means mark_payout_paid
+    already sent the supplier part of this booking's payout (amount_paid >
+    0, see services.supplier_ledger.mark_payout_paid) - that money already
+    left the business just like "paid", so it needs the same manual
+    reconciliation flag rather than being silently zeroed alongside it.
     """
     entry = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking_id).with_for_update().first()
     if not entry:
@@ -115,6 +119,11 @@ def reverse_ledger_entry(db: Session, booking_id: int) -> Optional[SupplierLedge
 
     if entry.status == "paid":
         entry.notes = ((entry.notes or "") + f" | Booking cancelled/refunded after supplier was already paid {entry.amount_paid} {entry.currency} - needs manual reconciliation.").strip(" |")
+        db.flush()
+        return entry
+
+    if entry.status == "partial":
+        entry.notes = ((entry.notes or "") + f" | Booking cancelled/refunded after supplier was already partially paid {entry.amount_paid} {entry.currency} - needs manual reconciliation.").strip(" |")
         db.flush()
         return entry
 

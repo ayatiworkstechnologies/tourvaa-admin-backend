@@ -592,13 +592,24 @@ def seed_default_roles_and_permissions(db: Session):
         ],
     }
 
+    missing_permission_slugs = sorted({
+        slug
+        for role, permission_slugs in default_role_permissions.items()
+        if role
+        for slug in permission_slugs
+        if slug not in permissions_by_slug
+    })
+    if missing_permission_slugs:
+        raise RuntimeError(
+            "Role seeding references unknown permission slug(s): "
+            + ", ".join(missing_permission_slugs)
+        )
+
     for role, permission_slugs in default_role_permissions.items():
         if not role:
             continue
         for slug in permission_slugs:
-            permission = permissions_by_slug.get(slug)
-            if permission:
-                assign_if_missing(db, role, permission)
+            assign_if_missing(db, role, permissions_by_slug[slug])
 
     db.commit()
 

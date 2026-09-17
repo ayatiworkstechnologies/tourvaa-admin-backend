@@ -196,6 +196,21 @@ def get_current_user(
     return user
 
 
+def get_current_user_optional(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """Same resolution as get_current_user, but returns None instead of
+    raising when there's no/invalid session - for endpoints that serve both
+    the public site (anonymous) and an admin view (needs the real user to
+    gate extra content), see website_cms.py's require_view_permission_if."""
+    try:
+        return get_current_user(request, credentials, db)
+    except HTTPException:
+        return None
+
+
 def _is_supplier(user: User) -> bool:
     return user.user_type == "SUPPLIER" or "supplier" in ((user.role.slug if user.role else "") or "").lower()
 
@@ -321,6 +336,28 @@ def require_portal(expected_portal: str):
         return user
 
     return dependency
+
+def user_has_any_permission(db: Session, user: User | None, *permission_slugs: str) -> bool:
+    """Plain boolean check (no raising, no approval-status gating) for
+    endpoints that need to conditionally require a permission only in some
+    branches - e.g. a CMS list endpoint that's public when filtered to
+    published/active rows, but needs website_cms.view to see drafts too."""
+    if user is None:
+        return False
+    role_ids = get_user_role_ids(user)
+    if not role_ids:
+        return False
+    allowed_slugs = expand_permission_slugs(permission_slugs)
+    allowed = (
+        db.query(Permission)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .filter(RolePermission.role_id.in_(role_ids))
+        .filter(Permission.slug.in_(allowed_slugs))
+        .filter(Permission.is_active == True)
+        .first()
+    )
+    return allowed is not None
+
 
 def require_permission(permission_slug: str):
     return require_any_permission(permission_slug)

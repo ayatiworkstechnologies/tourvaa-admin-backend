@@ -18,9 +18,15 @@ try:
     from reportlab.lib.enums import TA_CENTER
 
     REPORTLAB_AVAILABLE = True
-except ImportError:
+except ImportError as exc:
     REPORTLAB_AVAILABLE = False
-    logger.warning("reportlab not installed - itinerary PDFs will be plain text. Run: pip install reportlab")
+    REPORTLAB_IMPORT_ERROR = exc
+    logger.warning(
+        "Itinerary PDF rendering is unavailable because a ReportLab dependency failed "
+        "to import (%s: %s); itinerary output will use the plain-text fallback.",
+        type(exc).__name__,
+        exc,
+    )
 
 
 def _plain_text_pdf(path: Path, data: dict) -> None:

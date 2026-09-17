@@ -17,6 +17,7 @@ fastembed==0.8.0
 onnxruntime==1.28.0
 pywebpush==2.3.0
 reportlab==5.0.0
+Pillow==12.3.0
 redis==8.0.1
 cloudinary==1.45.0
 bleach==6.4.0

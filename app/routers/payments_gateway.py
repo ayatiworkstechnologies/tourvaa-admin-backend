@@ -170,6 +170,30 @@ def _minimum_deposit_amount(db: Session, booking: Booking) -> Decimal:
         total = money(booking.customer_selling_price or booking.total_cost or full)
         return min(agent_reserve_deposit_amount(db, tour.id, total), full)
 
+    # A customer's very first payment on this booking follows the same
+    # eligibility window as the agent branch above (see
+    # tour_availability.customer_deposit_eligibility / _deposit_window) --
+    # the checkout page only offers "Secure with a Deposit" when this
+    # returns eligible, so this must agree with that check rather than the
+    # separate deposit_cutoff_days rule below, which instead governs
+    # whether an *already-deposited* booking's remaining balance can still
+    # be paid in installments.
+    if (
+        getattr(booking, "booking_source", None) != "agent"
+        and money(getattr(booking, "amount_paid", 0) or 0) <= 0
+        and tour is not None
+        and getattr(booking, "tour_start_date", None) is not None
+    ):
+        from app.services.tour_availability import customer_deposit_eligibility
+        eligibility = customer_deposit_eligibility(db, tour.id, booking.tour_start_date)
+        if not eligibility["eligible"]:
+            return full
+        if eligibility["deposit_type"] == "percentage" and eligibility["deposit_percentage"]:
+            return money(full * Decimal(str(eligibility["deposit_percentage"])) / Decimal("100"))
+        if eligibility["booking_deposit"]:
+            return money(min(Decimal(str(eligibility["booking_deposit"])), full))
+        return full
+
     cutoff_days = getattr(tour, "deposit_cutoff_days", None) if tour else None
     if cutoff_days is None:
         cutoff_days = get_default_deposit_cutoff_days(db)

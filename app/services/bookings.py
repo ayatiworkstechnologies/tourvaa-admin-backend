@@ -413,7 +413,7 @@ def _agent_reserve_deposit_info(db: Session, booking: Booking) -> Optional[dict]
     return {"percentage": percentage, "minimum_amount": money_str(minimum)}
 
 
-def serialize_booking(db: Session, booking: Booking, detail: bool = False, include_supplier_breakdown: bool = False) -> dict:
+def serialize_booking(db: Session, booking: Booking, detail: bool = False, include_supplier_breakdown: bool = False, hide_supplier_identity: bool = False) -> dict:
     data = {
         "id": booking.id,
         "booking_code": booking.booking_code or _booking_code(booking.id),
@@ -422,6 +422,11 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "customer_email": booking.customer.email if booking.customer else None,
         "tour_id": booking.tour_id,
         "tour_calendar_id": booking.tour_calendar_id,
+        # Kept even when hide_supplier_identity is set: it's never rendered
+        # in the customer/agent UI, only used as a "does this booking have a
+        # supplier assigned yet" signal (e.g. gating the support message
+        # thread) - supplier_name/the supplier dict below are the fields
+        # that actually identify who's fulfilling the tour.
         "supplier_id": booking.supplier_id,
         "agent_id": booking.agent_id,
         "affiliate_id": booking.affiliate_id,
@@ -433,7 +438,12 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "tour_start_date": booking.tour_start_date,
         "tour_end_date": booking.tour_end_date,
         "country": booking.country,
-        "supplier_name": booking.supplier_name,
+        # Suppliers are a B2B/back-office relationship - customers and agents
+        # should never see who is actually fulfilling their tour, only
+        # Tourvaa (see get_booking_detail/get_bookings' hide_supplier_identity
+        # gate below, mirroring the existing include_supplier_breakdown
+        # admin-only pattern).
+        "supplier_name": None if hide_supplier_identity else booking.supplier_name,
         "no_of_adults": booking.no_of_adults,
         "no_of_children": booking.no_of_children,
         "no_of_infants": booking.no_of_infants,
@@ -487,7 +497,7 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
                 "converted_customer_amount": money_str(booking.converted_customer_amount) if booking.converted_customer_amount is not None else None,
             },
             "customer": {"id": booking.customer.id, "name": booking.customer.full_name, "email": booking.customer.email} if booking.customer else None,
-            "supplier": {"id": booking.supplier.id, "supplier_name": booking.supplier.supplier_name} if booking.supplier else None,
+            "supplier": None if hide_supplier_identity else ({"id": booking.supplier.id, "supplier_name": booking.supplier.supplier_name} if booking.supplier else None),
             "travellers": [serialize_traveller(t) for t in booking.travellers],
             "optional_activities": [serialize_activity(a) for a in booking.optional_activities],
             "accommodations": [serialize_accommodation(a) for a in booking.accommodations],
@@ -631,7 +641,7 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
         if not tour:
             return money(0)
         from app.services.discounts import find_best_discount_row, discount_amount_for
-        row = find_best_discount_row(db, tour)
+        row = find_best_discount_row(db, tour, lock=consume)
         if not row or money(subtotal) < money(row.minimum_booking_amount or 0):
             return money(0)
         if row.usage_limit is not None and (row.used_count or 0) >= row.usage_limit:
@@ -641,7 +651,13 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
             row.used_count = (row.used_count or 0) + 1
         return money(amount)
     code = promo_code.strip()
-    discount = db.query(TourDiscount).filter(TourDiscount.discount_code == code, TourDiscount.status == "active").first()
+    discount_query = db.query(TourDiscount).filter(TourDiscount.discount_code == code, TourDiscount.status == "active")
+    if consume:
+        # Row-locked so two concurrent bookings against the same promo code
+        # can't both pass the usage_limit check below and both increment
+        # used_count past it.
+        discount_query = discount_query.with_for_update()
+    discount = discount_query.first()
     if not discount:
         raise HTTPException(status_code=400, detail="Invalid or inactive promo code")
     now = utcnow()
@@ -832,7 +848,16 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
 
     slab = None
     if data.tour_id:
-        slab = db.query(TourPricing).filter(TourPricing.tour_id == data.tour_id, TourPricing.status == "active", TourPricing.passenger_from <= seat_travellers, TourPricing.passenger_to >= seat_travellers).first()
+        # Ordered (narrowest range, then newest) rather than an unordered
+        # .first() -- new slabs are validated against overlap at creation
+        # (services.tours._assert_no_pricing_overlap), but this keeps
+        # resolution deterministic for any pre-existing overlapping slabs.
+        slab = (
+            db.query(TourPricing)
+            .filter(TourPricing.tour_id == data.tour_id, TourPricing.status == "active", TourPricing.passenger_from <= seat_travellers, TourPricing.passenger_to >= seat_travellers)
+            .order_by((TourPricing.passenger_to - TourPricing.passenger_from).asc(), TourPricing.id.desc())
+            .first()
+        )
         if not slab:
             # Tours priced via slabs must have a slab covering the requested
             # traveller count. Falling back silently here used to price
@@ -1046,7 +1071,8 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
         query = query.filter(Booking.booking_status == booking_status.strip().lower())
     query = query.order_by(Booking.id.asc() if sort_by == "oldest" else Booking.id.desc())
     total = query.count()
-    items = [serialize_booking(db, b) for b in query.offset((page - 1) * limit).limit(limit).all()]
+    hide_supplier_identity = _user_role(actor) in ("customer", "agent")
+    items = [serialize_booking(db, b, hide_supplier_identity=hide_supplier_identity) for b in query.offset((page - 1) * limit).limit(limit).all()]
     return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit)), "status_counts": status_counts}
 
 
@@ -1055,7 +1081,11 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
     _ensure_booking_access(booking, actor)
     log_audit(db, actor=actor, action="view_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit()
-    return serialize_booking(db, booking, detail=True, include_supplier_breakdown=_user_role(actor) == "admin")
+    return serialize_booking(
+        db, booking, detail=True,
+        include_supplier_breakdown=_user_role(actor) == "admin",
+        hide_supplier_identity=_user_role(actor) in ("customer", "agent"),
+    )
 
 
 def _validate_customer_travellers(data: BookingCreate, adults: int, children: int) -> None:
@@ -1315,7 +1345,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         new_booking_admin_email(booking.booking_code, booking.tour_name, booking.tour_date or "", customer.full_name, supplier_name, booking.adults_count, booking.currency, booking.final_amount, admin_url),
     )
 
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdate) -> None:
@@ -1471,7 +1501,7 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
 
     log_audit(db, actor=actor, action="update_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -1499,7 +1529,7 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
             booking.customer.email,
         )
 
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -1572,7 +1602,7 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
 
     _email_admins_booking_event(db, "Booking cancelled", f"Booking {booking.booking_code} was cancelled. Reason: {data.reason or 'Cancelled'}", booking)
 
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> list[int]:
@@ -1614,6 +1644,27 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
         if booking.agent and booking.agent.user_id:
             from app.services.notifications import enqueue_notification
             enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_expired", title="Booking hold expired", message=f"Booking {booking.booking_code} was automatically cancelled because payment wasn't completed in time.", entity_type="booking", entity_id=booking.id)
+        # Same cleanup cancel_booking/supplier_decline_booking/
+        # supplier_cancel_booking do - a "stale pending" booking can still
+        # have a captured/authorized Payment row (e.g. a webhook landed
+        # after the sweep's cutoff, or a partial payment didn't move the
+        # booking out of pending_payment in time) and a supplier/affiliate
+        # ledger entry already created for it; without this, that money and
+        # those ledger rows are left orphaned instead of refunded/reversed.
+        try:
+            _settle_cancelled_booking_payments(db, booking, None, None, reason)
+        except Exception:
+            logger.warning("Payment settlement failed for expired booking %s", booking.id, exc_info=True)
+        try:
+            from app.services.affiliate_tracking import reverse_conversion
+            reverse_conversion(db, booking.id)
+        except Exception:
+            logger.warning("Affiliate conversion reversal failed for expired booking %s", booking.id, exc_info=True)
+        try:
+            from app.services.supplier_ledger import reverse_ledger_entry
+            reverse_ledger_entry(db, booking.id)
+        except Exception:
+            logger.warning("Supplier ledger reversal failed for expired booking %s", booking.id, exc_info=True)
         if booking.agent_id:
             try:
                 from app.services.agent_ledger import reverse_ledger_entry as reverse_agent_ledger_entry
@@ -1674,14 +1725,14 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
             booking.supplier.user.email,
         )
 
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecisionRequest, actor: User, request: Request | None = None) -> dict:
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _start_supplier_decision(booking, "accepted"):
-        return serialize_booking(db, booking, detail=True)
+        return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
     booking.supplier_acceptance_status = "accepted"
     _set_status(db, booking, "confirmed", actor, "supplier", data.reason or "Supplier accepted booking")
 
@@ -1744,7 +1795,7 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
 
     _email_admins_booking_event(db, "Supplier accepted booking", f"Supplier accepted booking {booking.booking_code}.", booking)
 
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def supplier_set_due_date(db: Session, booking_id: int, data: SupplierDueDateUpdate, actor: User, request: Request | None = None) -> dict:
@@ -1760,14 +1811,14 @@ def supplier_set_due_date(db: Session, booking_id: int, data: SupplierDueDateUpd
     booking.payment_due_date = due_date
     log_audit(db, actor=actor, action="supplier_set_due_date", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(booking)
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisionRequest, actor: User, request: Request | None = None) -> dict:
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _start_supplier_decision(booking, "declined"):
-        return serialize_booking(db, booking, detail=True)
+        return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
     pending_before_decline = money(booking.amount_pending)
     booking.supplier_acceptance_status = "declined"
     _set_status(db, booking, "declined", actor, "supplier", data.reason or "Supplier declined booking")
@@ -1808,7 +1859,7 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
 
     _email_admins_booking_event(db, "Supplier declined booking", f"Supplier declined booking {booking.booking_code}. Reason: {data.reason or 'Declined by supplier'}", booking)
 
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def supplier_start_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
@@ -1818,7 +1869,7 @@ def supplier_start_booking(db: Session, booking_id: int, reason: str | None, act
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _validate_supplier_lifecycle_transition(booking, "ongoing"):
-        return serialize_booking(db, booking, detail=True)
+        return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
     old_values = serialize_booking(db, booking)
     transition_reason = reason or "Tour started by supplier"
@@ -1844,7 +1895,7 @@ def supplier_start_booking(db: Session, booking_id: int, reason: str | None, act
         )
     _email_agent_booking_status(db, booking, "ongoing", transition_reason)
     _email_admins_booking_event(db, "Tour started", f"Supplier started tour for booking {booking.booking_code}.", booking)
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
@@ -1853,7 +1904,7 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _validate_supplier_lifecycle_transition(booking, "completed"):
-        return serialize_booking(db, booking, detail=True)
+        return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
     old_values = serialize_booking(db, booking)
     _set_status(db, booking, "completed", actor, "supplier", reason or "Tour completed by supplier")
     log_audit(db, actor=actor, action="supplier_complete_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
@@ -1879,7 +1930,7 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
         )
     _email_agent_booking_status(db, booking, "completed", reason or "Tour completed")
     _email_admins_booking_event(db, "Tour completed", f"Supplier marked booking {booking.booking_code} as completed.", booking)
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: User, request: Request | None = None) -> dict:
@@ -1938,7 +1989,7 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
         )
     _email_agent_booking_status(db, booking, "cancelled", reason)
     _email_admins_booking_event(db, "Supplier cancelled booking", f"Supplier cancelled booking {booking.booking_code}. Reason: {reason}", booking)
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def supplier_postpone_booking(
@@ -2025,7 +2076,7 @@ def supplier_postpone_booking(
         )
     _email_agent_booking_status(db, booking, "postponed", reason)
     _email_admins_booking_event(db, "Booking postponed", f"Supplier postponed booking {booking.booking_code}. Reason: {reason}", booking)
-    return serialize_booking(db, booking, detail=True)
+    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
 def supplier_notify_parties(db: Session, booking_id: int, message: str, notify_customer: bool, notify_agent: bool, actor: User, request: Request | None = None) -> dict:
