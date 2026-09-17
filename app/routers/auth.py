@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth.permissions import get_current_user, get_token_user_including_inactive, require_permission
 from app.utils.ratelimit import check_rate_limit
+from app.utils.money import utcnow
 from app.models.users import User
 from app.config import settings
 from app.auth.security import create_token
@@ -297,6 +298,17 @@ def refresh_token(
         session = db.query(UserSession).filter(UserSession.session_id == session_id).first()
         if session and session.status != "active":
             raise HTTPException(status_code=401, detail="Session has been revoked")
+        # Rotation/reuse detection: a refresh token is only valid once. If
+        # this session has already recorded a newer jti (i.e. a refresh
+        # already happened since this token was issued), the token being
+        # presented now is a stale/replayed copy - possibly stolen - so the
+        # whole session is revoked rather than silently honored.
+        presented_jti = payload.get("jti")
+        if session and session.current_refresh_jti and presented_jti != session.current_refresh_jti:
+            session.status = "revoked"
+            session.revoked_at = utcnow()
+            db.commit()
+            raise HTTPException(status_code=401, detail="Refresh token already used. Please log in again.")
 
     refresh_data = data or RefreshTokenSchema()
     result = _set_auth_cookies(response, refresh_user_token(

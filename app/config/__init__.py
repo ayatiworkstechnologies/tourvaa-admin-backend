@@ -123,13 +123,27 @@ class Settings(BaseSettings):
         # credentialed requests against a wildcard CORS origin. A forgotten
         # ALLOWED_ORIGINS in production silently drops the cookies instead of
         # failing loudly, so refuse to boot rather than serve a broken login.
-        if self.APP_ENV == "production" and self.ALLOWED_ORIGINS.strip() == "*":
+        if self.is_production and self.ALLOWED_ORIGINS.strip() == "*":
             raise ValueError(
                 "ALLOWED_ORIGINS must be set to an explicit comma-separated origin "
                 "list in production - wildcard '*' disables credentialed CORS and "
                 "breaks cookie-based login."
             )
         return self
+
+    @property
+    def is_production(self) -> bool:
+        """True for any deployment that isn't explicitly local/dev.
+
+        Security- and correctness-critical gates (webhook signature
+        enforcement, docs exposure, test-payment endpoints, startup config
+        validation) must treat every non-development environment - staging,
+        UAT, a misspelled env name, or simply APP_ENV left unset - the same
+        as production. Checking `APP_ENV == "production"` literally instead
+        would silently disable that hardening for anything but the exact
+        string "production", which defeats the fail-closed default above.
+        """
+        return self.APP_ENV != "development"
 
     @property
     def cors_origins(self):

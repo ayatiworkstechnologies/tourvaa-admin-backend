@@ -61,8 +61,12 @@ def _traveller_names(booking: Booking) -> str:
     ]
     if names:
         return ", ".join(names)
-    if booking.customer and booking.customer.user:
-        return booking.customer.user.name
+    if booking.customer:
+        # full_name is always populated directly on Customer regardless of
+        # whether a linked User account exists (e.g. a guest/agent-booked
+        # customer has no user_id at all) - prefer it over customer.user.name,
+        # which is blank for exactly that common case.
+        return booking.customer.full_name or (booking.customer.user.name if booking.customer.user else "-")
     return "-"
 
 
@@ -79,7 +83,10 @@ def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | N
     return {
         "invoice_number": inv.invoice_number,
         "booking_code": booking.booking_code or str(booking.id),
-        "customer_name": (booking.customer.user.name if booking.customer and booking.customer.user else ""),
+        # Same fallback as _traveller_names above: Customer.full_name is
+        # always set, customer.user is only set for a customer who actually
+        # has a login account.
+        "customer_name": (booking.customer.full_name or (booking.customer.user.name if booking.customer.user else "")) if booking.customer else "",
         "tour_name": booking.tour_name or "-",
         "traveller_names": _traveller_names(booking),
         "payment_method": _payment_method_for(booking, payment),

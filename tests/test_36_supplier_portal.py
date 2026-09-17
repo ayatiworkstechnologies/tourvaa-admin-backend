@@ -13,7 +13,7 @@ def _register_supplier():
     password = "Supp@1234"
     resp = requests.post(f"{BASE_URL}/auth/register/supplier", json={
         "account_type": "SUPPLIER", "first_name": name, "email": email,
-        "country_code": "+91", "mobile_number": unique_phone()[3:], "accepted_terms": True,
+        "country_iso": "IN", "country_code": "+91", "mobile_number": unique_phone()[3:], "accepted_terms": True,
     }, timeout=10)
     assert resp.status_code in (200, 201), resp.text
     return name, email, password

@@ -23,6 +23,7 @@ def registration_data(account_type: str, **overrides):
         "account_type": account_type,
         "first_name": "Tourvaa User",
         "email": f"{account_type.lower()}@example.com",
+        "country_iso": "IN",
         "country_code": "+91",
         "mobile_number": "9876543210",
         "accepted_terms": True,

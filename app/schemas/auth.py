@@ -75,6 +75,7 @@ class UnifiedRegisterSchema(BaseModel):
     account_type: str
     first_name: str = Field(min_length=1, max_length=150)
     email: EmailStr
+    country_iso: str = Field(min_length=2, max_length=2)
     country_code: str = Field(min_length=2, max_length=8)
     mobile_number: str = Field(min_length=6, max_length=20)
     accepted_terms: bool
@@ -88,10 +89,18 @@ class UnifiedRegisterSchema(BaseModel):
             raise ValueError("Choose a valid account type")
         return value
 
-    @field_validator("first_name", "country_code", "mobile_number")
+    @field_validator("first_name", "country_iso", "country_code", "mobile_number")
     @classmethod
     def trim_text(cls, value: str):
         return value.strip()
+
+    @field_validator("country_iso")
+    @classmethod
+    def validate_country_iso(cls, value: str):
+        value = value.strip().upper()
+        if not re.fullmatch(r"[A-Z]{2}", value):
+            raise ValueError("Choose a valid country")
+        return value
 
     @field_validator("email")
     @classmethod

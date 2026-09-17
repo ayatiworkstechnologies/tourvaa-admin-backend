@@ -1,6 +1,7 @@
 from datetime import timedelta
 import logging
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import or_
@@ -25,7 +26,7 @@ from app.models.customers import Customer
 from app.models.suppliers import Supplier
 from app.models.agents import Agent
 from app.models.affiliates import Affiliate
-from app.models.sessions import LoginHistory
+from app.models.sessions import LoginHistory, UserSession
 from app.services.sessions import create_session
 from app.utils.media import existing_storage_path
 from app.auth.security import (
@@ -236,6 +237,7 @@ def register_unified_user(db: Session, data):
         name=data.first_name,
         email=email,
         phone=phone,
+        country=data.country_iso,
         country_code=data.country_code,
         mobile_number=phone,
         password=None,
@@ -595,12 +597,15 @@ def _finalize_login(db: Session, user: User, data, request=None):
         "session_id": session.session_id if session else None,
     }
     token = create_token(token_claims, portal=portal)
+    refresh_jti = uuid4().hex
     refresh_token = create_token(
-        token_claims,
+        {**token_claims, "jti": refresh_jti},
         portal=portal,
         token_type="refresh",
         expires_minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60,
     )
+    if session:
+        session.current_refresh_jti = refresh_jti
 
     if session:
         _record_login_history(
@@ -837,12 +842,24 @@ def refresh_user_token(db: Session, user: User, client_type: str | None = "web",
         "session_id": session_id,
     }
     token = create_token(token_claims, portal=portal)
+    refresh_jti = uuid4().hex
     refresh_token = create_token(
-        token_claims,
+        {**token_claims, "jti": refresh_jti},
         portal=portal,
         token_type="refresh",
         expires_minutes=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60,
     )
+
+    # Rotate: record the new jti as the only one this session's next refresh
+    # call may present. The caller (routers/auth.py) has already verified
+    # the incoming refresh token's jti matched the previous value before
+    # calling this function, so this row is always the current source of
+    # truth for reuse detection.
+    if session_id:
+        session = db.query(UserSession).filter(UserSession.session_id == session_id).first()
+        if session:
+            session.current_refresh_jti = refresh_jti
+            db.commit()
 
     return {
         "access_token": token,

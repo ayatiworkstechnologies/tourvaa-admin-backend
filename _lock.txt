@@ -1,3 +1,0 @@
-REPORTLAB_AVAILABLE=False
-reportlab=5.0.0
-PIL ERR ModuleNotFoundError: No module named 'PIL._imaging'

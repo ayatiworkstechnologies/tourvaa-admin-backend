@@ -74,7 +74,7 @@ def validate_production_config() -> None:
     deployment that forgets to set it explicitly gets these checks too -
     that's the point, not an oversight.
     """
-    if settings.APP_ENV != "production":
+    if not settings.is_production:
         return
 
     errors: list[str] = []
@@ -144,7 +144,7 @@ def validate_worker_concurrency() -> None:
 
 def validate_pdf_rendering_dependencies() -> None:
     """Fail production startup instead of silently emitting invalid .pdf files."""
-    if settings.APP_ENV != "production":
+    if not settings.is_production:
         return
 
     from app.utils import invoices_pdf, itinerary_pdf
@@ -326,7 +326,7 @@ def schema_is_ready():
 # legitimate frontend caller (the admin/portal UIs never fetch this schema
 # at runtime; only a human or a scanner browsing /docs would). Still fully
 # available in non-production for local development and API exploration.
-_docs_enabled = settings.APP_ENV != "production"
+_docs_enabled = not settings.is_production
 
 app = FastAPI(
     title="Tourvaa Backend",

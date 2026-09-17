@@ -48,7 +48,7 @@ def test_customer_registration_creates_immediately_usable_account(customer_ctx):
 def test_customer_duplicate_email_registration_rejected(customer_ctx):
     resp = requests.post(f"{BASE_URL}/auth/register/customer", json={
         "account_type": "CUSTOMER", "first_name": "Dup", "email": customer_ctx["email"],
-        "country_code": "+91", "mobile_number": unique_phone()[3:], "accepted_terms": True,
+        "country_iso": "IN", "country_code": "+91", "mobile_number": unique_phone()[3:], "accepted_terms": True,
     }, timeout=10)
     assert resp.status_code in (400, 409, 422), resp.text
 

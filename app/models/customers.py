@@ -73,7 +73,7 @@ class CustomerCommunication(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
-    booking_id = Column(Integer, nullable=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True, index=True)
     subject = Column(String(150), nullable=False)
     message = Column(Text, nullable=False)
     sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)

@@ -37,6 +37,8 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     )
     customer = SimpleNamespace(email_verified=False, status="inactive")
     agent = SimpleNamespace(
+        id=88,
+        agent_name="Test Agent",
         status="inactive",
         approval_status="email_verification_pending",
         approved_at=None,
@@ -76,6 +78,7 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     monkeypatch.setattr(auth, "hash_password", lambda _password: "hashed-password")
     monkeypatch.setattr(auth, "UserStatusHistory", lambda **values: SimpleNamespace(**values))
     monkeypatch.setattr(notification_triggers, "notify_supplier_approval_pending", lambda *_args, **_values: None)
+    monkeypatch.setattr(notification_triggers, "notify_agent_registered", lambda *_args, **_values: None)
     from app.services import notifications as notifications_service
     monkeypatch.setattr(notifications_service, "notify_admins", lambda *_args, **_values: None)
 

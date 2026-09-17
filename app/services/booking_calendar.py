@@ -25,7 +25,10 @@ def _ics_content(booking: Booking, uid: str) -> str:
         return str(dt).replace("-", "").replace(":", "").replace(" ", "T")
 
     tour_name = booking.tour.title if booking.tour else "Tour Booking"
-    customer_name = booking.customer.user.name if booking.customer and booking.customer.user else "Customer"
+    # full_name is always set on Customer directly; customer.user is only
+    # set when that customer actually has a login account (see the same
+    # fallback in services.invoices._traveller_names).
+    customer_name = (booking.customer.full_name or (booking.customer.user.name if booking.customer.user else "Customer")) if booking.customer else "Customer"
     supplier_name = booking.supplier.supplier_name if booking.supplier else ""
     description = f"Booking: {booking.booking_code}\\nCustomer: {customer_name}\\nSupplier: {supplier_name}\\nTravellers: {booking.total_travellers or 0}"
 

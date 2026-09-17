@@ -339,7 +339,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
     if webhook_secret:
         stripe_gw = get_stripe(db)
         event = stripe_gw.construct_event(payload, stripe_signature, webhook_secret)
-    elif app_settings.APP_ENV == "production":
+    elif app_settings.is_production:
         logger.critical("Stripe webhook received without STRIPE_WEBHOOK_SECRET -- rejecting in production")
         raise _HTTPException(status_code=400, detail="Webhook signature verification not configured")
     else:
@@ -430,7 +430,7 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
             Payment.gateway_order_id == body.session_id,
             Payment.booking_id == booking.id,
         ).order_by(Payment.id.desc()).first()
-    elif settings.APP_ENV != "production":
+    elif not settings.is_production:
         payment = db.query(Payment).filter(
             Payment.gateway == "stripe",
             Payment.booking_id == booking.id,
@@ -580,7 +580,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
         if not verified:
             logger.error("PayPal webhook signature verification failed")
             raise _HTTPException(status_code=400, detail="Webhook signature verification failed")
-    elif app_settings.APP_ENV == "production":
+    elif app_settings.is_production:
         logger.critical("PayPal webhook received without a configured webhook_id -- rejecting in production")
         raise _HTTPException(status_code=400, detail="Webhook signature verification not configured")
     else:
@@ -678,7 +678,7 @@ def gateways_status(db: Session = Depends(get_db), current_user=Depends(get_curr
             "paypal_test": paypal_test,
             "stripe": stripe_ok,
             "paypal": paypal_ok,
-            "test_mode_available": settings.APP_ENV != "production",
+            "test_mode_available": not settings.is_production,
         },
     }
 
@@ -699,7 +699,7 @@ def test_simulate_payment(
     current_user=Depends(get_current_user),
 ):
     """Simulate a successful payment without calling any real gateway. Non-production only."""
-    if settings.APP_ENV == "production":
+    if settings.is_production:
         raise HTTPException(status_code=403, detail="Test payments are not available in production.")
 
     booking = _booking_or_404(db, body.booking_id)
