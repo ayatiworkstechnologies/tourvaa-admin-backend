@@ -79,6 +79,27 @@ class ItineraryPayload(BaseModel):
     display_order: int = Field(default=0, ge=0)
     status: str = Field(default="active", max_length=20)
 
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_null_text_fields(cls, data):
+        # Several TourItinerary DB columns are nullable Text/String with no
+        # DB-level default enforcement (see app.models.tours.TourItinerary),
+        # so existing rows can hold NULL - and the frontend round-trips GET
+        # data straight back into this POST/PUT payload (see
+        # TourItineraryTab.tsx's `save`), so a None here from an old row is
+        # expected, not client error. Treat it the same as "" rather than
+        # 422ing (mirrors TourOverviewPayload.coerce_null_text_fields).
+        if isinstance(data, dict):
+            for key in (
+                "short_description", "long_description", "activities",
+                "optional_activities", "accommodation", "start_time", "end_time",
+                "travel_distance", "travel_duration", "transport_type",
+                "meals_included", "important_notes",
+            ):
+                if data.get(key) is None:
+                    data[key] = ""
+        return data
+
     @field_validator("status")
     @classmethod
     def validate_status(cls, v: str):

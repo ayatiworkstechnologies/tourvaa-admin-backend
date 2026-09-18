@@ -15,10 +15,46 @@ _PLACEHOLDER_PUBLIC_CONTACTS = {
     "company_address": {"new zealand"},
 }
 
+_PUBLIC_TEXT_LIMITS = {
+    "site_name": 80,
+    "app_name": 80,
+    "company_name": 120,
+    "site_tagline": 240,
+    "footer_description": 500,
+}
+
+_UNSAFE_PUBLIC_TEXT_MARKERS = (
+    "<script",
+    "</script",
+    "javascript:",
+    "document.",
+    "window.",
+    "innerhtml",
+    "onerror=",
+    "onload=",
+)
+
 
 def sanitize_public_contact_setting(key: str, value: str | None) -> str:
     normalized = (value or "").strip()
     if normalized.lower() in _PLACEHOLDER_PUBLIC_CONTACTS.get(key, set()):
+        return ""
+    return normalized
+
+
+def sanitize_public_setting(key: str, value: str | None) -> str:
+    """Keep compromised or malformed CMS text out of public page chrome.
+
+    React escapes text values, but a stored script payload can still destroy
+    the layout when it is displayed as a site name or footer description.
+    Public text fields therefore have conservative length and content checks.
+    """
+    normalized = sanitize_public_contact_setting(key, value)
+    limit = _PUBLIC_TEXT_LIMITS.get(key)
+    if limit is None:
+        return normalized
+    lowered = normalized.lower()
+    if len(normalized) > limit or any(marker in lowered for marker in _UNSAFE_PUBLIC_TEXT_MARKERS):
         return ""
     return normalized
 

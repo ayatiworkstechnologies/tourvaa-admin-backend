@@ -68,9 +68,9 @@ def settings_cities(
 def public_settings(db: Session = Depends(get_db)):
     """Returns only is_public settings - safe to call without auth."""
     from app.models.settings import ApiSetting, AppSetting
-    from app.services.settings import sanitize_public_contact_setting
+    from app.services.settings import sanitize_public_setting
     rows = db.query(AppSetting).filter(AppSetting.is_public == True).all()  # noqa: E712
-    data = {row.key: sanitize_public_contact_setting(row.key, row.value) for row in rows}
+    data = {row.key: sanitize_public_setting(row.key, row.value) for row in rows}
 
     # brightlane.api_url is a plain external link (not a secret, unlike
     # api_key/api_secret - see _API_SECRET_FIELDS), so it's safe to surface
