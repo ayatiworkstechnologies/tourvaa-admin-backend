@@ -297,6 +297,10 @@ Generate, generate-pdf, email, download (GST invoice PDF with tour name, travell
 
 Countries, cities, tour categories, tour subcategories, tours (CRUD + pricing + calendar + discounts + versions), CMS geo reference data, popular tours, website CMS content blocks.
 
+Countries carry `country_code` (ISO-2), `phone_code`, `currency_code` and `flag_emoji`, all populated by the geo seed. `flag_emoji` is derived from the ISO-2 code and is returned by both the admin and public country endpoints, so clients read one stored value instead of deriving flags themselves; creating a country by hand fills it in automatically when the payload omits it.
+
+`states` is unique on `(country_id, state_name)` and `cities` on `(country_id, state_id, city_name)`, so re-imports and concurrent writes cannot create duplicate geo rows.
+
 ### Customers / Suppliers / Agents / Affiliates (admin side)
 
 Standard CRUD + approve/reject/partial-approve + block/unblock + markup/discount/commission settings + communications, under `/api/customers`, `/api/suppliers`, `/api/agents`, `/api/affiliates`.
