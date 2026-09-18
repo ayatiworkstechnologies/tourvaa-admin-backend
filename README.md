@@ -114,16 +114,17 @@ python -m alembic upgrade head
 python -m alembic current
 ```
 
-The current schema head is `20260724_0038`. Revision `0038` idempotently backfills `supplier_vehicles.vehicle_type`/`registration_number` for any database that was bootstrapped purely through the migration chain (these columns were added to the model without ever getting a migration -- see the troubleshooting section below). Revision `0037` adds supplier commission-request staging fields (`suppliers.commission_request_*`, mirroring the existing agent commission-request flow) and a `supplier_payouts.paid_by` audit column. Revision `0036` repairs verification metadata only for legacy supplier accounts that were already approved, active, and password-enabled.
+The current schema head is `20260917_0104`. Revision `0104` adds `user_sessions.current_refresh_jti` for refresh-token rotation with reuse detection. Revision `0038` idempotently backfills `supplier_vehicles.vehicle_type`/`registration_number` for any database that was bootstrapped purely through the migration chain (these columns were added to the model without ever getting a migration -- see the troubleshooting section below); it's kept here as the running example in that section, not as the current head.
 
-Seed or synchronize roles and permissions without deleting application data:
+Run `python -m alembic heads` any time to confirm the true current head instead of trusting this README, which can go stale as new migrations land.
 
-```powershell
-$env:PYTHONUTF8="1"
-python -m scripts.reset_seed_admin_rbac
+Seed everything (RBAC, geo, payment gateways) without deleting application data:
+
+```bash
+python seed.py
 ```
 
-Never use `--reset` against a database containing data you need to retain.
+See [Seed Data](#seed-data) for the available options. Never use `--reset` against a database containing data you need to retain.
 
 ### 6. Start the API
 
@@ -326,7 +327,7 @@ Standard CRUD + approve/reject/partial-approve + block/unblock + markup/discount
 
 ## Roles & Permissions
 
-Six built-in roles:
+Seven built-in roles (`app/seed.py:DEFAULT_ROLES`):
 
 | Slug | Description |
 | --- | --- |
@@ -336,8 +337,52 @@ Six built-in roles:
 | `supplier` | Own tours and bookings only |
 | `agent-reseller` | Own bookings and clients only |
 | `customer` | Own bookings and profile only |
+| `affiliate` | Own referral links and payout requests only |
 
-Permission format: `{module}.{action}` (e.g. `dashboard.view`, `bookings.view`) or legacy `view-{module}` - both supported via `expand_permission_slugs()`.
+Permissions are generated per module × action (`{module}.{action}`, e.g. `dashboard.view`, `bookings.view`) across the modules listed in `app/seed.py:MODULES`; the legacy `view-{module}` form is also accepted via `expand_permission_slugs()`.
+
+---
+
+## Seed Data
+
+One command seeds everything:
+
+```bash
+python seed.py
+```
+
+That runs, in order:
+
+1. **RBAC** - the super-admin login, roles, permissions, and admin modules
+2. **Geo** - every country (~250) with its ISO code, phone/dialling code, currency code and flag, plus all states/provinces and cities (GeoNames, population >= 5000)
+3. **Currencies** - every currency referenced by a seeded country, with its symbol. Existing rows are left untouched, so hand-curated names/symbols are never overwritten
+4. **Payment gateways** - Stripe/PayPal credentials from the environment, skipped silently when those variables aren't set
+
+Country flags are stored on `countries.flag_emoji`, derived from the ISO-2 code, so every consumer reads one value instead of deriving it client-side.
+
+Every step is idempotent, so re-running it adds nothing it has already seeded. Duplicates are prevented by the database itself - `states` is unique on `(country_id, state_name)` and `cities` on `(country_id, state_id, city_name)` (migration `20260918_0106`, which also de-duplicates any rows an earlier import left behind, repointing referencing tours/customers/suppliers at the surviving row first).
+
+| Option | Effect |
+| --- | --- |
+| `--reset` | Wipe every table first (destructive; prompts unless `--yes`) |
+| `--no-cities` | Countries and states only - skips the large cities download |
+| `--countries IN AE` | Limit geo to specific ISO-2 codes |
+| `--launch-markets` | Limit geo to the original 10 (US, CA, IN, NZ, AE, QA, LK, GB, AU, SG) |
+| `--skip-geo` / `--skip-payments` | Skip that step |
+| `--demo-tours` | Also seed sample dev tours (never use in production) |
+
+Two seeds stay separate on purpose:
+
+| Data | Command | Why separate |
+| --- | --- | --- |
+| Demo tour content | `python -m scripts.seed_demo_tour`, `python -m scripts.seed_milford_sound_tour` | Fake sample tours for local development - also reachable via `seed.py --demo-tours` |
+| CI fixtures | `python -m scripts.seed_ci_fixtures` | Guarded behind CI-only checks (refuses to run unless `CI=true` and the database name contains `ci`) |
+
+To re-sync only roles/permissions later (e.g. after adding a new module), without touching any other data:
+
+```bash
+python seed.py --skip-geo --skip-payments
+```
 
 ---
 
@@ -387,7 +432,7 @@ Write/destructive tests are gated behind `TOURVAA_WRITE_TESTS=1` so a default ru
 - [ ] Set `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false`
 - [ ] Set a unique super-admin password and verify the admin login
 - [ ] Point `DATABASE_URL` to production MySQL
-- [ ] Back up the database, run `alembic upgrade head`, and confirm `alembic current` reports `20260724_0038`
+- [ ] Back up the database, run `alembic upgrade head`, and confirm `alembic current` matches `alembic heads`
 - [ ] Run the RBAC seed without `--reset`
 - [ ] Configure real SMTP credentials
 - [ ] Set `ALLOWED_ORIGINS` to production frontend domains
@@ -430,8 +475,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 To resync RBAC later without clearing production data:
 
-```powershell
-python -m scripts.reset_seed_admin_rbac
+```bash
+python seed.py --skip-geo --skip-payments
 ```
 
 ---

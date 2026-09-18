@@ -77,9 +77,6 @@ class Settings(BaseSettings):
     # No API key needed -- downloads once on first use and runs on CPU.
     CHATBOT_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
 
-    # Countries / States / Cities fallback API (countrystatecity.in)
-    COUNTRY_STATE_CITY_API_KEY: str = ""
-
     # Viator Partner API (Basic Access) - powers the "External Day Trips"
     # public section. The real, admin-editable values live in the
     # api_settings DB table (Admin -> Settings -> API Settings), managed via

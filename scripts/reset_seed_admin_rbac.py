@@ -124,16 +124,23 @@ def run_rbac_seed(db) -> None:
 
 
 def run_geo_seed(country_codes: list[str], include_cities: bool) -> None:
-    from app.routers.cms_geo_seed import _job, _lock, _run_import  # noqa: E402
+    from app.routers.cms_geo_seed import (  # noqa: E402
+        _job,
+        _lock,
+        _run_countries_and_states_only,
+        _run_phased,
+    )
 
     scope = ", ".join(code.upper() for code in country_codes) if country_codes else "ALL countries"
     _ok(f"Scope : {scope}")
     _ok(f"Cities: {'yes' if include_cities else 'no - states only'}")
     _print()
 
+    # Skipping cities avoids downloading the (much larger) cities dump.
+    target = _run_phased if include_cities else _run_countries_and_states_only
     thread = threading.Thread(
-        target=_run_import,
-        args=(country_codes, include_cities),
+        target=target,
+        args=(country_codes,),
         daemon=True,
     )
     thread.start()
@@ -193,7 +200,7 @@ def main() -> None:
     parser.add_argument(
         "--geo",
         action="store_true",
-        help="Import countries and states from GitHub dataset after RBAC seed.",
+        help="Import countries and states from GeoNames after the RBAC seed.",
     )
     parser.add_argument(
         "--cities",

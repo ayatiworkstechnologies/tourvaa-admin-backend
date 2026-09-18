@@ -13,7 +13,7 @@ from app.models.users import User
 
 
 def _country(item: Country):
-    return {"id": item.id, "country_name": item.country_name, "country_code": item.country_code, "phone_code": item.phone_code, "currency_code": item.currency_code, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
+    return {"id": item.id, "country_name": item.country_name, "country_code": item.country_code, "phone_code": item.phone_code, "currency_code": item.currency_code, "flag_emoji": item.flag_emoji, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
 
 
 def _currency(item: Currency):
@@ -179,10 +179,24 @@ def list_countries(db: Session, page: int, limit: int, search: str = ""):
     return simple_paginate(query.order_by(Country.country_name.asc()), page, limit, _country)
 
 
+def _flag_from_iso2(code: str) -> str:
+    """Unicode flag from an ISO-2 code - same derivation the geo seeder uses."""
+    code = (code or "").strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        return ""
+    return "".join(chr(0x1F1E6 + ord(ch) - ord("A")) for ch in code)
+
+
 def save_country(db: Session, data: CountryPayload, actor: User, request: Request | None = None, country_id: int | None = None):
     item = get_or_404(db, Country, country_id, "Country") if country_id else Country()
     old = _country(item) if country_id else None
-    for key, value in data.model_dump().items():
+    payload = data.model_dump()
+    # Derive the flag from the ISO-2 code when the caller didn't supply one,
+    # so a country added by hand in the admin UI gets the same flag the geo
+    # seed would have given it (see cms_geo_seed._flag_from_iso2).
+    if not payload.get("flag_emoji"):
+        payload["flag_emoji"] = _flag_from_iso2(payload.get("country_code", ""))
+    for key, value in payload.items():
         setattr(item, key, value)
     db.add(item)
     db.flush()
@@ -325,7 +339,17 @@ def list_tours(db: Session, page: int, limit: int, search: str = "", country_id:
     if category_id:
         query = query.filter(Tour.category_id == int(category_id))
     if status:
-        query = query.filter(Tour.status == status.strip().lower())
+        normalized_status = status.strip().lower()
+        if normalized_status == "published":
+            # A tour is live either because an admin manually published it
+            # (status="published") or because it went through the supplier
+            # submit -> approve workflow, which lands it on status="active"
+            # (see services.tour_versions.approve_tour_version). Both must
+            # count as "Published" here so the admin stat card/filter isn't
+            # blind to the majority of live tours.
+            query = query.filter(Tour.status.in_(["published", "active"]))
+        else:
+            query = query.filter(Tour.status == normalized_status)
     if supplier_id:
         query = query.filter(Tour.supplier_id == int(supplier_id))
     return simple_paginate(query.order_by(Tour.id.desc()), page, limit, _tour)

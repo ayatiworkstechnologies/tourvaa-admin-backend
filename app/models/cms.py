@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, Numeric, String, Table, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, Numeric, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -13,6 +13,10 @@ class Country(Base):
     country_code = Column(String(10), nullable=False, unique=True)
     phone_code = Column(String(10), default="", nullable=False)
     currency_code = Column(String(10), default="", nullable=False)
+    # Unicode regional-indicator flag, derived from country_code at seed
+    # time. Stored rather than computed client-side so every consumer gets
+    # the same value for all ~250 countries.
+    flag_emoji = Column(String(16), default="", nullable=False)
     status = Column(String(20), default="active", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -35,6 +39,11 @@ class Currency(Base):
 
 class State(Base):
     __tablename__ = "states"
+    # Nothing but the primary key used to stop the same state being inserted
+    # twice; see migration 20260918_0106.
+    __table_args__ = (
+        UniqueConstraint("country_id", "state_name", name="uq_states_country_name"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=False, index=True)
@@ -50,6 +59,12 @@ class State(Base):
 
 class City(Base):
     __tablename__ = "cities"
+    # MySQL treats NULLs as distinct here, so this does not cover cities with
+    # no state (city-states); the seeder guards that case explicitly.
+    # See migration 20260918_0106.
+    __table_args__ = (
+        UniqueConstraint("country_id", "state_id", "city_name", name="uq_cities_country_state_name"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=False, index=True)

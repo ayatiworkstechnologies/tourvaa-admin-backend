@@ -256,6 +256,7 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, revie
         "discounted_price_per_person": discount_info["discounted_price_per_person"] if discount_info else None,
         "country_name": country_name,
         "country_slug": country_slug,
+        "country_flag": item.country.flag_emoji if item.country else "",
         "city_name": item.city.city_name if item.city else "",
         "category_name": item.category.category_name if item.category else "",
         "number_of_days": item.number_of_days,

@@ -46,9 +46,10 @@ class CountryPayload(BaseModel):
     country_code: str = Field(min_length=1, max_length=10)
     phone_code: str = Field(default="", max_length=10)
     currency_code: str = Field(default="", max_length=10)
+    flag_emoji: str = Field(default="", max_length=16)
     status: str = Field(default="active", max_length=20)
 
-    @field_validator("country_name", "country_code", "phone_code", "currency_code", "status")
+    @field_validator("country_name", "country_code", "phone_code", "currency_code", "flag_emoji", "status")
     @classmethod
     def trim_text(cls, value: str):
         return value.strip()
