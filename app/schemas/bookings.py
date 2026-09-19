@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator
+import re
 
 BOOKING_STATUSES = {"draft", "pending_payment", "pending_credit_approval", "pending_supplier_assignment", "payment_authorized", "pending_supplier_acceptance", "supplier_reassignment_required", "confirmed", "ready_to_travel", "ongoing", "completed", "cancellation_requested", "cancelled", "declined", "refunded", "upcoming", "postponed"}
 SUPPLIER_ACCEPTANCE_STATUSES = {"not_assigned", "pending", "accepted", "declined", "expired"}
@@ -36,6 +37,35 @@ class BookingTravellerPayload(BaseModel):
         if v not in TRAVELLER_TYPES:
             raise ValueError("Invalid traveller_type")
         return v
+
+    @field_validator("first_name", "last_name", "full_name")
+    @classmethod
+    def validate_names(cls, v: str) -> str:
+        value = " ".join((v or "").split())
+        if value and (len(value) < 2 or len(value) > 120):
+            raise ValueError("Traveller names must be between 2 and 120 characters")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        value = v.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+            raise ValueError("Invalid traveller email address")
+        return value
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        value = v.strip()
+        digits = re.sub(r"\D", "", value)
+        if len(digits) < 7 or len(digits) > 15:
+            raise ValueError("Invalid traveller phone number")
+        return value
 
 
 class BookingAddonPayload(BaseModel):
