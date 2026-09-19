@@ -312,6 +312,11 @@ def my_dashboard(
     supplier_id = None
     agent_id = None
     affiliate_id = None
+    # The supplier's own operating currency (Supplier.currency, auto-derived
+    # from their country). The portal uses it as the display currency so a
+    # supplier reads one familiar currency instead of whatever the public
+    # site's IP-detected visitor currency happened to be.
+    portal_currency = None
 
     if role_slug == "supplier":
         supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
@@ -319,6 +324,7 @@ def my_dashboard(
             supplier_id = supplier.id
             profile_status = supplier.status
             approval_status = supplier.approval_status
+            portal_currency = (supplier.currency or "").upper() or None
     elif role_slug == "agent-reseller":
         agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
         if agent:
@@ -357,6 +363,7 @@ def my_dashboard(
                 "supplier_id": supplier_id,
                 "agent_id": agent_id,
                 "affiliate_id": affiliate_id,
+                "portal_currency": portal_currency,
             },
             "permissions": [
                 {

@@ -279,6 +279,10 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, revie
         "start_location": overview.start_location if overview and overview.start_location else None,
         "end_location": overview.end_location if overview and overview.end_location else None,
         "group_size": overview.group_size if overview and overview.group_size else None,
+        # Per-tour specs the listing cards show; without these the cards fall
+        # back to invented values rather than the tour's real limits.
+        "suitable_age_range": item.suitable_age_range or None,
+        "max_group_size": item.max_group_size,
     }
 
 
