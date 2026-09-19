@@ -149,8 +149,15 @@ def update_session(db: Session, session_key: str, body: CheckoutUpdate, current_
         # object, so `s.data = existing` re-assigns the identical object and
         # SQLAlchemy's change tracking on the JSON column never sees a
         # difference - the update silently never gets persisted.
+        incoming = dict(body.data)
+        # The departure can change after the session was started (the customer
+        # picks/changes the date on step 1); keep the session column in sync so
+        # confirm_session books the date actually chosen, not the initial one.
+        if "tour_calendar_id" in incoming:
+            calendar_id = incoming.pop("tour_calendar_id")
+            s.tour_calendar_id = int(calendar_id) if calendar_id not in (None, "") else None
         existing = dict(s.data or {})
-        existing.update(body.data)
+        existing.update(incoming)
         s.data = existing
     if current_user and not s.user_id:
         s.user_id = current_user.id

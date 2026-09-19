@@ -222,6 +222,10 @@ def create_popular_tour(db, data: PopularTourPayload):
     db.commit()
     db.refresh(obj)
     return _s_popular_tour(obj, db)
+def update_popular_tour(db, item_id, data: PopularTourPayload):
+    if data.tour_id is not None and not db.query(Tour).filter(Tour.id == data.tour_id).first():
+        raise HTTPException(status_code=400, detail="Selected tour does not exist")
+    return _update(db, PopularTour, item_id, data.model_dump(exclude_unset=True), lambda row: _s_popular_tour(row, db), "Popular Tour")
 def delete_popular_tour(db, item_id): _delete(db, PopularTour, item_id, "Popular Tour")
 
 # tours on deals
@@ -472,6 +476,10 @@ def create_handpicked_tour(db, data: HandpickedTourPayload):
     db.commit()
     db.refresh(obj)
     return _s_handpicked(obj, db)
+def update_handpicked_tour(db, item_id, data: HandpickedTourPayload):
+    if data.tour_id is not None and not db.query(Tour).filter(Tour.id == data.tour_id).first():
+        raise HTTPException(status_code=400, detail="Selected tour does not exist")
+    return _update(db, HandpickedTour, item_id, data.model_dump(exclude_unset=True), lambda row: _s_handpicked(row, db), "Handpicked Tour")
 def delete_handpicked_tour(db, item_id): _delete(db, HandpickedTour, item_id, "Handpicked Tour")
 
 # favourite countries

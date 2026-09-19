@@ -43,6 +43,18 @@ REQUIRED_SUPPLIER_DOCUMENT_TYPES = {
 }
 
 
+def _document_gaps(supplier: Supplier, *, require_approved: bool) -> list[str]:
+    """Labels of required document types that are missing (or, when
+    require_approved, not yet approved)."""
+    by_type = {doc.document_type: doc for doc in supplier.documents}
+    gaps = []
+    for key in sorted(REQUIRED_SUPPLIER_DOCUMENT_TYPES):
+        doc = by_type.get(key)
+        if doc is None or (require_approved and (doc.status or "").lower() != "approved"):
+            gaps.append(SUPPLIER_DOCUMENT_TYPES[key]["label"])
+    return gaps
+
+
 def _approval_history(item):
     # supplier_approval_history (migration 20260724_0034) may not exist yet on
     # every deployed database; degrade to an empty history instead of a 500
@@ -384,6 +396,9 @@ def approve_supplier(db: Session, supplier_id: int, actor: User, request: Reques
         raise HTTPException(status_code=409, detail="Supplier account must be active before approval")
     if (item.approval_status or "").upper() == "APPROVED":
         raise HTTPException(status_code=409, detail="Supplier is already approved")
+    rejected = [SUPPLIER_DOCUMENT_TYPES.get(d.document_type, {}).get("label", d.document_type) for d in item.documents if (d.status or "").lower() == "rejected"]
+    if rejected:
+        raise HTTPException(status_code=409, detail=f"Resolve rejected documents before approving: {', '.join(rejected)}")
 
     old = serialize_supplier(item)
     previous_status = item.approval_status
@@ -570,6 +585,11 @@ def set_supplier_account_status(
 def _submit_supplier_verification(db: Session, supplier: Supplier, actor: User, request: Request | None = None):
     if (supplier.approval_status or "").upper() == "APPROVED":
         raise HTTPException(status_code=409, detail="Supplier is already approved")
+    if supplier.user and (supplier.user.account_status != "ACTIVE" or not supplier.user.is_active):
+        raise HTTPException(status_code=409, detail="This supplier account is not active. Contact support to reactivate it before submitting.")
+    gaps = _document_gaps(supplier, require_approved=False)
+    if gaps:
+        raise HTTPException(status_code=400, detail=f"Upload all required documents before submitting. Missing: {', '.join(gaps)}")
     old = serialize_supplier(supplier)
     supplier.approval_status = "pending"
     supplier.status = "active"

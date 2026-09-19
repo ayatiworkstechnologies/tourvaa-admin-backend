@@ -10,8 +10,16 @@ from app.models.users import User
 
 
 def is_agent_user(user: User | None) -> bool:
-    slug = (getattr(getattr(user, "role", None), "slug", "") or "").lower()
-    return "agent" in slug
+    if not user:
+        return False
+    role_slugs = set()
+    if getattr(user, "role", None) and user.role.slug:
+        role_slugs.add(user.role.slug.lower())
+    for user_role in getattr(user, "user_roles", None) or []:
+        if user_role.role and user_role.role.slug:
+            role_slugs.add(user_role.role.slug.lower())
+    user_type = str(getattr(user, "user_type", "") or "").lower()
+    return (user_type == "agent" or any("agent" in slug for slug in role_slugs)) and not ({"admin", "super-admin"} & role_slugs)
 
 
 def get_actor_agent(db: Session, user: User) -> Agent:

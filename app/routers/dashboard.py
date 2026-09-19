@@ -199,7 +199,16 @@ def _build_admin_menus(permissions: list[Permission]) -> list[dict]:
 
 
 def _get_role_slug(user: User) -> str:
-    return user.role.slug if user.role else ""
+    if user.role and user.role.slug:
+        return user.role.slug
+    user_type = str(getattr(user, "user_type", "") or "").lower()
+    return {
+        "agent": "agent-reseller",
+        "supplier": "supplier",
+        "customer": "customer",
+        "affiliate": "affiliate",
+        "admin": "admin",
+    }.get(user_type, "")
 
 
 def _get_dashboard_type(role_slug: str) -> str:

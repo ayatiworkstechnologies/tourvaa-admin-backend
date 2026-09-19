@@ -305,6 +305,8 @@ def update_my_vehicle(vehicle_id: int, data: VehicleUpdate, db: Session = Depend
         raise HTTPException(status_code=404, detail="Vehicle not found")
     for field, value in data.model_dump(exclude_none=True).items():
         setattr(v, field, value)
+    v.approval_status = "pending"  # edited details need admin re-review
+    v.rejection_reason = None
     db.commit()
     db.refresh(v)
     return {"status": "success", "message": "Vehicle updated", "data": _serialize_vehicle(v)}
@@ -342,7 +344,13 @@ async def upload_vehicle_file(
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     path = await _save_vehicle_file(file, "vehicle-docs")
+    if not path:
+        # _save_vehicle_file returns "" for an empty/unsupported/spoofed file;
+        # without this guard the stored certificate would be silently wiped.
+        raise HTTPException(status_code=400, detail="Upload a valid JPG, PNG, WEBP, AVIF or PDF file")
     setattr(v, field, path)
+    v.approval_status = "pending"  # replaced document needs admin re-review
+    v.rejection_reason = None
     db.commit()
     db.refresh(v)
     return {"status": "success", "message": "File uploaded", "data": _serialize_vehicle(v)}
@@ -369,11 +377,16 @@ async def upload_vehicle_photos(
             status_code=400,
             detail=f"A vehicle can have at most {MAX_VEHICLE_PHOTOS} photos ({len(existing)} already uploaded).",
         )
+    initial_count = len(existing)
     for f in files:
         path = await _save_vehicle_file(f, "vehicle-photos")
         if path:
             existing.append(path)
+    if len(existing) == initial_count:
+        raise HTTPException(status_code=400, detail="No valid image files were uploaded (JPG, PNG, WEBP, AVIF or PDF only)")
     v.vehicle_photos = json.dumps(existing)
+    v.approval_status = "pending"  # new photos need admin re-review
+    v.rejection_reason = None
     db.commit()
     db.refresh(v)
     return {"status": "success", "message": "Photos uploaded", "data": _serialize_vehicle(v)}
@@ -523,6 +536,8 @@ async def upload_supplier_document(
     current_user: User = Depends(get_current_user),
 ):
     check_rate_limit(request, "upload", max_calls=20, window_seconds=60)
+    if document_type not in SUPPLIER_DOCUMENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown document type. Allowed: {', '.join(SUPPLIER_DOCUMENT_TYPES)}")
     supplier = get_supplier(db, supplier_id)
     is_self_service = supplier.user_id == current_user.id
     if not is_self_service:
@@ -562,7 +577,7 @@ async def upload_supplier_document(
     }
     extension = allowed_types.get(file.content_type or "")
     if not extension:
-        filename_lower = file.filename.lower()
+        filename_lower = (file.filename or "").lower()
         if filename_lower.endswith(".pdf"):
             extension = "pdf"
         elif filename_lower.endswith(".jpg") or filename_lower.endswith(".jpeg"):

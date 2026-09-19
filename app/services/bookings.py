@@ -125,14 +125,22 @@ def _mask_passport(value: str | None) -> str | None:
 
 
 def _user_role(user: User | None) -> str:
-    if not user or not user.role:
+    if not user:
         return "admin"
-    slug = user.role.slug or ""
-    if "supplier" in slug:
+    role_slugs = []
+    if user.role and user.role.slug:
+        role_slugs.append(user.role.slug.lower())
+    role_slugs.extend(
+        user_role.role.slug.lower()
+        for user_role in (getattr(user, "user_roles", None) or [])
+        if user_role.role and user_role.role.slug
+    )
+    user_type = str(getattr(user, "user_type", "") or "").lower()
+    if user_type == "supplier" or any("supplier" in slug for slug in role_slugs):
         return "supplier"
-    if "agent" in slug:
+    if user_type == "agent" or any("agent" in slug for slug in role_slugs):
         return "agent"
-    if "customer" in slug:
+    if user_type == "customer" or any("customer" in slug for slug in role_slugs):
         return "customer"
     return "admin"
 
@@ -1935,7 +1943,7 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
 
 def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: User, request: Request | None = None) -> dict:
     from app.services.notifications import enqueue_notification, notify_admins
-    booking = get_booking_by_id(db, booking_id)
+    booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if booking.booking_status == "cancelled":
         raise HTTPException(status_code=400, detail="Booking is already cancelled")
@@ -2002,6 +2010,7 @@ def supplier_postpone_booking(
     new_tour_calendar_id: int | None = None,
 ) -> dict:
     from app.services.notifications import enqueue_notification, notify_admins
+    from app.utils.email_templates import booking_status_update_email
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if booking.booking_status in ("cancelled", "completed", "declined"):
@@ -2081,6 +2090,7 @@ def supplier_postpone_booking(
 
 def supplier_notify_parties(db: Session, booking_id: int, message: str, notify_customer: bool, notify_agent: bool, actor: User, request: Request | None = None) -> dict:
     from app.services.notifications import enqueue_notification
+    from app.utils.email_templates import booking_status_update_email
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
     row = BookingCommunication(

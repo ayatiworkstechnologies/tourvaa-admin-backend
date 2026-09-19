@@ -455,23 +455,6 @@ def featured_tours(db: Session = Depends(get_db), limit: int = Query(default=6, 
     return {"status": "success", "items": [_public_tour(t, review_stats=review_stats, overview=overview_map.get(t.id), discount_map=discount_map) for t in tours]}
 
 
-@router.get("/tours/{country_slug}/{tour_slug}")
-def public_tour_detail_by_slug(country_slug: str, tour_slug: str, db: Session = Depends(get_db)):
-    """Resolve the canonical public tour URL and reject mismatched countries."""
-    from fastapi import HTTPException
-
-    tour = db.query(Tour).filter(Tour.slug == tour_slug, Tour.status == "published").first()
-    if not tour:
-        raise HTTPException(status_code=404, detail="Tour not found")
-    expected_country = slugify(tour.country.country_name if tour.country else "worldwide")
-    if country_slug != expected_country:
-        raise HTTPException(
-            status_code=404,
-            detail={"message": "Tour not found for this country", "canonical_path": f"/tours/{expected_country}/{tour.slug}"},
-        )
-    return public_tour_detail(tour.slug, db)
-
-
 @router.get("/tours/{tour_id}/deposit-options")
 def public_tour_deposit_options(tour_id: int, travel_date: str = Query(...), db: Session = Depends(get_db)):
     """Whether 'pay a deposit now, balance later' can be offered for this
@@ -498,6 +481,23 @@ def public_tour_deposit_options(tour_id: int, travel_date: str = Query(...), db:
             "agent": agent_reserve_eligibility(db, tour_id, parsed_date),
         },
     }
+
+
+@router.get("/tours/{country_slug}/{tour_slug}")
+def public_tour_detail_by_slug(country_slug: str, tour_slug: str, db: Session = Depends(get_db)):
+    """Resolve the canonical public tour URL and reject mismatched countries."""
+    from fastapi import HTTPException
+
+    tour = db.query(Tour).filter(Tour.slug == tour_slug, Tour.status == "published").first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    expected_country = slugify(tour.country.country_name if tour.country else "worldwide")
+    if country_slug != expected_country:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "Tour not found for this country", "canonical_path": f"/tours/{expected_country}/{tour.slug}"},
+        )
+    return public_tour_detail(tour.slug, db)
 
 
 @router.get("/tours/{tour_id}")

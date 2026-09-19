@@ -88,6 +88,10 @@ def list_popular_tours(pagination=Depends(pagination_params), active_only: bool 
 def create_popular_tour(data: PopularTourPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
     return {"status": "success", "data": service.create_popular_tour(db, data)}
 
+@router.put("/popular-tours/{item_id}")
+def update_popular_tour(item_id: int, data: PopularTourPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS))):
+    return {"status": "success", "data": service.update_popular_tour(db, item_id, data)}
+
 @router.delete("/popular-tours/{item_id}")
 def delete_popular_tour(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
     service.delete_popular_tour(db, item_id)
@@ -125,6 +129,10 @@ def list_handpicked_tours(pagination=Depends(pagination_params), active_only: bo
 @router.post("/handpicked-tours")
 def create_handpicked_tour(data: HandpickedTourPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
     return {"status": "success", "data": service.create_handpicked_tour(db, data)}
+
+@router.put("/handpicked-tours/{item_id}")
+def update_handpicked_tour(item_id: int, data: HandpickedTourPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS))):
+    return {"status": "success", "data": service.update_handpicked_tour(db, item_id, data)}
 
 @router.delete("/handpicked-tours/{item_id}")
 def delete_handpicked_tour(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
