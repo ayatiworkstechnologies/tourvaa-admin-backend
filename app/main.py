@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import asyncio
 import os
 from fastapi import FastAPI
@@ -340,7 +341,6 @@ app = FastAPI(
 register_error_handlers(app)
 
 
-@app.on_event("startup")
 def warn_if_chatbot_llm_unconfigured():
     from app.config import settings
 
@@ -351,7 +351,16 @@ def warn_if_chatbot_llm_unconfigured():
         )
 
 
-@app.on_event("startup")
+def warn_if_redis_unconfigured():
+    from app.config import settings
+
+    if settings.APP_ENV == "production" and not settings.REDIS_URL:
+        logger.warning(
+            "REDIS_URL is not set: rate limiting, sweep locks and realtime messaging are per-process. "
+            "Run a single worker/instance, or set REDIS_URL before scaling out."
+        )
+
+
 def run_seed():
     if schema_is_ready():
         db = SessionLocal()
@@ -486,7 +495,6 @@ async def _wishlist_reminder_loop():
 _background_tasks: list[asyncio.Task] = []
 
 
-@app.on_event("startup")
 async def start_background_jobs():
     if schema_is_ready():
         _background_tasks.append(asyncio.create_task(_expire_stale_bookings_loop()))
@@ -499,12 +507,25 @@ async def start_background_jobs():
     _background_tasks.append(asyncio.create_task(start_redis_subscriber()))
 
 
-@app.on_event("shutdown")
 async def stop_background_jobs():
     for task in _background_tasks:
         task.cancel()
     await asyncio.gather(*_background_tasks, return_exceptions=True)
     _background_tasks.clear()
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    warn_if_chatbot_llm_unconfigured()
+    warn_if_redis_unconfigured()
+    run_seed()
+    await start_background_jobs()
+    try:
+        yield
+    finally:
+        await stop_background_jobs()
+
+
+app.router.lifespan_context = _lifespan
 
 setup_cors(app)
 app.add_middleware(CsrfMiddleware)

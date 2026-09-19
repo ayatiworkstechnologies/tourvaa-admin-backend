@@ -470,7 +470,22 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
 
     # Call the real gateway (if any) BEFORE touching local state, so a failed
     # gateway call never leaves local records claiming money moved when it didn't.
-    gateway_refund_id, gateway_status = _issue_gateway_refund(db, payment, amount, data.reason or "")
+    try:
+        gateway_refund_id, gateway_status = _issue_gateway_refund(db, payment, amount, data.reason or "")
+    except HTTPException as error:
+        # Local state is untouched, but a refund that could not be issued must
+        # not fail silently - alert admins so it gets retried or handled manually.
+        from app.services.notifications import notify_admins
+        notify_admins(
+            db,
+            notification_type="refund_failed",
+            title="Refund failed",
+            message=f"Gateway refund of {money_str(amount)} for {payment.payment_code} failed: {error.detail}",
+            entity_type="payment",
+            entity_id=payment.id,
+        )
+        db.commit()
+        raise
 
     payment.refunded_amount = money(payment.refunded_amount) + amount
     if money(payment.refunded_amount) >= money(payment.captured_amount or payment.paid_amount):

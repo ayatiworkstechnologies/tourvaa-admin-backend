@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -22,9 +22,9 @@ class Agent(Base):
     admin_comments = Column(Text, nullable=True)
     pending_requirements = Column(Text, nullable=True)
     discount_type = Column(String(20), nullable=True)
-    discount_value = Column(Float, default=0, nullable=False)
+    discount_value = Column(Numeric(12, 2, asdecimal=False), default=0, nullable=False)
     commission_request_type = Column(String(20), nullable=True)
-    commission_request_value = Column(Float, nullable=True)
+    commission_request_value = Column(Numeric(12, 2, asdecimal=False), nullable=True)
     commission_request_status = Column(String(20), nullable=True, index=True)
     commission_requested_at = Column(DateTime(timezone=True), nullable=True)
     commission_reviewed_at = Column(DateTime(timezone=True), nullable=True)

@@ -89,6 +89,13 @@ def _calculate_refund_percentage(db: Session, booking: Booking) -> Decimal:
     return Decimal("0")
 
 
+def _validate_refund_value(*, percentage: Decimal | None = None, amount: Decimal | None = None) -> None:
+    if percentage is not None and (percentage < 0 or percentage > 100):
+        raise HTTPException(status_code=422, detail="Refund percentage must be between 0 and 100")
+    if amount is not None and amount < 0:
+        raise HTTPException(status_code=422, detail="Refund amount cannot be negative")
+
+
 def _user_role(user: User | None) -> str:
     if not user or not user.role:
         return "admin"
@@ -234,12 +241,17 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
         raise HTTPException(status_code=400, detail=f"Request is already '{req.status}'")
 
     if data.refund_percentage is not None:
+        _validate_refund_value(percentage=data.refund_percentage)
         req.refund_percentage = money(data.refund_percentage)
     if data.refund_amount is not None:
+        _validate_refund_value(amount=data.refund_amount)
         req.refund_amount = money(data.refund_amount)
     elif data.refund_percentage is not None:
         booking = req.booking
         req.refund_amount = money((money(booking.amount_paid) * money(data.refund_percentage)) / 100)
+
+    if money(req.refund_amount) > money(req.booking.amount_paid):
+        raise HTTPException(status_code=422, detail="Refund amount cannot exceed the amount paid for this booking")
 
     req.status = "approved"
     req.admin_notes = data.admin_notes
@@ -357,13 +369,23 @@ def reject_request(db: Session, request_id: int, data: CancellationReject, actor
 
 
 def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor: User, request=None) -> dict:
-    req = db.query(CancellationRequest).filter(CancellationRequest.id == request_id).first()
+    req = db.query(CancellationRequest).filter(CancellationRequest.id == request_id).with_for_update().first()
     if not req:
         raise HTTPException(status_code=404, detail="Cancellation request not found")
-    if req.status != "approved":
+    if req.status not in {"approved", "refund_processing"}:
         raise HTTPException(status_code=400, detail="Request must be approved before processing refund")
 
     booking = req.booking
+
+    # Claim the request before calling an external gateway. The payment
+    # service commits its own transaction, so keeping this state prevents a
+    # second worker from issuing the same refund concurrently. A failed or
+    # incomplete attempt remains retryable as refund_processing; already
+    # refunded payment rows are skipped on the next attempt.
+    if req.status == "approved":
+        req.status = "refund_processing"
+        db.commit()
+        db.refresh(req)
 
     # refund the actual Payment rows up to refund_amount (used to just flip status flags)
     from app.models.payments import Payment
@@ -395,6 +417,16 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
             if refund_result.get("gateway_refund_id"):
                 gateway_refund_ids.append(refund_result["gateway_refund_id"])
             remaining -= amount
+
+    # A live gateway refund must account for the entire approved amount. Do
+    # not mark the request complete after refunding only part of it; an admin
+    # can retry safely while the request remains approved. Manual refunds may
+    # provide an external reference for the uncovered remainder.
+    if remaining > 0 and not data.gateway_refund_id:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Refund could not cover the approved amount; {remaining} remains refundable",
+        )
 
     req.status = "refund_processed"
     # Real gateway refund id(s) from the actual Stripe/PayPal call, not an
@@ -429,6 +461,9 @@ def list_rules(db: Session, tour_id: Optional[int] = None, supplier_id: Optional
 
 
 def create_rule(db: Session, data: RefundRuleCreate, actor: User, request=None) -> dict:
+    _validate_refund_value(percentage=data.refund_percentage)
+    if data.days_before_tour_min < 0 or (data.days_before_tour_max is not None and data.days_before_tour_max < data.days_before_tour_min):
+        raise HTTPException(status_code=422, detail="Invalid refund-rule day range")
     rule = RefundRule(**data.model_dump())
     db.add(rule)
     db.flush()
@@ -445,6 +480,9 @@ def update_rule(db: Session, rule_id: int, data: RefundRuleUpdate, actor: User, 
     rule = db.query(RefundRule).filter(RefundRule.id == rule_id).first()
     if not rule:
         raise HTTPException(status_code=404, detail="Refund rule not found")
+    _validate_refund_value(percentage=data.refund_percentage)
+    if data.days_before_tour_min < 0 or (data.days_before_tour_max is not None and data.days_before_tour_max < data.days_before_tour_min):
+        raise HTTPException(status_code=422, detail="Invalid refund-rule day range")
     old_values = _serialize_rule(rule)
     for key, value in data.model_dump().items():
         setattr(rule, key, value)

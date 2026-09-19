@@ -5,6 +5,7 @@ so the server starts even without reportlab installed.
 """
 
 import logging
+from html import escape
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -269,7 +270,9 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     story.append(HRFlowable(width="100%", thickness=0.5, color=LINE))
     story.append(Spacer(1, 0.3 * cm))
     story.append(Paragraph("Thank you for booking with <b>Tourvaa</b>.", center_style))
-    story.append(Paragraph("For queries contact support@tourvaa.com &nbsp;|&nbsp; www.tourvaa.com", center_style))
+    support_email = escape(str(data.get("support_email") or "support@tourvaa.com"))
+    website = escape(str(data.get("website") or "www.tourvaa.com"))
+    story.append(Paragraph(f"For queries contact {support_email} &nbsp;|&nbsp; {website}", center_style))
     story.append(Spacer(1, 0.15 * cm))
     story.append(Paragraph("This is a system-generated invoice and does not require a signature.", center_style))
 

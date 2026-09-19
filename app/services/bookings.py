@@ -848,11 +848,22 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             raise HTTPException(status_code=400, detail="Selected tour date is not available")
         if calendar.available_seats and calendar.booked_seats + seat_travellers > calendar.available_seats:
             raise HTTPException(status_code=409, detail="Not enough seats available")
-    if data.tour_id and data.tour_start_date:
-        start = _parse_dt(data.tour_start_date)
-        blocked = db.query(TourUnavailableDate).filter(TourUnavailableDate.tour_id == data.tour_id, func.date(TourUnavailableDate.unavailable_date) == start.date()).first()
-        if blocked:
-            raise HTTPException(status_code=400, detail="Selected date is unavailable")
+    if data.tour_id:
+        # Check both the requested start date and the selected calendar
+        # departure: a request carrying only tour_calendar_id (no explicit
+        # start date) must not bypass the blackout list.
+        blackout_dates = set()
+        if data.tour_start_date:
+            blackout_dates.add(_parse_dt(data.tour_start_date).date())
+        if calendar and calendar.tour_date:
+            blackout_dates.add(calendar.tour_date.date())
+        if blackout_dates:
+            blocked = db.query(TourUnavailableDate).filter(
+                TourUnavailableDate.tour_id == data.tour_id,
+                func.date(TourUnavailableDate.unavailable_date).in_(blackout_dates),
+            ).first()
+            if blocked:
+                raise HTTPException(status_code=400, detail="Selected date is unavailable")
 
     slab = None
     if data.tour_id:

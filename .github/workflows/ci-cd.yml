@@ -83,6 +83,10 @@ jobs:
           exit 1
 
       - name: Run API suite
+        # The MySQL service above is disposable, so exercise destructive/write
+        # tests in CI instead of allowing the readonly guard to hide them.
+        env:
+          TOURVAA_WRITE_TESTS: "1"
         run: python -m pytest -q
 
       - name: Show API log after failure

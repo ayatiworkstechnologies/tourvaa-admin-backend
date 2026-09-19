@@ -79,8 +79,29 @@ def _payment_method_for(booking: Booking, payment: Payment | None) -> str:
     return "Not specified"
 
 
+def _support_contact(inv: Invoice) -> tuple[str, str]:
+    """Support email + website for the invoice footer: the admin-configured
+    `support_email` setting, falling back to the built-in defaults. Read-only
+    (no seed/commit) because invoices are built mid-transaction."""
+    from urllib.parse import urlparse
+    from sqlalchemy.orm import object_session
+    from app.config import settings as app_settings
+    from app.models.settings import AppSetting
+
+    email = ""
+    session = object_session(inv)
+    if session is not None:
+        row = session.query(AppSetting).filter(AppSetting.key == "support_email").first()
+        email = (row.value or "").strip() if row else ""
+    host = urlparse(app_settings.FRONTEND_URL or "").netloc
+    return email or "support@tourvaa.com", host or "www.tourvaa.com"
+
+
 def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | None, items: list[dict]) -> dict:
+    support_email, website = _support_contact(inv)
     return {
+        "support_email": support_email,
+        "website": website,
         "invoice_number": inv.invoice_number,
         "booking_code": booking.booking_code or str(booking.id),
         # Same fallback as _traveller_names above: Customer.full_name is

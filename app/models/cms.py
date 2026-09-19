@@ -129,7 +129,7 @@ class Tour(Base):
     title = Column(String(180), nullable=False)
     slug = Column(String(200), nullable=False, unique=True, index=True)
     subtitle = Column(String(255), default="", nullable=False)
-    price_start_per_person = Column(Float, default=0, nullable=False)
+    price_start_per_person = Column(Numeric(12, 2, asdecimal=False), default=0, nullable=False)
     currency = Column(String(10), default="USD", nullable=False)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True, index=True)
     state_id = Column(Integer, ForeignKey("states.id"), nullable=True, index=True)
@@ -149,16 +149,16 @@ class Tour(Base):
     short_description = Column(Text, default="", nullable=False)
     long_description = Column(Text, default="", nullable=False)
     pricing_type = Column(String(20), default="per_person", nullable=False)
-    offer_price = Column(Float, default=0, nullable=False)
-    infant_price = Column(Float, default=0, nullable=False)
-    single_supplement = Column(Float, default=0, nullable=False)
+    offer_price = Column(Numeric(12, 2, asdecimal=False), default=0, nullable=False)
+    infant_price = Column(Numeric(12, 2, asdecimal=False), default=0, nullable=False)
+    single_supplement = Column(Numeric(12, 2, asdecimal=False), default=0, nullable=False)
     tax_percentage = Column(Float, default=0, nullable=False)
-    service_fee = Column(Float, default=0, nullable=False)
+    service_fee = Column(Numeric(12, 2, asdecimal=False), default=0, nullable=False)
     # Percentage payment-gateway/transaction fee, applied on top of
     # service_fee so the total charged to the customer matches what the
     # gateway (Stripe/PayPal) actually deducts -- see bookings._price_booking.
     gateway_fee_percentage = Column(Float, default=0, nullable=False)
-    booking_deposit = Column(Float, default=0, nullable=False)
+    booking_deposit = Column(Numeric(12, 2, asdecimal=False), default=0, nullable=False)
     # "percentage" -> deposit_percentage applies to the booking total; "fixed" (default,
     # preserves existing behavior) -> booking_deposit is a flat currency amount.
     deposit_type = Column(String(20), default="fixed", nullable=False)
