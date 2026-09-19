@@ -114,7 +114,8 @@ def _assert_supplier_owns_tour(db: Session, tour_id: int, user: User, *, view_on
     manage tours.
     """
     role_slug = (user.role.slug if user.role else "") or ""
-    if "supplier" not in role_slug.lower():
+    user_type = str(getattr(user, "user_type", "") or "").lower()
+    if "supplier" not in role_slug.lower() and user_type != "supplier":
         return
     from app.models.cms import Tour
     from app.models.suppliers import Supplier

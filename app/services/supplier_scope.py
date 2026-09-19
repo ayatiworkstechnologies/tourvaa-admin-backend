@@ -15,7 +15,8 @@ def is_supplier_user(user: User | None) -> bool:
     for user_role in getattr(user, "user_roles", None) or []:
         if user_role.role and user_role.role.slug:
             role_slugs.add(user_role.role.slug)
-    return "supplier" in role_slugs and not ({"admin", "super-admin"} & role_slugs)
+    user_type = str(getattr(user, "user_type", "") or "").lower()
+    return ("supplier" in role_slugs or user_type == "supplier") and not ({"admin", "super-admin"} & role_slugs)
 
 
 def get_actor_supplier(db: Session, user: User) -> Supplier:

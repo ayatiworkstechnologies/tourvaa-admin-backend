@@ -17,7 +17,8 @@ _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.
 def _get_actor_supplier_id(db: Session, user: User) -> int | None:
     """Returns the Supplier.id for the given user, or None if user is not a supplier."""
     role_slug = (user.role.slug if user.role else "") or ""
-    if "supplier" not in role_slug.lower():
+    user_type = str(getattr(user, "user_type", "") or "").lower()
+    if "supplier" not in role_slug.lower() and user_type != "supplier":
         return None
     from app.models.suppliers import Supplier
     supplier = db.query(Supplier).filter(Supplier.user_id == user.id).first()
