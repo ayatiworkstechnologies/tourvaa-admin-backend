@@ -341,16 +341,6 @@ app = FastAPI(
 register_error_handlers(app)
 
 
-def warn_if_chatbot_llm_unconfigured():
-    from app.config import settings
-
-    if not settings.ANTHROPIC_API_KEY:
-        logger.warning(
-            "ANTHROPIC_API_KEY is not set; the chatbot will run in keyword-only fallback mode "
-            "(no LLM, no streaming). Set ANTHROPIC_API_KEY to enable full AI responses."
-        )
-
-
 def warn_if_redis_unconfigured():
     from app.config import settings
 
@@ -494,6 +484,27 @@ async def _wishlist_reminder_loop():
             logger.exception("Wishlist reminder sweep failed")
 
 
+CHAT_RETENTION_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def _chat_retention_loop():
+    from app.services.chatbot import purge_old_chat_data
+    from app.utils.distributed_lock import acquire_sweep_lock
+
+    while True:
+        await asyncio.sleep(CHAT_RETENTION_SWEEP_INTERVAL_SECONDS)
+        try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "chat_retention", CHAT_RETENTION_SWEEP_INTERVAL_SECONDS - 300):
+                continue
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(purge_old_chat_data, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Chat retention sweep failed")
+
+
 _background_tasks: list[asyncio.Task] = []
 
 
@@ -504,6 +515,7 @@ async def start_background_jobs():
         _background_tasks.append(asyncio.create_task(_balance_due_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_tour_availability_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_wishlist_reminder_loop()))
+        _background_tasks.append(asyncio.create_task(_chat_retention_loop()))
 
     from app.services.messaging_ws import start_redis_subscriber
     _background_tasks.append(asyncio.create_task(start_redis_subscriber()))
@@ -517,7 +529,6 @@ async def stop_background_jobs():
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    warn_if_chatbot_llm_unconfigured()
     warn_if_redis_unconfigured()
     run_seed()
     await start_background_jobs()

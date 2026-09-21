@@ -112,6 +112,20 @@ def reindex_all(db: Session) -> dict:
     for faq in faqs:
         upsert_embedding(db, "faq", faq.id, _faq_document(faq))
 
+    from app.models.website_cms import CmsPage, HelpCentreArticle
+    from app.services.rag_answer import _plain, invalidate
+
+    articles = db.query(HelpCentreArticle).filter(HelpCentreArticle.is_active == True).all()  # noqa: E712
+    for art in articles:
+        upsert_embedding(db, "help", art.id, "Q: " + art.question + "\nA: " + _plain(art.answer))
+    pages = db.query(CmsPage).filter(CmsPage.status == "published").all()
+    for page in pages:
+        upsert_embedding(db, "page", page.id, (page.title + "\n" + _plain(page.content))[:4000])
+    for source_type, live_ids in (("help", {a.id for a in articles}), ("page", {p.id for p in pages})):
+        for row in db.query(ChatEmbedding).filter(ChatEmbedding.source_type == source_type, ~ChatEmbedding.source_id.in_(live_ids or [0])).all():
+            db.delete(row)
+    invalidate()
+
     valid_tour_ids = {t.id for t in tours}
     stale_tours = (
         db.query(ChatEmbedding)
@@ -131,7 +145,7 @@ def reindex_all(db: Session) -> dict:
         db.delete(row)
 
     db.commit()
-    return {"tours_indexed": len(tours), "faqs_indexed": len(faqs)}
+    return {"tours_indexed": len(tours), "faqs_indexed": len(faqs), "help_articles_indexed": len(articles), "pages_indexed": len(pages)}
 
 
 def semantic_search(

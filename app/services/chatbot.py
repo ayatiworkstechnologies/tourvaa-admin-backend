@@ -13,7 +13,9 @@ from app.models.website_cms import CustomerReview, PopularDestination, PopularTo
 
 logger = logging.getLogger(__name__)
 
-HISTORY_WINDOW = 10
+CHAT_RETENTION_DAYS = 90
+# The scripted reply used when nothing matched - also how "unanswered" questions are found.
+NO_ANSWER_REPLY = "I can help with Tourvaa tours, booking steps, pricing, cancellations, payments, and destinations. Could you share a little more detail?"
 
 BOOKING_INFO_PHRASES = (
     "my booking", "my bookings", "my trip", "my order", "my reservation",
@@ -82,37 +84,6 @@ def _page_context(db: Session, page_url: str | None) -> str | None:
         f"{tour.title} ({tour.number_of_days} day(s), starting from {price}). "
         f"{tour.short_description or ''}".strip()
     )
-
-
-def _build_system_prompt(
-    faq_snippets: list[str],
-    tour_snippets: list[str],
-    booking_context: str | None,
-    page_context: str | None = None,
-) -> str:
-    base = (
-        "You are a friendly and knowledgeable travel assistant for Tourvaa, "
-        "a premium tour and travel booking platform. "
-        "Ground your answers in the retrieved context below when it is relevant. If the context does not "
-        "cover the question, answer briefly from general travel knowledge and encourage the customer to "
-        "contact the Tourvaa support team for anything account-specific. Be concise, warm, and helpful.\n\n"
-    )
-    if page_context:
-        base += (
-            "The customer is currently viewing this tour's page. If their question is ambiguous "
-            "(e.g. \"is breakfast included\", \"how many days\"), assume it refers to this tour:\n\n"
-            + page_context + "\n\n"
-        )
-    if faq_snippets:
-        base += "Relevant FAQs (retrieved for this question):\n\n" + "\n\n".join(faq_snippets) + "\n\n"
-    if tour_snippets:
-        base += "Relevant Tourvaa tours (retrieved for this question):\n\n" + "\n\n".join(tour_snippets) + "\n\n"
-    if booking_context:
-        base += (
-            "The customer is logged in. Only use the following when they ask about their own "
-            "bookings -- never invent or guess booking details:\n\n" + booking_context + "\n\n"
-        )
-    return base
 
 
 def _faq_fallback(user_message: str, faqs: list[ChatFAQ]) -> str | None:
@@ -283,28 +254,44 @@ def _why_tourvaa_text(db: Session) -> str:
     return base
 
 
-SHOW_TOURS_TOOL = {
-    "name": "show_tours",
-    "description": (
-        "Search Tourvaa's published tours and show the matching tours as cards in the chat UI. "
-        "Call this whenever the customer is asking about tours, destinations, prices, packages, or wants "
-        "to browse or start booking something -- even if the request is indirect (e.g. 'what can I do in "
-        "Dubai', 'something for a family of 4', 'any cheaper options', 'show me more'). "
-        "Do not call it for general FAQ, cancellation, payment, or account questions -- answer those with text."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "A short search query capturing what the customer is looking for: destination, theme, budget, duration, etc.",
-            }
-        },
-        "required": ["query"],
-    },
-}
-
 BOOKING_PREFIXES = ("__select_tour__:", "__select_date__:", "__select_travellers__:")
+
+
+def _available_dates(db: Session, tour: Tour, limit: int = 120) -> list[dict]:
+    """Departure dates a customer can actually book: open, with seats left, in the
+    future, past the tour's minimum-advance window, and not blacked out - the
+    same rules the booking itself enforces."""
+    from datetime import date, datetime, timedelta, timezone
+
+    from app.models.tours import TourCalendar, TourUnavailableDate
+    from app.services.tour_availability import min_advance_booking_days
+
+    earliest = date.today() + timedelta(days=max(0, min_advance_booking_days(db, tour.id)))
+    blackout = {
+        row[0].date()
+        for row in db.query(TourUnavailableDate.unavailable_date).filter(TourUnavailableDate.tour_id == tour.id).all()
+        if row[0]
+    }
+    rows = (
+        db.query(TourCalendar)
+        .filter(
+            TourCalendar.tour_id == tour.id,
+            TourCalendar.status == "available",
+            TourCalendar.available_seats > TourCalendar.booked_seats,
+            TourCalendar.tour_date >= datetime.now(timezone.utc),
+        )
+        .order_by(TourCalendar.tour_date.asc())
+        .all()
+    )
+    dates: list[dict] = []
+    for row in rows:
+        day = row.tour_date.date()
+        if day < earliest or day in blackout:
+            continue
+        dates.append({"date": day.isoformat(), "slots": max(0, row.available_seats - row.booked_seats), "calendar_id": row.id})
+        if len(dates) >= limit:
+            break
+    return dates
 
 
 def _parse_booking_command(db: Session, user_message: str) -> tuple[str, str | None, dict | None] | None:
@@ -317,13 +304,21 @@ def _parse_booking_command(db: Session, user_message: str) -> tuple[str, str | N
             tour_id = int(tour_id_str)
         except ValueError:
             return None
-        tour = db.query(Tour).filter(Tour.id == tour_id).first()
+        tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
         if not tour:
             return "Sorry, that tour could not be found.", None, None
-        reply = f"Great choice - **{tour.title}**! What date are you planning to travel? (e.g. 15 July 2025)"
+        available = _available_dates(db, tour)
+        if not available:
+            return (
+                f"**{tour.title}** has no open departure dates right now. "
+                f"You can open the tour page to check back later, or ask me about other tours.",
+                None, None,
+            )
+        reply = f"Great choice - **{tour.title}**! Pick one of the available departure dates below."
         return reply, "select_date", {
             "tour_id": tour.id,
             "tour_title": tour.title,
+            "available_dates": available,
             "duration_days": tour.number_of_days,
             "price": float(tour.price_start_per_person) if tour.price_start_per_person else None,
             "currency": tour.currency or "USD",
@@ -337,8 +332,22 @@ def _parse_booking_command(db: Session, user_message: str) -> tuple[str, str | N
             date_str = parts["date"]
         except Exception:
             return None
-        tour = db.query(Tour).filter(Tour.id == tour_id).first()
-        tour_title = tour.title if tour else "the tour"
+        tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
+        if not tour:
+            return "Sorry, that tour could not be found.", None, None
+        available = _available_dates(db, tour)
+        if date_str not in {d["date"] for d in available}:
+            return (
+                f"Sorry, **{tour.title}** isn't available on {date_str}. Please choose one of the available dates.",
+                "select_date",
+                {
+                    "tour_id": tour.id, "tour_title": tour.title, "available_dates": available,
+                    "duration_days": tour.number_of_days,
+                    "price": float(tour.price_start_per_person) if tour.price_start_per_person else None,
+                    "currency": tour.currency or "USD",
+                },
+            )
+        tour_title = tour.title
         reply = f"How many travellers will be joining for **{tour_title}** on **{date_str}**?"
         return reply, "select_travellers", {
             "tour_id": tour_id,
@@ -357,26 +366,58 @@ def _parse_booking_command(db: Session, user_message: str) -> tuple[str, str | N
             date_str = parts["date"]
         except Exception:
             return None
-        tour = db.query(Tour).filter(Tour.id == tour_id).first()
-        tour_title = tour.title if tour else "the tour"
-        price_per = float(tour.price_start_per_person) if tour and tour.price_start_per_person else None
-        currency = (tour.currency if tour else None) or "USD"
-        total = price_per * travellers if price_per else None
-        total_str = f"{currency} {total:,.0f}" if total else "price on request"
-        reply = (
-            f"Here is your booking summary:\n"
-            f"• Tour: {tour_title}\n"
-            f"• Date: {date_str}\n"
-            f"• Travellers: {travellers}\n"
-            f"• Total: {total_str}\n\n"
-            f"Confirm your booking below."
-        )
+        tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
+        if not tour:
+            return "Sorry, that tour could not be found.", None, None
+        slot = next((d for d in _available_dates(db, tour) if d["date"] == date_str), None)
+        if not slot:
+            return "Sorry, that date is no longer available. Please pick another date.", None, None
+
+        # Quote with the same engine checkout uses (slabs, group tiers, discounts,
+        # tax), so the total shown here is what the booking will actually charge.
+        from fastapi import HTTPException
+        from app.schemas.bookings import BookingCreate
+        from app.services.bookings import calculate_booking_price
+
+        try:
+            quote = calculate_booking_price(db, BookingCreate(
+                customer_id=0, tour_id=tour.id, tour_calendar_id=slot["calendar_id"],
+                no_of_adults=travellers, adults_count=travellers, no_of_children=0, children_count=0,
+                currency=tour.currency or "USD", booking_source="customer",
+            ))
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, str) else "That group size isn't available for this date."
+            return (
+                f"Sorry, I couldn't price {travellers} traveller(s) for **{tour.title}** on {date_str}: {detail}",
+                "select_travellers",
+                {"tour_id": tour.id, "tour_title": tour.title, "date": date_str,
+                 "price": float(tour.price_start_per_person) if tour.price_start_per_person else None,
+                 "currency": tour.currency or "USD"},
+            )
+        currency = quote["currency"]
+        total = float(quote["final_amount"])
+        per_person = round(total / travellers, 2) if travellers else None
+        lines = [
+            "Here is your booking summary:",
+            f"• Tour: {tour.title}",
+            f"• Date: {date_str}",
+            f"• Travellers: {travellers}",
+            f"• Tour price: {currency} {float(quote['base_amount']):,.2f}",
+        ]
+        if float(quote["group_discount_amount"]) > 0:
+            lines.append(f"• Group discount: -{currency} {float(quote['group_discount_amount']):,.2f}")
+        if float(quote["discount_amount"]) > 0:
+            lines.append(f"• Discount: -{currency} {float(quote['discount_amount']):,.2f}")
+        if float(quote["tax_amount"]) > 0:
+            lines.append(f"• Taxes & fees: {currency} {float(quote['tax_amount']):,.2f}")
+        lines.append(f"• Total: {currency} {total:,.2f}")
+        reply = "\n".join(lines) + "\n\nConfirm your booking below."
         return reply, "confirm_booking", {
-            "tour_id": tour_id,
-            "tour_title": tour_title,
+            "tour_id": tour.id,
+            "tour_title": tour.title,
             "date": date_str,
             "travellers": travellers,
-            "price_per_person": price_per,
+            "price_per_person": per_person,
             "total_price": total,
             "currency": currency,
         }
@@ -428,7 +469,7 @@ def _rule_based_reply(db: Session, user_message: str, faqs: list[ChatFAQ]) -> tu
     if tour_reply:
         return tour_reply, None, None
 
-    return "I can help with Tourvaa tours, booking steps, pricing, cancellations, payments, and destinations. Could you share a little more detail?", None, None
+    return NO_ANSWER_REPLY, None, None
 
 
 def get_or_create_session(db: Session, session_key: str | None) -> ChatSession:
@@ -452,6 +493,65 @@ def get_active_faqs(db: Session) -> list[ChatFAQ]:
         .order_by(ChatFAQ.sort_order, ChatFAQ.id)
         .all()
     )
+
+
+_SMALLTALK_WORDS = frozenset("hello hi hey thanks thank you ok okay good morning afternoon evening bye goodbye cheers great".split())
+
+
+def _is_smalltalk(user_message: str) -> bool:
+    words = re.findall(r"[a-z]+", user_message.lower())
+    return bool(words) and len(words) <= 4 and all(w in _SMALLTALK_WORDS for w in words)
+
+
+def _answer_with_rag(
+    db: Session,
+    user_message: str,
+    faqs: list[ChatFAQ],
+    customer_id: int | None,
+    page_url: str | None,
+) -> tuple[str, str | None, dict | None]:
+    """Answer from the site's own content (FAQs, Help Centre, pages, tours) via
+    retrieval - see services/rag_answer.py. No external LLM is involved.
+    Falls back to the scripted replies when retrieval finds nothing relevant."""
+    if customer_id and _wants_booking_info(user_message):
+        context = _get_customer_bookings_context(db, customer_id)
+        if context.startswith("- ") or "\n- " in context:
+            return "Here are your most recent bookings:\n" + context, None, None
+        return context, None, None
+
+    if _is_smalltalk(user_message):
+        msg = _normalise(user_message)
+        if "thank" in msg or "cheers" in msg:
+            return "You're welcome! Let me know if there's anything else I can help with.", None, None
+        if "bye" in msg:
+            return "Goodbye! Have a great day, and happy travels.", None, None
+        return _rule_based_reply(db, user_message, faqs)
+
+    from app.services import rag_answer
+
+    try:
+        result = rag_answer.answer(db, user_message, page_url)
+    except Exception:
+        logger.exception("RAG retrieval failed; using scripted fallback")
+        result = None
+
+    if result:
+        action_type, action_data = None, None
+        if result["tour_ids"]:
+            tours = db.query(Tour).filter(Tour.id.in_(result["tour_ids"]), Tour.status == "published").all()
+            order = {tid: i for i, tid in enumerate(result["tour_ids"])}
+            tours.sort(key=lambda t: order.get(t.id, 99))
+            if tours:
+                action_type, action_data = "show_tours", {"tours": _tour_cards(tours)}
+        return result["text"], action_type, action_data
+
+    return _rule_based_reply(db, user_message, faqs)
+
+
+def _stream_pieces(text: str, words_per_piece: int = 3):
+    tokens = re.findall(r"\S+\s*", text)
+    for i in range(0, len(tokens), words_per_piece):
+        yield "".join(tokens[i:i + words_per_piece])
 
 
 def stream_chat_reply(
@@ -494,92 +594,11 @@ def stream_chat_reply(
         return
 
     faqs = get_active_faqs(db)
-    faq_snippets = [f"Q: {f.question}\nA: {f.answer}" for f in faqs]
 
-    tour_snippets: list[str] = []
-
-    booking_context = None
-    if customer_id and _wants_booking_info(user_message):
-        booking_context = _get_customer_bookings_context(db, customer_id)
-
-    page_context = _page_context(db, page_url)
-    system_prompt = _build_system_prompt(faq_snippets, tour_snippets, booking_context, page_context)
-
-    history = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.session_id == session.id)
-        .order_by(ChatMessage.id.desc())
-        .limit(HISTORY_WINDOW * 2)
-        .all()
-    )
-    history = list(reversed(history))
-    messages = [{"role": m.role, "content": m.content} for m in history]
-
-    reply_text = ""
-
-    if not settings.ANTHROPIC_API_KEY:
-        logger.info("ANTHROPIC_API_KEY is not configured; using local chatbot fallback")
-        reply_text, action_type, action_data = _rule_based_reply(db, user_message, faqs)
-        yield {"type": "delta", "text": reply_text}
-    else:
-        try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-            call_messages = list(messages)
-
-            with client.messages.stream(
-                model=settings.CHATBOT_LLM_MODEL,
-                max_tokens=512,
-                system=system_prompt,
-                messages=call_messages,
-                tools=[SHOW_TOURS_TOOL],
-            ) as stream:
-                for text in stream.text_stream:
-                    reply_text += text
-                    yield {"type": "delta", "text": text}
-                final = stream.get_final_message()
-
-            if final.stop_reason == "tool_use":
-                tool_use = next(b for b in final.content if b.type == "tool_use")
-                search_query = (tool_use.input or {}).get("query") or user_message
-                tours = _search_tours(db, search_query)
-
-                if tours:
-                    action_type, action_data = "show_tours", {"tours": _tour_cards(tours)}
-                    tool_result_content = f"Found {len(tours)} matching published tour(s)."
-                else:
-                    tool_result_content = "No matching published tours were found."
-
-                call_messages.append({"role": "assistant", "content": final.content})
-                call_messages.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tool_use.id,
-                        "content": tool_result_content,
-                    }],
-                })
-                with client.messages.stream(
-                    model=settings.CHATBOT_LLM_MODEL,
-                    max_tokens=512,
-                    system=system_prompt,
-                    messages=call_messages,
-                ) as followup_stream:
-                    for text in followup_stream.text_stream:
-                        reply_text += text
-                        yield {"type": "delta", "text": text}
-
-                if not reply_text.strip():
-                    reply_text = (
-                        "Here are some Tourvaa tours that match your request. Tap a tour to start booking:"
-                        if tours else
-                        "I could not find a published tour matching that. Could you share a destination or budget?"
-                    )
-                    yield {"type": "delta", "text": reply_text}
-        except Exception as exc:
-            logger.error("Anthropic API error: %s", exc)
-            reply_text, action_type, action_data = _rule_based_reply(db, user_message, faqs)
-            yield {"type": "delta", "text": reply_text}
+    reply_text, action_type, action_data = _answer_with_rag(db, user_message, faqs, customer_id, page_url)
+    # Reply is stream-delivered in small pieces so the widget types it out.
+    for piece in _stream_pieces(reply_text):
+        yield {"type": "delta", "text": piece}
 
     assistant_message = ChatMessage(session_id=session.id, role="assistant", content=reply_text)
     db.add(assistant_message)
@@ -641,11 +660,26 @@ def list_faqs_paginated(
     return paginated_response(items=items, total=total, page=page, limit=limit)
 
 
+def _reindex_faq(db: Session, faq: ChatFAQ | None, faq_id: int | None = None) -> None:
+    """Keep the keyword cache and (if built) the vector index in step with FAQ edits."""
+    from app.services import rag, rag_answer
+
+    rag_answer.invalidate()
+    try:
+        if faq is not None:
+            rag.index_faq(db, faq)
+        elif faq_id is not None:
+            rag.delete_embedding(db, "faq", faq_id)
+    except Exception:
+        logger.warning("FAQ vector re-index failed", exc_info=True)
+
+
 def create_faq(db: Session, data: FAQCreate) -> ChatFAQ:
     faq = ChatFAQ(**data.model_dump())
     db.add(faq)
     db.commit()
     db.refresh(faq)
+    _reindex_faq(db, faq)
     return faq
 
 
@@ -657,6 +691,7 @@ def update_faq(db: Session, faq_id: int, data: FAQUpdate) -> ChatFAQ | None:
         setattr(faq, field, value)
     db.commit()
     db.refresh(faq)
+    _reindex_faq(db, faq)
     return faq
 
 
@@ -666,6 +701,7 @@ def delete_faq(db: Session, faq_id: int) -> bool:
         return False
     db.delete(faq)
     db.commit()
+    _reindex_faq(db, None, faq_id)
     return True
 
 
@@ -710,3 +746,92 @@ def get_chat_session_messages(db: Session, session_id: int) -> list[dict]:
         {"id": m.id, "role": m.role, "content": m.content, "created_at": m.created_at}
         for m in messages
     ]
+
+
+def chatbot_analytics(db: Session, days: int = 30, limit: int = 15) -> dict:
+    """Numbers for the admin Insights tab: how the bot is doing and what to teach it."""
+    from datetime import datetime, timedelta, timezone
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    def preceding_question(message: ChatMessage) -> str:
+        q = (
+            db.query(ChatMessage.content)
+            .filter(ChatMessage.session_id == message.session_id, ChatMessage.role == "user", ChatMessage.id < message.id)
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        return q[0] if q else ""
+
+    sessions = db.query(func.count(ChatSession.id)).filter(ChatSession.created_at >= since).scalar() or 0
+    questions = (
+        db.query(func.count(ChatMessage.id))
+        .filter(ChatMessage.role == "user", ChatMessage.created_at >= since)
+        .scalar()
+        or 0
+    )
+    unanswered_msgs = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.role == "assistant", ChatMessage.content == NO_ANSWER_REPLY, ChatMessage.created_at >= since)
+        .order_by(ChatMessage.id.desc())
+        .all()
+    )
+    up = db.query(func.count(ChatFeedback.id)).filter(ChatFeedback.rating > 0, ChatFeedback.created_at >= since).scalar() or 0
+    down_rows = (
+        db.query(ChatFeedback, ChatMessage)
+        .join(ChatMessage, ChatFeedback.message_id == ChatMessage.id)
+        .filter(ChatFeedback.rating < 0, ChatFeedback.created_at >= since)
+        .order_by(ChatFeedback.id.desc())
+        .all()
+    )
+
+    seen: dict[str, int] = {}
+    for m in unanswered_msgs:
+        q = _normalise(preceding_question(m))
+        if q:
+            seen[q] = seen.get(q, 0) + 1
+    unanswered = [{"question": q, "count": n} for q, n in sorted(seen.items(), key=lambda kv: kv[1], reverse=True)[:limit]]
+
+    return {
+        "days": days,
+        "sessions": sessions,
+        "questions": questions,
+        "unanswered_count": len(unanswered_msgs),
+        "answer_rate": round(100 * (1 - len(unanswered_msgs) / questions), 1) if questions else None,
+        "thumbs_up": up,
+        "thumbs_down": len(down_rows),
+        "unanswered": unanswered,
+        "disliked": [
+            {"question": preceding_question(m), "answer": m.content[:300], "comment": fb.comment or ""}
+            for fb, m in down_rows[:limit]
+        ],
+    }
+
+
+def purge_old_chat_data(db: Session, days: int = CHAT_RETENTION_DAYS) -> int:
+    """Delete chat sessions (with their messages and feedback) with no activity in `days` days."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    last_activity = (
+        db.query(ChatMessage.session_id.label("sid"), func.max(ChatMessage.created_at).label("last"))
+        .group_by(ChatMessage.session_id)
+        .subquery()
+    )
+    old_ids = [
+        sid for (sid,) in db.query(ChatSession.id)
+        .outerjoin(last_activity, last_activity.c.sid == ChatSession.id)
+        .filter(func.coalesce(last_activity.c.last, ChatSession.created_at) < cutoff)
+        .all()
+    ]
+    if not old_ids:
+        return 0
+    msg_ids = [mid for (mid,) in db.query(ChatMessage.id).filter(ChatMessage.session_id.in_(old_ids)).all()]
+    if msg_ids:
+        db.query(ChatFeedback).filter(ChatFeedback.message_id.in_(msg_ids)).delete(synchronize_session=False)
+    db.query(ChatFeedback).filter(ChatFeedback.session_id.in_(old_ids)).delete(synchronize_session=False)
+    db.query(ChatMessage).filter(ChatMessage.session_id.in_(old_ids)).delete(synchronize_session=False)
+    db.query(ChatSession).filter(ChatSession.id.in_(old_ids)).delete(synchronize_session=False)
+    db.commit()
+    logger.info("Chat retention: removed %d session(s) older than %d days", len(old_ids), days)
+    return len(old_ids)

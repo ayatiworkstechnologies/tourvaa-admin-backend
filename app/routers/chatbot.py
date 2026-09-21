@@ -1,7 +1,7 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -72,12 +72,10 @@ def chat(payload: ChatMessageRequest, request: Request, db: Session = Depends(ge
 
 @router.get("/health")
 def chatbot_health(db: Session = Depends(get_db)):
-    from app.config import settings
     from app.models.chatbot import ChatEmbedding
 
     return {
-        "llm_configured": bool(settings.ANTHROPIC_API_KEY),
-        "llm_model": settings.CHATBOT_LLM_MODEL if settings.ANTHROPIC_API_KEY else None,
+        "engine": "rag",
         "rag_indexed": db.query(ChatEmbedding).first() is not None,
     }
 
@@ -164,6 +162,15 @@ def admin_list_sessions(
     _: object = Depends(require_any_permission("chatbot.view", "view-chatbot")),
 ):
     return {"status": "success", **service.list_chat_sessions(db, params["page"], params["limit"])}
+
+
+@router.get("/admin/analytics")
+def admin_analytics(
+    days: int = Query(default=30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    _: object = Depends(require_any_permission("chatbot.view", "view-chatbot")),
+):
+    return {"status": "success", "data": service.chatbot_analytics(db, days=days)}
 
 
 @router.get("/admin/sessions/{session_id}/messages")
