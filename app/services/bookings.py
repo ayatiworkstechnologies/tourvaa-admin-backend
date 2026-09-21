@@ -2248,6 +2248,10 @@ def notify_overdue_agent_balances(db: Session) -> list[int]:
         due = _balance_due_date(db, booking)
         if due is None:
             continue
+        # _balance_due_date returns a date for the agent buffer window and a
+        # datetime elsewhere; a date is overdue once that whole day has passed.
+        if not isinstance(due, datetime):
+            due = datetime.combine(due, datetime.max.time())
         if due.tzinfo is None:
             due = due.replace(tzinfo=now.tzinfo)
         if due >= now:

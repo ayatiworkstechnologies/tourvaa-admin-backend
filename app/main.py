@@ -329,6 +329,21 @@ def schema_is_ready():
 # available in non-production for local development and API exploration.
 _docs_enabled = not settings.is_production
 
+
+class _QuietDocsAccessLog(logging.Filter):
+    """Drop uvicorn access-log lines for the OpenAPI schema / Swagger docs.
+
+    An open Swagger UI tab or an editor's OpenAPI extension can re-fetch
+    /openapi.json every few seconds, which buries the log lines that matter."""
+
+    _NOISY = ("GET /openapi.json ", "GET /docs ", "GET /redoc ")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not any(token in record.getMessage() for token in self._NOISY)
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietDocsAccessLog())
+
 app = FastAPI(
     title="Tourvaa Backend",
     version="1.0.0",
