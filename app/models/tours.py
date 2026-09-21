@@ -300,8 +300,12 @@ class TourAvailabilityConfig(Base):
     agent_reserve_deposit_percentage = Column(Float, default=30.0, nullable=False)
     # "weekly" | "fortnightly" | "monthly", NULL until a schedule is saved.
     frequency = Column(String(20), nullable=True)
-    # Week 1/2 for fortnightly, Week 1-4 for monthly; unused for weekly.
+    # Fortnightly: 1 = the week of the start date, 2 = the following week. Unused for weekly.
+    # Monthly: kept as the first selected week for older clients; see frequency_weeks.
     frequency_week = Column(Integer, nullable=True)
+    # Monthly: which occurrence(s) of each chosen weekday to run, 1-4 = 1st-4th and
+    # 5 = the last one in the month, e.g. [1, 3] with Saturday = 1st and 3rd Saturday.
+    frequency_weeks = Column(JSON, nullable=True)
     # ISO weekday ints (0=Monday..6=Sunday) the tour operates on.
     frequency_days = Column(JSON, nullable=True)
     # Capacity applied to each generated TourCalendar row.

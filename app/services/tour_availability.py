@@ -51,6 +51,7 @@ def _ser_config(o: TourAvailabilityConfig) -> dict:
         "agent_reserve_deposit_percentage": o.agent_reserve_deposit_percentage,
         "frequency": o.frequency,
         "frequency_week": o.frequency_week,
+        "frequency_weeks": o.frequency_weeks or ([o.frequency_week] if o.frequency == "monthly" and o.frequency_week else []),
         "frequency_days": o.frequency_days or [],
         "seats_per_occurrence": o.seats_per_occurrence,
         "created_at": o.created_at, "updated_at": o.updated_at,
@@ -63,8 +64,12 @@ def get_availability_config(db: Session, tour_id: int) -> dict | None:
     return _ser_config(o) if o else None
 
 
-def _generate_dates(start: date, end: date, frequency: str, frequency_week: int | None, weekdays: set[int]) -> list[date]:
-    """weekdays uses Python's date.weekday() convention: 0=Monday..6=Sunday."""
+def _generate_dates(start: date, end: date, frequency: str, frequency_week: int | None, weekdays: set[int], weeks: list[int] | None = None) -> list[date]:
+    """weekdays uses Python's date.weekday() convention: 0=Monday..6=Sunday.
+
+    fortnightly: frequency_week 1 = the week of `start`, 2 = the week after, then every 2 weeks.
+    monthly: `weeks` lists which occurrence of each weekday to run - 1-4 = 1st-4th, 5 = the last
+    one in the month (falls back to [frequency_week] for older data)."""
     dates: list[date] = []
 
     if frequency == "weekly":
@@ -86,17 +91,22 @@ def _generate_dates(start: date, end: date, frequency: str, frequency_week: int 
             week_start += timedelta(weeks=2)
 
     elif frequency == "monthly":
-        nth = frequency_week or 1
+        nths = weeks or [frequency_week or 1]
         month_cursor = date(start.year, start.month, 1)
         while month_cursor <= end:
             days_in_month = calendar_module.monthrange(month_cursor.year, month_cursor.month)[1]
             first_weekday = month_cursor.weekday()
+            last_weekday = (first_weekday + days_in_month - 1) % 7
             for weekday in weekdays:
-                day_number = 1 + ((weekday - first_weekday) % 7) + (nth - 1) * 7
-                if day_number <= days_in_month:
-                    candidate = date(month_cursor.year, month_cursor.month, day_number)
-                    if start <= candidate <= end:
-                        dates.append(candidate)
+                for nth in nths:
+                    if nth == 5:  # the last such weekday of the month
+                        day_number = days_in_month - ((last_weekday - weekday) % 7)
+                    else:
+                        day_number = 1 + ((weekday - first_weekday) % 7) + (nth - 1) * 7
+                    if 1 <= day_number <= days_in_month:
+                        candidate = date(month_cursor.year, month_cursor.month, day_number)
+                        if start <= candidate <= end:
+                            dates.append(candidate)
             month_cursor = date(month_cursor.year + 1, 1, 1) if month_cursor.month == 12 else date(month_cursor.year, month_cursor.month + 1, 1)
 
     return sorted(set(dates))
@@ -117,15 +127,17 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
     o.agent_reserve_deposit_percentage = data.agent_reserve_deposit_percentage
     o.frequency = data.frequency
     o.frequency_week = data.frequency_week
+    o.frequency_weeks = data.frequency_weeks if data.frequency == "monthly" else []
     o.frequency_days = data.frequency_days
     o.seats_per_occurrence = data.seats_per_occurrence
 
     created_count = 0
     updated_count = 0
+    removed_count = 0
     start = _as_date(o.availability_start_date)
     end = _as_date(o.availability_end_date)
     if o.frequency and o.frequency_days and start and end:
-        candidate_dates = _generate_dates(start, end, o.frequency, o.frequency_week, set(o.frequency_days))
+        candidate_dates = _generate_dates(start, end, o.frequency, o.frequency_week, set(o.frequency_days), o.frequency_weeks)
         existing_entries = {
             _as_date(c.tour_date): c for c in db.query(TourCalendar).filter(TourCalendar.tour_id == tour_id).all()
         }
@@ -151,6 +163,29 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
             ))
             created_count += 1
 
+        # Changing the schedule (e.g. Monday -> Tuesday) leaves the old dates behind. On request,
+        # delete future, unbooked, unblocked dates that no longer fit - never a date that any
+        # booking (even a cancelled one) still points at.
+        if data.remove_unmatched_dates:
+            from app.models.bookings import Booking
+
+            today = date.today()
+            fitting = set(candidate_dates)
+            stale = {
+                d: c for d, c in existing_entries.items()
+                if d not in fitting and d >= today and c.status != "blocked" and (c.booked_seats or 0) == 0
+            }
+            referenced = (
+                {row[0] for row in db.query(Booking.tour_calendar_id).filter(Booking.tour_calendar_id.in_([c.id for c in stale.values()])).all()}
+                if stale else set()
+            )
+            for d, c in stale.items():
+                if c.id in referenced:
+                    continue
+                db.delete(c)
+                existing_entries.pop(d, None)
+                removed_count += 1
+
         # Also update any other unblocked calendar entries with 0 bookings for this tour
         for existing in existing_entries.values():
             if existing.status != "blocked" and (existing.booked_seats or 0) == 0:
@@ -169,13 +204,17 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
             "frequency": o.frequency, "frequency_week": o.frequency_week, "frequency_days": o.frequency_days,
             "calendar_entries_generated": created_count,
             "calendar_entries_updated": updated_count,
+            "calendar_entries_removed": removed_count,
         },
         request=request,
     )
     maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
     db.refresh(o)
-    return _ser_config(o)
+    result = _ser_config(o)
+    result["generated_dates"] = created_count
+    result["removed_dates"] = removed_count
+    return result
 
 
 def min_advance_booking_days(db: Session, tour_id: int) -> int:

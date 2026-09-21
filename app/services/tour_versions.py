@@ -47,13 +47,20 @@ def _serialize(v: TourVersion) -> dict:
 
 def _tour_snapshot(db: Session, tour: Tour) -> dict:
     from app.services.tours import (
+        get_overview,
+        list_accommodations,
+        list_activities,
         list_calendar,
         list_discounts,
+        list_exclusions,
         list_extensions,
         list_gallery,
+        list_highlights,
         list_inclusions,
         list_itineraries,
         list_pricing,
+        list_similar_tours,
+        list_unavailable_dates,
     )
     snapshot = {
         "title": tour.title,
@@ -89,6 +96,15 @@ def _tour_snapshot(db: Session, tour: Tour) -> dict:
         "calendar": list_calendar(db, tour.id),
         "discounts": list_discounts(db, tour.id),
         "extensions": list_extensions(db, tour.id),
+        # Shown to the approving admin in the change comparison (not part of
+        # the rollback restore below, which only re-applies the keys above).
+        "overview": get_overview(db, tour.id),
+        "highlights": list_highlights(db, tour.id),
+        "exclusions": list_exclusions(db, tour.id),
+        "accommodations": list_accommodations(db, tour.id),
+        "activities": list_activities(db, tour.id),
+        "similar_tours": list_similar_tours(db, tour.id),
+        "unavailable_dates": list_unavailable_dates(db, tour.id),
     }
     # The child-list serializers above return raw datetime/date/Decimal
     # values straight from the ORM; jsonable_encoder converts everything to

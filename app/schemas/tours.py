@@ -368,8 +368,12 @@ class AvailabilityConfigPayload(BaseModel):
     agent_reserve_deposit_percentage: float = Field(default=30.0, ge=0, le=100)
     frequency: str | None = None
     frequency_week: int | None = Field(default=None, ge=1, le=4)
+    # Monthly only: 1-4 = 1st-4th occurrence of each chosen weekday, 5 = the last one.
+    frequency_weeks: list[int] = Field(default_factory=list)
     frequency_days: list[int] = Field(default_factory=list)
     seats_per_occurrence: int = Field(default=0, ge=0)
+    # When the schedule changes, also delete unbooked calendar dates that no longer fit it.
+    remove_unmatched_dates: bool = False
 
     @field_validator("frequency")
     @classmethod
@@ -385,6 +389,13 @@ class AvailabilityConfigPayload(BaseModel):
             raise ValueError("frequency_days must contain weekday values 0 (Monday) through 6 (Sunday)")
         return v
 
+    @field_validator("frequency_weeks")
+    @classmethod
+    def validate_frequency_weeks(cls, v: list[int]):
+        if any(week < 1 or week > 5 for week in v):
+            raise ValueError("frequency_weeks must contain 1-4 (1st-4th) or 5 (last)")
+        return sorted(set(v))
+
     @model_validator(mode="after")
     def validate_range_and_frequency(self) -> "AvailabilityConfigPayload":
         if self.availability_start_date and self.availability_end_date and self.availability_end_date < self.availability_start_date:
@@ -393,8 +404,12 @@ class AvailabilityConfigPayload(BaseModel):
             raise ValueError("Select at least one day of the week for the chosen frequency")
         if self.frequency in ("fortnightly",) and self.frequency_week not in (1, 2):
             raise ValueError("frequency_week must be 1 or 2 for a fortnightly schedule")
-        if self.frequency == "monthly" and self.frequency_week not in (1, 2, 3, 4):
-            raise ValueError("frequency_week must be between 1 and 4 for a monthly schedule")
+        if self.frequency == "monthly":
+            if not self.frequency_weeks and self.frequency_week in (1, 2, 3, 4):
+                self.frequency_weeks = [self.frequency_week]  # older clients send a single week
+            if not self.frequency_weeks:
+                raise ValueError("Select at least one week of the month for a monthly schedule")
+            self.frequency_week = self.frequency_weeks[0] if self.frequency_weeks[0] <= 4 else None
         return self
 
 
