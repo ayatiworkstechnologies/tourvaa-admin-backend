@@ -343,7 +343,7 @@ async def upload_vehicle_file(
     v = db.query(SupplierVehicle).filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier.id).first()
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle not found")
-    path = await _save_vehicle_file(file, "vehicle-docs")
+    path = await _save_vehicle_file(file, "vehicle-docs", allow_pdf=True)
     if not path:
         # _save_vehicle_file returns "" for an empty/unsupported/spoofed file;
         # without this guard the stored certificate would be silently wiped.
@@ -378,18 +378,24 @@ async def upload_vehicle_photos(
             detail=f"A vehicle can have at most {MAX_VEHICLE_PHOTOS} photos ({len(existing)} already uploaded).",
         )
     initial_count = len(existing)
+    rejected_files: list[str] = []
     for f in files:
-        path = await _save_vehicle_file(f, "vehicle-photos")
+        path = await _save_vehicle_file(f, "vehicle-photos", allow_pdf=False)
         if path:
             existing.append(path)
+        else:
+            rejected_files.append(f.filename or "unnamed file")
     if len(existing) == initial_count:
-        raise HTTPException(status_code=400, detail="No valid image files were uploaded (JPG, PNG, WEBP, AVIF or PDF only)")
+        raise HTTPException(status_code=400, detail="No valid image files were uploaded (JPG, PNG, WEBP or AVIF only)")
     v.vehicle_photos = json.dumps(existing)
     v.approval_status = "pending"  # new photos need admin re-review
     v.rejection_reason = None
     db.commit()
     db.refresh(v)
-    return {"status": "success", "message": "Photos uploaded", "data": _serialize_vehicle(v)}
+    message = "Photos uploaded"
+    if rejected_files:
+        message += f"; skipped invalid image files: {', '.join(rejected_files)}"
+    return {"status": "success", "message": message, "data": _serialize_vehicle(v)}
 
 
 @router.delete("/me/vehicles/{vehicle_id}/photos")
@@ -415,13 +421,15 @@ def delete_vehicle_photo(vehicle_id: int, photo_index: int = Query(...), db: Ses
     return {"status": "success", "message": "Photo removed", "data": _serialize_vehicle(v)}
 
 
-async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
+async def _save_vehicle_file(upload: UploadFile, subfolder: str, *, allow_pdf: bool = True) -> str:
     from app.utils.cloudinary_client import upload_to_cloudinary
     from app.utils.media import detect_image_type, sanitize_filename
     ALLOWED = {
         "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
         "image/webp": "webp", "image/avif": "avif", "application/pdf": "pdf",
     }
+    if not allow_pdf:
+        ALLOWED.pop("application/pdf", None)
     IMAGE_EXT_BY_SIGNATURE = {"jpeg": "jpg", "png": "png", "webp": "webp", "avif": "avif"}
     content = await upload.read()
     if not content:
@@ -429,7 +437,10 @@ async def _save_vehicle_file(upload: UploadFile, subfolder: str) -> str:
     ext = ALLOWED.get(upload.content_type or "")
     if not ext:
         fname = (upload.filename or "").lower()
-        for s, e in [(".pdf", "pdf"), (".jpg", "jpg"), (".jpeg", "jpg"), (".png", "png"), (".webp", "webp"), (".avif", "avif")]:
+        suffixes = [(".jpg", "jpg"), (".jpeg", "jpg"), (".png", "png"), (".webp", "webp"), (".avif", "avif")]
+        if allow_pdf:
+            suffixes.insert(0, (".pdf", "pdf"))
+        for s, e in suffixes:
             if fname.endswith(s):
                 ext = e
                 break

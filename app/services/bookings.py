@@ -4,7 +4,7 @@ from math import ceil
 from typing import Optional
 
 from fastapi import HTTPException, Request
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
@@ -85,8 +85,8 @@ def _email_agent_booking_status(db, booking: Booking, new_status: str, reason: s
     )
 
 
-def _booking_code(booking_id: int) -> str:
-    return f"TOURVAA-BOOKING-{booking_id:05d}"
+def _booking_code(booking_id: int, source: str = "customer") -> str:
+    return f"{'TVAA' if source == 'agent' else 'TVAC'}-{booking_id}"
 
 
 def _parse_dt(value: str | None):
@@ -424,7 +424,7 @@ def _agent_reserve_deposit_info(db: Session, booking: Booking) -> Optional[dict]
 def serialize_booking(db: Session, booking: Booking, detail: bool = False, include_supplier_breakdown: bool = False, hide_supplier_identity: bool = False) -> dict:
     data = {
         "id": booking.id,
-        "booking_code": booking.booking_code or _booking_code(booking.id),
+        "booking_code": booking.booking_code or _booking_code(booking.id, booking.booking_source),
         "customer_id": booking.customer_id,
         "customer_name": booking.customer.full_name if booking.customer else None,
         "customer_email": booking.customer.email if booking.customer else None,
@@ -1261,7 +1261,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     )
     db.add(booking)
     db.flush()
-    booking.booking_code = _booking_code(booking.id)
+    booking.booking_code = _booking_code(booking.id, booking.booking_source)
     if resolved_attribution:
         resolved_attribution.booking_id = booking.id
         resolved_attribution.status = "consumed"
@@ -1624,6 +1624,9 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
     return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
+OFFLINE_PAYMENT_HOLD_DAYS = 7
+
+
 def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> list[int]:
     """Release the calendar hold on bookings that never got paid.
 
@@ -1639,16 +1642,25 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
     """
     cutoff = utcnow() - timedelta(minutes=older_than_minutes)
     stale_statuses = ("pending_payment", "pending_credit_approval", "pending_supplier_assignment")
+    # Agent credit / bank-transfer bookings wait on an offline step (admin
+    # credit approval, a wire landing), so the short online-payment hold would
+    # cancel them before that can happen. They get a much longer hold instead.
+    offline_payment_statuses = ("credit_approval_pending", "bank_transfer_pending")
+    offline_cutoff = utcnow() - timedelta(days=OFFLINE_PAYMENT_HOLD_DAYS)
     candidates = (
         db.query(Booking)
         .filter(Booking.booking_status.in_(stale_statuses))
-        .filter(Booking.created_at < cutoff)
+        .filter(or_(
+            and_(Booking.payment_status.notin_(offline_payment_statuses), Booking.created_at < cutoff),
+            and_(Booking.payment_status.in_(offline_payment_statuses), Booking.created_at < offline_cutoff),
+        ))
         .with_for_update()
         .all()
     )
     expired_ids: list[int] = []
+    expired_codes: list[str] = []
     for booking in candidates:
-        reason = f"Automatically cancelled - no payment received within {older_than_minutes} minutes of booking"
+        reason = f"Automatically cancelled - no payment received in time"
         _set_status(db, booking, "cancelled", None, "system", reason)
         booking.cancellation_reason = reason
         booking.cancelled_at = utcnow()
@@ -1691,13 +1703,14 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
             except Exception:
                 logger.warning("Agent ledger reversal failed for booking %s", booking.id, exc_info=True)
         expired_ids.append(booking.id)
+        expired_codes.append(booking.booking_code or _booking_code(booking.id, booking.booking_source))
 
     if expired_ids:
         db.commit()
         logger.info("Expired %d stale pending booking(s): %s", len(expired_ids), expired_ids)
         from app.utils.email_templates import admin_booking_event_email
         from app.utils.notification_triggers import email_admins
-        codes = ", ".join(_booking_code(bid) for bid in expired_ids)
+        codes = ", ".join(expired_codes)
         detail = f"{len(expired_ids)} unpaid booking(s) were automatically cancelled after {older_than_minutes} minutes without payment."
         admin_url = f"{settings.FRONTEND_URL}/admin/bookings"
         email_admins(
@@ -2206,3 +2219,61 @@ def add_communication_reply(db: Session, communication_id: int, message: str, ac
 
 
 
+
+
+def notify_overdue_agent_balances(db: Session) -> list[int]:
+    """Flag agent 'Reserve Now' (pay_later) bookings whose balance is past its due date.
+
+    Deliberately does NOT cancel: these bookings already hold a deposit, and
+    cancelling one triggers refund/forfeit rules that are an admin decision
+    (use cancel_booking). Instead the agent gets a reminder and admins get an
+    alert - once per booking (deduped on the Notification row).
+
+    Returns the ids of bookings flagged this run.
+    """
+    from app.models.notifications import Notification
+    from app.services.notifications import enqueue_notification, notify_admins
+
+    closed = ("cancelled", "completed", "declined", "refunded", "cancellation_requested", "draft")
+    candidates = (
+        db.query(Booking)
+        .filter(Booking.booking_source == "agent", Booking.agent_payment_method == "pay_later")
+        .filter(~Booking.booking_status.in_(closed))
+        .filter(Booking.amount_pending > 0)
+        .all()
+    )
+    now = utcnow()
+    flagged: list[int] = []
+    for booking in candidates:
+        due = _balance_due_date(db, booking)
+        if due is None:
+            continue
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=now.tzinfo)
+        if due >= now:
+            continue
+        already = db.query(Notification.id).filter(
+            Notification.notification_type == "balance_overdue",
+            Notification.entity_type == "booking",
+            Notification.entity_id == booking.id,
+        ).first()
+        if already:
+            continue
+        code = booking.booking_code or _booking_code(booking.id, booking.booking_source)
+        if booking.agent and booking.agent.user_id:
+            enqueue_notification(
+                db, user_id=booking.agent.user_id, notification_type="balance_overdue",
+                title="Balance payment overdue",
+                message=f"The balance for booking {code} was due on {due:%d %b %Y}. Please pay now to keep the booking.",
+                entity_type="booking", entity_id=booking.id,
+            )
+        notify_admins(
+            db, notification_type="balance_overdue", title="Agent balance overdue",
+            message=f"Booking {code} has an unpaid balance past its {due:%d %b %Y} due date.",
+            entity_type="booking", entity_id=booking.id,
+        )
+        flagged.append(booking.id)
+    if flagged:
+        db.commit()
+        logger.info("Flagged %d booking(s) with overdue agent balances: %s", len(flagged), flagged)
+    return flagged

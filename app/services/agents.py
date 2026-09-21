@@ -152,7 +152,7 @@ def get_agent_activity(db: Session, agent_id: int, recent_limit: int = 10):
         "recent_bookings": [
             {
                 "id": row.id,
-                "booking_code": row.booking_code or f"BK-{row.id:06d}",
+                "booking_code": row.booking_code or str(row.id),
                 "customer_id": row.customer_id,
                 "customer_name": row.customer.full_name if row.customer else "",
                 "tour_id": row.tour_id,
@@ -315,7 +315,7 @@ def create_agent(db: Session, data: AgentCreate, actor: User, request: Request |
     item = Agent(**agent_data)
     db.add(item)
     db.flush()
-    item.agent_code = f"{item.id:05d}"
+    item.agent_code = str(item.id)
     log_audit(db, actor=actor, action="create_agent", entity_type="agent", entity_id=item.id, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)

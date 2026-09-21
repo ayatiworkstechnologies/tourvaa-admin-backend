@@ -161,7 +161,7 @@ def create_affiliate(db: Session, data: AffiliateCreate, actor: User, request: R
     item = Affiliate(**affiliate_data)
     db.add(item)
     db.flush()
-    item.affiliate_code = f"{item.id:05d}"
+    item.affiliate_code = str(item.id)
     log_audit(db, actor=actor, action="create_affiliate", entity_type="affiliate", entity_id=item.id, new_values=serialize_affiliate(item), request=request)
     db.commit()
     db.refresh(item)

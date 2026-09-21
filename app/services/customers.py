@@ -35,7 +35,7 @@ def _split_name(full_name: str):
 
 
 def _customer_code(customer_id: int):
-    return f"{customer_id:05d}"
+    return str(customer_id)
 
 
 
@@ -322,7 +322,11 @@ def create_customer(
         last_name = last_name or derived_last_name
 
     linked_user = db.query(User).filter(User.email == email).first()
+    from app.services.agent_scope import get_actor_agent, is_agent_user
+    added_by_agent = get_actor_agent(db, actor) if is_agent_user(actor) else None
     customer = Customer(
+        customer_type="agent" if added_by_agent else "registered",
+        agent_id=added_by_agent.id if added_by_agent else None,
         user_id=linked_user.id if linked_user else None,
         first_name=first_name,
         last_name=last_name,

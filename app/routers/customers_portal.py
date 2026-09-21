@@ -226,7 +226,11 @@ def create_customer_booking(payload: dict, request: Request, db: Session = Depen
 @router.get("/bookings/{booking_id}")
 def customer_booking_detail(booking_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _current_customer(db, current_user)
-    return {"status": "success", "data": get_booking_detail(db, booking_id, actor=current_user, request=request)}
+    data = get_booking_detail(db, booking_id, actor=current_user, request=request)
+    from app.models.reviews import TourReview
+    # Lets the portal hide the review form once this booking has been reviewed.
+    data["has_review"] = db.query(TourReview.id).filter(TourReview.booking_id == booking_id).first() is not None
+    return {"status": "success", "data": data}
 
 
 @router.get("/bookings/{booking_id}/itinerary")

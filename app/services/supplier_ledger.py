@@ -16,7 +16,7 @@ from app.models.users import User
 
 
 def _payout_code(payout_id: int) -> str:
-    return f"SPO-{payout_id:06d}"
+    return str(payout_id)
 
 
 def _serialize_ledger(row: SupplierLedger) -> dict:
@@ -59,7 +59,18 @@ def _serialize_payout(row: SupplierPayout) -> dict:
         "paid_by": row.paid_by,
         "payer_name": row.payer.name if row.payer else None,
         "paid_at": row.paid_at,
-        "items": [{"ledger_id": i.ledger_id, "amount": str(i.amount)} for i in row.items],
+        "items": [
+            {
+                "ledger_id": i.ledger_id,
+                "amount": str(i.amount),
+                "booking_id": i.ledger.booking_id if i.ledger else None,
+                "booking_code": i.ledger.booking.booking_code if i.ledger and i.ledger.booking else None,
+                "booking_status": i.ledger.booking.booking_status if i.ledger and i.ledger.booking else None,
+                "ledger_status": i.ledger.status if i.ledger else None,
+                "notes": i.ledger.notes if i.ledger else None,
+            }
+            for i in row.items
+        ],
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -169,7 +180,12 @@ def get_supplier_statement(db: Session, supplier_id: int) -> dict:
     supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
-    rows = db.query(SupplierLedger).options(joinedload(SupplierLedger.supplier), joinedload(SupplierLedger.booking)).filter(SupplierLedger.supplier_id == supplier_id).all()
+    rows = (
+        db.query(SupplierLedger)
+        .options(joinedload(SupplierLedger.supplier), joinedload(SupplierLedger.booking))
+        .filter(SupplierLedger.supplier_id == supplier_id)
+        .all()
+    )
     by_currency: dict[str, dict] = {}
     for r in rows:
         cur = r.currency or "USD"
@@ -178,7 +194,8 @@ def get_supplier_statement(db: Session, supplier_id: int) -> dict:
         totals["total_commission"] = money(totals["total_commission"] + money(r.commission_amount))
         totals["total_net_payable"] = money(totals["total_net_payable"] + money(r.net_payable))
         totals["total_paid"] = money(totals["total_paid"] + money(r.amount_paid))
-        totals["total_pending"] = money(totals["total_pending"] + money(r.amount_pending))
+        if r.booking and r.booking.booking_status == "completed":
+            totals["total_pending"] = money(totals["total_pending"] + money(r.amount_pending))
     return {
         "supplier_id": supplier_id,
         "supplier_name": supplier.supplier_name,
@@ -246,7 +263,14 @@ def _resolve_payout_supplier_id(db: Session, data: SupplierPayoutCreate, actor: 
 
 
 def _select_payout_ledgers(db: Session, supplier_id: int, data: SupplierPayoutCreate) -> list[SupplierLedger]:
-    query = db.query(SupplierLedger).filter(SupplierLedger.supplier_id == supplier_id)
+    # Supplier earnings become payable only after the booked tour is marked
+    # completed. Keep the account scope on the ledger row and join the booking
+    # status so confirmed/ongoing reservations cannot be paid early.
+    query = (
+        db.query(SupplierLedger)
+        .join(Booking, SupplierLedger.booking_id == Booking.id)
+        .filter(SupplierLedger.supplier_id == supplier_id, Booking.booking_status == "completed")
+    )
     if data.ledger_ids:
         ledger_rows = query.filter(SupplierLedger.id.in_(data.ledger_ids)).with_for_update().all()
     else:
@@ -394,7 +418,4 @@ def mark_payout_paid(db: Session, payout_id: int, data: SupplierPayoutMarkPaid, 
 
     log_audit(db, actor=actor, action="mark_payout_paid", entity_type="supplier_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "paid"}, request=request)
     return _serialize_payout(payout)
-
-
-
 

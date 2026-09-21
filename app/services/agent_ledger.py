@@ -16,7 +16,7 @@ from app.models.users import User
 
 
 def _payout_code(payout_id: int) -> str:
-    return f"APO-{payout_id:06d}"
+    return str(payout_id)
 
 
 def _serialize_ledger(row: AgentLedger) -> dict:
@@ -149,7 +149,11 @@ def get_agent_statement(db: Session, agent_id: int) -> dict:
     total_commission = sum(money(r.commission_amount) for r in rows)
     total_net = sum(money(r.net_payable) for r in rows)
     total_paid = sum(money(r.amount_paid) for r in rows)
-    total_pending = sum(money(r.amount_pending) for r in rows)
+    total_pending = sum(
+        money(r.amount_pending)
+        for r in rows
+        if r.booking and r.booking.booking_status == "completed"
+    )
     return {
         "agent_id": agent_id,
         "agent_name": agent.agent_name,
@@ -215,7 +219,14 @@ def _resolve_payout_agent_id(db: Session, data: AgentPayoutCreate, actor: User) 
 
 
 def _select_payout_ledgers(db: Session, agent_id: int, data: AgentPayoutCreate) -> list[AgentLedger]:
-    query = db.query(AgentLedger).filter(AgentLedger.agent_id == agent_id)
+    # Agent commission is payable only after the associated tour is completed;
+    # pending/ongoing bookings remain visible in the ledger but not eligible
+    # for a payout request.
+    query = (
+        db.query(AgentLedger)
+        .join(Booking, AgentLedger.booking_id == Booking.id)
+        .filter(AgentLedger.agent_id == agent_id, Booking.booking_status == "completed")
+    )
     if data.ledger_ids:
         ledger_rows = query.filter(AgentLedger.id.in_(data.ledger_ids)).with_for_update().all()
     else:

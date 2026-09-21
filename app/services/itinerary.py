@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -7,6 +8,8 @@ from app.config import get_private_docs_root
 from app.models.bookings import Booking
 from app.models.tours import TourHighlight, TourItinerary
 from app.models.users import User
+from app.models.settings import AppSetting
+from app.config import settings
 from app.utils.itinerary_pdf import generate_pdf
 
 
@@ -43,15 +46,22 @@ def download_itinerary_pdf(db: Session, booking_id: int, actor: User) -> tuple[s
 
     storage = get_private_docs_root().joinpath("itineraries")
     storage.mkdir(parents=True, exist_ok=True)
-    filename = f"{booking.booking_code or booking.id}-itinerary.pdf"
+    # Version the cached artifact so PDFs generated before the contact-footer
+    # settings became dynamic are not served indefinitely.
+    filename = f"{booking.booking_code or booking.id}-itinerary-v2.pdf"
     pdf_path = storage.joinpath(filename)
 
     if not pdf_path.exists():
+        support_setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
+        support_email = (support_setting.value or "").strip() if support_setting else ""
+        website = urlparse(settings.FRONTEND_URL or "").netloc or "www.tourvaa.com"
         itinerary_data = {
             "booking_code": booking.booking_code or str(booking.id),
             "tour_name": booking.tour_name or "Tour",
             "customer_name": booking.customer.full_name if booking.customer else "",
             "tour_date": booking.tour_date or "",
+            "support_email": support_email,
+            "website": website,
             "highlights": [{"title": h.title, "description": h.short_description or ""} for h in highlights],
             "days": [
                 {

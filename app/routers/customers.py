@@ -367,7 +367,7 @@ def self_create_booking(
         )
         db.add(customer)
         db.flush()
-        customer.customer_code = f"CUST-{customer.id:06d}"
+        customer.customer_code = str(customer.id)
         db.commit()
         db.refresh(customer)
 

@@ -512,10 +512,16 @@ def dashboard_summary(
         gross_value = float(eligible_query.with_entities(
             sqlfunc.coalesce(sqlfunc.sum(Booking.final_amount), 0)
         ).scalar() or 0)
+        # Commission is earned/payable only after the tour is completed;
+        # upcoming and ongoing bookings must not inflate the agent's balance.
+        completed_query = booking_query.filter(Booking.booking_status == "completed")
+        completed_gross_value = float(completed_query.with_entities(
+            sqlfunc.coalesce(sqlfunc.sum(Booking.final_amount), 0)
+        ).scalar() or 0)
         if (agent.discount_type or "").lower() == "percentage":
-            commission_earned = gross_value * float(agent.discount_value or 0) / 100
+            commission_earned = completed_gross_value * float(agent.discount_value or 0) / 100
         else:
-            commission_earned = eligible_query.count() * float(agent.discount_value or 0)
+            commission_earned = completed_query.count() * float(agent.discount_value or 0)
 
         return {
             "status": "success",

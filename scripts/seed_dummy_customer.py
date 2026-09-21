@@ -32,7 +32,7 @@ def main() -> None:
             )
             db.add(customer)
             db.flush()
-            customer.customer_code = f"{customer.id:05d}"
+            customer.customer_code = str(customer.id)
             db.commit()
             print(f"Created demo customer {customer.id} ({DEMO_EMAIL})")
         else:

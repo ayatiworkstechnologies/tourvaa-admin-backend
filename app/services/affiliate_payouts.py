@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.models.affiliate_tracking import AffiliateConversion, AffiliatePayout, AffiliatePayoutItem, AffiliatePayoutMethod, AffiliateWalletTransaction
 from app.models.affiliates import Affiliate
+from app.models.bookings import Booking
 from app.models.users import User
 from app.schemas.affiliate_tracking import AffiliatePayoutMethodCreate, AffiliatePayoutMethodUpdate, AffiliatePayoutRequestCreate
 from app.services.affiliate_tracking import _payout_code, _s_payout, _wallet_entry
@@ -99,7 +100,16 @@ def delete_payout_method(db: Session, affiliate_id: int, method_id: int) -> None
 def get_available_balance(db: Session, affiliate_id: int) -> Decimal:
     payable_statuses = ("pending", "confirmed")
     held_conversion_ids = {row[0] for row in db.query(AffiliatePayoutItem.conversion_id).join(AffiliatePayout).filter(AffiliatePayout.affiliate_id == affiliate_id).all()}
-    rows = db.query(AffiliateConversion).filter(AffiliateConversion.affiliate_id == affiliate_id, AffiliateConversion.status.in_(payable_statuses)).all()
+    rows = (
+        db.query(AffiliateConversion)
+        .join(Booking, AffiliateConversion.booking_id == Booking.id)
+        .filter(
+            AffiliateConversion.affiliate_id == affiliate_id,
+            AffiliateConversion.status.in_(payable_statuses),
+            Booking.booking_status == "completed",
+        )
+        .all()
+    )
     return money(sum((r.final_commission if r.final_commission is not None else r.commission_amount) for r in rows if r.id not in held_conversion_ids))
 
 
@@ -120,7 +130,13 @@ def get_wallet_summary(db: Session, affiliate_id: int) -> dict:
     def amt(c):
         return c.final_commission if c.final_commission is not None else c.commission_amount
 
-    pending = money(sum(amt(c) for c in conversions if c.status in payable_statuses and c.id not in held_conversion_ids))
+    completed_conversions = {
+        c.id for c in db.query(AffiliateConversion.id)
+        .join(Booking, AffiliateConversion.booking_id == Booking.id)
+        .filter(Booking.booking_status == "completed")
+        .all()
+    }
+    pending = money(sum(amt(c) for c in conversions if c.id in completed_conversions and c.status in payable_statuses and c.id not in held_conversion_ids))
     held = money(sum(amt(c) for c in conversions if c.id in held_conversion_ids))
     paid = money(sum(amt(c) for c in conversions if c.status == "paid"))
     lifetime = money(sum(amt(c) for c in conversions if c.status not in ("void", "reversed")))
@@ -172,7 +188,12 @@ def request_payout(db: Session, affiliate: Affiliate, data: AffiliatePayoutReque
     held_conversion_ids = {row[0] for row in db.query(AffiliatePayoutItem.conversion_id).join(AffiliatePayout).filter(AffiliatePayout.affiliate_id == affiliate.id).all()}
     candidates = (
         db.query(AffiliateConversion)
-        .filter(AffiliateConversion.affiliate_id == affiliate.id, AffiliateConversion.status.in_(("pending", "confirmed")))
+        .join(Booking, AffiliateConversion.booking_id == Booking.id)
+        .filter(
+            AffiliateConversion.affiliate_id == affiliate.id,
+            AffiliateConversion.status.in_(("pending", "confirmed")),
+            Booking.booking_status == "completed",
+        )
         .order_by(AffiliateConversion.id.asc())
         .with_for_update()
         .all()

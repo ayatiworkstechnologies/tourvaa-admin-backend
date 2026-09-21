@@ -31,6 +31,7 @@ ALLOWED_CONTENT_BLOCK_KEYS = {
     "hero_extras", "about_section", "blog_teaser", "airport_transfer",
     "travel_support", "newsletter_banner", "top_deals_section",
     "trending_section", "favourite_countries_section", "social_links",
+    "destination_styles", "destination_seasons", "top_bar", "trust_bar", "slogans", "handpicked_section", "countries_section", "testimonials_section", "faq_section",
 }
 
 # Per-country destination guide content (best time to visit, monsoon/season

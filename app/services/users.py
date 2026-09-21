@@ -598,6 +598,13 @@ def assign_roles_to_user(
     elif grants_super_admin and not (actor and is_super_admin(actor)):
         raise HTTPException(status_code=403, detail="Only a super admin can grant the super admin role")
 
+    # A back-office role and a partner role on one user would exempt them from
+    # supplier/agent data scoping (see supplier_scope / agent_scope), so the two
+    # families can't be combined.
+    assigned_slugs = {slug for (slug,) in db.query(Role.slug).filter(Role.id.in_(role_ids)).all()}
+    if assigned_slugs & {"super-admin", "admin", "sub-admin"} and assigned_slugs & {"supplier", "agent-reseller"}:
+        raise HTTPException(status_code=400, detail="A user cannot hold both a back-office role and a supplier/agent role")
+
     roles = sync_user_roles(db, user, role_ids)
 
     if user.role_id != new_primary_role_id:

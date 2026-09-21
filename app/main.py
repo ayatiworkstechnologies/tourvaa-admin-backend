@@ -393,6 +393,8 @@ async def _expire_stale_bookings_loop():
             try:
                 # Run the blocking DB work off the event loop thread.
                 await asyncio.to_thread(expire_stale_pending_bookings, db, BOOKING_EXPIRY_HOLD_MINUTES)
+                from app.services.bookings import notify_overdue_agent_balances
+                await asyncio.to_thread(notify_overdue_agent_balances, db)
             finally:
                 db.close()
         except Exception:

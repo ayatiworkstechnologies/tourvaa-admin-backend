@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _invoice_number(invoice_id: int) -> str:
-    return f"TVA-INV-{invoice_id:06d}"
+    return str(invoice_id)
 
 
 def split_gst_inclusive(gross_amount, gst_rate) -> tuple[Decimal, Decimal]:

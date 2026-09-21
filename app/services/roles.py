@@ -94,6 +94,10 @@ def update_role(
     role = get_role(db, role_id)
     old_values = serialize_role(role)
 
+    from app.services.users import is_super_admin
+    if role.slug == "super-admin" and not (actor and is_super_admin(actor)):
+        raise HTTPException(status_code=403, detail="Only a super admin can modify the super admin role")
+
     if role.is_system and data.slug is not None and data.slug != role.slug:
         raise HTTPException(status_code=400, detail="System role slug cannot be changed")
 

@@ -12,6 +12,9 @@ class Customer(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     customer_code = Column(String(30), unique=True, nullable=True, index=True)
+    # "registered" = signed up on their own; "agent" = added by an agent for bookings
+    customer_type = Column(String(20), default="registered", server_default="registered", nullable=False, index=True)
+    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True, index=True)
     first_name = Column(String(75), default="", nullable=False)
     last_name = Column(String(75), default="", nullable=False)
     full_name = Column(String(150), nullable=False)

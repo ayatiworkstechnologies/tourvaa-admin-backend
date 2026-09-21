@@ -99,7 +99,17 @@ class Settings(BaseSettings):
             "customer": self.CUSTOMER_JWT_SECRET_KEY,
             "admin": self.ADMIN_JWT_SECRET_KEY,
         }
-        return mapping.get(portal, "") or self.JWT_SECRET_KEY
+        explicit = mapping.get(portal, "")
+        if explicit:
+            return explicit
+        if portal in mapping and not self.is_production:
+            # Dev convenience without the shared-secret risk: a per-portal key
+            # derived from the base one, so a token minted for one portal is
+            # never valid on another even when no per-portal secrets are set.
+            import hashlib
+            import hmac
+            return hmac.new(self.JWT_SECRET_KEY.encode(), f"portal:{portal}".encode(), hashlib.sha256).hexdigest()
+        return self.JWT_SECRET_KEY
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -88,7 +88,7 @@ class ValueSetupRequest(BaseModel):
 
 
 def code_for(prefix: str, item_id: int):
-    return f"{prefix}-{item_id:05d}"
+    return str(item_id)
 
 
 def simple_paginate(query, page: int, limit: int, serializer):

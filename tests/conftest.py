@@ -10,8 +10,8 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get("TOURVAA_TEST_BASE_URL", "http://127.0.0.1:8000/api").rstrip("/")
-ADMIN_EMAIL = "admin@tourvaa.com"
-ADMIN_PASSWORD = "Admin@123"
+ADMIN_EMAIL = os.environ.get("TOURVAA_TEST_ADMIN_EMAIL", os.environ.get("SUPER_ADMIN_EMAIL", "admin@tourvaa.com"))
+ADMIN_PASSWORD = os.environ.get("TOURVAA_TEST_ADMIN_PASSWORD", os.environ.get("SUPER_ADMIN_PASSWORD", "Admin@123"))
 
 WRITE_TESTS = os.environ.get("TOURVAA_WRITE_TESTS", "0") == "1"
 

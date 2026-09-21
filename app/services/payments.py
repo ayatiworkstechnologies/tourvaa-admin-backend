@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def _payment_code(payment_id: int) -> str:
-    return f"PAY-{payment_id:06d}"
+    return str(payment_id)
 
 
 def _email_customer_payment_received(db: Session, payment: Payment, amount) -> None:

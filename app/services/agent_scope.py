@@ -36,7 +36,7 @@ def agent_customer_filter(db: Session, agent: Agent, actor_user_id: int):
         AuditLog.action.in_(["create_customer", "link_customer"]),
         AuditLog.entity_type == "customer",
     )
-    return or_(Customer.id.in_(booked_customer_ids), Customer.id.in_(created_customer_ids))
+    return or_(Customer.id.in_(booked_customer_ids), Customer.id.in_(created_customer_ids), Customer.agent_id == agent.id)
 
 
 def ensure_agent_account_access(db: Session, agent_id: int, user: User | None) -> None:

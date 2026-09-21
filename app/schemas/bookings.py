@@ -98,7 +98,7 @@ class BookingCreate(BaseModel):
     children_count: Optional[int] = Field(default=None, ge=0)
     currency: str = "USD"
     payment_type: str = "full"
-    agent_markup: Decimal = Field(default=Decimal("0"), ge=0)
+    agent_markup: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("1000000"))
     agent_payment_method: Optional[str] = None
     agent_reference: Optional[str] = Field(default=None, max_length=100)
     promo_code: Optional[str] = None

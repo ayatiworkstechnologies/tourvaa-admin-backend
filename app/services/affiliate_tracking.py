@@ -17,6 +17,7 @@ from app.models.affiliate_tracking import (
 )
 from app.schemas.affiliate_tracking import AffiliateLinkCreate, AffiliateLinkUpdate, AffiliatePayoutCreate
 from app.models.affiliates import Affiliate
+from app.models.bookings import Booking
 from app.utils.money import money, utcnow
 from app.services.affiliate_commission import compute_commission
 from app.services.audit import log_audit
@@ -29,7 +30,7 @@ def _ref_code() -> str:
 
 
 def _payout_code(payout_id: int) -> str:
-    return f"AFF-PAY-{payout_id:06d}"
+    return str(payout_id)
 
 
 def is_affiliate_user(user: Optional[User]) -> bool:
@@ -540,11 +541,18 @@ def reverse_conversion(db: Session, booking_id: int, *, refund_amount: Optional[
 
 def get_commissions(db: Session, affiliate_id: int) -> dict:
     rows = db.query(AffiliateConversion).filter(AffiliateConversion.affiliate_id == affiliate_id).all()
+    completed_ids = {
+        row[0]
+        for row in db.query(AffiliateConversion.id)
+        .join(Booking, AffiliateConversion.booking_id == Booking.id)
+        .filter(AffiliateConversion.affiliate_id == affiliate_id, Booking.booking_status == "completed")
+        .all()
+    }
     live_rows = [r for r in rows if r.status not in ("void", "reversed")]
-    total_commission = sum(money(r.commission_amount) for r in live_rows)
-    pending = sum(money(r.commission_amount) for r in rows if r.status == "pending")
-    confirmed = sum(money(r.commission_amount) for r in rows if r.status == "confirmed")
-    available = sum(money(r.commission_amount) for r in rows if r.status == "available")
+    total_commission = sum(money(r.commission_amount) for r in live_rows if r.id in completed_ids or r.status == "paid")
+    pending = sum(money(r.commission_amount) for r in rows if r.id in completed_ids and r.status == "pending")
+    confirmed = sum(money(r.commission_amount) for r in rows if r.id in completed_ids and r.status == "confirmed")
+    available = sum(money(r.commission_amount) for r in rows if r.id in completed_ids and r.status == "available")
     paid = sum(money(r.commission_amount) for r in rows if r.status == "paid")
     void = sum(money(r.commission_amount) for r in rows if r.status in ("void", "reversed"))
     return {
@@ -573,9 +581,11 @@ def create_payout(db: Session, data: AffiliatePayoutCreate, actor: User) -> dict
     # and rejects instead of double-paying.
     conversions = (
         db.query(AffiliateConversion)
+        .join(Booking, AffiliateConversion.booking_id == Booking.id)
         .filter(
             AffiliateConversion.id.in_(data.conversion_ids),
             AffiliateConversion.affiliate_id == data.affiliate_id,
+            Booking.booking_status == "completed",
         )
         .with_for_update()
         .all()
