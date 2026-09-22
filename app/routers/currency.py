@@ -3,6 +3,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.auth.permissions import require_permission
 from app.services.currency import BASE_CURRENCY, convert_amount, currency_for_country, geolocate_ip, get_usd_rates, rates_for
@@ -60,13 +61,20 @@ def currency_context(request: Request, country: str = Query(default=""), db: Ses
     if not detected_country:
         forwarded_for = request.headers.get("x-forwarded-for", "")
         client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (request.client.host if request.client else "")
-        detected_country = geolocate_ip(client_ip)
+        # geolocate_ip is best-effort and always returns "" on any failure
+        # (timeout, non-200, bad body, rate limit) rather than raising, so
+        # this can never block/fail the request - it just falls through to
+        # the configured default currency below.
+        try:
+            detected_country = geolocate_ip(client_ip)
+        except Exception:
+            detected_country = ""
     return {
         "status": "success",
         "data": {
             "base_currency": BASE_CURRENCY,
             "country_code": detected_country or None,
-            "currency": currency_for_country(db, detected_country) or BASE_CURRENCY,
+            "currency": currency_for_country(db, detected_country) or settings.DEFAULT_CURRENCY,
         },
     }
 

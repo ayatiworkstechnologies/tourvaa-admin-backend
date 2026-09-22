@@ -1,7 +1,7 @@
 import csv
 import io
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -123,9 +123,9 @@ def calculate_price(data: BookingCreate, db: Session = Depends(get_db), current_
 
 @router.post("")
 @router.post("/")
-def add_booking(data: BookingCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.create", "create-bookings"))):
+def add_booking(data: BookingCreate, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.create", "create-bookings"))):
     check_rate_limit(request, "booking-create", max_calls=10, window_seconds=60)
-    return {"status": "success", "message": "Booking created successfully", "data": create_booking(db, data, actor=current_user, request=request)}
+    return {"status": "success", "message": "Booking created successfully", "data": create_booking(db, data, actor=current_user, request=request, background_tasks=background_tasks)}
 
 
 @router.get("/{booking_id}")

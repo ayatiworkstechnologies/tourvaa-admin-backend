@@ -70,40 +70,72 @@ DEFAULT_SETTINGS = [
     {"key": "logo", "label": "Logo URL", "value": "", "group": "general", "is_public": True},
     {"key": "favicon", "label": "Favicon URL", "value": "", "group": "general", "is_public": True},
     {"key": "booking_prefix", "label": "Booking Prefix", "value": "TVA", "group": "booking", "is_public": False},
-    # Admin-configured MINIMUM supplier commission percentage. A supplier's
-    # own commission_percentage (suppliers.commission_percentage) may be set
-    # higher than this at onboarding/approval or raised later by the
-    # supplier, but a write can never take it below the current value of
+    # Admin-configured MINIMUM supplier commission percentage -- UI label is
+    # "Default Tourvaa Commission" (this is the ONLY commission Tourvaa
+    # itself earns; agent/affiliate commission below is carved out of it,
+    # never paid additionally -- see services.bookings._apply_commission_snapshot).
+    # A supplier's own commission_percentage (suppliers.commission_percentage)
+    # may be set higher than this at onboarding/approval or raised later by
+    # the supplier, but a write can never take it below the current value of
     # this setting. When a supplier has no rate of their own, this value is
     # used directly. See services.settings.get_commission_percentage and
     # services.bookings.supplier_accept_booking (the ledger commission calc).
-    {"key": "supplier_commission_percentage", "label": "Tourvaa Tour Commission - Minimum (%)", "value": "10", "group": "booking", "is_public": True},
+    # Moved to the "pricing" group (was "booking") per the Pricing & Commission
+    # / Booking Rules settings-screen split.
+    {"key": "supplier_commission_percentage", "label": "Default Tourvaa Commission (%)", "value": "10", "group": "pricing", "is_public": True},
     # Platform-wide fallback deposit percentage, used only when a tour has no
     # deposit_percentage/booking_deposit of its own set (Tour.deposit_type
     # etc. - see models/cms.py). A supplier's own per-tour deposit config
     # always takes priority over this. See get_default_deposit_percentage.
-    {"key": "default_deposit_percentage", "label": "Default Deposit Percentage (%)", "value": "20", "group": "booking", "is_public": True},
+    # Group "booking_rules" (was "booking") -- pricing/commission settings
+    # and booking-behavior settings are now separate settings-screen sections.
+    {"key": "default_deposit_percentage", "label": "Default Deposit Percentage (%)", "value": "20", "group": "booking_rules", "is_public": True},
     # Platform-wide fallback for how many days before departure a deposit is
     # still offered (Tour.deposit_cutoff_days) and how many days before
     # departure the remaining balance is due (Tour.balance_payment_deadline_days).
     # Same fallback-only role as default_deposit_percentage above - a tour's
     # own values always take priority.
-    {"key": "default_deposit_cutoff_days", "label": "Default Deposit Cutoff (days before departure)", "value": "30", "group": "booking", "is_public": True},
-    {"key": "default_balance_payment_deadline_days", "label": "Default Final Payment Due (days before departure)", "value": "14", "group": "booking", "is_public": True},
+    {"key": "default_deposit_cutoff_days", "label": "Default Deposit Cutoff (days before departure)", "value": "30", "group": "booking_rules", "is_public": True},
+    {"key": "default_balance_payment_deadline_days", "label": "Default Final Payment Due (days before departure)", "value": "14", "group": "booking_rules", "is_public": True},
     # Admin-configured MAXIMUM commission Tourvaa pays out to an agent or
     # affiliate. Unlike the supplier minimum above, agent/affiliate
-    # commission flows the other way (Tourvaa pays them), so the admin
-    # control here is a ceiling, not a floor - see get_agent_commission_max /
+    # commission flows the other way (Tourvaa pays them, carved out of its
+    # own commission -- never additional), so the admin control here is a
+    # ceiling, not a floor - see get_agent_commission_max /
     # get_affiliate_commission_max and their write-path enforcement in
     # services.agents.update_agent_discount and the affiliate commission
-    # rate/rule write paths.
-    {"key": "agent_commission_max_percentage", "label": "Maximum Agent Commission (%)", "value": "20", "group": "booking", "is_public": True},
-    {"key": "affiliate_commission_max_percentage", "label": "Maximum Affiliate Commission (%)", "value": "20", "group": "booking", "is_public": True},
+    # rate/rule write paths. Lowered from 20% to 5% -- the prior default let
+    # an agent/affiliate rate approach or exceed Tourvaa's own default 10%
+    # commission, which the commission-deduction model treats as an error
+    # (see _apply_commission_snapshot's <= validation).
+    {"key": "agent_commission_max_percentage", "label": "Maximum Agent Commission (%)", "value": "5", "group": "pricing", "is_public": True},
+    {"key": "affiliate_commission_max_percentage", "label": "Maximum Affiliate Commission (%)", "value": "5", "group": "pricing", "is_public": True},
     # Default commission % shown to a new agent on the post-login
     # commission-consent popup (see CommissionConsentModal) - unlike the
     # supplier minimum above, agents have no per-record override today, so
-    # this is the only rate an agent is ever shown/accepts.
-    {"key": "agent_default_commission_percentage", "label": "Default Agent Commission (%)", "value": "10", "group": "booking", "is_public": True},
+    # this is the only rate an agent is ever shown/accepts. Lowered from 10%
+    # to 3% to match the commission-deduction business model (agent
+    # commission is carved out of Tourvaa's own ~10% commission, so 10%
+    # would leave Tourvaa with nothing).
+    {"key": "agent_default_commission_percentage", "label": "Default Agent Commission (%)", "value": "3", "group": "pricing", "is_public": True},
+    # Whether an agent may additionally set their own retail markup on top
+    # of the storefront price (see services.bookings.create_booking /
+    # calculate_booking_price, where agent_markup is currently always forced
+    # to 0). Recommended/default OFF -- agents already earn a platform-paid
+    # commission; combining both requires deliberate admin opt-in so
+    # agent_markup_amount and agent_commission_amount are never silently
+    # mixed. Turning this ON without also updating create_booking/
+    # calculate_booking_price to read it is a no-op; see the TODO there.
+    {"key": "allow_agent_markup", "label": "Allow Agent Markup", "value": "false", "group": "pricing", "is_public": False},
+    # Whether the SAME booking may pay commission to both an agent and an
+    # affiliate. Recommended/default OFF: an agent booking should only ever
+    # pay agent commission, and a direct customer booking attributed to an
+    # affiliate should only ever pay affiliate commission -- otherwise
+    # Tourvaa's own commission (the only pool either is paid from) can be
+    # split three ways and go negative. Enforced in
+    # services.bookings.supplier_accept_booking, which skips affiliate
+    # conversion recording for an agent-sourced booking unless this is "true".
+    {"key": "allow_agent_and_affiliate_commission_same_booking", "label": "Allow Agent + Affiliate Commission on Same Booking", "value": "false", "group": "pricing", "is_public": False},
     {"key": "currency", "label": "Currency", "value": "USD", "group": "booking", "is_public": True},
     # This ONLY controls whether "currency" above locks the display currency
     # for every site visitor (frontend useCurrency.ts) - it must default to
@@ -115,14 +147,16 @@ DEFAULT_SETTINGS = [
     {"key": "force_site_currency", "label": "Force Currency For All Visitors", "value": "false", "group": "booking", "is_public": True},
     {"key": "timezone", "label": "Timezone", "value": "Pacific/Auckland", "group": "system", "is_public": False},
     {"key": "maintenance_mode", "label": "Maintenance Mode", "value": "false", "group": "system", "is_public": False},
-    {"key": "stripe_enabled", "label": "Stripe Enabled", "value": "false", "group": "payment", "is_public": False},
-    {"key": "stripe_public_key", "label": "Stripe Public Key", "value": "", "group": "payment", "is_public": False},
-    {"key": "stripe_secret_key", "label": "Stripe Secret Key Placeholder", "value": "", "group": "payment", "is_public": False},
-    {"key": "paypal_enabled", "label": "PayPal Enabled", "value": "false", "group": "payment", "is_public": False},
-    {"key": "paypal_client_id", "label": "PayPal Client ID Placeholder", "value": "", "group": "payment", "is_public": False},
-    {"key": "paypal_secret", "label": "PayPal Secret Placeholder", "value": "", "group": "payment", "is_public": False},
+    # DEPRECATED and no longer seeded: stripe_enabled/stripe_public_key/
+    # stripe_secret_key/paypal_enabled/paypal_client_id/paypal_secret/
+    # default_payment_mode used to duplicate what PaymentSetting (see
+    # DEFAULT_PAYMENT_SETTINGS below) already stores -- grepping the
+    # codebase found these AppSetting keys were never read anywhere, only
+    # ever written by this seed list. PaymentSetting is the one real source
+    # for Stripe/PayPal config; removed from here so a fresh install doesn't
+    # create dead duplicate rows. Any pre-existing rows in an already-seeded
+    # database are harmless leftovers, not cleaned up automatically.
     {"key": "payment_surcharge_percentage", "label": "Payment Surcharge Percentage", "value": "0", "group": "payment", "is_public": False},
-    {"key": "default_payment_mode", "label": "Default Payment Mode", "value": "test", "group": "payment", "is_public": False},
     {"key": "google_map_api_key", "label": "Google Maps API Key Placeholder", "value": "", "group": "api", "is_public": False},
     {"key": "email_api_key", "label": "Email API Key Placeholder", "value": "", "group": "api", "is_public": False},
     {"key": "sms_api_key", "label": "SMS API Key Placeholder", "value": "", "group": "api", "is_public": False},
@@ -132,14 +166,66 @@ DEFAULT_SETTINGS = [
     # Public so the post-login commission-consent popup (CommissionConsentModal)
     # can read it via GET /settings/public before an affiliate is approved,
     # the same way suppliers already read supplier_commission_percentage.
-    {"key": "affiliate_default_commission_value", "label": "Default Affiliate Commission Value", "value": "5", "group": "affiliate", "is_public": True},
+    # Lowered from 5% to 3% -- same reasoning as agent_default_commission_percentage
+    # above: affiliate commission is carved out of Tourvaa's own ~10%
+    # commission, not paid additionally.
+    {"key": "affiliate_default_commission_value", "label": "Default Affiliate Commission Value", "value": "3", "group": "affiliate", "is_public": True},
     {"key": "affiliate_default_attribution_model", "label": "Default Attribution Model", "value": "last_click", "group": "affiliate", "is_public": False},
     {"key": "affiliate_default_attribution_window_days", "label": "Default Attribution Window (days)", "value": "30", "group": "affiliate", "is_public": False},
     {"key": "affiliate_minimum_payout", "label": "Minimum Affiliate Payout", "value": "50", "group": "affiliate", "is_public": False},
     {"key": "affiliate_allow_self_link_creation", "label": "Allow Affiliate Self-Service Link Creation", "value": "true", "group": "affiliate", "is_public": False},
     {"key": "affiliate_allow_custom_alias", "label": "Allow Custom Alias", "value": "true", "group": "affiliate", "is_public": False},
     {"key": "affiliate_auto_approve_commission", "label": "Auto-Approve Affiliate Commission", "value": "false", "group": "affiliate", "is_public": False},
+    # Documents the rounding behavior services.bookings.money() already
+    # implements (Decimal, 2 places, ROUND_HALF_UP) -- exposed as a setting
+    # so it's discoverable/auditable rather than only implicit in code.
+    # Changing these values does NOT currently change money()'s actual
+    # behavior; they're documentation-only until a caller reads them.
+    {"key": "money_decimal_places", "label": "Money Decimal Places (informational only, fixed at 2)", "value": "2", "group": "system", "is_public": False},
+    {"key": "money_rounding_method", "label": "Money Rounding Method (informational only, fixed at HALF_UP)", "value": "HALF_UP", "group": "system", "is_public": False},
+    # Granular first-login/setup-wizard progress flags (replaces a single
+    # initial_setup_completed boolean) so the admin dashboard can show
+    # "Platform Setup: 5/7 complete" instead of an all-or-nothing state.
+    {"key": "company_setup_completed", "label": "Company Setup Completed", "value": "false", "group": "system", "is_public": False},
+    {"key": "pricing_setup_completed", "label": "Pricing Setup Completed", "value": "false", "group": "system", "is_public": False},
+    {"key": "booking_rules_completed", "label": "Booking Rules Setup Completed", "value": "false", "group": "system", "is_public": False},
+    {"key": "payment_setup_completed", "label": "Payment Setup Completed", "value": "false", "group": "system", "is_public": False},
+    {"key": "email_setup_completed", "label": "Email Setup Completed", "value": "false", "group": "system", "is_public": False},
+    {"key": "storage_setup_completed", "label": "Storage Setup Completed", "value": "false", "group": "system", "is_public": False},
+    {"key": "security_check_completed", "label": "Security Check Completed", "value": "false", "group": "system", "is_public": False},
 ]
+
+# Steps tracked by the Platform Setup checklist (see get_setup_progress) --
+# each key must exist in DEFAULT_SETTINGS above with value "true"/"false".
+SETUP_CHECKLIST_KEYS = [
+    "company_setup_completed",
+    "pricing_setup_completed",
+    "booking_rules_completed",
+    "payment_setup_completed",
+    "email_setup_completed",
+    "storage_setup_completed",
+    "security_check_completed",
+]
+
+
+def get_setup_progress(db: Session) -> dict:
+    """Platform Setup checklist progress for the admin dashboard -- e.g.
+    "5/7 complete" rather than one opaque boolean. Each step is an admin-set
+    AppSetting flag (SETUP_CHECKLIST_KEYS); this never infers completion
+    from other data, an admin/setup-wizard step must explicitly flip it."""
+    rows = {
+        s.key: s.value
+        for s in db.query(AppSetting).filter(AppSetting.key.in_(SETUP_CHECKLIST_KEYS)).all()
+    }
+    steps = {key: str(rows.get(key, "false")).lower() == "true" for key in SETUP_CHECKLIST_KEYS}
+    completed = sum(1 for done in steps.values() if done)
+    total = len(SETUP_CHECKLIST_KEYS)
+    return {
+        "steps": steps,
+        "completed": completed,
+        "total": total,
+        "percent": round((completed / total) * 100) if total else 0,
+    }
 
 
 def get_affiliate_setting(db: Session, key: str, default: str = "") -> str:
@@ -240,13 +326,22 @@ def _get_percentage_setting(db: Session, key: str, default: str) -> "Decimal":
         return Decimal(default)
 
 
+def get_booking_prefix(db: Session) -> str:
+    """Admin-configured booking-code prefix (AppSetting key "booking_prefix",
+    default "TVA") -- see services.bookings._booking_code, which appends
+    "C"/customer or "A"/agent plus the booking id (e.g. TVAC-1024)."""
+    setting = db.query(AppSetting).filter(AppSetting.key == "booking_prefix").first()
+    value = (setting.value if setting else None) or "TVA"
+    return str(value).strip() or "TVA"
+
+
 def get_agent_commission_max(db: Session):
     """Admin-configured MAXIMUM commission percentage Tourvaa will pay an
     agent (Agent.discount_type == "percentage"). Unlike supplier commission,
     this flows Tourvaa -> agent, so it is a ceiling enforced on every write
     of Agent.discount_value, not a floor an agent can self-raise - see
     services.agents.update_agent_discount."""
-    return _get_percentage_setting(db, "agent_commission_max_percentage", "20")
+    return _get_percentage_setting(db, "agent_commission_max_percentage", "5")
 
 
 def get_agent_default_commission(db: Session):
@@ -256,7 +351,7 @@ def get_agent_default_commission(db: Session):
     see services.agents.accept_agent_commission - since (unlike supplier's
     NULL-means-platform-minimum resolution) an agent's real payout fields
     don't otherwise resolve to any global setting."""
-    return _get_percentage_setting(db, "agent_default_commission_percentage", "10")
+    return _get_percentage_setting(db, "agent_default_commission_percentage", "3")
 
 
 def get_affiliate_default_commission(db: Session):
@@ -266,7 +361,7 @@ def get_affiliate_default_commission(db: Session):
     see services.affiliates.accept_affiliate_commission - since an
     affiliate's real payout field otherwise stays at its column default (0),
     not any global setting."""
-    return _get_percentage_setting(db, "affiliate_default_commission_value", "5")
+    return _get_percentage_setting(db, "affiliate_default_commission_value", "3")
 
 
 def get_affiliate_commission_max(db: Session):
@@ -274,7 +369,7 @@ def get_affiliate_commission_max(db: Session):
     affiliate (Affiliate.commission_percentage and percentage-type
     AffiliateCommissionRule rows). Ceiling, not a floor - see
     services.affiliates and services.affiliate_commission_rules."""
-    return _get_percentage_setting(db, "affiliate_commission_max_percentage", "20")
+    return _get_percentage_setting(db, "affiliate_commission_max_percentage", "5")
 
 
 def _get_int_setting(db: Session, key: str, default: int) -> int:
@@ -283,6 +378,95 @@ def _get_int_setting(db: Session, key: str, default: int) -> int:
         return int(setting.value) if setting and setting.value not in (None, "") else default
     except (TypeError, ValueError):
         return default
+
+
+def _get_bool_setting(db: Session, key: str, default: bool) -> bool:
+    setting = db.query(AppSetting).filter(AppSetting.key == key).first()
+    if not setting or setting.value in (None, ""):
+        return default
+    return str(setting.value).strip().lower() in ("true", "1", "yes", "on")
+
+
+def get_allow_agent_markup(db: Session) -> bool:
+    """Whether an agent may set their own retail markup on top of the
+    storefront price. Default OFF (commission-only agent model) -- see the
+    allow_agent_markup DEFAULT_SETTINGS entry."""
+    return _get_bool_setting(db, "allow_agent_markup", False)
+
+
+def get_allow_agent_and_affiliate_same_booking(db: Session) -> bool:
+    """Whether a single booking may pay commission to both an agent and an
+    affiliate. Default OFF -- see services.bookings.supplier_accept_booking,
+    which skips affiliate conversion recording for an agent-sourced booking
+    unless this is enabled."""
+    return _get_bool_setting(db, "allow_agent_and_affiliate_commission_same_booking", False)
+
+
+def compute_commission_preview(db: Session, sample_price=None) -> dict:
+    """Admin-facing "what does 120 actually split into" preview for the
+    Pricing & Commission settings screen -- uses the SAME configured
+    percentages real bookings would use (get_commission_percentage,
+    get_agent_default_commission, get_affiliate_default_commission), not
+    hardcoded example numbers, so the preview never drifts from reality."""
+    from decimal import Decimal
+
+    price = Decimal(str(sample_price)) if sample_price is not None else Decimal("120")
+    commission_pct = get_commission_percentage(db)
+    agent_pct = get_agent_default_commission(db)
+    affiliate_pct = get_affiliate_default_commission(db)
+
+    commission_amount = (price * commission_pct / Decimal("100")).quantize(Decimal("0.01"))
+    supplier_net = price - commission_amount
+    agent_amount = (price * agent_pct / Decimal("100")).quantize(Decimal("0.01"))
+    affiliate_amount = (price * affiliate_pct / Decimal("100")).quantize(Decimal("0.01"))
+
+    return {
+        "sample_price": str(price),
+        "tourvaa_commission_percentage": str(commission_pct),
+        "direct": {
+            "supplier": str(supplier_net),
+            "tourvaa": str(commission_amount),
+        },
+        "agent": {
+            "supplier": str(supplier_net),
+            "agent_commission_percentage": str(agent_pct),
+            "agent": str(agent_amount),
+            "tourvaa": str(commission_amount - agent_amount),
+        },
+        "affiliate": {
+            "supplier": str(supplier_net),
+            "affiliate_commission_percentage": str(affiliate_pct),
+            "affiliate": str(affiliate_amount),
+            "tourvaa": str(commission_amount - affiliate_amount),
+        },
+    }
+
+
+def get_security_status(db: Session) -> dict:
+    """Read-only Security Status panel: which portal JWT secrets are
+    actually configured (not just falling back to the shared JWT_SECRET_KEY)
+    and whether Redis/Cloudinary are configured. Never exposes secret
+    values, only configured/missing -- see routers.settings for the
+    admin-only endpoint that serves this."""
+    from app.config import settings as app_settings
+
+    portal_secret_keys = {
+        "admin": app_settings.ADMIN_JWT_SECRET_KEY,
+        "supplier": app_settings.SUPPLIER_JWT_SECRET_KEY,
+        "agent": app_settings.AGENT_JWT_SECRET_KEY,
+        "customer": app_settings.CUSTOMER_JWT_SECRET_KEY,
+        "affiliate": app_settings.AFFILIATE_JWT_SECRET_KEY,
+    }
+    jwt_status = {
+        portal: ("configured" if str(value or "").strip() else "missing (falls back to shared JWT_SECRET_KEY)")
+        for portal, value in portal_secret_keys.items()
+    }
+    return {
+        "jwt_secrets": jwt_status,
+        "redis": "configured" if str(getattr(app_settings, "REDIS_URL", "") or "").strip() else "not configured (single-instance/in-process fallback)",
+        "cloudinary": "configured" if str(getattr(app_settings, "CLOUDINARY_URL", "") or "").strip() else "not configured",
+        "settings_encryption_key": "configured" if str(getattr(app_settings, "SETTINGS_ENCRYPTION_KEY", "") or "").strip() else "missing",
+    }
 
 
 def get_default_deposit_percentage(db: Session):
@@ -370,6 +554,120 @@ def update_payment_setting(
     return setting
 
 
+def test_payment_connection(
+    db: Session,
+    provider_name: str,
+    actor: User | None = None,
+    request=None,
+) -> dict:
+    """Makes a real, side-effect-free authenticated call to Stripe/PayPal with
+    the currently configured credentials, so an admin can tell a saved key
+    actually works instead of finding out the hard way at checkout time (the
+    secret/client id+secret were previously stored and used blindly -- never
+    health-checked anywhere in the codebase). Uses plain HTTP calls to match
+    how app.services.payments_gateway already talks to both gateways (this
+    codebase has no `stripe` SDK dependency installed).
+
+    Persists the outcome on the PaymentSetting row (last_test_status/
+    last_test_at/last_test_error) so the UI can display "last checked"
+    without re-testing on every page load."""
+    from datetime import datetime, timezone
+    import base64
+    import requests as http_requests
+    from fastapi import HTTPException
+
+    provider = (provider_name or "").strip().lower()
+    if provider not in ("stripe", "paypal"):
+        raise HTTPException(status_code=404, detail="Unknown payment provider")
+
+    setting = (
+        db.query(PaymentSetting)
+        .filter(PaymentSetting.provider_name == provider)
+        .first()
+    )
+
+    checked_at = datetime.now(timezone.utc)
+    connected = False
+    mode = None
+    error = None
+
+    if provider == "stripe":
+        secret = decrypt_secret(setting.secret_key) if setting and setting.secret_key else ""
+        if not secret:
+            error = "Not configured"
+        else:
+            mode = "live" if secret.startswith(("sk_live_", "rk_live_")) else "test"
+            try:
+                resp = http_requests.get(
+                    "https://api.stripe.com/v1/balance",
+                    headers={"Authorization": f"Bearer {secret}"},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    connected = True
+                elif resp.status_code == 401:
+                    error = "Authentication failed: invalid Stripe secret key"
+                else:
+                    body = resp.json() if resp.content else {}
+                    error = body.get("error", {}).get("message") or f"Stripe returned HTTP {resp.status_code}"
+            except Exception as exc:
+                error = f"Could not reach Stripe: {exc}"
+    else:  # paypal
+        client_id = setting.public_key if setting else ""
+        client_secret = decrypt_secret(setting.secret_key) if setting and setting.secret_key else ""
+        if not client_id or not client_secret:
+            error = "Not configured"
+        else:
+            provider_mode = (getattr(setting, "mode", "sandbox") or "sandbox")
+            mode = "live" if provider_mode == "live" else "sandbox"
+            base_url = "https://api-m.paypal.com" if mode == "live" else "https://api-m.sandbox.paypal.com"
+            try:
+                credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+                resp = http_requests.post(
+                    f"{base_url}/v1/oauth2/token",
+                    headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/x-www-form-urlencoded"},
+                    data="grant_type=client_credentials",
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    connected = True
+                elif resp.status_code == 401:
+                    error = "Authentication failed: invalid PayPal client id/secret"
+                else:
+                    body = resp.json() if resp.content else {}
+                    error = body.get("error_description") or body.get("message") or f"PayPal returned HTTP {resp.status_code}"
+            except Exception as exc:
+                error = f"Could not reach PayPal: {exc}"
+
+    result = {
+        "provider": provider,
+        "connected": connected,
+        "mode": mode,
+        "error": error,
+        "checked_at": checked_at.isoformat(),
+    }
+
+    if setting:
+        setting.last_test_status = "connected" if connected else "failed"
+        setting.last_test_at = checked_at
+        setting.last_test_error = error
+        db.commit()
+        db.refresh(setting)
+
+    log_audit(
+        db,
+        actor=actor,
+        action="test_payment_connection",
+        entity_type="payment_setting",
+        entity_id=setting.id if setting else None,
+        new_values={"provider": provider, "connected": connected, "mode": mode, "error": error},
+        request=request,
+    )
+    db.commit()
+
+    return result
+
+
 def update_api_setting(
     db: Session,
     api_name: str,
@@ -412,12 +710,42 @@ def update_api_setting(
     return setting
 
 
+class SettingsValidationError(ValueError):
+    """Raised when an incoming settings value would misrepresent behavior
+    the code doesn't actually implement (see _validate_money_settings)."""
+
+
+def _validate_money_settings(values: dict[str, str | None]) -> None:
+    """money_decimal_places/money_rounding_method are documentation-only --
+    app.utils.money.money() hardcodes Decimal("0.01")/ROUND_HALF_UP as a
+    Python constant and does not read these settings at all (deliberately:
+    money() is called extremely frequently across pricing/booking
+    calculations with no db session in scope at most call sites, so making
+    it DB-backed, even via a cached value, would add risk to code that must
+    never have surprising rounding behavior for real money). Reject any
+    value that doesn't match reality so an admin can never be misled into
+    thinking a save changed actual rounding/precision."""
+    if "money_decimal_places" in values and values["money_decimal_places"] not in (None, "2"):
+        raise SettingsValidationError(
+            "money_decimal_places is documentation-only and must be \"2\" -- "
+            "app.utils.money.money() hardcodes 2 decimal places and does not "
+            "read this setting."
+        )
+    if "money_rounding_method" in values and values["money_rounding_method"] not in (None, "HALF_UP"):
+        raise SettingsValidationError(
+            "money_rounding_method is documentation-only and must be \"HALF_UP\" -- "
+            "app.utils.money.money() hardcodes ROUND_HALF_UP and does not read "
+            "this setting."
+        )
+
+
 def update_settings(
     db: Session,
     values: dict[str, str | None],
     actor: User | None = None,
     request=None,
 ):
+    _validate_money_settings(values)
     seed_settings(db)
     values = dict(values)
     # "currency" (booking group) and "default_currency" (general group) are
@@ -665,6 +993,12 @@ def get_payment_settings_payload(db: Session):
         "paypal_webhook_id": paypal.webhook_id if paypal else "",
         "payment_surcharge_percentage": surcharge,
         "default_payment_mode": stripe.mode if stripe else (paypal.mode if paypal else "test"),
+        "stripe_last_test_status": stripe.last_test_status if stripe else None,
+        "stripe_last_test_at": stripe.last_test_at if stripe else None,
+        "stripe_last_test_error": stripe.last_test_error if stripe else None,
+        "paypal_last_test_status": paypal.last_test_status if paypal else None,
+        "paypal_last_test_at": paypal.last_test_at if paypal else None,
+        "paypal_last_test_error": paypal.last_test_error if paypal else None,
     }
 
 

@@ -45,6 +45,33 @@ class Booking(Base):
     optional_activity_amount = Column(Numeric(12, 2), default=0, nullable=False)
     accommodation_amount = Column(Numeric(12, 2), default=0, nullable=False)
     extension_amount = Column(Numeric(12, 2), default=0, nullable=False)
+    # Snapshot (at booking creation/edit time) of the portion of
+    # optional_activity_amount/accommodation_amount/extension_amount whose
+    # underlying TourOptionalActivity/TourAccommodationExtra/TourExtension
+    # row had commissionable == False. Excluded from the amount Tourvaa
+    # commission is computed on in services.bookings.
+    # compute_booking_supplier_financials, but still paid to the supplier in
+    # full. Nullable/defaulted so existing rows (all commissionable) net 0.
+    non_commissionable_addon_amount = Column(Numeric(12, 2), default=0, nullable=False)
+    # Snapshot (at booking creation/edit time) of the CUSTOMER-facing price
+    # portion contributed by every addon line item priced under the
+    # cost-plus model (TourOptionalActivity/TourAccommodationExtra/
+    # TourExtension.supplier_cost set). Carved out of the commissionable base
+    # in services.bookings.compute_booking_supplier_financials exactly like
+    # non_commissionable_addon_amount is -- a cost-plus item's customer price
+    # must never also have commission% applied to it. Defaulted so existing
+    # rows (no cost-plus items) net 0.
+    cost_plus_customer_amount = Column(Numeric(12, 2), default=0, nullable=False)
+    # Snapshot (at booking creation/edit time) of what the supplier is owed,
+    # in full, for every addon line item priced under the cost-plus model --
+    # sum of quantity * supplier_cost across those items. Added back
+    # directly onto net_payable/gross_amount in
+    # services.bookings.compute_booking_supplier_financials, the same way
+    # non_commissionable_addon_amount is, and those same line items are
+    # excluded from the commissionable base (via cost_plus_customer_amount
+    # above) so they're never also subject to a commission percentage.
+    # Defaulted so existing rows (no cost-plus items) net 0.
+    cost_plus_supplier_payable = Column(Numeric(12, 2), default=0, nullable=False)
     discount_amount = Column(Numeric(12, 2), default=0, nullable=False)
     promo_code = Column(String(100), nullable=True)
     # Supplier-defined group-size discount actually applied to this booking's
@@ -54,14 +81,47 @@ class Booking(Base):
     # not code-redeemed.
     group_discount_tier_id = Column(Integer, ForeignKey("tour_group_discount_tiers.id"), nullable=True)
     group_discount_amount = Column(Numeric(12, 2), default=0, nullable=False)
+    # Snapshot of which side actually absorbed each discount at the moment
+    # this booking was priced (see TourGroupDiscountTier.funded_by /
+    # TourDiscount.funded_by and services.bookings._price_booking) --
+    # "SUPPLIER", "TOURVAA", or None when no discount of that kind applied.
+    # Immutable like the commission snapshot below: later changes to the
+    # discount row's funded_by must never retroactively change what this
+    # booking already charged/paid out.
+    group_discount_funded_by = Column(String(20), nullable=True)
+    promo_discount_funded_by = Column(String(20), nullable=True)
     tax_amount = Column(Numeric(12, 2), default=0, nullable=False)
     surcharge_amount = Column(Numeric(12, 2), default=0, nullable=False)
+    # Granular breakdown of surcharge_amount (kept as-is for backward
+    # compatibility with existing readers) -- see services.bookings._price_booking.
+    service_fee_amount = Column(Numeric(12, 2), nullable=True)
+    gateway_fee_amount = Column(Numeric(12, 2), nullable=True)
     final_amount = Column(Numeric(12, 2), default=0, nullable=False)
     agent_net_price = Column(Numeric(12, 2), default=0, nullable=False)
     agent_markup = Column(Numeric(12, 2), default=0, nullable=False)
     customer_selling_price = Column(Numeric(12, 2), default=0, nullable=False)
     amount_paid = Column(Numeric(12, 2), default=0, nullable=False)
     amount_pending = Column(Numeric(12, 2), default=0, nullable=False)
+
+    # Immutable commission-split snapshot, captured once at booking creation
+    # (see services.bookings._apply_commission_snapshot) and never
+    # recalculated from today's tour/agent/affiliate settings -- invoices,
+    # refunds, supplier payouts, agent/affiliate ledgers and reports must all
+    # read these instead of re-deriving them. Commission-deduction business
+    # model: tourvaa_commission_amount is deducted from the supplier's own
+    # selling price (no separate admin markup); agent/affiliate commission
+    # is carved OUT of that same commission (never paid additionally), so
+    # tourvaa_net_revenue = tourvaa_commission_amount - agent_commission_amount
+    # - affiliate_commission_amount (only one of which is ever nonzero for a
+    # given booking_source).
+    tourvaa_commission_percentage = Column(Numeric(5, 2), nullable=True)
+    tourvaa_commission_amount = Column(Numeric(12, 2), nullable=True)
+    supplier_net_payable = Column(Numeric(12, 2), nullable=True)
+    agent_commission_percentage = Column(Numeric(5, 2), nullable=True)
+    agent_commission_amount = Column(Numeric(12, 2), nullable=True)
+    affiliate_commission_percentage = Column(Numeric(5, 2), nullable=True)
+    affiliate_commission_amount = Column(Numeric(12, 2), nullable=True)
+    tourvaa_net_revenue = Column(Numeric(12, 2), nullable=True)
 
     # Pricing/currency snapshot at the moment of booking -- kept even if the
     # tour's pricing, commission, or exchange rates change later, so a
@@ -87,6 +147,16 @@ class Booking(Base):
     customer_notes = Column(Text, nullable=True)
     admin_notes = Column(Text, nullable=True)
     cancellation_reason = Column(String(255), nullable=True)
+    # Who/what initiated the cancellation, distinct from cancelled_by (the
+    # user id): "customer_request" (tiered RefundRule via
+    # services.cancellations), "admin" (direct cancel_booking), "supplier"
+    # (supplier_cancel_booking), or "system_expiry" (expire_stale_pending_bookings).
+    # Every admin/supplier/system-initiated path always refunds 100% of the
+    # captured amount (see _settle_cancelled_booking_payments) -- only
+    # customer_request consults RefundRule tiers. This column exists so that
+    # distinction is auditable per-booking, not just implied by which
+    # function happened to run.
+    cancellation_source = Column(String(30), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     cancelled_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     # Supplier-set date the remaining balance is due, distinct from

@@ -5,10 +5,14 @@ logic out of the business logic files.
 """
 
 import logging
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
 from app.services.notifications import enqueue_notification, notify_admins
+
+if TYPE_CHECKING:
+    from fastapi import BackgroundTasks
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +30,27 @@ def send_templated_email(db: Session, to_email: str | None, key: str, values: di
         logger.warning("Templated email %s to %s failed: %s", key, to_email, exc)
 
 
-def email_admins(db: Session, key: str, values: dict, fallback_subject: str, fallback_html: str):
-    """Render a DB email template and send it to every super-admin/admin user."""
+def _do_email_admins(db: Session, key: str, values: dict, fallback_subject: str, fallback_html: str) -> None:
     from app.models.users import User
     from app.models.roles import Role
     admins = db.query(User).join(Role, User.role_id == Role.id).filter(Role.slug.in_(["super-admin", "admin"])).all()
     for admin in admins:
         send_templated_email(db, admin.email, key, values, fallback_subject, fallback_html)
+
+
+def email_admins(db: Session, key: str, values: dict, fallback_subject: str, fallback_html: str, background_tasks: "BackgroundTasks | None" = None):
+    """Render a DB email template and send it to every super-admin/admin user.
+
+    Runs inline by default, unchanged for existing (low-traffic) callers.
+    Pass `background_tasks` from a high-traffic request path (e.g. booking
+    creation) to schedule the send instead of blocking the response on SMTP
+    - see app.utils.mailer.dispatch_email_task.
+    """
+    if background_tasks is None:
+        _do_email_admins(db, key, values, fallback_subject, fallback_html)
+        return
+    from app.utils.mailer import dispatch_email_task
+    dispatch_email_task(background_tasks, db, _do_email_admins, key, values, fallback_subject, fallback_html)
 
 
 def _user_email(db: Session, user_id: int | None) -> str | None:

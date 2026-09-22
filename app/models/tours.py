@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, true as sa_true
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -142,6 +142,21 @@ class TourExtension(Base):
     category = Column(String(30), default="other", nullable=False)
     display_order = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
+    # When False, this extension's price is excluded from the commissionable
+    # portion of the booking's supplier gross share -- see
+    # services.bookings.compute_booking_supplier_financials /
+    # Booking.non_commissionable_addon_amount. Defaults True to preserve
+    # existing behavior (commission applies to all addons) exactly.
+    commissionable = Column(Boolean, default=True, nullable=False, server_default=sa_true())
+    # Cost-plus margin model: when set, this is the supplier's exact cost for
+    # this item, paid verbatim (quantity * supplier_cost), with NO commission
+    # percentage applied -- mutually exclusive with the commissionable flag
+    # above, which drives the percentage-commission model instead. NULL (the
+    # default) means "no cost-plus margin configured", falling back to the
+    # commissionable/commission-percentage behavior exactly as before this
+    # column existed. See services.bookings._price_booking /
+    # compute_booking_supplier_financials.
+    supplier_cost = Column(Numeric(12, 2), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -185,8 +200,12 @@ class TourPricing(Base):
     # Supplier > platform minimum) - null means "use that resolved floor
     # directly". supplier_final_*_price = *_price * (1 - this/100).
     commission_percentage = Column(Numeric(5, 2), nullable=True)
-    # admin_markup_type/admin_markup_value are Tourvaa's own markup on top of
-    # the supplier-final price, editable by admins only.
+    # DEPRECATED: admin_markup_type/admin_markup_value are no longer applied.
+    # Confirmed business model is commission-deduction only: the supplier's
+    # own adult_price/child_price IS the customer/storefront price;
+    # supplier_final = adult_price * (1 - commission%) is Tourvaa's only
+    # margin lever. Kept as columns for backward compatibility with existing
+    # rows/API consumers -- see services/tours._apply_pricing_computation.
     admin_markup_type = Column(String(20), default="percentage", nullable=False)
     admin_markup_value = Column(Numeric(12, 2), default=0, nullable=False)
     # storefront_adult_price/storefront_child_price are what bookings.py
@@ -234,6 +253,10 @@ class TourOptionalActivity(Base):
     image = Column(String(255), default="", nullable=False)
     category = Column(String(30), default="other", nullable=False)
     status = Column(String(20), default="active", nullable=False)
+    # See TourExtension.commissionable above.
+    commissionable = Column(Boolean, default=True, nullable=False, server_default=sa_true())
+    # See TourExtension.supplier_cost above.
+    supplier_cost = Column(Numeric(12, 2), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -253,6 +276,10 @@ class TourAccommodationExtra(Base):
     category = Column(String(30), default="room_upgrade", nullable=False)
     is_default = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
+    # See TourExtension.commissionable above.
+    commissionable = Column(Boolean, default=True, nullable=False, server_default=sa_true())
+    # See TourExtension.supplier_cost above.
+    supplier_cost = Column(Numeric(12, 2), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -348,6 +375,13 @@ class TourDiscount(Base):
     used_count = Column(Integer, default=0, nullable=False)
     minimum_booking_amount = Column(Numeric(12, 2), default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
+    # Who actually absorbs this promo code's discount amount: "SUPPLIER" (the
+    # default -- current/legacy behavior, unchanged) or "TOURVAA". Note that
+    # unlike group discounts, promo discounts currently don't feed into the
+    # supplier commission calc at all (see compute_booking_supplier_financials),
+    # so this only matters for future Tourvaa-net-revenue accounting -- it is
+    # still snapshotted onto the booking (Booking.promo_discount_funded_by).
+    funded_by = Column(String(20), default="SUPPLIER", nullable=False, server_default="SUPPLIER")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -402,6 +436,13 @@ class TourGroupDiscountTier(Base):
     discount_type = Column(String(20), nullable=False)
     discount_value = Column(Numeric(12, 2), nullable=False)
     status = Column(String(20), default="active", nullable=False)
+    # Who absorbs this group discount: "SUPPLIER" (default -- current
+    # behavior, the discount ratio also reduces the supplier's net_earnings
+    # via compute_supplier_commission_breakdown's group_discount_ratio) or
+    # "TOURVAA" (supplier is paid as if the discount never happened --
+    # see compute_booking_supplier_financials, which zeroes the ratio when
+    # the booking's snapshotted Booking.group_discount_funded_by == "TOURVAA").
+    funded_by = Column(String(20), default="SUPPLIER", nullable=False, server_default="SUPPLIER")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

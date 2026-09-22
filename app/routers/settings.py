@@ -17,11 +17,14 @@ from app.schemas.settings import (
     SystemSettingsUpdate,
 )
 from app.services.settings import (
+    compute_commission_preview,
     get_api_settings_payload,
     get_api_settings,
     get_payment_settings,
     get_payment_settings_payload,
+    get_security_status,
     get_settings,
+    get_setup_progress,
     get_smtp_settings_payload,
     get_system_settings,
     mask_secret,
@@ -29,10 +32,12 @@ from app.services.settings import (
     update_api_setting,
     update_payment_settings_payload,
     update_payment_setting,
+    test_payment_connection,
     update_smtp_settings_payload,
     update_system_settings,
     update_settings,
     send_smtp_test_email,
+    SettingsValidationError,
 )
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
@@ -89,6 +94,39 @@ def list_settings(
     return {"status": "success", "data": get_settings(db)}
 
 
+@router.get("/pricing/commission-preview")
+def commission_preview(
+    sample_price: float = Query(default=120),
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-settings")),
+):
+    """Live 'Direct / Agent / Affiliate' breakdown for the Pricing &
+    Commission settings screen, computed from the actually-configured
+    percentages (never hardcoded example numbers)."""
+    return {"status": "success", "data": compute_commission_preview(db, sample_price)}
+
+
+@router.get("/setup-progress")
+def setup_progress(
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-settings")),
+):
+    """Platform Setup checklist progress (e.g. '5/7 complete') for the admin
+    dashboard -- each step is an explicit admin/setup-wizard flag, never
+    inferred from other data."""
+    return {"status": "success", "data": get_setup_progress(db)}
+
+
+@router.get("/security-status")
+def security_status(
+    db: Session = Depends(get_db),
+    _=Depends(require_permission("view-settings")),
+):
+    """Read-only panel showing which portal JWT secrets / Redis / Cloudinary
+    are configured -- never exposes secret values, admin cannot edit here."""
+    return {"status": "success", "data": get_security_status(db)}
+
+
 @router.put("/")
 def save_settings(
     data: SettingsBulkUpdate,
@@ -96,10 +134,14 @@ def save_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("update-settings")),
 ):
+    try:
+        result = update_settings(db, data.settings, actor=current_user, request=request)
+    except SettingsValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     return {
         "status": "success",
         "message": "Settings updated successfully",
-        "data": update_settings(db, data.settings, actor=current_user, request=request),
+        "data": result,
     }
 
 
@@ -147,6 +189,9 @@ def list_payment_settings(
                 "webhook_id": item.webhook_id,
                 "surcharge_percentage": item.surcharge_percentage,
                 "mode": item.mode,
+                "last_test_status": item.last_test_status,
+                "last_test_at": item.last_test_at,
+                "last_test_error": item.last_test_error,
                 "created_at": item.created_at,
                 "updated_at": item.updated_at,
             }
@@ -202,6 +247,17 @@ def save_payment_setting(
         raise HTTPException(status_code=404, detail="Payment provider not found")
 
     return {"status": "success", "message": "Payment setting updated", "data": setting}
+
+
+@router.post("/payment/{provider_name}/test-connection")
+def test_payment_provider_connection(
+    provider_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("update-settings")),
+):
+    result = test_payment_connection(db, provider_name, actor=current_user, request=request)
+    return {"status": "success", "message": "Connection test complete", "data": result}
 
 
 @router.get("/api")

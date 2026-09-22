@@ -580,7 +580,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     return {
         "status": "success",
         "data": {
-            **_public_tour(tour, review_stats=review_stats, discount_map=own_discount_map),
+            **_public_tour(tour, departures=calendar, review_stats=review_stats, overview=overview, discount_map=own_discount_map),
             "long_description": tour.long_description,
             "start_location": tour.start_location,
             "finish_location": tour.finish_location,

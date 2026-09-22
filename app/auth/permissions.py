@@ -300,6 +300,22 @@ def get_token_user_including_inactive(
     _ensure_session_active(db, payload)
     return user
 
+def get_current_session_id(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str | None:
+    """Resolve the session_id claim from the current request's access token
+    without re-validating the user/session. Used only to identify which
+    UserSession row a single-device logout should revoke; tokens issued
+    before session_id existed simply have nothing to revoke here."""
+    try:
+        token = _request_token(request, credentials)
+        payload = _decode_token(token)
+    except HTTPException:
+        return None
+    return payload.get("session_id")
+
+
 def require_portal(expected_portal: str):
     """Dependency that additionally enforces the token's portal claim matches the expected portal."""
     def dependency(

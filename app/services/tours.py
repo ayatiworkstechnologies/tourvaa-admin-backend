@@ -308,6 +308,8 @@ def _ser_extension(o: TourExtension) -> dict:
         "extension_tour_title": o.extension_tour.title if o.extension_tour else "",
         "extension_title": o.extension_title, "extension_note": o.extension_note,
         "extra_price": o.extra_price, "price_type": o.price_type, "category": o.category, "display_order": o.display_order, "status": o.status,
+        "commissionable": o.commissionable,
+        "supplier_cost": o.supplier_cost,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
@@ -367,34 +369,24 @@ def _ser_pricing(o: TourPricing) -> dict:
     }
 
 
-def _apply_markup(markup_type: str, markup_value: float, base: float) -> float:
-    """Tourvaa's retail markup is added ON TOP of the supplier's own entered
-    price to produce the storefront/customer-facing price -- a second,
-    independent layer from the supplier's commission deduction above."""
-    if markup_type == "percentage":
-        return round(max(0.0, base * (1 + markup_value / 100)), 2)
-    return round(max(0.0, base + markup_value), 2)
-
-
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    """Two independent layers computed from the supplier's own adult_price/
-    child_price ("Your Price to Tourvaa"):
-      - Supplier layer: this slab's own commission_percentage (floor-
-        enforced against resolve_effective_commission_percentage) ->
-        supplier_final_*_price ("Supplier Receives"). Applies to every
-        actor -- a supplier sets/raises it, an admin can too.
-      - Admin layer: admin_markup_value, honoured ONLY for an admin actor
-        -> storefront_*_price, what bookings.py actually charges the
-        customer at checkout. A supplier's payload can never move this
-        (routers.tours._ADMIN_ONLY_PRICING_FIELDS also hides it from their
-        responses) -- for a supplier actor the existing admin_markup_*
-        already on the row (0 for a brand-new slab) is reused as-is.
-    A supplier's price change (either layer they control) takes effect
-    immediately, like any other content edit (see maybe_resubmit_for_review)
-    -- mark_repricing_required (called by create_pricing/update_pricing
-    right after this) still records a version and notifies admins for
-    visibility, it just no longer withholds anything while that review is
-    pending.
+    """Commission-deduction pricing model (confirmed business rule, replaces
+    the earlier admin-markup layer): the supplier's own adult_price/
+    child_price IS the customer-facing/storefront price -- there is no
+    separate markup on top. Tourvaa's only margin lever is
+    commission_percentage (floor-enforced against
+    resolve_effective_commission_percentage: Tour > Supplier > platform
+    default), deducted from that same price to produce
+    supplier_final_*_price ("Supplier Receives"). Applies to every actor --
+    a supplier sets/raises the commission floor, an admin can too.
+    admin_markup_type/admin_markup_value are kept on the model for backward
+    compatibility with existing rows/API consumers but are no longer applied
+    -- storefront_*_price always equals adult_price/child_price now.
+    A supplier's price change takes effect immediately, like any other
+    content edit (see maybe_resubmit_for_review) -- mark_repricing_required
+    (called by create_pricing/update_pricing right after this) still records
+    a version and notifies admins for visibility, it just no longer
+    withholds anything while that review is pending.
     """
     from app.services.bookings import resolve_effective_commission_percentage
     from app.services.supplier_scope import is_supplier_user
@@ -410,8 +402,8 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
 
     if not is_supplier_user(actor):
         o.admin_markup_value = data.admin_markup_value
-    o.storefront_adult_price = _apply_markup(o.admin_markup_type, float(o.admin_markup_value or 0), o.adult_price)
-    o.storefront_child_price = _apply_markup(o.admin_markup_type, float(o.admin_markup_value or 0), o.child_price)
+    o.storefront_adult_price = round(max(0.0, o.adult_price), 2)
+    o.storefront_child_price = round(max(0.0, o.child_price), 2)
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
@@ -581,7 +573,7 @@ def delete_date_price(db, tour_id, rid, actor, request=None): return _delete_dat
 
 # optional activity
 def _ser_activity(o: TourOptionalActivity) -> dict:
-    return {"id": o.id, "tour_id": o.tour_id, "activity_name": o.activity_name, "description": o.description, "price_per_person": o.price_per_person, "child_price_per_person": o.child_price_per_person, "infant_price_per_person": o.infant_price_per_person, "pricing_mode": o.pricing_mode, "image": o.image, "category": o.category, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
+    return {"id": o.id, "tour_id": o.tour_id, "activity_name": o.activity_name, "description": o.description, "price_per_person": o.price_per_person, "child_price_per_person": o.child_price_per_person, "infant_price_per_person": o.infant_price_per_person, "pricing_mode": o.pricing_mode, "image": o.image, "category": o.category, "status": o.status, "commissionable": o.commissionable, "supplier_cost": o.supplier_cost, "created_at": o.created_at, "updated_at": o.updated_at}
 
 _list_activities_fn, _create_activity_fn, _update_activity_fn, _delete_activity_fn = _simple_crud(TourOptionalActivity, _ser_activity)
 
@@ -593,7 +585,7 @@ def delete_activity(db, tour_id, rid, actor, request=None): return _delete_activ
 
 # accommodation extra
 def _ser_accommodation(o: TourAccommodationExtra) -> dict:
-    return {"id": o.id, "tour_id": o.tour_id, "accommodation_name": o.accommodation_name, "description": o.description, "extra_price": o.extra_price, "price_type": o.price_type, "image": o.image or "", "category": o.category, "is_default": bool(o.is_default), "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
+    return {"id": o.id, "tour_id": o.tour_id, "accommodation_name": o.accommodation_name, "description": o.description, "extra_price": o.extra_price, "price_type": o.price_type, "image": o.image or "", "category": o.category, "is_default": bool(o.is_default), "status": o.status, "commissionable": o.commissionable, "supplier_cost": o.supplier_cost, "created_at": o.created_at, "updated_at": o.updated_at}
 
 
 def list_accommodations(db: Session, tour_id: int) -> list[dict]:
@@ -711,6 +703,7 @@ def _ser_discount(o: TourDiscount) -> dict:
         "discount_scope": o.discount_scope, "start_date": o.start_date, "end_date": o.end_date,
         "usage_limit": o.usage_limit, "used_count": o.used_count,
         "minimum_booking_amount": o.minimum_booking_amount, "status": o.status,
+        "funded_by": o.funded_by,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
@@ -858,6 +851,7 @@ def _ser_group_discount_tier(o: TourGroupDiscountTier) -> dict:
     return {
         "id": o.id, "tour_id": o.tour_id, "min_pax": o.min_pax, "max_pax": o.max_pax,
         "discount_type": o.discount_type, "discount_value": o.discount_value, "status": o.status,
+        "funded_by": o.funded_by,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
@@ -1017,150 +1011,102 @@ def deactivate_global_discount(db: Session, discount_id: int, actor: User, reaso
 
 # price calculation
 def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> dict:
+    """Tour-detail/tour-builder price preview -- a thin wrapper around
+    services.bookings._price_booking, the SAME calculator real checkout uses,
+    so this preview can never again show a different total than what a
+    customer is actually charged. This function used to independently
+    reimplement the same math and had drifted: it was missing group
+    discounts, date-price overrides, infant pricing, the single-traveller
+    supplement, per-passenger-type activity pricing, the cost-plus/
+    non-commissionable addon distinction, and the gateway fee (it only ever
+    added tax + a flat service_fee). The response shape below is kept
+    IDENTICAL to that old implementation's so no caller needs to change --
+    only the numbers backing it are now guaranteed correct.
+
+    Accommodation extras are intentionally NOT forwarded to _price_booking:
+    booking-time accommodation selection is out of scope for launch and
+    _price_booking hard-rejects any accommodations payload (see
+    services.bookings._price_booking) -- previewing a price for something
+    that can't actually be booked would be misleading, so
+    accommodation_extra_ids is accepted for API compatibility but ignored.
+    """
+    from app.models.tours import TourDiscount as _TourDiscount
+    from app.schemas.bookings import BookingAddonPayload, BookingCreate
+    from app.services.bookings import _price_booking
+    from app.services.discounts import find_best_discount_row
+
     tour = _require_tour(db, tour_id)
-    total_pax = req.adults_count + req.children_count
-    now = datetime.now(tz=timezone.utc)
 
-    # Find best pricing slab
-    slab: TourPricing | None = (
-        db.query(TourPricing)
-        .filter(
-            TourPricing.tour_id == tour_id,
-            TourPricing.status == "active",
-            TourPricing.passenger_from <= total_pax,
-            TourPricing.passenger_to >= total_pax,
-        )
-        .first()
+    booking_data = BookingCreate(
+        customer_id=0,  # preview only -- _price_booking never reads customer_id
+        tour_id=tour_id,
+        tour_date=req.tour_date.isoformat() if req.tour_date else "",
+        tour_start_date=req.tour_date.isoformat() if req.tour_date else None,
+        tour_end_date=req.tour_end_date.isoformat() if req.tour_end_date else None,
+        adults_count=req.adults_count,
+        children_count=req.children_count,
+        no_of_adults=req.adults_count,
+        no_of_children=req.children_count,
+        no_of_infants=req.no_of_infants,
+        no_of_rooms=req.no_of_rooms,
+        promo_code=req.promo_code,
+        optional_activities=[BookingAddonPayload(id=i, quantity=1) for i in req.optional_activity_ids],
+        extensions=[BookingAddonPayload(id=i, quantity=1) for i in req.tour_extension_ids],
     )
+    (
+        _tour, _calendar, adults, children, _total_travellers, currency, base_amount,
+        activity_total, accommodation_total, extension_total, discount_amount, tax, surcharge,
+        final, activity_rows, accommodation_rows, extension_rows, slab, _group_tier,
+        _group_discount_amount, _group_discount_funded_by, _promo_discount_funded_by,
+        service_fee, gateway_fee, _non_commissionable_addon_total, _cost_plus_customer_total,
+        _cost_plus_supplier_total,
+    ) = _price_booking(db, booking_data)
 
-    currency = slab.currency if slab else tour.currency
-    # storefront_* (falling back to the raw price if unset) is what
-    # _price_booking actually charges at checkout - this preview must match
-    # that.
-    # float(...) throughout this function: TourPricing/TourOptionalActivity/
-    # TourAccommodationExtra/TourExtension/TourDiscount amount columns are all
-    # Numeric (Decimal on read) - this function otherwise does plain float
-    # arithmetic (0.0 accumulators), and Decimal + float raises TypeError.
     adult_unit = float((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else tour.price_start_per_person)
     child_unit = float((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0.0)
 
-    adult_total = adult_unit * req.adults_count
-    child_total = child_unit * req.children_count
-    base_price = adult_total + child_total
-
-    # Optional activities
-    activity_total = 0.0
-    activity_breakdown = []
-    if req.optional_activity_ids:
-        acts = db.query(TourOptionalActivity).filter(
-            TourOptionalActivity.id.in_(req.optional_activity_ids),
-            TourOptionalActivity.tour_id == tour_id,
-            TourOptionalActivity.status == "active",
-        ).all()
-        for act in acts:
-            cost = float(act.price_per_person) * total_pax
-            activity_total += cost
-            activity_breakdown.append({"id": act.id, "name": act.activity_name, "amount": cost})
-
-    # Accommodation extras
-    accommodation_total = 0.0
-    accommodation_breakdown = []
-    if req.accommodation_extra_ids:
-        extras = db.query(TourAccommodationExtra).filter(
-            TourAccommodationExtra.id.in_(req.accommodation_extra_ids),
-            TourAccommodationExtra.tour_id == tour_id,
-            TourAccommodationExtra.status == "active",
-        ).all()
-        for extra in extras:
-            cost = float(extra.extra_price) * (total_pax if extra.price_type == "per_person" else 1)
-            accommodation_total += cost
-            accommodation_breakdown.append({"id": extra.id, "name": extra.accommodation_name, "amount": cost})
-
-    # Tour extensions
-    extension_total = 0.0
-    extension_breakdown = []
-    if req.tour_extension_ids:
-        exts = db.query(TourExtension).filter(
-            TourExtension.id.in_(req.tour_extension_ids),
-            TourExtension.tour_id == tour_id,
-            TourExtension.status == "active",
-        ).all()
-        for ext in exts:
-            amount = float(ext.extra_price)
-            extension_total += amount
-            extension_breakdown.append({"id": ext.id, "title": ext.extension_title, "amount": amount})
-
-    subtotal = base_price + activity_total + accommodation_total + extension_total
-
-    # Apply discount / promo code
-    discount_amount = 0.0
+    # Display-only discount metadata (name/code/type/value) -- purely
+    # descriptive, doesn't affect discount_amount above, which already came
+    # from _price_booking's single authoritative calculation.
     discount_info = None
-    discount: TourDiscount | None = None
-
-    if req.promo_code:
-        discount = db.query(TourDiscount).filter(
-            TourDiscount.discount_code == req.promo_code,
-            TourDiscount.status == "active",
-        ).first()
-        if not discount:
-            raise HTTPException(status_code=400, detail="Invalid or expired promo code")
-
-    if not discount:
-        # Best automatic discount for this tour -- shares services.discounts
-        # with the storefront display and actual booking-creation charge, so
-        # this preview can never show a different discount than either.
-        from app.services.discounts import find_best_discount_row
-        discount = find_best_discount_row(db, tour)
-
-    if discount:
-        discount_value = float(discount.discount_value)
-        minimum_booking_amount = float(discount.minimum_booking_amount or 0)
-        expiry_ok = (not discount.end_date) or discount.end_date.replace(tzinfo=timezone.utc) >= now
-        start_ok = (not discount.start_date) or discount.start_date.replace(tzinfo=timezone.utc) <= now
-        limit_ok = (not discount.usage_limit) or discount.used_count < discount.usage_limit
-        min_ok = subtotal >= minimum_booking_amount
-
-        if expiry_ok and start_ok and limit_ok and min_ok:
-            if discount.discount_type == "percentage":
-                discount_amount = subtotal * discount_value / 100
-            else:
-                discount_amount = min(discount_value, subtotal)
+    if float(discount_amount) > 0:
+        row: _TourDiscount | None = None
+        if req.promo_code and req.promo_code.strip():
+            row = db.query(_TourDiscount).filter(_TourDiscount.discount_code == req.promo_code.strip(), _TourDiscount.status == "active").first()
+        else:
+            row = find_best_discount_row(db, tour)
+        if row:
             discount_info = {
-                "id": discount.id,
-                "name": discount.discount_name,
-                "code": discount.discount_code,
-                "type": discount.discount_type,
-                "value": discount_value,
-                "amount": discount_amount,
+                "id": row.id,
+                "name": row.discount_name,
+                "code": row.discount_code,
+                "type": row.discount_type,
+                "value": float(row.discount_value),
+                "amount": float(discount_amount),
             }
 
-    taxable_amount = max(subtotal - discount_amount, 0.0)
-    tax_percentage = float(tour.tax_percentage or 0)
-    tax_amount = round(taxable_amount * tax_percentage / 100, 2) if tax_percentage > 0 else 0.0
-    service_fee = float(tour.service_fee or 0)
-    final_total = max(subtotal - discount_amount + tax_amount + service_fee, 0.0)
-
+    subtotal = float(base_amount + activity_total + accommodation_total + extension_total)
     return {
         "currency": currency,
-        "adults_count": req.adults_count,
-        "children_count": req.children_count,
+        "adults_count": adults,
+        "children_count": children,
         "adult_unit_price": adult_unit,
         "child_unit_price": child_unit,
-        "adult_price": adult_total,
-        "child_price": child_total,
-        "base_price": base_price,
-        "optional_activity_total": activity_total,
-        "accommodation_extra_total": accommodation_total,
-        "tour_extension_total": extension_total,
+        "adult_price": adult_unit * adults,
+        "child_price": child_unit * children,
+        "base_price": float(base_amount),
+        "optional_activity_total": float(activity_total),
+        "accommodation_extra_total": float(accommodation_total),
+        "tour_extension_total": float(extension_total),
         "subtotal": subtotal,
-        "discount_amount": discount_amount,
+        "discount_amount": float(discount_amount),
         "discount": discount_info,
-        "tax_amount": tax_amount,
-        "service_fee": service_fee,
-        "final_total": final_total,
+        "tax_amount": float(tax),
+        "service_fee": float(service_fee),
+        "final_total": float(final),
         "price_breakdown": {
-            "activities": activity_breakdown,
-            "accommodations": accommodation_breakdown,
-            "extensions": extension_breakdown,
+            "activities": [{"id": row.id, "name": row.activity_name, "amount": float(total)} for row, _qty, _unit, total in activity_rows],
+            "accommodations": [{"id": row.id, "name": row.accommodation_name, "amount": float(total)} for row, _qty, _unit, total in accommodation_rows],
+            "extensions": [{"id": row.id, "title": row.extension_title, "amount": float(total)} for row, _qty, _unit, total in extension_rows],
         },
     }

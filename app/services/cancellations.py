@@ -263,6 +263,7 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
     old_status = booking.booking_status
     booking.booking_status = "cancelled"
     booking.cancellation_reason = req.reason
+    booking.cancellation_source = "customer_request"
     booking.cancelled_at = utcnow()
     booking.cancelled_by = actor.id
     if booking.calendar:

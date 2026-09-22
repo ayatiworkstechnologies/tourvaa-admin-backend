@@ -1,15 +1,62 @@
 import logging
 import re
 import smtplib
+import threading
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from html import unescape
+from typing import TYPE_CHECKING
 
 from app.config import settings
 from app.utils.money import utcnow
 
+if TYPE_CHECKING:
+    from fastapi import BackgroundTasks
+    from sqlalchemy.orm import Session
+
 logger = logging.getLogger(__name__)
+
+
+def dispatch_email_task(background_tasks: "BackgroundTasks | None", db: "Session", target, *args, **kwargs) -> None:
+    """Schedule `target(db, *args, **kwargs)` so the caller (a booking/
+    payment request) never blocks on SMTP.
+
+    - When `background_tasks` (FastAPI's BackgroundTasks) is available, the
+      task runs after the response is sent, still safely reusing the
+      request's `db` session - FastAPI defers closing yield-based
+      dependencies (like the request's DB session) until after background
+      tasks finish, precisely so this is safe.
+    - When no BackgroundTasks is available (e.g. this helper end up being
+      called from a background sweep rather than an HTTP request, or from a
+      service layer that hasn't threaded one through), falls back to a
+      daemon thread. That thread opens its OWN DB session rather than
+      reusing `db`, since the caller's session may already be closed, or
+      concurrently in use on another thread, by the time the thread runs.
+    Either way, a failed/slow send is caught and logged as a warning - it
+    must never surface to, or block, the original caller.
+    """
+    if background_tasks is not None:
+        background_tasks.add_task(_run_email_task, db, target, args, kwargs)
+        return
+
+    def _run_in_thread() -> None:
+        from app.database import SessionLocal
+
+        thread_db = SessionLocal()
+        try:
+            _run_email_task(thread_db, target, args, kwargs)
+        finally:
+            thread_db.close()
+
+    threading.Thread(target=_run_in_thread, daemon=True).start()
+
+
+def _run_email_task(db: "Session", target, args: tuple, kwargs: dict) -> None:
+    try:
+        target(db, *args, **kwargs)
+    except Exception:
+        logger.warning("Background email task %s failed", getattr(target, "__name__", target), exc_info=True)
 
 
 @dataclass(frozen=True)

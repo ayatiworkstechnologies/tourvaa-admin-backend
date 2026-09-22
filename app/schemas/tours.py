@@ -1,5 +1,6 @@
 from datetime import date, datetime
-from typing import Any
+from decimal import Decimal
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -11,6 +12,23 @@ AVAILABILITY_FREQUENCIES = {"weekly", "fortnightly", "monthly"}
 DISCOUNT_TYPES = {"percentage", "fixed"}
 DISCOUNT_SCOPES = {"tour", "all_tours", "category", "country"}
 PRICE_TYPES = {"per_person", "per_booking", "per_room", "per_person_per_night", "per_room_per_night"}
+
+
+def _reject_ambiguous_commission_mode(commissionable: bool, supplier_cost) -> None:
+    """supplier_cost (cost-plus) and commissionable=False (percentage-model
+    opt-out) are two different ways of saying "don't apply Tourvaa's
+    commission % to this item's customer price" -- see
+    services.bookings.compute_booking_supplier_financials, where supplier_cost
+    silently wins over commissionable when both are set. Reject the
+    combination outright instead of silently ignoring commissionable, so an
+    admin who sets both gets a clear error rather than a config that doesn't
+    do what its own commissionable=False flag implies."""
+    if supplier_cost is not None and commissionable is False:
+        raise ValueError(
+            "commissionable=false has no effect when supplier_cost is set (cost-plus already excludes this item "
+            "from commission) -- set commissionable=true (or omit it) when using supplier_cost, or clear "
+            "supplier_cost if you only want the commissionable flag."
+        )
 ADDON_CATEGORIES = {"pickup", "room_upgrade", "dining", "insurance", "extra_activity", "additional_night", "meal", "visa_assistance", "other"}
 
 
@@ -163,6 +181,15 @@ class ExtensionPayload(BaseModel):
     category: str = Field(default="other", max_length=30)
     display_order: int = Field(default=0, ge=0)
     status: str = Field(default="active", max_length=20)
+    # When False, this extension's price is excluded from Tourvaa's
+    # commission base (paid to the supplier in full) -- see
+    # services.bookings.compute_booking_supplier_financials.
+    commissionable: bool = True
+    # Cost-plus margin: when set, the supplier is paid this exact per-unit
+    # cost (no commission %) and Tourvaa's margin is customer price minus
+    # this -- mutually exclusive with the commissionable flag above (see
+    # models.tours.TourExtension.supplier_cost). None means unset/legacy.
+    supplier_cost: Optional[Decimal] = None
 
     @field_validator("price_type")
     @classmethod
@@ -177,6 +204,11 @@ class ExtensionPayload(BaseModel):
         if v not in ADDON_CATEGORIES:
             raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
         return v
+
+    @model_validator(mode="after")
+    def validate_commission_mode(self):
+        _reject_ambiguous_commission_mode(self.commissionable, self.supplier_cost)
+        return self
 
     @field_validator("status")
     @classmethod
@@ -286,6 +318,12 @@ class OptionalActivityPayload(BaseModel):
     image: str = Field(default="", max_length=255)
     category: str = Field(default="other", max_length=30)
     status: str = Field(default="active", max_length=20)
+    # When False, this activity's price is excluded from Tourvaa's
+    # commission base (paid to the supplier in full) -- see
+    # services.bookings.compute_booking_supplier_financials.
+    commissionable: bool = True
+    # See ExtensionPayload.supplier_cost above.
+    supplier_cost: Optional[Decimal] = None
 
     @field_validator("pricing_mode")
     @classmethod
@@ -300,6 +338,11 @@ class OptionalActivityPayload(BaseModel):
         if v not in ADDON_CATEGORIES:
             raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
         return v
+
+    @model_validator(mode="after")
+    def validate_commission_mode(self):
+        _reject_ambiguous_commission_mode(self.commissionable, self.supplier_cost)
+        return self
 
     @field_validator("status")
     @classmethod
@@ -319,6 +362,12 @@ class AccommodationExtraPayload(BaseModel):
     category: str = Field(default="room_upgrade", max_length=30)
     is_default: bool = False
     status: str = Field(default="active", max_length=20)
+    # When False, this accommodation extra's price is excluded from
+    # Tourvaa's commission base (paid to the supplier in full) -- see
+    # services.bookings.compute_booking_supplier_financials.
+    commissionable: bool = True
+    # See ExtensionPayload.supplier_cost above.
+    supplier_cost: Optional[Decimal] = None
 
     @field_validator("price_type")
     @classmethod
@@ -333,6 +382,11 @@ class AccommodationExtraPayload(BaseModel):
         if v not in ADDON_CATEGORIES:
             raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
         return v
+
+    @model_validator(mode="after")
+    def validate_commission_mode(self):
+        _reject_ambiguous_commission_mode(self.commissionable, self.supplier_cost)
+        return self
 
     @field_validator("status")
     @classmethod
@@ -433,12 +487,24 @@ class DiscountPayload(BaseModel):
     usage_limit: int | None = Field(default=None, ge=1)
     minimum_booking_amount: float = Field(default=0.0, ge=0)
     status: str = Field(default="active", max_length=20)
+    # Who absorbs this promo code's discount amount -- "SUPPLIER" (default,
+    # unchanged legacy behavior) or "TOURVAA" (Tourvaa's own margin absorbs
+    # it instead; see services.bookings.compute_booking_supplier_financials).
+    funded_by: str = Field(default="SUPPLIER", max_length=20)
 
     @field_validator("discount_type")
     @classmethod
     def validate_type(cls, v: str):
         if v not in DISCOUNT_TYPES:
             raise ValueError(f"discount_type must be one of {DISCOUNT_TYPES}")
+        return v
+
+    @field_validator("funded_by")
+    @classmethod
+    def validate_funded_by(cls, v: str):
+        v = (v or "SUPPLIER").upper()
+        if v not in {"SUPPLIER", "TOURVAA", "SHARED"}:
+            raise ValueError("funded_by must be one of ['SUPPLIER', 'TOURVAA', 'SHARED']")
         return v
 
     @field_validator("discount_scope")
@@ -496,12 +562,25 @@ class GroupDiscountTierPayload(BaseModel):
     discount_type: str = Field(max_length=20)
     discount_value: float = Field(ge=0)
     status: str = Field(default="active", max_length=20)
+    # Who absorbs this group discount -- "SUPPLIER" (default, unchanged
+    # legacy behavior: the discount ratio also reduces the supplier's own
+    # net_earnings) or "TOURVAA" (supplier is paid as if the discount never
+    # happened; see services.bookings.compute_booking_supplier_financials).
+    funded_by: str = Field(default="SUPPLIER", max_length=20)
 
     @field_validator("discount_type")
     @classmethod
     def validate_type(cls, v: str):
         if v not in DISCOUNT_TYPES:
             raise ValueError(f"discount_type must be one of {DISCOUNT_TYPES}")
+        return v
+
+    @field_validator("funded_by")
+    @classmethod
+    def validate_funded_by(cls, v: str):
+        v = (v or "SUPPLIER").upper()
+        if v not in {"SUPPLIER", "TOURVAA", "SHARED"}:
+            raise ValueError("funded_by must be one of ['SUPPLIER', 'TOURVAA', 'SHARED']")
         return v
 
     @field_validator("status")
@@ -529,3 +608,12 @@ class PriceCalculationRequest(BaseModel):
     accommodation_extra_ids: list[int] = Field(default_factory=list)
     tour_extension_ids: list[int] = Field(default_factory=list)
     promo_code: str | None = None
+    # Optional, forward-compatible with services.bookings._price_booking
+    # (the same calculator this preview now delegates to) -- needed to
+    # quote a per_person_per_night/per_room_per_night extension or
+    # accommodation extra correctly. Omitting them just means those specific
+    # priced-per-night items can't be quoted (an explicit 400, not a silent
+    # wrong number as the old standalone calculator used to give).
+    tour_end_date: datetime | None = None
+    no_of_rooms: int | None = Field(default=None, ge=1)
+    no_of_infants: int = Field(default=0, ge=0)

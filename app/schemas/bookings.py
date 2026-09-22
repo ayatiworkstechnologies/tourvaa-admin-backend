@@ -98,6 +98,10 @@ class BookingCreate(BaseModel):
     children_count: Optional[int] = Field(default=None, ge=0)
     currency: str = "USD"
     payment_type: str = "full"
+    # Deprecated: agents are commission-only now (see services.bookings.
+    # compute_agent_commission) -- this is accepted for backward
+    # compatibility with older frontend builds but always ignored, forced to
+    # 0 server-side in calculate_booking_price/create_booking/update_booking.
     agent_markup: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("1000000"))
     agent_payment_method: Optional[str] = None
     agent_reference: Optional[str] = Field(default=None, max_length=100)

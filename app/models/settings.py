@@ -27,6 +27,9 @@ class PaymentSetting(Base):
     webhook_id = Column(String(150), nullable=True)
     surcharge_percentage = Column(String(20), default="0", nullable=False)
     mode = Column(String(20), default="test", nullable=False)
+    last_test_status = Column(String(20), nullable=True)
+    last_test_at = Column(DateTime(timezone=True), nullable=True)
+    last_test_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

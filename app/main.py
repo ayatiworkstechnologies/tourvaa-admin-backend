@@ -520,6 +520,31 @@ async def _chat_retention_loop():
             logger.exception("Chat retention sweep failed")
 
 
+# Log/audit-adjacent tables (login_history, email_logs, notifications,
+# expired sessions) only need pruning once a day - see
+# app/services/retention.py for the per-table thresholds and for what is
+# deliberately excluded (audit_logs and anything financial).
+DATA_RETENTION_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def _data_retention_loop():
+    from app.services.retention import run_retention_cleanup
+    from app.utils.distributed_lock import acquire_sweep_lock
+
+    while True:
+        await asyncio.sleep(DATA_RETENTION_SWEEP_INTERVAL_SECONDS)
+        try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "data_retention", DATA_RETENTION_SWEEP_INTERVAL_SECONDS - 300):
+                continue
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(run_retention_cleanup, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Data retention sweep failed")
+
+
 _background_tasks: list[asyncio.Task] = []
 
 
@@ -531,6 +556,7 @@ async def start_background_jobs():
         _background_tasks.append(asyncio.create_task(_tour_availability_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_wishlist_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_chat_retention_loop()))
+        _background_tasks.append(asyncio.create_task(_data_retention_loop()))
 
     from app.services.messaging_ws import start_redis_subscriber
     _background_tasks.append(asyncio.create_task(start_redis_subscriber()))

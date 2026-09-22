@@ -14,6 +14,7 @@ from threading import Lock
 import httpx
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.cms import Country
 
 BASE_CURRENCY = "USD"
@@ -48,7 +49,6 @@ FALLBACK_USD_RATES: dict[str, Decimal] = {
 _cache_lock = Lock()
 _cache: dict[str, object] = {}
 
-GEOIP_URL = "http://ip-api.com/json/{ip}"
 GEOIP_TTL = timedelta(hours=1)
 
 _geoip_cache_lock = Lock()
@@ -70,10 +70,53 @@ def _is_private_ip(ip: str) -> bool:
     return False
 
 
+def _geoip_request(ip: str) -> tuple[str, dict[str, object]]:
+    """Return (url, params) for the configured GEOIP_PROVIDER.
+
+    Only used by geolocate_ip, which treats any failure the same way
+    regardless of provider - this just isolates the per-provider URL/param
+    shape so swapping providers doesn't touch the error-handling path.
+    """
+    provider = (settings.GEOIP_PROVIDER or "ip-api").strip().lower()
+    api_key = (settings.GEOIP_API_KEY or "").strip()
+    if provider in ("ipapi", "ipapi.com"):
+        # https://ipapi.com/documentation
+        url = f"https://api.ipapi.com/api/{ip}" if api_key else f"http://api.ipapi.com/api/{ip}"
+        params: dict[str, object] = {"fields": "country_code"}
+        if api_key:
+            params["access_key"] = api_key
+        return url, params
+    # Default: ip-api.com. Free tier is HTTP-only and unlicensed for
+    # commercial/production use - set GEOIP_PROVIDER/GEOIP_API_KEY to move
+    # to a paid plan or a different provider before launch.
+    scheme = "https" if api_key else "http"
+    url = f"{scheme}://ip-api.com/json/{ip}"
+    params = {"fields": "status,countryCode"}
+    if api_key:
+        params["key"] = api_key
+    return url, params
+
+
+def _parse_geoip_response(provider: str, payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    if provider in ("ipapi", "ipapi.com"):
+        if payload.get("error"):
+            return ""
+        raw_code = str(payload.get("country_code") or "").strip().upper()
+    else:
+        if payload.get("status") != "success":
+            return ""
+        raw_code = str(payload.get("countryCode") or "").strip().upper()
+    return raw_code if len(raw_code) == 2 and raw_code.isalpha() else ""
+
+
 def geolocate_ip(ip: str) -> str:
-    """Best-effort IP -> ISO country code lookup via ip-api.com. Returns "" on
-    any failure (private IP, network error, rate limit, unparseable body) so
-    callers can fall back to their own default rather than raising."""
+    """Best-effort IP -> ISO country code lookup via the configured
+    GEOIP_PROVIDER. Returns "" on any failure (private IP, network error,
+    rate limit, unparseable body) so callers MUST fall back to their own
+    default (see DEFAULT_CURRENCY/DEFAULT_LOCALE) rather than treating this
+    as authoritative - geo-IP lookups must never block or fail a request."""
     ip = (ip or "").strip()
     if _is_private_ip(ip):
         return ""
@@ -82,15 +125,18 @@ def geolocate_ip(ip: str) -> str:
         cached = _geoip_cache.get(ip)
         if cached and cached[1] > now:
             return cached[0]
+    provider = (settings.GEOIP_PROVIDER or "ip-api").strip().lower()
     try:
-        response = httpx.get(GEOIP_URL.format(ip=ip), params={"fields": "status,countryCode"}, timeout=3.0)
+        url, params = _geoip_request(ip)
+        response = httpx.get(url, params=params, timeout=3.0)
         response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict) or payload.get("status") != "success":
-            return ""
-        raw_code = str(payload.get("countryCode") or "").strip().upper()
-        country_code = raw_code if len(raw_code) == 2 and raw_code.isalpha() else ""
-    except (httpx.HTTPError, ValueError, TypeError):
+        country_code = _parse_geoip_response(provider, response.json())
+    except (httpx.HTTPError, ValueError, TypeError, KeyError):
+        return ""
+    except Exception:
+        # Belt-and-braces: a geo-IP lookup failing in any way must never
+        # propagate and block/break the caller (e.g. checkout/currency
+        # detection) - always degrade to "" so the caller uses its default.
         return ""
     if country_code:
         with _geoip_cache_lock:

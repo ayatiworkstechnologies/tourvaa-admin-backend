@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     AGENT_JWT_SECRET_KEY: str = ""
     CUSTOMER_JWT_SECRET_KEY: str = ""
     ADMIN_JWT_SECRET_KEY: str = ""
+    AFFILIATE_JWT_SECRET_KEY: str = ""
     REQUIRE_EMAIL_VERIFICATION: bool = False
     EMAIL_VERIFICATION_EXPIRE_MINUTES: int = 1440
     OTP_EXPIRE_MINUTES: int = 10
@@ -89,6 +90,19 @@ class Settings(BaseSettings):
     VAPID_PRIVATE_KEY_FILE: str = "vapid_private.pem"
     VAPID_MAILTO: str = "mailto:admin@tourvaa.com"
 
+    # IP -> country geolocation used only for browsing-currency detection
+    # (never for anything booking/checkout-critical - lookups are always
+    # best-effort and fall back to DEFAULT_CURRENCY/DEFAULT_LOCALE on any
+    # failure). Defaults to the existing ip-api.com free-tier endpoint for
+    # continuity; set GEOIP_PROVIDER + GEOIP_API_KEY to switch to a licensed
+    # provider (e.g. "ipapi" for ipapi.com, "ip-api" for a paid ip-api.com
+    # plan) before going to production, since the ip-api.com free tier is
+    # not licensed for commercial/production use.
+    GEOIP_PROVIDER: str = "ip-api"
+    GEOIP_API_KEY: str = ""
+    DEFAULT_CURRENCY: str = "USD"
+    DEFAULT_LOCALE: str = "en-US"
+
     def get_portal_secret(self, portal: str) -> str:
         """Return the JWT secret for the given portal, falling back to the main key."""
         mapping = {
@@ -96,6 +110,7 @@ class Settings(BaseSettings):
             "agent": self.AGENT_JWT_SECRET_KEY,
             "customer": self.CUSTOMER_JWT_SECRET_KEY,
             "admin": self.ADMIN_JWT_SECRET_KEY,
+            "affiliate": self.AFFILIATE_JWT_SECRET_KEY,
         }
         explicit = mapping.get(portal, "")
         if explicit:

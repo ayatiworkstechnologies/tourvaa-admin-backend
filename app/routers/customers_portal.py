@@ -1,6 +1,6 @@
 ﻿from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -215,12 +215,12 @@ def customer_bookings(params: dict = Depends(pagination_params), booking_status:
 
 
 @router.post("/bookings")
-def create_customer_booking(payload: dict, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_customer_booking(payload: dict, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     check_rate_limit(request, "booking-create", max_calls=10, window_seconds=60)
     customer = _current_customer(db, current_user)
     payload = {**payload, "customer_id": customer.id, "booking_source": "customer"}
     data = BookingCreate.model_validate(payload)
-    return {"status": "success", "message": "Booking created successfully", "data": create_booking(db, data, actor=current_user, request=request)}
+    return {"status": "success", "message": "Booking created successfully", "data": create_booking(db, data, actor=current_user, request=request, background_tasks=background_tasks)}
 
 
 @router.get("/bookings/{booking_id}")

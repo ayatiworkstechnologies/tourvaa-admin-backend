@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import Optional
 
-from fastapi import HTTPException, Request
+from fastapi import BackgroundTasks, HTTPException, Request
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -33,6 +33,7 @@ from app.schemas.bookings import (
 from app.models.cms import City, Country, Tour
 from app.utils.money import as_aware_utc, money, money_str, utcnow
 from app.services.settings import (
+    get_allow_agent_markup,
     get_default_balance_payment_deadline_days,
     get_default_deposit_cutoff_days,
     get_default_deposit_percentage,
@@ -46,7 +47,7 @@ from app.models.users import User
 logger = logging.getLogger(__name__)
 
 
-def _send_booking_email(db, key: str, values: dict, fallback_subject: str, fallback_html: str, to_email: str):
+def _do_send_booking_email(db, key: str, values: dict, fallback_subject: str, fallback_html: str, to_email: str) -> None:
     from app.utils.email_templates import render_database_email
     from app.utils.mailer import try_send_email
     try:
@@ -56,16 +57,33 @@ def _send_booking_email(db, key: str, values: dict, fallback_subject: str, fallb
         logger.warning("Booking email %s to %s failed: %s", key, to_email, exc)
 
 
-def _email_admins_booking_event(db, event_title: str, detail: str, booking: Booking) -> None:
+def _send_booking_email(db, key: str, values: dict, fallback_subject: str, fallback_html: str, to_email: str, background_tasks: BackgroundTasks | None = None):
+    # Booking success must never depend on (or wait on) email delivery - the
+    # actual send is scheduled via BackgroundTasks (or a daemon thread when
+    # none is available) rather than run inline. See
+    # app.utils.mailer.dispatch_email_task for how each mode stays safe.
+    from app.utils.mailer import dispatch_email_task
+    dispatch_email_task(background_tasks, db, _do_send_booking_email, key, values, fallback_subject, fallback_html, to_email)
+
+
+def _do_email_admins_booking_event(db, event_title: str, detail: str, booking_id: int, booking_code: str, tour_name: str | None) -> None:
     from app.utils.email_templates import admin_booking_event_email
     from app.utils.notification_triggers import email_admins
-    admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
+    admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking_id}"
     email_admins(
         db, "admin_booking_event",
-        {"event_title": event_title, "detail": detail, "booking_code": booking.booking_code,
-         "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "View booking", "button_url": admin_url},
-        f"{event_title} - {booking.booking_code}",
-        admin_booking_event_email(event_title, detail, booking.booking_code, booking.tour_name, admin_url),
+        {"event_title": event_title, "detail": detail, "booking_code": booking_code,
+         "tour_name": tour_name, "admin_url": admin_url, "button_text": "View booking", "button_url": admin_url},
+        f"{event_title} - {booking_code}",
+        admin_booking_event_email(event_title, detail, booking_code, tour_name, admin_url),
+    )
+
+
+def _email_admins_booking_event(db, event_title: str, detail: str, booking: Booking, background_tasks: BackgroundTasks | None = None) -> None:
+    from app.utils.mailer import dispatch_email_task
+    dispatch_email_task(
+        background_tasks, db, _do_email_admins_booking_event,
+        event_title, detail, booking.id, booking.booking_code, booking.tour_name,
     )
 
 
@@ -85,8 +103,11 @@ def _email_agent_booking_status(db, booking: Booking, new_status: str, reason: s
     )
 
 
-def _booking_code(booking_id: int, source: str = "customer") -> str:
-    return f"{'TVAA' if source == 'agent' else 'TVAC'}-{booking_id}"
+def _booking_code(db: Session, booking_id: int, source: str = "customer") -> str:
+    from app.services.settings import get_booking_prefix
+
+    prefix = get_booking_prefix(db)
+    return f"{prefix}{'A' if source == 'agent' else 'C'}-{booking_id}"
 
 
 def _parse_dt(value: str | None):
@@ -238,13 +259,76 @@ def _similar_tours_for_email(db: Session, tour_id: int | None, limit: int = 3) -
 
 
 def affiliate_eligible_amount(booking: Booking):
-    """Base amount for affiliate commission - excludes an agent's own markup
-    (agent_net_price) so an affiliate isn't paid a cut of money the agent
-    added on top and never routed through Tourvaa's own margin. Mirrors the
-    same booking_source == "agent" carve-out used for the supplier ledger."""
+    """Base amount for affiliate commission - the tour/experience selling
+    amount net of tax and fees, so Tourvaa never pays commission on money
+    that passed straight through to tax authorities or the payment gateway.
+    Also excludes an agent's own markup (agent_net_price) so an affiliate
+    isn't paid a cut of money the agent added on top and never routed
+    through Tourvaa's own margin - mirrors the same booking_source ==
+    "agent" carve-out used for the supplier ledger. Refund-time proration is
+    handled separately by affiliate_tracking.reverse_conversion."""
     if booking.booking_source == "agent" and booking.agent_net_price:
-        return money(booking.agent_net_price)
-    return money(booking.final_amount or booking.total_cost or 0)
+        gross = money(booking.agent_net_price)
+    else:
+        gross = money(booking.final_amount or booking.total_cost or 0)
+    eligible = gross - money(booking.tax_amount or 0) - money(booking.surcharge_amount or 0)
+    return max(money(0), eligible)
+
+
+def _apply_commission_snapshot(db: Session, booking: Booking) -> None:
+    """Immutable commission-split snapshot, computed once at booking
+    creation and written directly onto the booking row (see the new columns
+    on models.bookings.Booking). Commission-deduction model: supplier's own
+    price IS the customer price (no admin markup); agent/affiliate
+    commission is carved OUT of Tourvaa's own commission, never paid
+    additionally -- so an agent/affiliate rate that would exceed Tourvaa's
+    own commission percentage is rejected outright rather than silently
+    letting Tourvaa's net revenue go negative."""
+    financials = compute_booking_supplier_financials(db, booking)
+    if not financials:
+        return
+    commission_percentage = money(financials["commission_percentage"])
+    commission_amount = money(financials["commission_amount"])
+    booking.tourvaa_commission_percentage = commission_percentage
+    booking.tourvaa_commission_amount = commission_amount
+    booking.supplier_net_payable = money(financials["net_payable"])
+    booking.tourvaa_net_revenue = commission_amount
+
+    if booking.booking_source == "agent" and booking.agent:
+        agent = booking.agent
+        discount_type = (agent.discount_type or "").strip().lower()
+        discount_value = money(agent.discount_value or 0)
+        if discount_type == "percentage" and commission_percentage > 0 and discount_value > commission_percentage:
+            raise HTTPException(
+                status_code=422,
+                detail=f"This agent's commission rate ({discount_value}%) cannot exceed Tourvaa's commission on this tour ({commission_percentage}%).",
+            )
+        agent_commission_amount = compute_agent_commission(agent, booking.customer_selling_price)
+        if agent_commission_amount > commission_amount:
+            raise HTTPException(
+                status_code=422,
+                detail="This agent's commission amount cannot exceed Tourvaa's commission on this booking.",
+            )
+        booking.agent_commission_percentage = discount_value if discount_type == "percentage" else None
+        booking.agent_commission_amount = agent_commission_amount
+        booking.tourvaa_net_revenue = commission_amount - agent_commission_amount
+
+
+def compute_agent_commission(agent, gross_amount):
+    """Platform-paid commission Tourvaa owes an agent on a booking's gross
+    amount -- the agent's ONLY earning under the commission-only model (see
+    AgentLedger, agent_markup forced to 0 in calculate_booking_price/
+    create_booking/update_booking). Single shared formula so the per-booking
+    ledger entry (create_booking) and the dashboard's aggregate estimate
+    (routers.dashboard) never drift apart."""
+    discount_type = ((agent.discount_type if agent else None) or "").strip().lower()
+    discount_value = money(agent.discount_value or 0) if agent else money(0)
+    gross_amount = money(gross_amount or 0)
+    if discount_type == "percentage":
+        return money((gross_amount * discount_value) / 100)
+    if discount_type == "fixed":
+        return discount_value
+    return money(0)
 
 
 def _settle_cancelled_booking_payments(
@@ -424,7 +508,7 @@ def _agent_reserve_deposit_info(db: Session, booking: Booking) -> Optional[dict]
 def serialize_booking(db: Session, booking: Booking, detail: bool = False, include_supplier_breakdown: bool = False, hide_supplier_identity: bool = False) -> dict:
     data = {
         "id": booking.id,
-        "booking_code": booking.booking_code or _booking_code(booking.id, booking.booking_source),
+        "booking_code": booking.booking_code or _booking_code(db, booking.id, booking.booking_source),
         "customer_id": booking.customer_id,
         "customer_name": booking.customer.full_name if booking.customer else None,
         "customer_email": booking.customer.email if booking.customer else None,
@@ -465,9 +549,14 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "optional_activity_amount": money_str(booking.optional_activity_amount),
         "accommodation_amount": money_str(booking.accommodation_amount),
         "extension_amount": money_str(booking.extension_amount),
+        "group_discount_amount": money_str(booking.group_discount_amount),
+        "group_discount_funded_by": booking.group_discount_funded_by,
         "discount_amount": money_str(booking.discount_amount),
+        "promo_discount_funded_by": booking.promo_discount_funded_by,
         "tax_amount": money_str(booking.tax_amount),
         "surcharge_amount": money_str(booking.surcharge_amount),
+        "service_fee_amount": money_str(booking.service_fee_amount) if booking.service_fee_amount is not None else None,
+        "gateway_fee_amount": money_str(booking.gateway_fee_amount) if booking.gateway_fee_amount is not None else None,
         "final_amount": money_str(booking.final_amount),
         "agent_net_price": money_str(booking.agent_net_price),
         "agent_markup": money_str(booking.agent_markup),
@@ -487,6 +576,7 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "customer_notes": booking.customer_notes,
         "admin_notes": booking.admin_notes,
         "cancellation_reason": booking.cancellation_reason,
+        "cancellation_source": booking.cancellation_source,
         "cancelled_at": booking.cancelled_at,
         "created_at": booking.created_at,
         "updated_at": booking.updated_at,
@@ -518,9 +608,14 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
                 "optional_activity_amount": _money_total(booking.optional_activities),
                 "accommodation_amount": _money_total(booking.accommodations),
                 "extension_amount": _money_total(booking.extensions),
+                "group_discount_amount": money_str(booking.group_discount_amount),
+                "group_discount_funded_by": booking.group_discount_funded_by,
                 "discount_amount": money_str(booking.discount_amount),
+                "promo_discount_funded_by": booking.promo_discount_funded_by,
                 "tax_amount": money_str(booking.tax_amount),
                 "surcharge_amount": money_str(booking.surcharge_amount),
+                "service_fee_amount": money_str(booking.service_fee_amount) if booking.service_fee_amount is not None else None,
+                "gateway_fee_amount": money_str(booking.gateway_fee_amount) if booking.gateway_fee_amount is not None else None,
                 "final_amount": money_str(booking.final_amount),
                 "agent_net_price": money_str(booking.agent_net_price),
                 "agent_markup": money_str(booking.agent_markup),
@@ -644,20 +739,31 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
     the same best-active discount the storefront/booking-flow already
     highlighted for this tour (services.discounts.find_best_discount_row) --
     so the discounted price a customer/agent sees is always what they're
-    actually charged, with no separate promo code required."""
+    actually charged, with no separate promo code required.
+
+    Returns (amount, funded_by) where funded_by is the resolved TourDiscount
+    row's funded_by ("SUPPLIER"/"TOURVAA"/"SHARED"), or None when no discount
+    applied at all. Snapshotted onto the booking (Booking.promo_discount_funded_by)
+    and read by compute_booking_supplier_financials, which decides whether the
+    supplier's payout absorbs this discount (SUPPLIER, the default -- and the
+    amount is already baked into gross_amount via booking.final_amount by the
+    time that function runs), is paid as if it never happened (TOURVAA), or
+    splits it 50/50 (SHARED)."""
     if not promo_code or not promo_code.strip():
         if not tour:
-            return money(0)
+            return money(0), None
         from app.services.discounts import find_best_discount_row, discount_amount_for
         row = find_best_discount_row(db, tour, lock=consume)
         if not row or money(subtotal) < money(row.minimum_booking_amount or 0):
-            return money(0)
+            return money(0), None
         if row.usage_limit is not None and (row.used_count or 0) >= row.usage_limit:
-            return money(0)
+            return money(0), None
         amount = min(money(discount_amount_for(row, float(subtotal))), money(subtotal))
-        if consume and amount > 0:
+        if amount <= 0:
+            return money(0), None
+        if consume:
             row.used_count = (row.used_count or 0) + 1
-        return money(amount)
+        return money(amount), (row.funded_by or "SUPPLIER")
     code = promo_code.strip()
     discount_query = db.query(TourDiscount).filter(TourDiscount.discount_code == code, TourDiscount.status == "active")
     if consume:
@@ -690,7 +796,7 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
     amount = min(money(amount), money(subtotal))
     if consume:
         discount.used_count = (discount.used_count or 0) + 1
-    return money(amount)
+    return money(amount), (discount.funded_by or "SUPPLIER")
 
 
 def resolve_effective_commission_percentage(db: Session, *, tour=None, supplier=None, slab=None):
@@ -802,21 +908,92 @@ def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict |
         marked_up_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
         marked_up_tour_amount = money(money(marked_up_adult) * adults + money(marked_up_child) * children)
         addon_amount = gross_amount - marked_up_tour_amount
-        group_discount_ratio = money(booking.group_discount_amount or 0) / money(booking.base_amount) if booking.base_amount else money(0)
+        # When the group discount actually applied to this booking was
+        # TOURVAA-funded (snapshotted at creation time -- see
+        # services.bookings._price_booking / Booking.group_discount_funded_by),
+        # the supplier is paid as if the discount never happened: Tourvaa's
+        # own margin absorbs it instead, so the ratio applied to the
+        # supplier's raw share is forced to 0 here. SHARED splits the burden
+        # 50/50 (half the discount ratio still reduces the supplier's share,
+        # half is absorbed by Tourvaa). SUPPLIER-funded (or unset/legacy)
+        # discounts keep the exact prior behavior -- the full ratio reduces
+        # the supplier's share.
+        full_ratio = money(booking.group_discount_amount or 0) / money(booking.base_amount) if booking.base_amount else money(0)
+        funded_by = (booking.group_discount_funded_by or "SUPPLIER").upper()
+        if funded_by == "TOURVAA":
+            group_discount_ratio = money(0)
+        elif funded_by == "SHARED":
+            group_discount_ratio = full_ratio / money(2)
+        else:
+            group_discount_ratio = full_ratio
         discounted_raw_tour_amount = raw_tour_amount * (money(1) - group_discount_ratio)
         supplier_gross_share = money(discounted_raw_tour_amount + addon_amount)
+
+    # Promo-code discount (booking.discount_amount, from TourDiscount /
+    # _resolve_discount) is already baked into gross_amount above -- it was
+    # subtracted from booking.final_amount at checkout, and (via addon_amount
+    # in the slab branch, or directly when there's no slab) that reduction
+    # flows straight through into supplier_gross_share. That means the
+    # historical/default behavior for a promo discount is SUPPLIER-funded:
+    # the supplier's payout is already reduced dollar-for-dollar, with no
+    # extra code needed here. TOURVAA-funded means Tourvaa's own margin
+    # absorbs it instead, so the supplier must be paid as if the discount
+    # never happened -- the discounted dollar amount is added back onto
+    # supplier_gross_share. SHARED adds back half. This mirrors the
+    # group-discount funded_by handling above, applied as an add-back
+    # instead of a ratio since the promo discount (unlike the group
+    # discount) is already subtracted out of gross_amount by the time we
+    # get here, in both the slab and no-slab paths.
+    promo_discount_amount = money(booking.discount_amount or 0)
+    if promo_discount_amount > 0:
+        promo_funded_by = (booking.promo_discount_funded_by or "SUPPLIER").upper()
+        if promo_funded_by == "TOURVAA":
+            promo_addback = promo_discount_amount
+        elif promo_funded_by == "SHARED":
+            promo_addback = promo_discount_amount / money(2)
+        else:
+            promo_addback = money(0)
+        supplier_gross_share = money(supplier_gross_share + promo_addback)
+
+    # Per-item commissionable flag (TourOptionalActivity/TourAccommodationExtra/
+    # TourExtension.commissionable) snapshotted at booking creation/edit time
+    # onto Booking.non_commissionable_addon_amount -- see _price_booking. That
+    # portion is carved out of the base commission is computed on, then added
+    # back in FULL (commission-free) to what the supplier is actually paid,
+    # so a non-commissionable addon nets the supplier its entire price rather
+    # than price-minus-commission.
+    non_commissionable_addon_amount = money(booking.non_commissionable_addon_amount or 0)
+
+    # Cost-plus items (TourOptionalActivity/TourAccommodationExtra/
+    # TourExtension.supplier_cost set) are structurally the same problem as
+    # the non-commissionable carve-out above, but with a different payout:
+    # the supplier is owed their exact cost (cost_plus_supplier_payable),
+    # not the item's customer price. cost_plus_customer_amount (the
+    # customer-price portion of those same items) is carved out of the
+    # commissionable base right alongside non_commissionable_addon_amount so
+    # it's never also subject to a commission percentage -- and
+    # cost_plus_supplier_payable, not that customer-price figure, is what
+    # gets added back onto gross_amount/net_payable below. This keeps a
+    # commissionable=False item and a supplier_cost-set item from ever
+    # double-carving the same dollar out of the commissionable base (each
+    # item is one or the other, never both -- see _price_booking).
+    cost_plus_customer_amount = money(booking.cost_plus_customer_amount or 0)
+    cost_plus_supplier_payable = money(booking.cost_plus_supplier_payable or 0)
+    carve_out_amount = money(non_commissionable_addon_amount + cost_plus_customer_amount)
+    add_back_amount = money(non_commissionable_addon_amount + cost_plus_supplier_payable)
+    commissionable_gross_share = money(max(money(0), supplier_gross_share - carve_out_amount))
 
     supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first()
     tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
     effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
-    breakdown = compute_supplier_commission_breakdown(supplier_gross_share, money(0), effective_commission_percentage)
+    breakdown = compute_supplier_commission_breakdown(commissionable_gross_share, money(0), effective_commission_percentage)
     currency = booking.currency or (slab.currency if slab else "USD")
     return {
         "currency": currency,
-        "gross_amount": breakdown["discounted_amount"],
+        "gross_amount": money(breakdown["discounted_amount"] + add_back_amount),
         "commission_percentage": breakdown["commission_percentage"],
         "commission_amount": breakdown["commission_amount"],
-        "net_payable": breakdown["net_earnings"],
+        "net_payable": money(breakdown["net_earnings"] + add_back_amount),
         "customer_price": money(booking.customer_selling_price or booking.final_amount or booking.total_cost or 0),
         "customer_price_currency": currency,
     }
@@ -913,6 +1090,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # only -- infants and the solo single-supplement below are resolved
     # after this call so the discount % is never applied to them.
     group_tier, group_discount_amount, _group_discount_ratio = _resolve_group_discount(db, data.tour_id, seat_travellers, per_person_amount)
+    group_discount_funded_by = (group_tier.funded_by or "SUPPLIER") if group_tier else None
     infant_unit = money(getattr(tour, "infant_price", 0) or 0) if tour else money(0)
     infant_total = money(infant_unit * data.no_of_infants)
     # Single supplement: a lone adult (no children, no co-travellers) is
@@ -940,8 +1118,22 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             return (seat_travellers if price_type == "per_person_per_night" else room_count) * nights
         return requested_quantity
 
+    # Two mutually-exclusive per-item margin models: cost-plus
+    # (row.supplier_cost set -- supplier paid exactly quantity * supplier_cost,
+    # no commission %, Tourvaa's margin is customer price minus that) takes
+    # priority over the older commissionable/commission-percentage flag,
+    # which only applies when supplier_cost is unset. cost_plus_customer_total
+    # is the customer-price portion of cost-plus items (carved out of the
+    # commissionable base in compute_booking_supplier_financials, exactly
+    # like non_commissionable_addon_total) and cost_plus_supplier_total is
+    # what the supplier is actually owed for those same items (added back in
+    # full, in place of a customer-price add-back, since the payout there
+    # isn't "customer price minus 0 commission" but the supplier's own cost).
     activity_rows = []
     activity_total = money(0)
+    non_commissionable_addon_total = money(0)
+    cost_plus_customer_total = money(0)
+    cost_plus_supplier_total = money(0)
     for item in data.optional_activities:
         row = db.query(TourOptionalActivity).filter(TourOptionalActivity.id == item.id, TourOptionalActivity.status == "active").first() if item.id else None
         if not row or (data.tour_id and row.tour_id != data.tour_id):
@@ -958,12 +1150,32 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             infant_unit = money(row.infant_price_per_person) if row.infant_price_per_person is not None else money(0)
             total = money(adult_unit * adults + child_unit * children + infant_unit * data.no_of_infants)
             activity_total += total
-            activity_rows.append((row, adults + children + data.no_of_infants, adult_unit, total))
+            item_qty = adults + children + data.no_of_infants
+            if row.supplier_cost is not None:
+                cost_plus_customer_total += total
+                cost_plus_supplier_total += money(row.supplier_cost) * item_qty
+            elif not row.commissionable:
+                non_commissionable_addon_total += total
+            activity_rows.append((row, item_qty, adult_unit, total))
         else:
             unit = money(row.price_per_person)
             total = money(unit * item.quantity)
             activity_total += total
+            if row.supplier_cost is not None:
+                cost_plus_customer_total += total
+                cost_plus_supplier_total += money(row.supplier_cost) * item.quantity
+            elif not row.commissionable:
+                non_commissionable_addon_total += total
             activity_rows.append((row, item.quantity, unit, total))
+
+    # Accommodation booking is out of scope for launch (frontend selection UI
+    # is hidden behind SHOW_ACCOMMODATION_BOOKING = false). Reject rather than
+    # silently accept, so a direct API call can't create a booking with
+    # accommodation add-ons the product doesn't support end-to-end yet. The
+    # underlying TourAccommodationExtra content-management (CMS) feature is
+    # untouched -- this only blocks selecting extras *at booking time*.
+    if data.accommodations:
+        raise HTTPException(status_code=400, detail="Accommodation add-ons are not available for booking at this time")
 
     accommodation_rows = []
     accommodation_total = money(0)
@@ -975,6 +1187,11 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         qty = _addon_quantity(row.price_type, item.quantity, label=f"Accommodation extra '{row.accommodation_name}'")
         total = money(unit * qty)
         accommodation_total += total
+        if row.supplier_cost is not None:
+            cost_plus_customer_total += total
+            cost_plus_supplier_total += money(row.supplier_cost) * qty
+        elif not row.commissionable:
+            non_commissionable_addon_total += total
         accommodation_rows.append((row, qty, unit, total))
 
     extension_rows = []
@@ -987,13 +1204,18 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         qty = _addon_quantity(row.price_type, item.quantity, label=f"Extension '{row.extension_title}'")
         total = money(unit * qty)
         extension_total += total
+        if row.supplier_cost is not None:
+            cost_plus_customer_total += total
+            cost_plus_supplier_total += money(row.supplier_cost) * qty
+        elif not row.commissionable:
+            non_commissionable_addon_total += total
         extension_rows.append((row, qty, unit, total))
 
     # Group discount is applied before the promo code, off the group-discounted
     # subtotal, so a promo percentage never gets computed against an amount
     # the customer was never actually going to pay.
     subtotal = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total)
-    discount = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount)
+    discount, promo_discount_funded_by = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount)
     # tax_percentage applies to the discounted subtotal (never on top of a
     # discount the customer isn't actually being charged); service_fee is a
     # flat per-booking amount, not per-traveller -- mirrors the group-discount
@@ -1012,12 +1234,16 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     final = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total - discount + tax + surcharge)
     if final < 0:
         raise HTTPException(status_code=400, detail="Final amount cannot be negative")
-    return tour, calendar, adults, children, total_travellers, currency, base_amount, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activity_rows, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount
+    return tour, calendar, adults, children, total_travellers, currency, base_amount, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activity_rows, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total
 
 
 def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
-    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount = _price_booking(db, data)
-    agent_markup = money(data.agent_markup if data.booking_source == "agent" else 0)
+    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total = _price_booking(db, data)
+    # Agents are commission-only by default (see AgentLedger /
+    # compute_booking_supplier_financials) -- markup only applies if an
+    # admin has explicitly opted in via the allow_agent_markup setting (off
+    # by default), never combined silently with agent commission.
+    agent_markup = money(data.agent_markup) if data.booking_source == "agent" and get_allow_agent_markup(db) else money(0)
     customer_selling_price = money(final + agent_markup)
     return {
         "tour_id": data.tour_id,
@@ -1032,9 +1258,13 @@ def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
         "extension_amount": money_str(extension_total),
         "group_discount_tier_id": group_tier.id if group_tier else None,
         "group_discount_amount": money_str(group_discount_amount),
+        "group_discount_funded_by": group_discount_funded_by,
         "discount_amount": money_str(discount),
+        "promo_discount_funded_by": promo_discount_funded_by,
         "tax_amount": money_str(tax),
         "surcharge_amount": money_str(surcharge),
+        "service_fee_amount": money_str(service_fee),
+        "gateway_fee_amount": money_str(gateway_fee),
         "final_amount": money_str(customer_selling_price),
         "agent_net_price": money_str(final),
         "agent_markup": money_str(agent_markup),
@@ -1147,7 +1377,7 @@ def _validate_agreements(db: Session, data: BookingCreate, tour) -> None:
             raise HTTPException(status_code=400, detail="You must agree to this tour's cancellation & refund policy to continue")
 
 
-def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
+def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = None, request: Optional[Request] = None, background_tasks: BackgroundTasks | None = None) -> dict:
     if data.booking_source == "customer" and not data.customer_id:
         raise HTTPException(status_code=400, detail="customer_id is required for customer bookings")
     customer = db.query(Customer).filter(Customer.id == data.customer_id).first()
@@ -1200,7 +1430,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         except Exception:
             logger.warning("Affiliate attribution lookup failed for booking creation", exc_info=True)
 
-    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount = _price_booking(db, data, lock_calendar=True, consume_discount=True)
+    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total = _price_booking(db, data, lock_calendar=True, consume_discount=True)
     if tour:
         # calendar is only set when the caller passed tour_calendar_id - fall
         # back to the raw tour_date string (checkout/admin bookings that
@@ -1223,7 +1453,8 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     supplier = tour.supplier if tour and tour.supplier else None
     supplier_id = data.supplier_id or (supplier.id if supplier else None)
     agent_net_price = final if data.booking_source == "agent" else money(0)
-    agent_markup = money(data.agent_markup if data.booking_source == "agent" else 0)
+    # Commission-only by default -- see allow_agent_markup toggle at calculate_booking_price above.
+    agent_markup = money(data.agent_markup) if data.booking_source == "agent" and get_allow_agent_markup(db) else money(0)
     customer_selling_price = money(final + agent_markup) if data.booking_source == "agent" else final
     payment_status = "pending"
     booking_status = "pending_payment"
@@ -1241,7 +1472,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, affiliate_attribution_id=resolved_attribution.id if resolved_attribution else None, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
         no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, no_of_rooms=data.no_of_rooms, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
-        total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, group_discount_tier_id=group_tier.id if group_tier else None, group_discount_amount=group_discount_amount, discount_amount=discount, promo_code=data.promo_code, tax_amount=tax, surcharge_amount=surcharge, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
+        total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, non_commissionable_addon_amount=non_commissionable_addon_total, cost_plus_customer_amount=cost_plus_customer_total, cost_plus_supplier_payable=cost_plus_supplier_total, group_discount_tier_id=group_tier.id if group_tier else None, group_discount_amount=group_discount_amount, group_discount_funded_by=group_discount_funded_by, discount_amount=discount, promo_code=data.promo_code, promo_discount_funded_by=promo_discount_funded_by, tax_amount=tax, surcharge_amount=surcharge, service_fee_amount=service_fee, gateway_fee_amount=gateway_fee, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
         booking_status=booking_status, supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status=payment_status, payment_type=data.payment_type, agent_payment_method=data.agent_payment_method if data.booking_source == "agent" else None, agent_reference=data.agent_reference if data.booking_source == "agent" else None, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
         # Pricing/currency snapshot -- captured once here and never touched
         # again, even if the slab, commission, or exchange rates change
@@ -1261,7 +1492,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     )
     db.add(booking)
     db.flush()
-    booking.booking_code = _booking_code(booking.id, booking.booking_source)
+    booking.booking_code = _booking_code(db, booking.id, booking.booking_source)
     if resolved_attribution:
         resolved_attribution.booking_id = booking.id
         resolved_attribution.status = "consumed"
@@ -1288,16 +1519,11 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     if booking.supplier and booking.supplier.user_id:
         enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New booking assigned", message=f"Booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
 
+    _apply_commission_snapshot(db, booking)
+
     if booking.agent_id and booking.agent:
         from app.services.agent_ledger import create_ledger_entry
-        discount_type = (booking.agent.discount_type or "").strip().lower()
-        discount_value = money(booking.agent.discount_value or 0)
-        if discount_type == "percentage":
-            commission_amount = money((customer_selling_price * discount_value) / 100)
-        elif discount_type == "fixed":
-            commission_amount = discount_value
-        else:
-            commission_amount = money(0)
+        commission_amount = booking.agent_commission_amount if booking.agent_commission_amount is not None else compute_agent_commission(booking.agent, customer_selling_price)
         try:
             create_ledger_entry(db, booking=booking, agent_id=booking.agent_id, gross_amount=customer_selling_price, commission_amount=commission_amount)
         except Exception as error:
@@ -1312,6 +1538,13 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         # waiting on the on-demand Download Invoice action. The agent who
         # made the reservation needs it just as much as the customer (they're
         # the one who owes Tourvaa, not the traveller), so it's sent to both.
+        # Deliberately left synchronous (unlike the emails below): this is a
+        # comparatively low-volume agent-only flow, and email_invoice_to_customer
+        # is also called directly as an on-demand admin/customer action
+        # elsewhere with a success/failure contract (it raises on delivery
+        # failure) that backgrounding it here would silently break. It's
+        # already wrapped in try/except so a failure here can't fail the
+        # booking response either way.
         try:
             from app.schemas.invoices import InvoiceEmailRequest, InvoiceGenerateRequest
             from app.services.invoices import email_invoice_to_customer, generate_invoice
@@ -1323,6 +1556,10 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         except Exception:
             logger.warning("Reservation invoice generation/email failed for booking %s", booking.id, exc_info=True)
 
+    # Every email below is scheduled (BackgroundTasks, or a daemon thread
+    # fallback when none was threaded through - see _send_booking_email /
+    # email_admins) rather than sent inline: booking success must never
+    # depend on, or wait on, SMTP.
     from app.utils.email_templates import booking_confirmation_email
     login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
     _send_booking_email(
@@ -1333,6 +1570,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         f"Booking received - {booking.booking_code}",
         booking_confirmation_email(customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
         customer.email,
+        background_tasks=background_tasks,
     )
 
     if booking.supplier_id and booking.supplier and booking.supplier.user and booking.supplier.user.email:
@@ -1348,6 +1586,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
             f"New booking assigned - {booking.booking_code}",
             supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer.full_name, booking.adults_count, booking.currency, booking.final_amount, portal_url),
             booking.supplier.user.email,
+            background_tasks=background_tasks,
         )
 
     from app.utils.email_templates import new_booking_admin_email
@@ -1362,6 +1601,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
          "button_text": "View booking", "button_url": admin_url},
         f"New booking created - {booking.booking_code}",
         new_booking_admin_email(booking.booking_code, booking.tour_name, booking.tour_date or "", customer.full_name, supplier_name, booking.adults_count, booking.currency, booking.final_amount, admin_url),
+        background_tasks=background_tasks,
     )
 
     return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
@@ -1417,13 +1657,17 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
         if calendar_row:
             calendar_row.booked_seats = max(0, (calendar_row.booked_seats or 0) - old_seat_travellers)
 
-    tour, calendar, new_adults, new_children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount = _price_booking(db, booking_create, lock_calendar=False, consume_discount=False)
+    tour, calendar, new_adults, new_children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total = _price_booking(db, booking_create, lock_calendar=False, consume_discount=False)
 
     if calendar_row:
         calendar_row.booked_seats = (calendar_row.booked_seats or 0) + new_adults + new_children
 
     agent_net_price = final if booking.booking_source == "agent" else money(0)
-    agent_markup = money(booking.agent_markup or 0) if booking.booking_source == "agent" else money(0)
+    # Commission-only by default -- see allow_agent_markup toggle at calculate_booking_price above.
+    # Recalc path: preserve the booking's existing agent_markup if markup is
+    # allowed (an admin edit shouldn't silently wipe an already-set markup),
+    # otherwise force 0.
+    agent_markup = money(booking.agent_markup or 0) if booking.booking_source == "agent" and get_allow_agent_markup(db) else money(0)
     customer_selling_price = money(final + agent_markup) if booking.booking_source == "agent" else final
 
     booking.no_of_adults = new_adults
@@ -1436,12 +1680,19 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
     booking.optional_activity_amount = activity_total
     booking.accommodation_amount = accommodation_total
     booking.extension_amount = extension_total
+    booking.non_commissionable_addon_amount = non_commissionable_addon_total
+    booking.cost_plus_customer_amount = cost_plus_customer_total
+    booking.cost_plus_supplier_payable = cost_plus_supplier_total
     booking.group_discount_tier_id = group_tier.id if group_tier else None
     booking.group_discount_amount = group_discount_amount
+    booking.group_discount_funded_by = group_discount_funded_by
     booking.discount_amount = discount
     booking.promo_code = promo_code
+    booking.promo_discount_funded_by = promo_discount_funded_by
     booking.tax_amount = tax
     booking.surcharge_amount = surcharge
+    booking.service_fee_amount = service_fee
+    booking.gateway_fee_amount = gateway_fee
     booking.total_cost = customer_selling_price
     booking.final_amount = customer_selling_price
     booking.agent_net_price = agent_net_price
@@ -1551,20 +1802,44 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
     return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
 
 
-def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
-    booking = get_booking_by_id(db, booking_id, for_update=True)
-    _ensure_booking_access(booking, actor)
-    if booking.booking_status == "cancelled":
-        raise HTTPException(status_code=400, detail="Booking is already cancelled")
+def _cancel_booking_core(
+    db: Session,
+    booking: "Booking",
+    actor: Optional[User],
+    request: Optional[Request],
+    reason: Optional[str],
+    source: str,
+    role_label: str,
+    audit_action: str,
+    include_new_values: bool = True,
+    before_commit=None,
+    settle_reason: Optional[str] = None,
+) -> "Booking":
+    """Shared settlement sequence for cancel_booking / supplier_cancel_booking.
+
+    Performs: status transition, cancellation bookkeeping fields, calendar
+    seat release, payment settlement (100% refund of captured amount),
+    affiliate/supplier/agent ledger reversal, customer counter adjustment,
+    audit logging and commit. Role-specific notifications/emails are left to
+    the caller. `before_commit`, if given, runs after the audit log is
+    written but before the commit - this preserves cases where a caller's
+    own (pre-existing) in-app notifications must land in the same
+    transaction as the cancellation. `reason` is stored verbatim on the
+    booking (matching each caller's prior, slightly different, None
+    handling); `settle_reason` (defaults to `reason`) is what's passed to
+    payment settlement, since one caller applies a fallback string there
+    that it does NOT apply to the stored `cancellation_reason`.
+    """
     old_values = serialize_booking(db, booking)
-    _set_status(db, booking, "cancelled", actor, _user_role(actor), data.reason)
-    booking.cancellation_reason = data.reason
+    _set_status(db, booking, "cancelled", actor, role_label, reason)
+    booking.cancellation_reason = reason
+    booking.cancellation_source = source
     booking.cancelled_at = utcnow()
     booking.cancelled_by = actor.id if actor else None
     if booking.calendar:
         booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
     pending_before_cancel = money(booking.amount_pending)
-    _settle_cancelled_booking_payments(db, booking, actor, request, data.reason or "Cancelled by admin")
+    _settle_cancelled_booking_payments(db, booking, actor, request, settle_reason if settle_reason is not None else reason)
     try:
         from app.services.affiliate_tracking import reverse_conversion
         reverse_conversion(db, booking.id)
@@ -1586,8 +1861,24 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
             money(0),
             money(booking.customer.total_amount_pending or 0) - pending_before_cancel,
         )
-    log_audit(db, actor=actor, action="cancel_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
+    new_values = serialize_booking(db, booking) if include_new_values else None
+    log_audit(db, actor=actor, action=audit_action, entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=new_values, request=request)
+    if before_commit is not None:
+        before_commit()
     db.commit(); db.refresh(booking)
+    return booking
+
+
+def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
+    booking = get_booking_by_id(db, booking_id, for_update=True)
+    _ensure_booking_access(booking, actor)
+    if booking.booking_status == "cancelled":
+        raise HTTPException(status_code=400, detail="Booking is already cancelled")
+    booking = _cancel_booking_core(
+        db, booking, actor, request, data.reason, "admin", _user_role(actor),
+        "cancel_booking", include_new_values=True,
+        settle_reason=data.reason or "Cancelled by admin",
+    )
 
     if booking.customer and booking.customer.email:
         from app.utils.email_templates import booking_cancelled_email
@@ -1661,8 +1952,10 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
     expired_codes: list[str] = []
     for booking in candidates:
         reason = f"Automatically cancelled - no payment received in time"
+        old_values = serialize_booking(db, booking)
         _set_status(db, booking, "cancelled", None, "system", reason)
         booking.cancellation_reason = reason
+        booking.cancellation_source = "system_expiry"
         booking.cancelled_at = utcnow()
         if booking.calendar:
             booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
@@ -1702,8 +1995,13 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
                 reverse_agent_ledger_entry(db, booking.id)
             except Exception:
                 logger.warning("Agent ledger reversal failed for booking %s", booking.id, exc_info=True)
+        log_audit(
+            db, actor=None, action="expire_stale_pending_booking", entity_type="booking",
+            entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking),
+            request=None,
+        )
         expired_ids.append(booking.id)
-        expired_codes.append(booking.booking_code or _booking_code(booking.id, booking.booking_source))
+        expired_codes.append(booking.booking_code or _booking_code(db, booking.id, booking.booking_source))
 
     if expired_ids:
         db.commit()
@@ -1797,11 +2095,21 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
                 logger.warning("Supplier ledger entry creation failed for booking %s: %s", booking.id, error)
 
     if booking.affiliate_ref_code:
-        try:
-            from app.services.affiliate_tracking import record_conversion
-            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=booking.currency or "USD")
-        except Exception as error:
-            logger.warning("Affiliate conversion recording failed for booking %s: %s", booking.id, error)
+        from app.services.settings import get_allow_agent_and_affiliate_same_booking
+
+        if booking.booking_source == "agent" and not get_allow_agent_and_affiliate_same_booking(db):
+            # Default business rule: an agent booking pays agent commission
+            # ONLY -- it must not also pay affiliate commission on the same
+            # booking (both are carved out of the same Tourvaa commission
+            # pool, see _apply_commission_snapshot). Admin can opt back in
+            # via allow_agent_and_affiliate_commission_same_booking.
+            logger.info("Skipped affiliate conversion for agent booking %s (allow_agent_and_affiliate_commission_same_booking is off)", booking.id)
+        else:
+            try:
+                from app.services.affiliate_tracking import record_conversion
+                record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=booking.currency or "USD")
+            except Exception as error:
+                logger.warning("Affiliate conversion recording failed for booking %s: %s", booking.id, error)
 
     notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
     if booking.customer and booking.customer.user_id:
@@ -1973,41 +2281,17 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
         raise HTTPException(status_code=400, detail="Booking is already cancelled")
     if booking.booking_status == "completed":
         raise HTTPException(status_code=400, detail="Completed bookings cannot be cancelled")
-    old_values = serialize_booking(db, booking)
-    _set_status(db, booking, "cancelled", actor, "supplier", reason)
-    booking.cancellation_reason = reason
-    booking.cancelled_at = utcnow()
-    booking.cancelled_by = actor.id if actor else None
-    pending_before_cancel = money(booking.amount_pending)
-    if booking.calendar:
-        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
-    _settle_cancelled_booking_payments(db, booking, actor, request, reason)
-    try:
-        from app.services.affiliate_tracking import reverse_conversion
-        reverse_conversion(db, booking.id)
-    except Exception:
-        logger.warning("Affiliate conversion reversal failed for booking %s", booking.id, exc_info=True)
-    try:
-        from app.services.supplier_ledger import reverse_ledger_entry
-        reverse_ledger_entry(db, booking.id)
-    except Exception:
-        logger.warning("Supplier ledger reversal failed for booking %s", booking.id, exc_info=True)
-    try:
-        from app.services.agent_ledger import reverse_ledger_entry as reverse_agent_ledger_entry
-        reverse_agent_ledger_entry(db, booking.id)
-    except Exception:
-        logger.warning("Agent ledger reversal failed for booking %s", booking.id, exc_info=True)
-    if booking.customer:
-        booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
-        booking.customer.total_amount_pending = max(
-            money(0),
-            money(booking.customer.total_amount_pending or 0) - pending_before_cancel,
-        )
-    log_audit(db, actor=actor, action="supplier_cancel_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
-    notify_admins(db, notification_type="supplier_cancelled_booking", title="Supplier cancelled booking", message=f"Supplier cancelled {booking.booking_code}: {reason}", entity_type="booking", entity_id=booking.id)
-    if booking.customer and booking.customer.user_id:
-        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_cancelled", title="Booking cancelled", message=f"Your booking {booking.booking_code} was cancelled by supplier", entity_type="booking", entity_id=booking.id)
-    db.commit(); db.refresh(booking)
+
+    def _notify_before_commit():
+        notify_admins(db, notification_type="supplier_cancelled_booking", title="Supplier cancelled booking", message=f"Supplier cancelled {booking.booking_code}: {reason}", entity_type="booking", entity_id=booking.id)
+        if booking.customer and booking.customer.user_id:
+            enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_cancelled", title="Booking cancelled", message=f"Your booking {booking.booking_code} was cancelled by supplier", entity_type="booking", entity_id=booking.id)
+
+    booking = _cancel_booking_core(
+        db, booking, actor, request, reason, "supplier", "supplier",
+        "supplier_cancel_booking", include_new_values=False,
+        before_commit=_notify_before_commit,
+    )
     if booking.customer and booking.customer.email:
         from app.utils.email_templates import booking_cancelled_email
         login_url = f"{settings.FRONTEND_URL}/customer/bookings"
@@ -2263,7 +2547,7 @@ def notify_overdue_agent_balances(db: Session) -> list[int]:
         ).first()
         if already:
             continue
-        code = booking.booking_code or _booking_code(booking.id, booking.booking_source)
+        code = booking.booking_code or _booking_code(db, booking.id, booking.booking_source)
         if booking.agent and booking.agent.user_id:
             enqueue_notification(
                 db, user_id=booking.agent.user_id, notification_type="balance_overdue",

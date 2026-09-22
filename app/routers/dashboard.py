@@ -518,6 +518,12 @@ def dashboard_summary(
         completed_gross_value = float(completed_query.with_entities(
             sqlfunc.coalesce(sqlfunc.sum(Booking.final_amount), 0)
         ).scalar() or 0)
+        # SQL-aggregate mirror of services.bookings.compute_agent_commission
+        # (percentage * completed gross, or fixed * completed count) -- kept
+        # as an aggregate rather than a per-row call to avoid an N+1 query
+        # over every completed booking. Keep these two in sync: any change
+        # to the commission formula (e.g. discount_type branches) must be
+        # applied to both.
         if (agent.discount_type or "").lower() == "percentage":
             commission_earned = completed_gross_value * float(agent.discount_value or 0) / 100
         else:

@@ -440,6 +440,17 @@ def record_conversion(db: Session, *, ref_code: str, booking_id: int, booking_am
     eligible_amount = money(booking_amount)
     calc = compute_commission(db, affiliate=aff, link=link, eligible_amount=eligible_amount)
 
+    # Commission-deduction business model: affiliate commission is carved
+    # OUT of Tourvaa's own commission on this booking, never paid
+    # additionally -- so it can never exceed what Tourvaa actually earned.
+    # See services.bookings._apply_commission_snapshot for the equivalent
+    # agent-side rule and the booking's immutable commission snapshot.
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if booking and booking.tourvaa_commission_amount is not None:
+        commission_cap = money(booking.tourvaa_commission_amount)
+        if money(calc["commission_amount"]) > commission_cap:
+            calc = {**calc, "commission_amount": commission_cap}
+
     conversion = AffiliateConversion(
         link_id=link.id,
         affiliate_id=link.affiliate_id,
@@ -457,6 +468,11 @@ def record_conversion(db: Session, *, ref_code: str, booking_id: int, booking_am
     )
     db.add(conversion)
     db.flush()
+
+    if booking and booking.tourvaa_commission_amount is not None:
+        booking.affiliate_commission_percentage = calc["commission_percentage"]
+        booking.affiliate_commission_amount = calc["commission_amount"]
+        booking.tourvaa_net_revenue = money(booking.tourvaa_commission_amount) - money(calc["commission_amount"])
 
     _wallet_entry(
         db, affiliate_id=aff.id, transaction_type="COMMISSION_CREDIT", amount=conversion.final_commission,

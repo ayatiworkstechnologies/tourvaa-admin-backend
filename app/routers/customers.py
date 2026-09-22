@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -350,6 +350,7 @@ class SelfBookingCreate(BookingCreate):
 def self_create_booking(
     data: SelfBookingCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -375,5 +376,5 @@ def self_create_booking(
         "customer_id": customer.id,
         "booking_source": "customer",
     })
-    result = create_booking(db, booking_data, actor=current_user, request=request)
+    result = create_booking(db, booking_data, actor=current_user, request=request, background_tasks=background_tasks)
     return {"status": "success", "message": "Booking created successfully", "data": result}

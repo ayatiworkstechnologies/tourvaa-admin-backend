@@ -3,7 +3,9 @@ import secrets
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.auth.permissions import get_current_user, get_token_user_including_inactive, require_permission
+from app.auth.permissions import get_current_user, get_current_session_id, get_token_user_including_inactive, require_permission
+from app.models.sessions import UserSession
+from app.services.sessions import revoke_session
 from app.utils.ratelimit import check_rate_limit
 from app.utils.money import utcnow
 from app.models.users import User
@@ -339,13 +341,43 @@ def logout(
     request: Request,
     response: Response,
     current_user: User = Depends(get_token_user_including_inactive),
+    session_id: str | None = Depends(get_current_session_id),
     db: Session = Depends(get_db),
 ):
-    force_logout_user(db, current_user, actor=current_user, request=request)
+    """Ends only this device's session. Does not bump token_version and does
+    not touch any other session belonging to this user - see /auth/logout-all
+    for the all-devices variant used by security-sensitive flows."""
+    if session_id:
+        session = (
+            db.query(UserSession)
+            .filter(UserSession.session_id == session_id, UserSession.user_id == current_user.id)
+            .first()
+        )
+        if session and session.status == "active":
+            revoke_session(db, session.id)
     _clear_auth_cookies(response)
     return {
         "status": "success",
         "message": "Logged out successfully",
+    }
+
+
+@router.post("/logout-all")
+def logout_all(
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_token_user_including_inactive),
+    db: Session = Depends(get_db),
+):
+    """All-devices logout: bumps token_version (invalidating every issued
+    token) and revokes every session row for this user. This is the previous
+    default behavior of /auth/logout, kept available for users who explicitly
+    want to sign out everywhere."""
+    force_logout_user(db, current_user, actor=current_user, request=request)
+    _clear_auth_cookies(response)
+    return {
+        "status": "success",
+        "message": "Logged out from all devices successfully",
     }
 
 @router.post("/verify-email")

@@ -347,6 +347,21 @@ def seed_default_roles_and_permissions(db: Session):
         s for s in _all_booking_lifecycle
         if not s.endswith(".manage_settings") and not s.endswith(".force_logout")
     ]
+    # Sub Admin is a default operational role and must not carry
+    # capture/refund/void authority over payments or the power to approve/
+    # mark-paid supplier, agent, or affiliate payouts. Those stay admin-only.
+    _sub_admin_financial_excluded = {
+        "payments.capture", "payments.void", "payments.refund",
+        "supplier_ledger.approve", "supplier_ledger.mark_paid",
+        "agent_ledger.approve", "agent_ledger.mark_paid",
+        "affiliate_payouts.approve", "affiliate_payouts.mark_paid",
+    }
+    _sub_admin_operational = [
+        s for s in _all_operational if s not in _sub_admin_financial_excluded
+    ]
+    _sub_admin_booking_lifecycle_no_system = [
+        s for s in _booking_lifecycle_no_system if s not in _sub_admin_financial_excluded
+    ]
 
     default_role_permissions = {
         # ------------------------------------------------------------------
@@ -457,10 +472,11 @@ def seed_default_roles_and_permissions(db: Session):
             "view-chatbot", "create-chatbot", "update-chatbot",
             # Profile
             "view-profile", "update-profile", "profile.view",
-            # All operational granular permissions
-            *_all_operational,
-            # Booking-lifecycle granular -- exclude system-only actions
-            *_booking_lifecycle_no_system,
+            # All operational granular permissions, minus payout approve/mark-paid
+            *_sub_admin_operational,
+            # Booking-lifecycle granular -- exclude system-only actions and
+            # payment capture/void/refund (view-only for payments)
+            *_sub_admin_booking_lifecycle_no_system,
         ],
 
         # ------------------------------------------------------------------

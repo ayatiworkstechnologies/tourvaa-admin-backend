@@ -331,19 +331,17 @@ def _restore_snapshot(db: Session, tour: Tour, snapshot: dict) -> None:
 
 
 def _recalculate_storefront_prices(db: Session, tour_id: int) -> None:
-    # Storefront price = supplier's own price + admin markup - see
-    # services.tours._apply_markup / _apply_pricing_computation for the
-    # same rule applied on create/update. Re-applied here at approval time
-    # as a safety net so approving keeps the storefront price in sync even
-    # if a slab was touched between the edit and the approval, without
-    # wiping out any markup an admin already set on the row.
+    # Commission-deduction model (see services.tours._apply_pricing_computation):
+    # storefront price = supplier's own adult_price/child_price, no markup
+    # layer. Re-applied here at approval time as a safety net so approving
+    # keeps the storefront price in sync even if a slab was touched between
+    # the edit and the approval.
     from app.models.tours import TourPricing
-    from app.services.tours import _apply_markup, recalculate_price_start
+    from app.services.tours import recalculate_price_start
 
     for row in db.query(TourPricing).filter(TourPricing.tour_id == tour_id).all():
-        markup_value = float(row.admin_markup_value or 0)
-        row.storefront_adult_price = _apply_markup(row.admin_markup_type, markup_value, float(row.adult_price))
-        row.storefront_child_price = _apply_markup(row.admin_markup_type, markup_value, float(row.child_price))
+        row.storefront_adult_price = round(max(0.0, float(row.adult_price)), 2)
+        row.storefront_child_price = round(max(0.0, float(row.child_price)), 2)
     recalculate_price_start(db, tour_id)
 
 
