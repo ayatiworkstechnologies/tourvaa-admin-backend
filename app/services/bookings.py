@@ -646,6 +646,23 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
                 # the supplier what they're actually owed.
                 "tourvaa_margin": money_str(money(breakdown["customer_price"]) - money(breakdown["net_payable"])),
             } if breakdown else None
+            # Immutable commission snapshot captured once at booking creation
+            # (see Booking model / _price_booking, _finalize_agent_commission)
+            # - admin-only, same gate as supplier_breakdown above, since these
+            # expose exactly how the money split between supplier/Tourvaa/
+            # agent/affiliate.
+            data.update({
+                "tourvaa_commission_percentage": money_str(booking.tourvaa_commission_percentage) if booking.tourvaa_commission_percentage is not None else None,
+                "tourvaa_commission_amount": money_str(booking.tourvaa_commission_amount) if booking.tourvaa_commission_amount is not None else None,
+                "supplier_net_payable": money_str(booking.supplier_net_payable) if booking.supplier_net_payable is not None else None,
+                "agent_commission_percentage": money_str(booking.agent_commission_percentage) if booking.agent_commission_percentage is not None else None,
+                "agent_commission_amount": money_str(booking.agent_commission_amount) if booking.agent_commission_amount is not None else None,
+                "affiliate_commission_percentage": money_str(booking.affiliate_commission_percentage) if booking.affiliate_commission_percentage is not None else None,
+                "affiliate_commission_amount": money_str(booking.affiliate_commission_amount) if booking.affiliate_commission_amount is not None else None,
+                "tourvaa_net_revenue": money_str(booking.tourvaa_net_revenue) if booking.tourvaa_net_revenue is not None else None,
+                "non_commissionable_addon_amount": money_str(booking.non_commissionable_addon_amount) if booking.non_commissionable_addon_amount is not None else None,
+                "cost_plus_supplier_payable": money_str(booking.cost_plus_supplier_payable) if booking.cost_plus_supplier_payable is not None else None,
+            })
     return data
 
 
