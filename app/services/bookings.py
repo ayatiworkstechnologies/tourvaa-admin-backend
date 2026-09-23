@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from math import ceil
 from typing import Optional
 
@@ -258,15 +259,10 @@ def _similar_tours_for_email(db: Session, tour_id: int | None, limit: int = 3) -
     return results
 
 
-def affiliate_eligible_amount(booking: Booking):
-    """Base amount for affiliate commission - the tour/experience selling
-    amount net of tax and fees, so Tourvaa never pays commission on money
-    that passed straight through to tax authorities or the payment gateway.
-    Also excludes an agent's own markup (agent_net_price) so an affiliate
-    isn't paid a cut of money the agent added on top and never routed
-    through Tourvaa's own margin - mirrors the same booking_source ==
-    "agent" carve-out used for the supplier ledger. Refund-time proration is
-    handled separately by affiliate_tracking.reverse_conversion."""
+def _legacy_affiliate_eligible_amount(booking: Booking):
+    """Pre-snapshot fallback: customer amount net of tax, fees and agent
+    markup. Only used for bookings created before commission_base_amount
+    existed."""
     if booking.booking_source == "agent" and booking.agent_net_price:
         gross = money(booking.agent_net_price)
     else:
@@ -275,52 +271,224 @@ def affiliate_eligible_amount(booking: Booking):
     return max(money(0), eligible)
 
 
-def _apply_commission_snapshot(db: Session, booking: Booking) -> None:
-    """Immutable commission-split snapshot, computed once at booking
-    creation and written directly onto the booking row (see the new columns
-    on models.bookings.Booking). Commission-deduction model: supplier's own
-    price IS the customer price (no admin markup); agent/affiliate
-    commission is carved OUT of Tourvaa's own commission, never paid
-    additionally -- so an agent/affiliate rate that would exceed Tourvaa's
-    own commission percentage is rejected outright rather than silently
-    letting Tourvaa's net revenue go negative."""
-    financials = compute_booking_supplier_financials(db, booking)
-    if not financials:
+def affiliate_eligible_amount(booking: Booking):
+    """Base amount for affiliate commission: the booking's snapshotted
+    commission base (tour selling amount after the supplier's share of
+    discounts, excluding tax, service fee, gateway fee, agent markup and
+    non-commissionable/cost-plus add-ons) -- the same base Tourvaa's own
+    commission is computed on, so an affiliate rate below Tourvaa's rate can
+    never exceed Tourvaa's commission. Refund-time proration is handled
+    separately by affiliate_tracking.reverse_conversion."""
+    if booking.commission_base_amount is not None:
+        return money(booking.commission_base_amount)
+    return _legacy_affiliate_eligible_amount(booking)
+
+
+def _supplier_discount_share(amount, funded_by) -> Decimal:
+    """Portion of a discount the supplier absorbs: all of it (SUPPLIER, the
+    default and legacy behaviour), none (TOURVAA) or half (SHARED)."""
+    amount = money(amount or 0)
+    mode = (funded_by or "SUPPLIER").upper()
+    if mode == "TOURVAA":
+        return money(0)
+    if mode == "SHARED":
+        return money(amount / money(2))
+    return amount
+
+
+def compute_booking_financial_split(
+    *,
+    base_amount,
+    group_discount_amount=0,
+    group_discount_funded_by=None,
+    promo_discount_amount=0,
+    promo_discount_funded_by=None,
+    addon_total=0,
+    non_commissionable_addon_amount=0,
+    cost_plus_customer_amount=0,
+    cost_plus_supplier_payable=0,
+    commission_percentage=0,
+) -> dict:
+    """Pure supplier/Tourvaa money split for one booking, from amounts that
+    were all resolved at pricing time (never from the tour's live slab).
+
+    base_amount is the traveller amount actually charged (adult + child at
+    the resolved slab or date price, plus infants and single supplement).
+    Tax, service fee, gateway fee and agent markup are deliberately NOT
+    inputs: they are customer-side buckets and never reach the supplier or
+    the commission base.
+
+    Invariant (when nothing is clamped at 0):
+      supplier_net_payable + tourvaa_gross_revenue
+        == base - group - promo + add-ons      (= final - tax - fees)
+    """
+    base_amount = money(base_amount or 0)
+    group = money(group_discount_amount or 0)
+    promo = money(promo_discount_amount or 0)
+    addons = money(addon_total or 0)
+    non_comm = money(non_commissionable_addon_amount or 0)
+    cp_customer = money(cost_plus_customer_amount or 0)
+    cp_supplier = money(cost_plus_supplier_payable or 0)
+    pct = money(commission_percentage or 0)
+
+    group_supplier = _supplier_discount_share(group, group_discount_funded_by)
+    promo_supplier = _supplier_discount_share(promo, promo_discount_funded_by)
+    supplier_discount_share = money(group_supplier + promo_supplier)
+    tourvaa_discount_share = money((group - group_supplier) + (promo - promo_supplier))
+
+    commissionable_addons = max(money(0), addons - non_comm - cp_customer)
+    commission_base = max(money(0), base_amount - supplier_discount_share + commissionable_addons)
+    commission_amount = money(commission_base * pct / money(100))
+    supplier_gross = money(commission_base + non_comm + cp_supplier)
+    supplier_net = money(supplier_gross - commission_amount)
+    cost_plus_margin = money(cp_customer - cp_supplier)
+    tourvaa_gross = money(commission_amount + cost_plus_margin - tourvaa_discount_share)
+    return {
+        "commission_percentage": pct,
+        "commission_base_amount": commission_base,
+        "commission_amount": commission_amount,
+        "supplier_gross_amount": supplier_gross,
+        "supplier_net_payable": supplier_net,
+        "supplier_discount_share_amount": supplier_discount_share,
+        "tourvaa_discount_share_amount": tourvaa_discount_share,
+        "tourvaa_gross_revenue": tourvaa_gross,
+    }
+
+
+def _booking_financial_split(booking: Booking, commission_percentage) -> dict:
+    """compute_booking_financial_split fed from the amounts stored on the
+    booking row itself."""
+    addon_total = money(booking.optional_activity_amount or 0) + money(booking.accommodation_amount or 0) + money(booking.extension_amount or 0)
+    return compute_booking_financial_split(
+        base_amount=booking.base_amount,
+        group_discount_amount=booking.group_discount_amount,
+        group_discount_funded_by=booking.group_discount_funded_by,
+        promo_discount_amount=booking.discount_amount,
+        promo_discount_funded_by=booking.promo_discount_funded_by,
+        addon_total=addon_total,
+        non_commissionable_addon_amount=booking.non_commissionable_addon_amount,
+        cost_plus_customer_amount=booking.cost_plus_customer_amount,
+        cost_plus_supplier_payable=booking.cost_plus_supplier_payable,
+        commission_percentage=commission_percentage,
+    )
+
+
+def _recompute_tourvaa_net_revenue(booking: Booking) -> None:
+    """tourvaa_net_revenue = gross revenue - agent - affiliate, always from
+    the components so recording one channel's commission can never
+    overwrite the other's deduction."""
+    if booking.tourvaa_gross_revenue is not None:
+        gross = money(booking.tourvaa_gross_revenue)
+    elif booking.tourvaa_commission_amount is not None:
+        gross = money(booking.tourvaa_commission_amount)
+    else:
         return
-    commission_percentage = money(financials["commission_percentage"])
-    commission_amount = money(financials["commission_amount"])
-    booking.tourvaa_commission_percentage = commission_percentage
-    booking.tourvaa_commission_amount = commission_amount
-    booking.supplier_net_payable = money(financials["net_payable"])
-    booking.tourvaa_net_revenue = commission_amount
+    booking.tourvaa_net_revenue = money(gross - money(booking.agent_commission_amount or 0) - money(booking.affiliate_commission_amount or 0))
+
+
+def remaining_channel_commission_pool(booking: Booking):
+    """How much of Tourvaa's commission is still available for a channel
+    partner after the commission already paid to the other channel. None
+    when the booking has no snapshot."""
+    if booking.tourvaa_commission_amount is None:
+        return None
+    return max(money(0), money(booking.tourvaa_commission_amount) - money(booking.agent_commission_amount or 0) - money(booking.affiliate_commission_amount or 0))
+
+
+def _apply_commission_snapshot(db: Session, booking: Booking, pricing_details: dict | None = None) -> None:
+    """Establish the booking's financial snapshot from the amounts resolved
+    at pricing time and lock it (financials_locked_at). Called at creation
+    and when an admin re-prices a still-unpaid booking; everything
+    downstream (supplier acceptance/ledger, admin breakdown, affiliate
+    conversion, dashboards) reads these columns instead of re-deriving.
+
+    The commission percentage is resolved once, here (slab > tour > supplier
+    > platform minimum as of booking time). Agent commission is carved out
+    of Tourvaa's commission and computed on the same commission base --
+    never on tax, fees or agent markup -- and a rate or amount above
+    Tourvaa's commission is rejected rather than letting Tourvaa's net go
+    negative."""
+    if pricing_details:
+        for field in ("price_source", "date_price_id", "adult_unit_price", "child_unit_price", "infant_unit_price", "single_supplement_amount", "group_discount_base_amount", "group_discount_percentage"):
+            if field in pricing_details:
+                setattr(booking, field, pricing_details[field])
+
+    slab = db.query(TourPricing).filter(TourPricing.id == booking.pricing_slab_id).first() if booking.pricing_slab_id else None
+    tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
+    supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first() if booking.supplier_id else None
+    commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
+
+    split = _booking_financial_split(booking, commission_percentage)
+    booking.tourvaa_commission_percentage = split["commission_percentage"]
+    booking.tourvaa_commission_amount = split["commission_amount"]
+    booking.commission_base_amount = split["commission_base_amount"]
+    booking.supplier_gross_amount = split["supplier_gross_amount"]
+    booking.supplier_net_payable = split["supplier_net_payable"]
+    booking.supplier_discount_share_amount = split["supplier_discount_share_amount"]
+    booking.tourvaa_discount_share_amount = split["tourvaa_discount_share_amount"]
+    booking.tourvaa_gross_revenue = split["tourvaa_gross_revenue"]
+    booking.agent_commission_base_amount = None
+    booking.agent_commission_percentage = None
+    booking.agent_commission_amount = None
 
     if booking.booking_source == "agent" and booking.agent:
         agent = booking.agent
         discount_type = (agent.discount_type or "").strip().lower()
         discount_value = money(agent.discount_value or 0)
-        if discount_type == "percentage" and commission_percentage > 0 and discount_value > commission_percentage:
+        commission_pct = split["commission_percentage"]
+        if discount_type == "percentage" and commission_pct > 0 and discount_value > commission_pct:
             raise HTTPException(
                 status_code=422,
-                detail=f"This agent's commission rate ({discount_value}%) cannot exceed Tourvaa's commission on this tour ({commission_percentage}%).",
+                detail=f"This agent's commission rate ({discount_value}%) cannot exceed Tourvaa's commission on this tour ({commission_pct}%).",
             )
-        agent_commission_amount = compute_agent_commission(agent, booking.customer_selling_price)
-        if agent_commission_amount > commission_amount:
+        agent_base = split["commission_base_amount"]
+        agent_commission_amount = compute_agent_commission(agent, agent_base)
+        if agent_commission_amount > split["commission_amount"]:
             raise HTTPException(
                 status_code=422,
                 detail="This agent's commission amount cannot exceed Tourvaa's commission on this booking.",
             )
+        booking.agent_commission_base_amount = agent_base
         booking.agent_commission_percentage = discount_value if discount_type == "percentage" else None
         booking.agent_commission_amount = agent_commission_amount
-        booking.tourvaa_net_revenue = commission_amount - agent_commission_amount
+
+    _recompute_tourvaa_net_revenue(booking)
+    booking.financials_locked_at = utcnow()
+
+
+def _lock_legacy_booking_financials(db: Session, booking: Booking) -> None:
+    """Bookings created before the snapshot existed are locked from their
+    own stored amounts the first time they need a payout figure (supplier
+    acceptance). The commission percentage is the one stored at creation
+    when present, otherwise resolved once, now."""
+    if booking.financials_locked_at is not None:
+        return
+    if booking.tourvaa_commission_percentage is not None:
+        pct = money(booking.tourvaa_commission_percentage)
+    else:
+        slab = db.query(TourPricing).filter(TourPricing.id == booking.pricing_slab_id).first() if booking.pricing_slab_id else None
+        tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
+        supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first() if booking.supplier_id else None
+        pct = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
+    split = _booking_financial_split(booking, pct)
+    booking.tourvaa_commission_percentage = split["commission_percentage"]
+    booking.tourvaa_commission_amount = split["commission_amount"]
+    booking.commission_base_amount = split["commission_base_amount"]
+    booking.supplier_gross_amount = split["supplier_gross_amount"]
+    booking.supplier_net_payable = split["supplier_net_payable"]
+    booking.supplier_discount_share_amount = split["supplier_discount_share_amount"]
+    booking.tourvaa_discount_share_amount = split["tourvaa_discount_share_amount"]
+    booking.tourvaa_gross_revenue = split["tourvaa_gross_revenue"]
+    _recompute_tourvaa_net_revenue(booking)
+    booking.financials_locked_at = utcnow()
 
 
 def compute_agent_commission(agent, gross_amount):
-    """Platform-paid commission Tourvaa owes an agent on a booking's gross
-    amount -- the agent's ONLY earning under the commission-only model (see
-    AgentLedger, agent_markup forced to 0 in calculate_booking_price/
-    create_booking/update_booking). Single shared formula so the per-booking
-    ledger entry (create_booking) and the dashboard's aggregate estimate
-    (routers.dashboard) never drift apart."""
+    """Platform-paid commission Tourvaa owes an agent -- the agent's ONLY
+    earning under the commission-only model. gross_amount must be the
+    booking's commission base (tour selling amount), never the customer
+    total with tax, fees or agent markup. Single shared formula used by the
+    booking snapshot and the dashboard's legacy fallback."""
     discount_type = ((agent.discount_type if agent else None) or "").strip().lower()
     discount_value = money(agent.discount_value or 0) if agent else money(0)
     gross_amount = money(gross_amount or 0)
@@ -640,17 +808,34 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
                 "net_payable": money_str(breakdown["net_payable"]),
                 "customer_price": money_str(breakdown["customer_price"]),
                 "customer_price_currency": breakdown["customer_price_currency"],
-                # Tourvaa's total take on this booking: the admin markup baked
-                # into the customer price PLUS the commission held back from
-                # the supplier's share -- i.e. everything left after paying
-                # the supplier what they're actually owed.
-                "tourvaa_margin": money_str(money(breakdown["customer_price"]) - money(breakdown["net_payable"])),
+                "commission_base_amount": money_str(breakdown["commission_base_amount"]),
+                # Tourvaa's own revenue on the tour: commission + cost-plus
+                # margin - Tourvaa-funded discounts (before agent/affiliate
+                # payouts). Tax, service fee and gateway fee are separate
+                # pass-through buckets, not margin.
+                "tourvaa_margin": money_str(booking.tourvaa_gross_revenue) if booking.tourvaa_gross_revenue is not None else money_str(breakdown["commission_amount"]),
             } if breakdown else None
-            # Immutable commission snapshot captured once at booking creation
-            # (see Booking model / _price_booking, _finalize_agent_commission)
-            # - admin-only, same gate as supplier_breakdown above, since these
-            # expose exactly how the money split between supplier/Tourvaa/
-            # agent/affiliate.
+            # Booking financial snapshot (see Booking model /
+            # _apply_commission_snapshot) - admin-only, same gate as
+            # supplier_breakdown above, since these expose exactly how the
+            # money split between supplier/Tourvaa/agent/affiliate.
+            data.update({
+                "price_source": booking.price_source,
+                "date_price_id": booking.date_price_id,
+                "adult_unit_price": money_str(booking.adult_unit_price) if booking.adult_unit_price is not None else None,
+                "child_unit_price": money_str(booking.child_unit_price) if booking.child_unit_price is not None else None,
+                "infant_unit_price": money_str(booking.infant_unit_price) if booking.infant_unit_price is not None else None,
+                "group_discount_base_amount": money_str(booking.group_discount_base_amount) if booking.group_discount_base_amount is not None else None,
+                "group_discount_percentage": str(booking.group_discount_percentage) if booking.group_discount_percentage is not None else None,
+                "commission_base_amount": money_str(booking.commission_base_amount) if booking.commission_base_amount is not None else None,
+                "supplier_gross_amount": money_str(booking.supplier_gross_amount) if booking.supplier_gross_amount is not None else None,
+                "supplier_discount_share_amount": money_str(booking.supplier_discount_share_amount) if booking.supplier_discount_share_amount is not None else None,
+                "tourvaa_discount_share_amount": money_str(booking.tourvaa_discount_share_amount) if booking.tourvaa_discount_share_amount is not None else None,
+                "tourvaa_gross_revenue": money_str(booking.tourvaa_gross_revenue) if booking.tourvaa_gross_revenue is not None else None,
+                "agent_commission_base_amount": money_str(booking.agent_commission_base_amount) if booking.agent_commission_base_amount is not None else None,
+                "affiliate_commission_base_amount": money_str(booking.affiliate_commission_base_amount) if booking.affiliate_commission_base_amount is not None else None,
+                "financials_locked_at": booking.financials_locked_at,
+            })
             data.update({
                 "tourvaa_commission_percentage": money_str(booking.tourvaa_commission_percentage) if booking.tourvaa_commission_percentage is not None else None,
                 "tourvaa_commission_amount": money_str(booking.tourvaa_commission_amount) if booking.tourvaa_commission_amount is not None else None,
@@ -897,126 +1082,57 @@ def compute_supplier_commission_breakdown(raw_supplier_amount, group_discount_ra
 
 
 def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict | None:
-    """Supplier gross/commission/net-payable breakdown for a booking, valid
-    at any point in its lifecycle (not just after acceptance) -- reconstructed
-    from the pricing slab snapshotted at booking creation
-    (booking.pricing_slab_id), never the tour's live/changed pricing, so it
-    always matches what supplier_accept_booking later ledgers. Returns None
-    when the booking has no supplier assigned. Amounts are in the same
-    currency as the booking (booking.currency), consistent with every other
-    figure on the booking record."""
+    """Supplier gross / commission / net payable for a booking, read from the
+    booking's locked financial snapshot (see _apply_commission_snapshot).
+    Never re-reads the tour's current slab, date price or commission
+    settings, so the ledger created at supplier acceptance, the admin
+    breakdown and reports always show the figures fixed at booking time.
+
+    Bookings created before the snapshot existed (financials_locked_at is
+    None) get the same split computed from their own stored amounts, with
+    the percentage resolved once; supplier_accept_booking then locks it.
+    Tax, service fee, gateway fee and agent markup never enter these
+    figures. Returns None when the booking has no supplier assigned."""
     if not booking.supplier_id:
         return None
-    # For agent bookings, final_amount/total_cost is the customer-facing price
-    # INCLUDING the agent's own markup - the supplier never sees that markup,
-    # so the payout must be based on agent_net_price (the actual tour cost).
-    if booking.booking_source == "agent" and booking.agent_net_price:
-        gross_amount = money(booking.agent_net_price)
+    currency = booking.currency or "USD"
+    customer_price = money(booking.customer_selling_price or booking.final_amount or booking.total_cost or 0)
+    if booking.financials_locked_at is not None and booking.supplier_net_payable is not None:
+        gross = money(booking.supplier_gross_amount if booking.supplier_gross_amount is not None else money(booking.supplier_net_payable) + money(booking.tourvaa_commission_amount or 0))
+        return {
+            "currency": currency,
+            "gross_amount": gross,
+            "commission_base_amount": money(booking.commission_base_amount or 0),
+            "commission_percentage": money(booking.tourvaa_commission_percentage or 0),
+            "commission_amount": money(booking.tourvaa_commission_amount or 0),
+            "net_payable": money(booking.supplier_net_payable),
+            "customer_price": customer_price,
+            "customer_price_currency": currency,
+        }
+
+    if booking.tourvaa_commission_percentage is not None:
+        pct = money(booking.tourvaa_commission_percentage)
     else:
-        gross_amount = money(booking.final_amount or booking.total_cost or 0)
-
-    supplier_gross_share = gross_amount
-    slab = db.query(TourPricing).filter(TourPricing.id == booking.pricing_slab_id).first() if booking.pricing_slab_id else None
-    if slab:
-        adults = booking.adults_count if booking.adults_count is not None else (booking.no_of_adults or 0)
-        children = booking.children_count if booking.children_count is not None else (booking.no_of_children or 0)
-        raw_tour_amount = money(money(slab.adult_price) * adults + money(slab.child_price) * children)
-        marked_up_adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
-        marked_up_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
-        marked_up_tour_amount = money(money(marked_up_adult) * adults + money(marked_up_child) * children)
-        addon_amount = gross_amount - marked_up_tour_amount
-        # When the group discount actually applied to this booking was
-        # TOURVAA-funded (snapshotted at creation time -- see
-        # services.bookings._price_booking / Booking.group_discount_funded_by),
-        # the supplier is paid as if the discount never happened: Tourvaa's
-        # own margin absorbs it instead, so the ratio applied to the
-        # supplier's raw share is forced to 0 here. SHARED splits the burden
-        # 50/50 (half the discount ratio still reduces the supplier's share,
-        # half is absorbed by Tourvaa). SUPPLIER-funded (or unset/legacy)
-        # discounts keep the exact prior behavior -- the full ratio reduces
-        # the supplier's share.
-        full_ratio = money(booking.group_discount_amount or 0) / money(booking.base_amount) if booking.base_amount else money(0)
-        funded_by = (booking.group_discount_funded_by or "SUPPLIER").upper()
-        if funded_by == "TOURVAA":
-            group_discount_ratio = money(0)
-        elif funded_by == "SHARED":
-            group_discount_ratio = full_ratio / money(2)
-        else:
-            group_discount_ratio = full_ratio
-        discounted_raw_tour_amount = raw_tour_amount * (money(1) - group_discount_ratio)
-        supplier_gross_share = money(discounted_raw_tour_amount + addon_amount)
-
-    # Promo-code discount (booking.discount_amount, from TourDiscount /
-    # _resolve_discount) is already baked into gross_amount above -- it was
-    # subtracted from booking.final_amount at checkout, and (via addon_amount
-    # in the slab branch, or directly when there's no slab) that reduction
-    # flows straight through into supplier_gross_share. That means the
-    # historical/default behavior for a promo discount is SUPPLIER-funded:
-    # the supplier's payout is already reduced dollar-for-dollar, with no
-    # extra code needed here. TOURVAA-funded means Tourvaa's own margin
-    # absorbs it instead, so the supplier must be paid as if the discount
-    # never happened -- the discounted dollar amount is added back onto
-    # supplier_gross_share. SHARED adds back half. This mirrors the
-    # group-discount funded_by handling above, applied as an add-back
-    # instead of a ratio since the promo discount (unlike the group
-    # discount) is already subtracted out of gross_amount by the time we
-    # get here, in both the slab and no-slab paths.
-    promo_discount_amount = money(booking.discount_amount or 0)
-    if promo_discount_amount > 0:
-        promo_funded_by = (booking.promo_discount_funded_by or "SUPPLIER").upper()
-        if promo_funded_by == "TOURVAA":
-            promo_addback = promo_discount_amount
-        elif promo_funded_by == "SHARED":
-            promo_addback = promo_discount_amount / money(2)
-        else:
-            promo_addback = money(0)
-        supplier_gross_share = money(supplier_gross_share + promo_addback)
-
-    # Per-item commissionable flag (TourOptionalActivity/TourAccommodationExtra/
-    # TourExtension.commissionable) snapshotted at booking creation/edit time
-    # onto Booking.non_commissionable_addon_amount -- see _price_booking. That
-    # portion is carved out of the base commission is computed on, then added
-    # back in FULL (commission-free) to what the supplier is actually paid,
-    # so a non-commissionable addon nets the supplier its entire price rather
-    # than price-minus-commission.
-    non_commissionable_addon_amount = money(booking.non_commissionable_addon_amount or 0)
-
-    # Cost-plus items (TourOptionalActivity/TourAccommodationExtra/
-    # TourExtension.supplier_cost set) are structurally the same problem as
-    # the non-commissionable carve-out above, but with a different payout:
-    # the supplier is owed their exact cost (cost_plus_supplier_payable),
-    # not the item's customer price. cost_plus_customer_amount (the
-    # customer-price portion of those same items) is carved out of the
-    # commissionable base right alongside non_commissionable_addon_amount so
-    # it's never also subject to a commission percentage -- and
-    # cost_plus_supplier_payable, not that customer-price figure, is what
-    # gets added back onto gross_amount/net_payable below. This keeps a
-    # commissionable=False item and a supplier_cost-set item from ever
-    # double-carving the same dollar out of the commissionable base (each
-    # item is one or the other, never both -- see _price_booking).
-    cost_plus_customer_amount = money(booking.cost_plus_customer_amount or 0)
-    cost_plus_supplier_payable = money(booking.cost_plus_supplier_payable or 0)
-    carve_out_amount = money(non_commissionable_addon_amount + cost_plus_customer_amount)
-    add_back_amount = money(non_commissionable_addon_amount + cost_plus_supplier_payable)
-    commissionable_gross_share = money(max(money(0), supplier_gross_share - carve_out_amount))
-
-    supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first()
-    tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
-    effective_commission_percentage = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
-    breakdown = compute_supplier_commission_breakdown(commissionable_gross_share, money(0), effective_commission_percentage)
-    currency = booking.currency or (slab.currency if slab else "USD")
+        slab = db.query(TourPricing).filter(TourPricing.id == booking.pricing_slab_id).first() if booking.pricing_slab_id else None
+        supplier = db.query(Supplier).filter(Supplier.id == booking.supplier_id).first()
+        tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
+        pct = resolve_effective_commission_percentage(db, tour=tour, supplier=supplier, slab=slab)
+    split = _booking_financial_split(booking, pct)
     return {
         "currency": currency,
-        "gross_amount": money(breakdown["discounted_amount"] + add_back_amount),
-        "commission_percentage": breakdown["commission_percentage"],
-        "commission_amount": breakdown["commission_amount"],
-        "net_payable": money(breakdown["net_earnings"] + add_back_amount),
-        "customer_price": money(booking.customer_selling_price or booking.final_amount or booking.total_cost or 0),
+        "gross_amount": split["supplier_gross_amount"],
+        "commission_base_amount": split["commission_base_amount"],
+        "commission_percentage": split["commission_percentage"],
+        "commission_amount": split["commission_amount"],
+        "net_payable": split["supplier_net_payable"],
+        "customer_price": customer_price,
         "customer_price_currency": currency,
     }
 
-
-def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False):
+def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False, pricing_details: dict | None = None):
+    """Price a booking. When pricing_details (a dict) is passed it is filled
+    with the resolved price source, unit prices and group-discount base so
+    the caller can store them in the booking's financial snapshot."""
     adults = data.adults_count if data.adults_count is not None else data.no_of_adults
     children = data.children_count if data.children_count is not None else data.no_of_children
     seat_travellers = adults + children
@@ -1098,15 +1214,17 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
     adult_unit = money((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else (tour.price_start_per_person if tour else 0))
     child_unit = money((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0)
+    price_source = "SLAB" if slab else "TOUR_BASE"
     date_override = _resolve_date_price(db, data.tour_id, calendar.tour_date if calendar else data.tour_start_date)
     if date_override:
         adult_unit = money(date_override.adult_price)
         child_unit = money(date_override.child_price)
+        price_source = "DATE_OVERRIDE"
     per_person_amount = money(adult_unit * adults + child_unit * children)
     # Group discount is a percentage of the seat-paying (adult+child) price
     # only -- infants and the solo single-supplement below are resolved
     # after this call so the discount % is never applied to them.
-    group_tier, group_discount_amount, _group_discount_ratio = _resolve_group_discount(db, data.tour_id, seat_travellers, per_person_amount)
+    group_tier, group_discount_amount, group_discount_ratio = _resolve_group_discount(db, data.tour_id, seat_travellers, per_person_amount)
     group_discount_funded_by = (group_tier.funded_by or "SUPPLIER") if group_tier else None
     infant_unit = money(getattr(tour, "infant_price", 0) or 0) if tour else money(0)
     infant_total = money(infant_unit * data.no_of_infants)
@@ -1115,6 +1233,17 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # price, matching standard travel-industry practice.
     single_supplement_amount = money(getattr(tour, "single_supplement", 0) or 0) if tour and seat_travellers == 1 else money(0)
     base_amount = money(per_person_amount + infant_total + single_supplement_amount)
+    if pricing_details is not None:
+        pricing_details.update({
+            "price_source": price_source,
+            "date_price_id": date_override.id if date_override else None,
+            "adult_unit_price": adult_unit,
+            "child_unit_price": child_unit,
+            "infant_unit_price": infant_unit,
+            "single_supplement_amount": single_supplement_amount,
+            "group_discount_base_amount": per_person_amount if group_tier else None,
+            "group_discount_percentage": (group_discount_ratio * 100).quantize(Decimal("0.0001")) if group_tier else None,
+        })
 
     # Nights, for accommodation/extension extras priced per night. Only
     # resolvable when both ends of the stay are known; a *_per_night item is
@@ -1447,7 +1576,8 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         except Exception:
             logger.warning("Affiliate attribution lookup failed for booking creation", exc_info=True)
 
-    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total = _price_booking(db, data, lock_calendar=True, consume_discount=True)
+    pricing_details: dict = {}
+    tour, calendar, adults, children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodations, extensions, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total = _price_booking(db, data, lock_calendar=True, consume_discount=True, pricing_details=pricing_details)
     if tour:
         # calendar is only set when the caller passed tour_calendar_id - fall
         # back to the raw tour_date string (checkout/admin bookings that
@@ -1536,11 +1666,11 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     if booking.supplier and booking.supplier.user_id:
         enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New booking assigned", message=f"Booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
 
-    _apply_commission_snapshot(db, booking)
+    _apply_commission_snapshot(db, booking, pricing_details)
 
     if booking.agent_id and booking.agent:
         from app.services.agent_ledger import create_ledger_entry
-        commission_amount = booking.agent_commission_amount if booking.agent_commission_amount is not None else compute_agent_commission(booking.agent, customer_selling_price)
+        commission_amount = booking.agent_commission_amount if booking.agent_commission_amount is not None else money(0)
         try:
             create_ledger_entry(db, booking=booking, agent_id=booking.agent_id, gross_amount=customer_selling_price, commission_amount=commission_amount)
         except Exception as error:
@@ -1674,7 +1804,8 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
         if calendar_row:
             calendar_row.booked_seats = max(0, (calendar_row.booked_seats or 0) - old_seat_travellers)
 
-    tour, calendar, new_adults, new_children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total = _price_booking(db, booking_create, lock_calendar=False, consume_discount=False)
+    pricing_details: dict = {}
+    tour, calendar, new_adults, new_children, total_travellers, currency, base, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activities, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total = _price_booking(db, booking_create, lock_calendar=False, consume_discount=False, pricing_details=pricing_details)
 
     if calendar_row:
         calendar_row.booked_seats = (calendar_row.booked_seats or 0) + new_adults + new_children
@@ -1716,6 +1847,22 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
     booking.agent_markup = agent_markup
     booking.customer_selling_price = customer_selling_price
     booking.amount_pending = max(money(0), customer_selling_price - money(booking.amount_paid or 0))
+    booking.pricing_slab_id = slab.id if slab else None
+
+    # Re-pricing is only allowed before any payment (see update_booking), so
+    # re-locking the financial snapshot here is the one sanctioned change to
+    # it. Keep the pending agent ledger entry in step with the new figure.
+    _apply_commission_snapshot(db, booking, pricing_details)
+    if booking.agent_id:
+        from app.models.agent_ledger import AgentLedger
+        entry = db.query(AgentLedger).filter(AgentLedger.booking_id == booking.id, AgentLedger.status == "pending").first()
+        if entry:
+            new_commission = money(booking.agent_commission_amount or 0)
+            entry.gross_amount = customer_selling_price
+            entry.commission_amount = new_commission
+            entry.commission_percentage = money((new_commission / customer_selling_price) * 100) if customer_selling_price > 0 else money(0)
+            entry.net_payable = new_commission
+            entry.amount_pending = max(money(0), new_commission - money(entry.amount_paid or 0))
 
     for existing in list(booking.optional_activities):
         db.delete(existing)
@@ -2105,6 +2252,10 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         from app.services.supplier_ledger import create_ledger_entry
         existing_ledger = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking.id).first()
         if not existing_ledger:
+            # Ledger figures come from the booking's locked snapshot, never
+            # from today's slab/commission. A booking created before the
+            # snapshot existed is locked now, from its own stored amounts.
+            _lock_legacy_booking_financials(db, booking)
             breakdown = compute_booking_supplier_financials(db, booking)
             try:
                 create_ledger_entry(db, booking=booking, supplier_id=booking.supplier_id, gross_amount=breakdown["gross_amount"], commission_amount=breakdown["commission_amount"])

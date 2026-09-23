@@ -290,6 +290,12 @@ class DatePricePayload(BaseModel):
     adult_price: float = Field(ge=0)
     child_price: float = Field(default=0.0, ge=0)
     status: str = Field(default="active", max_length=20)
+    # Required when an admin (not the tour's supplier) creates or changes a
+    # date price: under the commission-deduction model the date price is
+    # the supplier's selling price, so overriding it changes the supplier's
+    # payout. Recorded in the audit log and sent to the supplier. Not stored
+    # on the row.
+    reason: Optional[str] = Field(default=None, max_length=500)
 
     @field_validator("status")
     @classmethod

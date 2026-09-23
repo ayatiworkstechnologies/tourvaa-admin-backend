@@ -103,17 +103,45 @@ class Booking(Base):
     amount_paid = Column(Numeric(12, 2), default=0, nullable=False)
     amount_pending = Column(Numeric(12, 2), default=0, nullable=False)
 
-    # Immutable commission-split snapshot, captured once at booking creation
-    # (see services.bookings._apply_commission_snapshot) and never
-    # recalculated from today's tour/agent/affiliate settings -- invoices,
-    # refunds, supplier payouts, agent/affiliate ledgers and reports must all
-    # read these instead of re-deriving them. Commission-deduction business
-    # model: tourvaa_commission_amount is deducted from the supplier's own
-    # selling price (no separate admin markup); agent/affiliate commission
-    # is carved OUT of that same commission (never paid additionally), so
-    # tourvaa_net_revenue = tourvaa_commission_amount - agent_commission_amount
-    # - affiliate_commission_amount (only one of which is ever nonzero for a
-    # given booking_source).
+    # Booking financial snapshot. The supplier/Tourvaa split and the agent
+    # commission are established at booking creation (see
+    # services.bookings._apply_commission_snapshot); affiliate commission is
+    # added when the referral conversion is recorded (supplier acceptance or
+    # payment confirmation). Once financials_locked_at is set these values
+    # are authoritative: supplier/agent/affiliate ledgers, the admin
+    # breakdown and reports read them and never re-derive money from the
+    # tour's current slab, date price or commission settings. The only
+    # re-lock is an admin re-price of a still-unpaid booking (update_booking).
+    #
+    # Commission-deduction model: the commission base is the tour selling
+    # amount (traveller price + commissionable add-ons, less the supplier's
+    # share of discounts) -- never tax, service fee, gateway fee or agent
+    # markup. tourvaa_commission_amount = base x %; supplier_net_payable =
+    # base - commission + non-commissionable add-ons + cost-plus supplier
+    # cost. Agent/affiliate commission is carved OUT of Tourvaa's share:
+    # tourvaa_net_revenue = tourvaa_gross_revenue - agent - affiliate.
+    price_source = Column(String(20), nullable=True)  # SLAB | DATE_OVERRIDE | TOUR_BASE
+    date_price_id = Column(Integer, nullable=True)
+    adult_unit_price = Column(Numeric(12, 2), nullable=True)
+    child_unit_price = Column(Numeric(12, 2), nullable=True)
+    infant_unit_price = Column(Numeric(12, 2), nullable=True)
+    single_supplement_amount = Column(Numeric(12, 2), nullable=True)
+    # Adult+child amount the group tier was applied to (never infants or the
+    # single supplement), and the effective percentage it removed.
+    group_discount_base_amount = Column(Numeric(12, 2), nullable=True)
+    group_discount_percentage = Column(Numeric(7, 4), nullable=True)
+    commission_base_amount = Column(Numeric(12, 2), nullable=True)
+    supplier_gross_amount = Column(Numeric(12, 2), nullable=True)
+    # How the group + promo discounts were split between supplier and
+    # Tourvaa according to their funded_by values.
+    supplier_discount_share_amount = Column(Numeric(12, 2), nullable=True)
+    tourvaa_discount_share_amount = Column(Numeric(12, 2), nullable=True)
+    # Commission + cost-plus margin - Tourvaa-funded discounts, before any
+    # agent/affiliate payout.
+    tourvaa_gross_revenue = Column(Numeric(12, 2), nullable=True)
+    agent_commission_base_amount = Column(Numeric(12, 2), nullable=True)
+    affiliate_commission_base_amount = Column(Numeric(12, 2), nullable=True)
+    financials_locked_at = Column(DateTime(timezone=True), nullable=True)
     tourvaa_commission_percentage = Column(Numeric(5, 2), nullable=True)
     tourvaa_commission_amount = Column(Numeric(12, 2), nullable=True)
     supplier_net_payable = Column(Numeric(12, 2), nullable=True)

@@ -515,19 +515,22 @@ def dashboard_summary(
         # Commission is earned/payable only after the tour is completed;
         # upcoming and ongoing bookings must not inflate the agent's balance.
         completed_query = booking_query.filter(Booking.booking_status == "completed")
-        completed_gross_value = float(completed_query.with_entities(
+        # Snapshotted bookings: sum the agent commission locked on each
+        # booking at creation (services.bookings._apply_commission_snapshot),
+        # never today's agent rate. Older bookings without a snapshot fall
+        # back to the legacy aggregate estimate (rate x completed gross).
+        snapshot_commission = float(completed_query.filter(Booking.agent_commission_amount.isnot(None)).with_entities(
+            sqlfunc.coalesce(sqlfunc.sum(Booking.agent_commission_amount), 0)
+        ).scalar() or 0)
+        legacy_query = completed_query.filter(Booking.agent_commission_amount.is_(None))
+        legacy_gross_value = float(legacy_query.with_entities(
             sqlfunc.coalesce(sqlfunc.sum(Booking.final_amount), 0)
         ).scalar() or 0)
-        # SQL-aggregate mirror of services.bookings.compute_agent_commission
-        # (percentage * completed gross, or fixed * completed count) -- kept
-        # as an aggregate rather than a per-row call to avoid an N+1 query
-        # over every completed booking. Keep these two in sync: any change
-        # to the commission formula (e.g. discount_type branches) must be
-        # applied to both.
         if (agent.discount_type or "").lower() == "percentage":
-            commission_earned = completed_gross_value * float(agent.discount_value or 0) / 100
+            legacy_commission = legacy_gross_value * float(agent.discount_value or 0) / 100
         else:
-            commission_earned = completed_query.count() * float(agent.discount_value or 0)
+            legacy_commission = legacy_query.count() * float(agent.discount_value or 0)
+        commission_earned = snapshot_commission + legacy_commission
 
         return {
             "status": "success",

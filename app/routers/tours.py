@@ -394,27 +394,34 @@ def remove_pricing(tour_id: int, pricing_id: int, request: Request, db: Session 
     return {"status": "success", "message": "Pricing slab deleted"}
 
 
-# seasonal/peak per-date price overrides -- admin only, unlike the slab CRUD
-# above there is no supplier-owned variant of this: date pricing is an
-# ops/admin pricing decision, not something a supplier sets.
+# seasonal/peak per-date price overrides. Under the commission-deduction
+# model a date price is the supplier's selling price for that departure, so
+# the tour's own supplier manages it (changes go through tour review, like
+# slabs); an admin override requires a reason and notifies the supplier
+# (see services.tours._record_date_price_change). Suppliers can only touch
+# their own tours.
 @router.get("/{tour_id}/date-prices")
 def tour_date_prices(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     return {"status": "success", "data": list_date_prices(db, tour_id)}
 
 
 @router.post("/{tour_id}/date-prices")
 def add_date_price(tour_id: int, data: DatePricePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": create_date_price(db, tour_id, data, current_user, request)}
 
 
 @router.put("/{tour_id}/date-prices/{date_price_id}")
 def edit_date_price(tour_id: int, date_price_id: int, data: DatePricePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": update_date_price(db, tour_id, date_price_id, data, current_user, request)}
 
 
 @router.delete("/{tour_id}/date-prices/{date_price_id}")
-def remove_date_price(tour_id: int, date_price_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
-    delete_date_price(db, tour_id, date_price_id, current_user, request)
+def remove_date_price(tour_id: int, date_price_id: int, request: Request, reason: str | None = Query(default=None, max_length=500), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
+    delete_date_price(db, tour_id, date_price_id, current_user, request, reason=reason)
     return {"status": "success", "message": "Date price override deleted"}
 
 

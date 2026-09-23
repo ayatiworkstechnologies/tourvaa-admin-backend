@@ -208,20 +208,115 @@ SETUP_CHECKLIST_KEYS = [
 ]
 
 
+def _setup_checks(db: Session) -> dict[str, list[tuple[str, bool]]]:
+    """Real configuration checks behind each Platform Setup step. A step is
+    only complete when every one of its checks passes, so the checklist
+    can't report "ready" just because someone flipped a flag."""
+    from app.config import settings as app_settings
+    from app.models.bookings import EmailLog
+
+    values = {s.key: (s.value or "").strip() for s in db.query(AppSetting).all()}
+
+    def _num(key: str):
+        try:
+            return float(values.get(key, ""))
+        except (TypeError, ValueError):
+            return None
+
+    tourvaa = _num("supplier_commission_percentage")
+    agent_default = _num("agent_default_commission_percentage")
+    agent_max = _num("agent_commission_max_percentage")
+    affiliate_default = _num("affiliate_default_commission_value") if (values.get("affiliate_default_commission_type") or "percentage") == "percentage" else None
+    affiliate_max = _num("affiliate_commission_max_percentage")
+    deposit = _num("default_deposit_percentage")
+    cutoff = _num("default_deposit_cutoff_days")
+    balance_days = _num("default_balance_payment_deadline_days")
+
+    gateways = db.query(PaymentSetting).filter(PaymentSetting.is_enabled.is_(True)).all()
+    webhook_for = {
+        "stripe": bool((app_settings.STRIPE_WEBHOOK_SECRET or "").strip()),
+        "paypal": bool((app_settings.PAYPAL_WEBHOOK_ID or "").strip()),
+    }
+    smtp = db.query(SmtpSetting).filter(SmtpSetting.is_enabled.is_(True)).first()
+    smtp_configured = bool((smtp and (smtp.host or "").strip()) or (getattr(app_settings, "SMTP_HOST", "") or "").strip())
+    email_delivered = db.query(EmailLog.id).filter(EmailLog.status == "sent").first() is not None
+
+    portal_secrets = [
+        app_settings.ADMIN_JWT_SECRET_KEY, app_settings.SUPPLIER_JWT_SECRET_KEY,
+        app_settings.AGENT_JWT_SECRET_KEY, app_settings.CUSTOMER_JWT_SECRET_KEY,
+        app_settings.AFFILIATE_JWT_SECRET_KEY,
+    ]
+    secrets_set = [str(s or "").strip() for s in portal_secrets]
+    import os
+    try:
+        workers = int(os.environ.get("WEB_CONCURRENCY", "1") or "1")
+    except ValueError:
+        workers = 1
+
+    def _le(a, b):
+        return a is not None and b is not None and a <= b
+
+    return {
+        "company_setup_completed": [
+            ("Site name set", bool(values.get("site_name"))),
+            ("Support email set", bool(values.get("support_email"))),
+            ("Company address set", bool(values.get("company_address"))),
+        ],
+        "pricing_setup_completed": [
+            ("Tourvaa commission configured", tourvaa is not None and 0 < tourvaa < 100),
+            ("Agent default <= agent maximum <= Tourvaa commission", _le(agent_default, agent_max) and _le(agent_max, tourvaa)),
+            ("Affiliate default <= affiliate maximum <= Tourvaa commission", (affiliate_default is None or _le(affiliate_default, affiliate_max)) and _le(affiliate_max, tourvaa)),
+        ],
+        "booking_rules_completed": [
+            ("Deposit percentage between 1 and 100", deposit is not None and 0 < deposit <= 100),
+            ("Balance due before the deposit cutoff", cutoff is not None and balance_days is not None and 0 <= balance_days <= cutoff),
+            ("Booking prefix set", bool(values.get("booking_prefix"))),
+        ],
+        "payment_setup_completed": [
+            ("A payment gateway is enabled", bool(gateways)),
+            ("Every enabled gateway passed its connection test", bool(gateways) and all(g.last_test_status == "connected" for g in gateways)),
+            ("Every enabled gateway has its webhook secret configured", bool(gateways) and all(webhook_for.get(g.provider_name, False) for g in gateways)),
+        ],
+        "email_setup_completed": [
+            ("SMTP configured", smtp_configured),
+            ("At least one email delivered", email_delivered),
+        ],
+        "storage_setup_completed": [
+            ("Cloudinary configured", bool((getattr(app_settings, "CLOUDINARY_URL", "") or "").strip())),
+        ],
+        "security_check_completed": [
+            ("All portal JWT secrets set and distinct", all(secrets_set) and len(set(secrets_set)) == len(secrets_set)),
+            ("Settings encryption key set", bool((getattr(app_settings, "SETTINGS_ENCRYPTION_KEY", "") or "").strip())),
+            ("Redis configured when running more than one worker", workers <= 1 or bool((getattr(app_settings, "REDIS_URL", "") or "").strip())),
+        ],
+    }
+
+
 def get_setup_progress(db: Session) -> dict:
-    """Platform Setup checklist progress for the admin dashboard -- e.g.
-    "5/7 complete" rather than one opaque boolean. Each step is an admin-set
-    AppSetting flag (SETUP_CHECKLIST_KEYS); this never infers completion
-    from other data, an admin/setup-wizard step must explicitly flip it."""
-    rows = {
-        s.key: s.value
+    """Platform Setup checklist progress for the admin dashboard (e.g.
+    "5/7 complete"). Each step is derived from real configuration checks
+    (_setup_checks) -- gateways connected, webhooks set, SMTP delivering,
+    secrets distinct -- never from a manually toggled flag. The old
+    *_completed AppSetting flags are still returned as `acknowledged` for
+    reference but don't count towards completion."""
+    flags = {
+        s.key: str(s.value or "").lower() == "true"
         for s in db.query(AppSetting).filter(AppSetting.key.in_(SETUP_CHECKLIST_KEYS)).all()
     }
-    steps = {key: str(rows.get(key, "false")).lower() == "true" for key in SETUP_CHECKLIST_KEYS}
+    checks = _setup_checks(db)
+    steps = {key: all(ok for _label, ok in checks[key]) for key in SETUP_CHECKLIST_KEYS}
     completed = sum(1 for done in steps.values() if done)
     total = len(SETUP_CHECKLIST_KEYS)
     return {
         "steps": steps,
+        "details": {
+            key: {
+                "done": steps[key],
+                "acknowledged": flags.get(key, False),
+                "checks": [{"label": label, "ok": ok} for label, ok in checks[key]],
+            }
+            for key in SETUP_CHECKLIST_KEYS
+        },
         "completed": completed,
         "total": total,
         "percent": round((completed / total) * 100) if total else 0,

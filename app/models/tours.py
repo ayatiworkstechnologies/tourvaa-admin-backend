@@ -219,12 +219,13 @@ class TourPricing(Base):
 
 
 class TourDatePrice(Base):
-    """A per-date storefront price override for a tour, layered on top of the
+    """A per-date selling-price override for a tour, layered on top of the
     normal TourPricing slab -- e.g. a peak-season surcharge or off-peak
     discount for a specific departure date. When present for a booking's
-    date, adult_price/child_price here are used verbatim as the final
-    customer-facing price (already inclusive of any markup an admin wants),
-    exactly like storefront_adult_price/storefront_child_price on the slab."""
+    date, adult_price/child_price here are used verbatim as the customer
+    price (no markup), Tourvaa's commission is deducted from them, and the
+    booking snapshots price_source=DATE_OVERRIDE plus the resolved unit
+    prices so settlement never re-reads this row."""
     __tablename__ = "tour_date_prices"
 
     id = Column(Integer, primary_key=True, index=True)

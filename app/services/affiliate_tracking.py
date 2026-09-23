@@ -442,14 +442,14 @@ def record_conversion(db: Session, *, ref_code: str, booking_id: int, booking_am
 
     # Commission-deduction business model: affiliate commission is carved
     # OUT of Tourvaa's own commission on this booking, never paid
-    # additionally -- so it can never exceed what Tourvaa actually earned.
-    # See services.bookings._apply_commission_snapshot for the equivalent
-    # agent-side rule and the booking's immutable commission snapshot.
+    # additionally -- so it can never exceed what is left of Tourvaa's
+    # commission after any agent commission already taken from it.
+    # See services.bookings._apply_commission_snapshot.
+    from app.services.bookings import remaining_channel_commission_pool, _recompute_tourvaa_net_revenue
     booking = db.query(Booking).filter(Booking.id == booking_id).first()
-    if booking and booking.tourvaa_commission_amount is not None:
-        commission_cap = money(booking.tourvaa_commission_amount)
-        if money(calc["commission_amount"]) > commission_cap:
-            calc = {**calc, "commission_amount": commission_cap}
+    commission_cap = remaining_channel_commission_pool(booking) if booking else None
+    if commission_cap is not None and money(calc["commission_amount"]) > commission_cap:
+        calc = {**calc, "commission_amount": commission_cap}
 
     conversion = AffiliateConversion(
         link_id=link.id,
@@ -470,9 +470,12 @@ def record_conversion(db: Session, *, ref_code: str, booking_id: int, booking_am
     db.flush()
 
     if booking and booking.tourvaa_commission_amount is not None:
+        booking.affiliate_commission_base_amount = eligible_amount
         booking.affiliate_commission_percentage = calc["commission_percentage"]
         booking.affiliate_commission_amount = calc["commission_amount"]
-        booking.tourvaa_net_revenue = money(booking.tourvaa_commission_amount) - money(calc["commission_amount"])
+        # Recomputed from all components so an agent deduction on the same
+        # booking is never overwritten.
+        _recompute_tourvaa_net_revenue(booking)
 
     _wallet_entry(
         db, affiliate_id=aff.id, transaction_type="COMMISSION_CREDIT", amount=conversion.final_commission,

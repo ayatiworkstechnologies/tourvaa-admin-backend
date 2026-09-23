@@ -377,11 +377,15 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     commission_percentage (floor-enforced against
     resolve_effective_commission_percentage: Tour > Supplier > platform
     default), deducted from that same price to produce
-    supplier_final_*_price ("Supplier Receives"). Applies to every actor --
-    a supplier sets/raises the commission floor, an admin can too.
-    admin_markup_type/admin_markup_value are kept on the model for backward
-    compatibility with existing rows/API consumers but are no longer applied
-    -- storefront_*_price always equals adult_price/child_price now.
+    supplier_final_*_price ("Supplier Receives"). Only admins set a slab's
+    commission_percentage (never below the floor); a supplier's payload
+    value is ignored -- a new slab gets the floor and an edited slab keeps
+    its existing rate (raised to the floor if that has since gone up), so
+    suppliers accept Tourvaa's commission rather than configure it.
+    admin_markup_type/admin_markup_value are deprecated: kept on the model
+    for backward compatibility with existing rows/API consumers but never
+    written or applied -- storefront_*_price always equals adult_price/
+    child_price now.
     A supplier's price change takes effect immediately, like any other
     content edit (see maybe_resubmit_for_review) -- mark_repricing_required
     (called by create_pricing/update_pricing right after this) still records
@@ -393,15 +397,19 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
 
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     floor = resolve_effective_commission_percentage(db, tour=tour, supplier=tour.supplier if tour else None)
-    requested = data.commission_percentage
+    if is_supplier_user(actor):
+        # Suppliers can't choose the commission: keep the admin-set rate on
+        # an existing slab, otherwise use the floor.
+        existing = o.commission_percentage if is_update else None
+        requested = existing
+    else:
+        requested = data.commission_percentage
     commission = max(float(requested), float(floor)) if requested is not None else float(floor)
     o.commission_percentage = commission
     o.supplier_final_adult_price = round(max(0.0, o.adult_price * (1 - commission / 100)), 2)
     o.supplier_final_child_price = round(max(0.0, o.child_price * (1 - commission / 100)), 2)
     o.final_price = o.adult_price
 
-    if not is_supplier_user(actor):
-        o.admin_markup_value = data.admin_markup_value
     o.storefront_adult_price = round(max(0.0, o.adult_price), 2)
     o.storefront_child_price = round(max(0.0, o.child_price), 2)
 
@@ -563,12 +571,72 @@ def delete_pricing(db: Session, tour_id: int, rid: int, actor: User, request: Re
 def _ser_date_price(o: TourDatePrice) -> dict:
     return {"id": o.id, "tour_id": o.tour_id, "price_date": o.price_date, "adult_price": o.adult_price, "child_price": o.child_price, "status": o.status, "created_at": o.created_at, "updated_at": o.updated_at}
 
-_list_date_prices_fn, _create_date_price_fn, _update_date_price_fn, _delete_date_price_fn = _simple_crud(TourDatePrice, _ser_date_price)
+_list_date_prices_fn, _, _, _ = _simple_crud(TourDatePrice, _ser_date_price)
 
 def list_date_prices(db, tour_id): return _list_date_prices_fn(db, tour_id)
-def create_date_price(db, tour_id, data, actor, request=None): return _create_date_price_fn(db, tour_id, data, actor, "create_date_price", request)
-def update_date_price(db, tour_id, rid, data, actor, request=None): return _update_date_price_fn(db, tour_id, rid, data, actor, "update_date_price", "Date price", request)
-def delete_date_price(db, tour_id, rid, actor, request=None): return _delete_date_price_fn(db, tour_id, rid, actor, "delete_date_price", "Date price", request)
+
+
+def _date_price_values(o: TourDatePrice | None) -> dict | None:
+    if o is None:
+        return None
+    return {"price_date": str(o.price_date), "adult_price": str(o.adult_price), "child_price": str(o.child_price), "status": o.status}
+
+
+def _record_date_price_change(db: Session, tour_id: int, actor: User, action: str, old: dict | None, new: dict | None, reason: str | None, request: Request | None) -> None:
+    """Date prices are the supplier's selling price for that departure, so
+    they drive the supplier's payout. A supplier's own change goes through
+    the normal tour review (maybe_resubmit_for_review). An admin override
+    must give a reason; it's audited with before/after values and the
+    supplier is notified."""
+    from app.services.supplier_scope import is_supplier_user
+
+    is_supplier = is_supplier_user(actor)
+    if not is_supplier and not (reason or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required when an admin changes a tour's date price, because it changes the supplier's selling price and payout.")
+    new_values = {**(new or {}), **({"reason": reason.strip()} if reason and reason.strip() else {})}
+    log_audit(db, actor=actor, action=action, entity_type="tour", entity_id=tour_id, old_values=old, new_values=new_values or None, request=request)
+    if is_supplier:
+        maybe_resubmit_for_review(db, tour_id, actor)
+        return
+    tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    supplier_user_id = tour.supplier.user_id if tour and tour.supplier else None
+    if supplier_user_id:
+        from app.services.notifications import enqueue_notification
+        date_label = (new or old or {}).get("price_date", "")
+        enqueue_notification(
+            db, user_id=supplier_user_id, notification_type="tour_date_price_changed",
+            title="Date price changed by Tourvaa",
+            message=f"Tourvaa changed the price for {date_label} on '{tour.title}'. Reason: {reason.strip()}",
+            entity_type="tour", entity_id=tour_id,
+        )
+
+
+def create_date_price(db, tour_id, data, actor, request=None):
+    _require_tour(db, tour_id)
+    o = TourDatePrice(tour_id=tour_id, **data.model_dump(exclude={"reason"}))
+    db.add(o)
+    _record_date_price_change(db, tour_id, actor, "create_date_price", None, _date_price_values(o), data.reason, request)
+    db.commit()
+    db.refresh(o)
+    return _ser_date_price(o)
+
+
+def update_date_price(db, tour_id, rid, data, actor, request=None):
+    o = _child_or_404(db, TourDatePrice, rid, tour_id, "Date price")
+    old = _date_price_values(o)
+    for key, value in data.model_dump(exclude={"reason"}).items():
+        setattr(o, key, value)
+    _record_date_price_change(db, tour_id, actor, "update_date_price", old, _date_price_values(o), data.reason, request)
+    db.commit()
+    db.refresh(o)
+    return _ser_date_price(o)
+
+
+def delete_date_price(db, tour_id, rid, actor, request=None, reason: str | None = None):
+    o = _child_or_404(db, TourDatePrice, rid, tour_id, "Date price")
+    _record_date_price_change(db, tour_id, actor, "delete_date_price", _date_price_values(o), None, reason, request)
+    db.delete(o)
+    db.commit()
 
 
 # optional activity
