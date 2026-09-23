@@ -32,6 +32,13 @@ ALLOWED_CONTENT_BLOCK_KEYS = {
     "travel_support", "newsletter_banner", "top_deals_section",
     "trending_section", "favourite_countries_section", "social_links",
     "destination_styles", "destination_seasons", "top_bar", "trust_bar", "slogans", "handpicked_section", "countries_section", "testimonials_section", "faq_section",
+    # Admin-defined extra tour carousels shown after Countries Worth Exploring
+    # (e.g. Adventures, Cultural Experience, Cruise Journeys, Spiritual Sites) -
+    # one master on/off switch plus a list of sections, each with its own
+    # on/off switch and tour source (category, subcategory or picked tours).
+    "home_extra_sections",
+    # Show/hide switch per built-in homepage section ({section_key: bool}).
+    "home_section_visibility",
     # Standalone About Us / Contact Us page builders (see AboutPageEditor /
     # ContactPageEditor in the admin frontend) - each field here backs one
     # numbered section of those pages, with the public page falling back to
