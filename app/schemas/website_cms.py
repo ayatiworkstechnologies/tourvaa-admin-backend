@@ -96,6 +96,7 @@ class CmsPagePayload(BaseModel):
     title: str
     slug: Optional[str] = None
     content: Optional[str] = None
+    sections: Optional[List[Dict[str, Any]]] = None
     seo_title: Optional[str] = None
     seo_description: Optional[str] = None
     status: str = "draft"

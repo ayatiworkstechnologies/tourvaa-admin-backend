@@ -32,6 +32,27 @@ ALLOWED_CONTENT_BLOCK_KEYS = {
     "travel_support", "newsletter_banner", "top_deals_section",
     "trending_section", "favourite_countries_section", "social_links",
     "destination_styles", "destination_seasons", "top_bar", "trust_bar", "slogans", "handpicked_section", "countries_section", "testimonials_section", "faq_section",
+    # Standalone About Us / Contact Us page builders (see AboutPageEditor /
+    # ContactPageEditor in the admin frontend) - each field here backs one
+    # numbered section of those pages, with the public page falling back to
+    # its built-in copy whenever a block is empty.
+    "about_page_hero", "about_page_story", "about_page_gallery", "about_page_metrics",
+    "about_page_values", "about_page_team", "about_page_awards", "about_page_cta",
+    "contact_page_hero", "contact_page_support_cards", "contact_page_channels",
+    "contact_page_faqs", "contact_page_partners", "contact_page_offices",
+    # Legal pages, Travel Advice, and the 3 partner portal pages - same
+    # pattern as the About/Contact blocks above (one hero/settings block with
+    # an `is_active` publish toggle, plus records blocks for each repeatable
+    # list on the page).
+    "terms_page_hero", "terms_page_sections",
+    "privacy_page_hero", "privacy_page_sections",
+    "cookie_page_hero", "cookie_page_sections",
+    "travel_advice_hero", "travel_advice_categories", "travel_advice_articles", "travel_advice_essentials",
+    "supplier_portal_hero", "supplier_portal_metrics", "supplier_portal_capabilities", "supplier_portal_steps",
+    "supplier_portal_documents", "supplier_portal_expectations", "supplier_portal_faqs", "supplier_portal_cta",
+    "agent_portal_hero", "agent_portal_metrics", "agent_portal_tools", "agent_portal_steps",
+    "agent_portal_documents", "agent_portal_expectations", "agent_portal_faqs", "agent_portal_cta",
+    "affiliate_portal_hero", "affiliate_portal_stats", "affiliate_portal_perks", "affiliate_portal_ideal_for", "affiliate_portal_cta",
 }
 
 # Per-country destination guide content (best time to visit, monsoon/season
@@ -117,7 +138,7 @@ def _s_deal(r: TourOnDeal, db: Session | None = None):
     tour = _tour_label(db, r.tour_id) if db else {"tour_title": "", "tour_code": ""}
     return {"id": r.id, "tour_id": r.tour_id, **tour, "deal_label": r.deal_label, "discount_percentage": r.discount_percentage, "valid_until": r.valid_until, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_blog(r: Blog): return {"id": r.id, "title": r.title, "slug": r.slug, "excerpt": r.excerpt, "content": r.content, "featured_image": r.featured_image, "author": r.author, "tags": r.tags, "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "published_at": r.published_at, "created_at": r.created_at, "updated_at": r.updated_at}
-def _s_cms_page(r: CmsPage): return {"id": r.id, "title": r.title, "slug": r.slug, "content": r.content, "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "footer_section_id": r.footer_section_id, "sort_order": r.sort_order, "created_at": r.created_at, "updated_at": r.updated_at}
+def _s_cms_page(r: CmsPage): return {"id": r.id, "title": r.title, "slug": r.slug, "content": r.content, "sections": r.sections or [], "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "footer_section_id": r.footer_section_id, "sort_order": r.sort_order, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_review(r: CustomerReview): return {"id": r.id, "reviewer_name": r.reviewer_name, "reviewer_image": r.reviewer_image, "rating": r.rating, "review_text": r.review_text, "tour_name": r.tour_name, "country": r.country, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_help(r: HelpCentreArticle): return {"id": r.id, "category": r.category, "question": r.question, "answer": r.answer, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_policy(r: CmsPolicy): return {"id": r.id, "slug": r.slug, "title": r.title, "content": r.content, "last_updated": r.last_updated, "created_at": r.created_at, "updated_at": r.updated_at}

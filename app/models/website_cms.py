@@ -177,6 +177,13 @@ class CmsPage(Base):
     title = Column(String(200), nullable=False)
     slug = Column(String(220), unique=True, nullable=False, index=True)
     content = Column(Text, nullable=True)
+    # Ordered list of typed content blocks (hero/text/image_text/cards/cta)
+    # built via the admin Pages section builder - when set, the public page
+    # renders these instead of `content`. NULL/empty falls back to the plain
+    # `content` HTML (see [slug]/page.tsx). Opaque JSON, rendered only via
+    # plain React text interpolation on the frontend, so unlike `content` it
+    # is never sanitized as HTML server-side.
+    sections = Column(JSON, nullable=True)
     seo_title = Column(String(200), nullable=True)
     seo_description = Column(String(400), nullable=True)
     status = Column(String(20), default="draft", nullable=False)
