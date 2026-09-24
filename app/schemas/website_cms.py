@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class BannerPayload(BaseModel):
@@ -27,6 +27,8 @@ class PopularDestinationPayload(BaseModel):
     image: Optional[str] = None
     description: Optional[str] = None
     href: Optional[str] = None
+    rating: Optional[float] = Field(default=None, ge=0, le=5)
+    package_count: Optional[int] = Field(default=None, ge=0)
     sort_order: int = 0
     is_active: bool = True
 

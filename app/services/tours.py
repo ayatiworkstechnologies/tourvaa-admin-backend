@@ -371,11 +371,10 @@ def _ser_pricing(o: TourPricing) -> dict:
 
 
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    """Commission-deduction pricing model (confirmed business rule, replaces
-    the earlier admin-markup layer): the supplier's own adult_price/
-    child_price IS the customer-facing/storefront price -- there is no
-    separate markup on top. Tourvaa's only margin lever is
-    commission_percentage (floor-enforced against
+    """Compute the supplier payout and customer-facing price. The supplier's
+    adult_price/child_price is the base price. Tourvaa commission is deducted
+    from that base for settlement, while an admin-only percentage markup is
+    added on top to produce the storefront price. Commission is floor-enforced against
     resolve_effective_commission_percentage: Tour > Supplier > platform
     default), deducted from that same price to produce
     supplier_final_*_price ("Supplier Receives"). Only admins set a slab's
@@ -383,10 +382,8 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     value is ignored -- a new slab gets the floor and an edited slab keeps
     its existing rate (raised to the floor if that has since gone up), so
     suppliers accept Tourvaa's commission rather than configure it.
-    admin_markup_type/admin_markup_value are deprecated: kept on the model
-    for backward compatibility with existing rows/API consumers but never
-    written or applied -- storefront_*_price always equals adult_price/
-    child_price now.
+    A supplier edit preserves the existing admin markup and a supplier can
+    never submit or view it. Admin edits may set it per pricing slab.
     A supplier's price change takes effect immediately, like any other
     content edit (see maybe_resubmit_for_review) -- mark_repricing_required
     (called by create_pricing/update_pricing right after this) still records
@@ -411,8 +408,18 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     o.supplier_final_child_price = round(max(0.0, o.child_price * (1 - commission / 100)), 2)
     o.final_price = o.adult_price
 
-    o.storefront_adult_price = round(max(0.0, o.adult_price), 2)
-    o.storefront_child_price = round(max(0.0, o.child_price), 2)
+    if is_supplier_user(actor):
+        markup = float(o.admin_markup_value or 0)
+    else:
+        if "admin_markup_value" in data.model_fields_set:
+            markup = max(0.0, float(data.admin_markup_value or 0))
+        else:
+            from app.services.settings import get_default_admin_markup_percentage
+            markup = float(get_default_admin_markup_percentage(db))
+        o.admin_markup_type = "percentage"
+        o.admin_markup_value = markup
+    o.storefront_adult_price = round(max(0.0, o.adult_price * (1 + markup / 100)), 2)
+    o.storefront_child_price = round(max(0.0, o.child_price * (1 + markup / 100)), 2)
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)

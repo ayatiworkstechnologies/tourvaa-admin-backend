@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -37,6 +37,8 @@ class PopularDestination(Base):
     # Destination link for this country's card, e.g. "/tours?country=Egypt".
     # Falls back to an auto-generated country URL on the frontend when unset.
     href = Column(String(500), nullable=True)
+    rating = Column(Float, nullable=True)
+    package_count = Column(Integer, nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -18,7 +18,7 @@ FastAPI REST API powering the Tourvaa travel platform. Provides authentication, 
 | File Uploads | python-multipart |
 | PDF Generation | ReportLab (invoices) |
 | Email | SMTP (smtplib) |
-| AI Chatbot | Anthropic SDK |
+| AI Chatbot | Retrieval-only local embeddings/BM25; no external LLM SDK |
 
 ---
 
@@ -32,7 +32,7 @@ docker build -t tourvaa/backend:local .
 
 The image runs as a non-root user on port `8000`, checks `/api/health`, persists `/data`, and applies Alembic migrations before startup. Keep `WEB_CONCURRENCY=1` until scheduled jobs and WebSockets use shared worker/pub-sub infrastructure.
 
-The workflow at `.github/workflows/ci-cd.yml` provisions MySQL, applies and verifies migrations, starts the API, runs tests, scans the image, and publishes verified main/tag builds to `ghcr.io/<owner>/<repository>`. For the complete stack and required environment variables, see `DOCKER_CICD_GUIDE.md` in the shared workspace root.
+The workflow at `.github/workflows/ci-cd.yml` provisions MySQL, applies and verifies migrations, starts the API, runs tests, scans the image, and publishes verified main/tag builds to `ghcr.io/<owner>/<repository>`. For the complete stack and required environment variables, see `deployment/DEPLOYMENT.md` in the workspace.
 
 ### Updating a running server
 
@@ -98,7 +98,6 @@ SUPER_ADMIN_EMAIL=admin@tourvaa.com
 SUPER_ADMIN_PASSWORD=replace_with_a_unique_strong_password
 SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false
 
-ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 > **Security:** Generate a strong JWT secret with `python -c "import secrets; print(secrets.token_hex(32))"`. Use a unique production super-admin password and keep `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false` after bootstrap.
@@ -114,9 +113,7 @@ python -m alembic upgrade head
 python -m alembic current
 ```
 
-The current schema head is `20260917_0104`. Revision `0104` adds `user_sessions.current_refresh_jti` for refresh-token rotation with reuse detection. Revision `0038` idempotently backfills `supplier_vehicles.vehicle_type`/`registration_number` for any database that was bootstrapped purely through the migration chain (these columns were added to the model without ever getting a migration -- see the troubleshooting section below); it's kept here as the running example in that section, not as the current head.
-
-Run `python -m alembic heads` any time to confirm the true current head instead of trusting this README, which can go stale as new migrations land.
+The current schema head is `20260924_0002`. The external-tours and destination-card migrations follow the booking financial snapshot; revision `20260924_0002` adds editable `rating` and `package_count` fields to `cms_popular_destinations`. Run `python -m alembic heads` any time to confirm the true current head instead of trusting this README, which can go stale as new migrations land.
 
 Seed everything (RBAC, geo, payment gateways) without deleting application data:
 
@@ -392,7 +389,7 @@ python seed.py --skip-geo --skip-payments
 
 ## Tests
 
-37+ test modules, ~390+ test functions, run against a live dev server at `http://127.0.0.1:8000/api`.
+66 test files, including HTTP tests and focused unit tests, run against a live dev server at `http://127.0.0.1:8000/api` where required.
 
 Install the development test dependencies once:
 

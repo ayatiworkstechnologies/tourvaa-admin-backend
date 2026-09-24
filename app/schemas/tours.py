@@ -277,7 +277,7 @@ class PricingPayload(BaseModel):
     # produce the storefront price - deliberately no min/max (admin sets
     # whatever's needed). Ignored for a supplier actor, see
     # routers.tours._ADMIN_ONLY_PRICING_FIELDS / _apply_pricing_computation.
-    admin_markup_value: float = Field(default=0.0, ge=0)
+    admin_markup_value: float = Field(default=0.0, ge=0, le=100)
     currency: str = Field(default="USD", max_length=10)
     status: str = Field(default="active", max_length=20)
     # Optional explanation for the audit trail when Admin edits a Supplier's

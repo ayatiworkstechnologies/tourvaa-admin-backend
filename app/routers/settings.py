@@ -77,6 +77,19 @@ def public_settings(db: Session = Depends(get_db)):
     rows = db.query(AppSetting).filter(AppSetting.is_public == True).all()  # noqa: E712
     data = {row.key: sanitize_public_setting(row.key, row.value) for row in rows}
 
+    # Maintenance mode must be readable before the public application renders.
+    # Keep the rest of the non-public system settings private and expose only
+    # this boolean operational flag.
+    maintenance = (
+        db.query(AppSetting)
+        .filter(AppSetting.key == "maintenance_mode")
+        .first()
+    )
+    maintenance_enabled = bool(
+        maintenance and str(maintenance.value).lower() == "true"
+    )
+    data["maintenance_mode"] = "true" if maintenance_enabled else "false"
+
     # brightlane.api_url is a plain external link (not a secret, unlike
     # api_key/api_secret - see _API_SECRET_FIELDS), so it's safe to surface
     # here. Powers the homepage "Book Your Airport Transfers" CTA.

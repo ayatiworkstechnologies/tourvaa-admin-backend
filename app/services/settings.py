@@ -110,6 +110,7 @@ DEFAULT_SETTINGS = [
     # Moved to the "pricing" group (was "booking") per the Pricing & Commission
     # / Booking Rules settings-screen split.
     {"key": "supplier_commission_percentage", "label": "Default Tourvaa Commission (%)", "value": "10", "group": "pricing", "is_public": True},
+    {"key": "default_admin_markup_percentage", "label": "Default Admin Markup (%)", "value": "0", "group": "pricing", "is_public": False},
     # Platform-wide fallback deposit percentage, used only when a tour has no
     # deposit_percentage/booking_deposit of its own set (Tour.deposit_type
     # etc. - see models/cms.py). A supplier's own per-tour deposit config
@@ -427,6 +428,11 @@ def get_commission_percentage(db: Session):
         return Decimal(str(setting.value)) if setting and setting.value not in (None, "") else Decimal("10")
     except (InvalidOperation, TypeError):
         return Decimal("10")
+
+
+def get_default_admin_markup_percentage(db: Session):
+    """Default percentage used for new admin-created pricing slabs."""
+    return _get_percentage_setting(db, "default_admin_markup_percentage", "0")
 
 
 def _get_percentage_setting(db: Session, key: str, default: str) -> "Decimal":
@@ -854,6 +860,18 @@ def _validate_timezone_setting(values: dict[str, str | None]) -> None:
         raise SettingsValidationError(f'Unsupported IANA timezone: "{timezone_name}"')
 
 
+def _validate_admin_markup_setting(values: dict[str, str | None]) -> None:
+    if "default_admin_markup_percentage" not in values:
+        return
+    from decimal import Decimal, InvalidOperation
+    try:
+        percentage = Decimal(str(values["default_admin_markup_percentage"]))
+    except (InvalidOperation, TypeError):
+        raise SettingsValidationError("Default admin markup must be a number between 0 and 100")
+    if percentage < 0 or percentage > 100:
+        raise SettingsValidationError("Default admin markup must be between 0 and 100 percent")
+
+
 def update_settings(
     db: Session,
     values: dict[str, str | None],
@@ -865,6 +883,7 @@ def update_settings(
         values["timezone"] = normalize_timezone_name(values.get("timezone"))
     _validate_money_settings(values)
     _validate_timezone_setting(values)
+    _validate_admin_markup_setting(values)
     seed_settings(db)
     # "currency" (booking group) and "default_currency" (general group) are
     # two historical keys for the same platform-wide default -- treat
