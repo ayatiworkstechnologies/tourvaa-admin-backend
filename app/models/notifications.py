@@ -37,11 +37,14 @@ class NotificationLog(Base):
 
 class PushSubscription(Base):
     __tablename__ = "push_subscriptions"
-    __table_args__ = (UniqueConstraint("endpoint", name="uq_push_endpoint"),)
+    __table_args__ = (UniqueConstraint("endpoint_hash", name="uq_push_endpoint_hash"),)
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    endpoint = Column(String(500), nullable=False)
+    # Push service URLs can exceed 500 chars (e.g. Windows/Edge), so the URL
+    # is TEXT and uniqueness is enforced on its SHA-256 (endpoint_hash).
+    endpoint = Column(Text, nullable=False)
+    endpoint_hash = Column(String(64), nullable=False)
     p256dh = Column(String(256), nullable=False)
     auth = Column(String(255), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

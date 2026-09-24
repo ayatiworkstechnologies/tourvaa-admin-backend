@@ -9,6 +9,15 @@ _PAYMENT_SECRET_FIELDS = {"secret_key"}
 _API_SECRET_FIELDS = {"api_key", "api_secret"}
 _SMTP_SECRET_FIELDS = {"password"}
 
+SUPPORTED_TIMEZONES = {
+    "Pacific/Auckland", "Pacific/Fiji", "Australia/Sydney", "Australia/Perth",
+    "Asia/Tokyo", "Asia/Singapore", "Asia/Kolkata", "Asia/Dubai", "Asia/Karachi",
+    "Asia/Dhaka", "Asia/Bangkok", "Asia/Shanghai", "Asia/Hong_Kong", "Europe/London",
+    "Europe/Paris", "Europe/Berlin", "Europe/Istanbul", "Africa/Johannesburg",
+    "Africa/Nairobi", "America/New_York", "America/Chicago", "America/Denver",
+    "America/Los_Angeles", "America/Toronto", "America/Sao_Paulo", "UTC",
+}
+
 _PLACEHOLDER_PUBLIC_CONTACTS = {
     "support_email": {"hello@tourvaa.com", "support@tourvaa.com"},
     "support_phone": {"+910000000000", "+919876543210"},
@@ -834,6 +843,16 @@ def _validate_money_settings(values: dict[str, str | None]) -> None:
         )
 
 
+def _validate_timezone_setting(values: dict[str, str | None]) -> None:
+    if "timezone" not in values:
+        return
+    timezone_name = (values.get("timezone") or "").strip()
+    if not timezone_name:
+        raise SettingsValidationError("Timezone is required")
+    if timezone_name not in SUPPORTED_TIMEZONES:
+        raise SettingsValidationError(f'Unsupported IANA timezone: "{timezone_name}"')
+
+
 def update_settings(
     db: Session,
     values: dict[str, str | None],
@@ -841,6 +860,7 @@ def update_settings(
     request=None,
 ):
     _validate_money_settings(values)
+    _validate_timezone_setting(values)
     seed_settings(db)
     values = dict(values)
     # "currency" (booking group) and "default_currency" (general group) are

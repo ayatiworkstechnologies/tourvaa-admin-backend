@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import secrets
@@ -78,18 +79,57 @@ class MessagingConnectionManager:
 
     def __init__(self):
         self._admin_sockets: set[WebSocket] = set()
+        # Same admin sockets, keyed by user, so one user's can be closed.
+        self._admin_sockets_by_user: dict[int, set[WebSocket]] = defaultdict(set)
         self._user_sockets: dict[int, set[WebSocket]] = defaultdict(set)
+        self._loop: asyncio.AbstractEventLoop | None = None
 
-    async def connect_admin(self, websocket: WebSocket):
+    async def connect_admin(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
+        self._loop = asyncio.get_running_loop()
         self._admin_sockets.add(websocket)
+        self._admin_sockets_by_user[user_id].add(websocket)
 
     async def connect_participant(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
+        self._loop = asyncio.get_running_loop()
         self._user_sockets[user_id].add(websocket)
 
-    def disconnect_admin(self, websocket: WebSocket):
+    def disconnect_admin(self, websocket: WebSocket, user_id: int | None = None):
         self._admin_sockets.discard(websocket)
+        for uid in ([user_id] if user_id is not None else list(self._admin_sockets_by_user)):
+            sockets = self._admin_sockets_by_user.get(uid)
+            if sockets:
+                sockets.discard(websocket)
+                if not sockets:
+                    self._admin_sockets_by_user.pop(uid, None)
+
+    async def close_user(self, user_id: int):
+        """Drop every live socket of this user held by this worker (used by
+        "sign out everywhere": a socket is only authenticated when it opens,
+        so without this a signed-out device kept receiving live messages)."""
+        sockets = set(self._user_sockets.get(user_id, set())) | set(self._admin_sockets_by_user.get(user_id, set()))
+        for socket in sockets:
+            try:
+                await socket.close(code=4401)
+            except Exception:
+                pass
+            self.disconnect_participant(socket, user_id)
+            self.disconnect_admin(socket, user_id)
+
+    def request_close_user(self, user_id: int):
+        """Thread-safe, fire-and-forget close_user() for sync code (e.g. a
+        password change running in the threadpool). With Redis, other
+        workers/instances are told too."""
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(self.close_user(user_id), loop)
+        r = get_redis_sync()
+        if r is not None:
+            try:
+                r.publish(WS_PUBSUB_CHANNEL, json.dumps({"logout_user_id": user_id}))
+            except Exception as exc:
+                logger.warning("WS pub/sub: logout publish failed (%s)", exc)
 
     def disconnect_participant(self, websocket: WebSocket, user_id: int):
         sockets = self._user_sockets.get(user_id)
@@ -150,6 +190,9 @@ async def start_redis_subscriber():
                 continue
             try:
                 payload = json.loads(message["data"])
+                if "logout_user_id" in payload:
+                    await ws_manager.close_user(int(payload["logout_user_id"]))
+                    continue
                 await ws_manager._deliver_locally(payload["event"], payload["participant_user_id"])
             except Exception:
                 logger.exception("WS pub/sub: failed to relay message")

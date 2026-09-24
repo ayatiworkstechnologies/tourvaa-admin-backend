@@ -1,5 +1,8 @@
 fastapi==0.139.2
 uvicorn==0.51.0
+# WebSocket support for uvicorn (/api/ws/messages live messaging). Plain
+# uvicorn has none built in and rejects every websocket handshake without it.
+websockets==15.0.1
 sqlalchemy==2.0.51
 pymysql==1.2.0
 python-dotenv==1.2.2

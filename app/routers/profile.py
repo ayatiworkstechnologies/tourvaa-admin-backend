@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -6,7 +6,8 @@ from app.auth.permissions import require_any_permission
 from app.schemas.profile import PasswordUpdate, ProfileUpdate
 from app.models.users import User
 from app.services.users import serialize_user
-from app.auth.security import hash_password, verify_password
+from app.services.auth import change_password_everywhere
+from app.auth.security import verify_password
 
 router = APIRouter(prefix="/profile", tags=["Profile"])
 
@@ -43,6 +44,8 @@ def update_profile(
 @router.put("/password")
 def update_password(
     data: PasswordUpdate,
+    request: Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_any_permission("profile.edit", "update-profile")),
     db: Session = Depends(get_db),
 ):
@@ -55,8 +58,9 @@ def update_password(
             detail="New password must be different from current password",
         )
 
-    current_user.password = hash_password(data.new_password)
-    current_user.token_version += 1
-    db.commit()
+    change_password_everywhere(db, current_user, data.new_password, request=request, background_tasks=background_tasks)
 
-    return {"status": "success", "message": "Password updated successfully"}
+    return {
+        "status": "success",
+        "message": "Password updated successfully. Please sign in again on all devices.",
+    }

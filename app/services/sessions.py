@@ -53,14 +53,26 @@ def revoke_session(db: Session, session_id: int):
 
 
 def force_logout_user(db: Session, user_id: int):
+    """Sign a user out of every device. Used by every password change/reset
+    and by admin "force logout":
+    - token_version bump: every access/refresh token already issued is dead
+    - all active sessions marked revoked
+    - browser push subscriptions removed (so signed-out devices stop showing
+      notification content; the current browser re-subscribes on next login)
+    - live /ws/messages sockets closed (they're only checked when opened)"""
+    from app.models.notifications import PushSubscription
+    from app.services.messaging_ws import ws_manager
+
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     user.token_version = (user.token_version or 0) + 1
     db.query(UserSession).filter(UserSession.user_id == user_id, UserSession.status == "active").update({"status": "revoked", "revoked_at": utcnow()})
+    push_removed = db.query(PushSubscription).filter(PushSubscription.user_id == user_id).delete(synchronize_session=False)
     db.commit()
     db.refresh(user)
-    return {"user_id": user_id, "token_version": user.token_version, "revoked": True}
+    ws_manager.request_close_user(user_id)
+    return {"user_id": user_id, "token_version": user.token_version, "revoked": True, "push_subscriptions_removed": push_removed}
 
 
 def list_login_history(db: Session, page: int = 1, limit: int = 20, user_id: int | None = None, status: str = ""):

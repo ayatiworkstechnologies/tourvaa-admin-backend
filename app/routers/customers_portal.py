@@ -31,7 +31,8 @@ from app.services.itinerary import download_itinerary_pdf
 from app.schemas.payments import PaymentCreate
 from app.services.payments import create_payment, get_customer_payments
 from app.models.users import User
-from app.auth.security import hash_password, verify_password
+from app.auth.security import verify_password
+from app.services.auth import change_password_everywhere
 from app.schemas.profile import PasswordUpdate
 from app.schemas.cms import slugify
 
@@ -181,16 +182,17 @@ def update_customer_profile(data: CustomerProfileUpdate, db: Session = Depends(g
 
 
 @router.post("/change-password")
-def change_customer_password(data: PasswordUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def change_customer_password(data: PasswordUpdate, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _current_customer(db, current_user)
     if not verify_password(data.current_password, current_user.password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     if data.current_password == data.new_password:
         raise HTTPException(status_code=400, detail="New password must be different from current password")
-    current_user.password = hash_password(data.new_password)
-    current_user.token_version += 1
-    db.commit()
-    return {"status": "success", "message": "Password updated successfully"}
+    change_password_everywhere(db, current_user, data.new_password, request=request, background_tasks=background_tasks)
+    return {
+        "status": "success",
+        "message": "Password updated successfully. Please sign in again on all devices.",
+    }
 
 
 @wishlist_router.get("")

@@ -1030,6 +1030,50 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web", ba
     return True
 
 
+def send_password_changed_email(db: Session, user: User, background_tasks=None):
+    """Security alert that the account password changed (reset link or a
+    profile change). Sent in the background when possible so a slow SMTP
+    server can never hold up the request."""
+    login_url = f"{settings.FRONTEND_URL}/login"
+    subject, html = render_database_email(
+        db,
+        "password_changed",
+        {
+            "name": user.name,
+            "email": user.email,
+            "login_url": login_url,
+            "button_text": "Login to Tourvaa",
+            "button_url": login_url,
+        },
+        "Your Tourvaa password was changed",
+        password_changed_email(user.name, login_url),
+    )
+    if background_tasks is not None:
+        background_tasks.add_task(try_send_email, user.email, subject, html, template_key="password_changed")
+    else:
+        try:
+            try_send_email(user.email, subject, html, template_key="password_changed")
+        except Exception as exc:
+            logger.warning("Password changed email failed for user id=%s: %s", user.id, exc)
+
+
+def change_password_everywhere(db: Session, user: User, new_password: str, *, request=None, background_tasks=None) -> dict:
+    """A signed-in user changed their own password (any portal's profile
+    page). Same security effect as a reset link: every device is signed out
+    (tokens, sessions, push subscriptions, live sockets), any unused reset
+    link stops working, it's audit-logged and the owner gets an alert email."""
+    from app.services.audit import log_audit
+    from app.services.sessions import force_logout_user
+
+    user.password = hash_password(new_password)
+    user.reset_password_token = None
+    user.reset_password_expires_at = None
+    log_audit(db, actor=user, action="password_changed", entity_type="user", entity_id=user.id, request=request)
+    result = force_logout_user(db, user.id)  # commits
+    send_password_changed_email(db, user, background_tasks=background_tasks)
+    return result
+
+
 def reset_password(db: Session, token: str, password: str, background_tasks=None):
     token_hash = hash_reset_token(token)
     user = (
@@ -1055,9 +1099,10 @@ def reset_password(db: Session, token: str, password: str, background_tasks=None
     user.password = hash_password(password)
     user.reset_password_token = None
     user.reset_password_expires_at = None
-    user.token_version += 1
-
-    db.commit()
+    # Resetting a password invalidates all access/refresh tokens and records
+    # every active device session as revoked.
+    from app.services.sessions import force_logout_user as _revoke_sessions
+    _revoke_sessions(db, user.id)
 
     # The password change above is already committed at this point - the
     # confirmation email is a courtesy notification, not part of the reset
@@ -1068,27 +1113,7 @@ def reset_password(db: Session, token: str, password: str, background_tasks=None
     # successful) attempt and be told the link was "invalid or expired" even
     # though the password had already been changed. See the identical fix in
     # forgot_password() above.
-    login_url = f"{settings.FRONTEND_URL}/login"
-    subject, html = render_database_email(
-        db,
-        "password_changed",
-        {
-            "name": user.name,
-            "email": user.email,
-            "login_url": login_url,
-            "button_text": "Login to Tourvaa",
-            "button_url": login_url,
-        },
-        "Your Tourvaa password was changed",
-        password_changed_email(user.name, login_url),
-    )
-    if background_tasks is not None:
-        background_tasks.add_task(try_send_email, user.email, subject, html, template_key="password_changed")
-    else:
-        try:
-            try_send_email(user.email, subject, html, template_key="password_changed")
-        except Exception as exc:
-            logger.warning("Password changed email failed for user id=%s: %s", user.id, exc)
+    send_password_changed_email(db, user, background_tasks=background_tasks)
 
     return True
 

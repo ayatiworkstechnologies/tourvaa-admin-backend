@@ -39,6 +39,10 @@ ALLOWED_CONTENT_BLOCK_KEYS = {
     "home_extra_sections",
     # Show/hide switch per built-in homepage section ({section_key: bool}).
     "home_section_visibility",
+    # Admin-editable <title>/meta description per public page
+    # ({"/about": {"title": "...", "description": "..."}}), read server-side
+    # by the Next.js layouts; empty fields fall back to the built-in copy.
+    "page_seo",
     # Standalone About Us / Contact Us page builders (see AboutPageEditor /
     # ContactPageEditor in the admin frontend) - each field here backs one
     # numbered section of those pages, with the public page falling back to

@@ -103,6 +103,9 @@ class Settings(BaseSettings):
 
     VAPID_PUBLIC_KEY: str = ""
     VAPID_PRIVATE_KEY_FILE: str = "vapid_private.pem"
+    # Optional: the private key itself (PEM text or base64url raw key) instead
+    # of a file - handy on hosts where shipping a .pem file is awkward.
+    VAPID_PRIVATE_KEY: str = ""
     VAPID_MAILTO: str = "mailto:admin@tourvaa.com"
 
     # IP -> country geolocation used only for browsing-currency detection

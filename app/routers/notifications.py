@@ -7,7 +7,8 @@ from app.auth.permissions import require_any_permission, get_current_user
 from app.utils.pagination import pagination_params
 from app.schemas.notifications import NotificationCreate
 from app.services.notifications import create_notification, list_notifications, mark_all_read, mark_read, retry_notification
-from app.services.notifications_push import save_subscription, delete_subscription, broadcast_push
+from app.config import settings
+from app.services.notifications_push import broadcast_push, delete_subscription, is_configured as is_push_configured, save_subscription
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -72,6 +73,12 @@ def read(notification_id: int, db: Session = Depends(get_db), current_user=Depen
 @router.post("/{notification_id}/retry")
 def retry(notification_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("notifications.retry", "notifications.manage"))):
     return {"status": "success", "data": retry_notification(db, notification_id)}
+
+
+@router.get("/push/public-key")
+def push_public_key():
+    """VAPID public key the browser needs to subscribe (public by design)."""
+    return {"status": "success", "data": {"public_key": settings.VAPID_PUBLIC_KEY if is_push_configured() else ""}}
 
 
 @router.post("/push/subscribe")

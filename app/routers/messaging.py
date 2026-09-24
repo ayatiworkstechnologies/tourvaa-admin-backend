@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.auth.permissions import ACCESS_COOKIE_NAME, _decode_token, get_current_user, get_user_role_ids, require_any_permission
 from app.database import SessionLocal, get_db
@@ -111,10 +111,17 @@ async def supplier_booking_conversation_reply(conversation_id: int, data: SendRe
     return {"status": "success", "message": "Reply sent", "data": message}
 
 
+# The socket handler uses the user after its DB session is closed, so load
+# everything it reads (role for participant_type_for_user, user_roles for
+# get_user_role_ids) up front. Lazy-loading them on a detached User raised
+# DetachedInstanceError, which failed every /ws/messages handshake.
+_WS_USER_LOAD = (joinedload(User.role), selectinload(User.user_roles))
+
+
 def _ws_user_by_id(user_id: int) -> User | None:
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.id == user_id).first()
+        user = db.query(User).options(*_WS_USER_LOAD).filter(User.id == user_id).first()
         if not user or user.account_status != "ACTIVE" or not user.is_active:
             return None
         db.expunge(user)
@@ -147,7 +154,7 @@ def _ws_user(websocket: WebSocket) -> User | None:
 
     db = SessionLocal()
     try:
-        user = db.query(User).filter(User.id == payload.get("user_id")).first()
+        user = db.query(User).options(*_WS_USER_LOAD).filter(User.id == payload.get("user_id")).first()
         if not user or payload.get("token_version") is None or payload.get("token_version") != user.token_version:
             return None
         if user.account_status != "ACTIVE" or not user.is_active:
@@ -188,14 +195,14 @@ async def messages_socket(websocket: WebSocket):
     is_admin_listener = _has_messages_permission(user)
 
     if is_admin_listener:
-        await ws_manager.connect_admin(websocket)
+        await ws_manager.connect_admin(websocket, user.id)
         try:
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
             pass
         finally:
-            ws_manager.disconnect_admin(websocket)
+            ws_manager.disconnect_admin(websocket, user.id)
         return
 
     if not participant_type:
