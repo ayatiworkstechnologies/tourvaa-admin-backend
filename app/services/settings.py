@@ -18,6 +18,24 @@ SUPPORTED_TIMEZONES = {
     "America/Los_Angeles", "America/Toronto", "America/Sao_Paulo", "UTC",
 }
 
+# Values that may already exist from the old free-text timezone field.
+# Normalize them on the next settings save instead of rejecting the entire
+# bulk update request.
+LEGACY_TIMEZONE_ALIASES = {
+    "india": "Asia/Kolkata",
+    "ist": "Asia/Kolkata",
+    "new zealand": "Pacific/Auckland",
+    "nzst": "Pacific/Auckland",
+    "auckland": "Pacific/Auckland",
+    "utc": "UTC",
+    "gmt": "UTC",
+}
+
+
+def normalize_timezone_name(value: str | None) -> str:
+    timezone_name = (value or "").strip()
+    return LEGACY_TIMEZONE_ALIASES.get(timezone_name.lower(), timezone_name)
+
 _PLACEHOLDER_PUBLIC_CONTACTS = {
     "support_email": {"hello@tourvaa.com", "support@tourvaa.com"},
     "support_phone": {"+910000000000", "+919876543210"},
@@ -846,7 +864,7 @@ def _validate_money_settings(values: dict[str, str | None]) -> None:
 def _validate_timezone_setting(values: dict[str, str | None]) -> None:
     if "timezone" not in values:
         return
-    timezone_name = (values.get("timezone") or "").strip()
+    timezone_name = normalize_timezone_name(values.get("timezone"))
     if not timezone_name:
         raise SettingsValidationError("Timezone is required")
     if timezone_name not in SUPPORTED_TIMEZONES:
@@ -859,10 +877,12 @@ def update_settings(
     actor: User | None = None,
     request=None,
 ):
+    values = dict(values)
+    if "timezone" in values:
+        values["timezone"] = normalize_timezone_name(values.get("timezone"))
     _validate_money_settings(values)
     _validate_timezone_setting(values)
     seed_settings(db)
-    values = dict(values)
     # "currency" (booking group) and "default_currency" (general group) are
     # two historical keys for the same platform-wide default -- treat
     # "currency" (the one with an actual validated dropdown in the UI) as
