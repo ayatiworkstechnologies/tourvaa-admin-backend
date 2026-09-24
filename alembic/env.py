@@ -50,6 +50,7 @@ from app.models.tours import (
     TourSimilar,
     TourUnavailableDate,
 )
+from app.models.external_tours import ExternalAffiliateClick, ExternalDestinationMapping, ExternalProvider
 from app.models.users import User, UserRole, UserStatusHistory
 from app.models.website_cms import Blog, CmsPage, CmsPolicy, CustomerReview, ExternalLink, FooterLink, FooterSection, HelpCentreArticle, HomepageBanner, PopularDestination, PopularTour, PromotionalPopup, SitemapEntry, TourOnDeal
 

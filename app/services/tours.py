@@ -119,6 +119,7 @@ def _ser_itinerary(i: TourItinerary) -> dict:
         "important_notes": i.important_notes,
         "image": i.image, "image_alt_text": i.image_alt_text, "images": images,
         "display_order": i.display_order, "status": i.status,
+        "day_type": i.day_type or "standard",
         "created_at": i.created_at, "updated_at": i.updated_at,
     }
 

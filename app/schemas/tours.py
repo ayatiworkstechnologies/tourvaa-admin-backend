@@ -96,6 +96,14 @@ class ItineraryPayload(BaseModel):
     images: list[str] = Field(default_factory=list)
     display_order: int = Field(default=0, ge=0)
     status: str = Field(default="active", max_length=20)
+    # "standard" or "free_day" (explicit flag for free/leisure days; see
+    # TourItinerary.day_type). Optional so existing clients are unaffected.
+    day_type: str = Field(default="standard", max_length=20)
+
+    @field_validator("day_type", mode="before")
+    @classmethod
+    def validate_day_type(cls, v):
+        return v if v in ("standard", "free_day") else "standard"
 
     @model_validator(mode="before")
     @classmethod

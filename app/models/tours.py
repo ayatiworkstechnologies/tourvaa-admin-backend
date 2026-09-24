@@ -59,6 +59,10 @@ class TourItinerary(Base):
     images = Column(Text, default="[]", nullable=True)
     display_order = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="active", nullable=False)
+    # "standard" (default) or "free_day" - an explicit admin flag for free /
+    # leisure days, which the public tour page can pair with optional
+    # external "things to do" suggestions. Never inferred from the title.
+    day_type = Column(String(20), default="standard", server_default="standard", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

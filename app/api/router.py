@@ -30,6 +30,8 @@ from app.routers.currency import router as currency_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.email_templates import router as email_templates_router
 from app.routers.email_logs import router as email_logs_router
+from app.routers.external_tours import admin_router as external_tours_admin_router
+from app.routers.external_tours import public_router as external_tours_public_router
 from app.routers.invoices import router as invoices_router
 from app.routers.messaging import booking_router as messaging_booking_router
 from app.routers.messaging import router as messaging_router
@@ -127,6 +129,7 @@ OPERATIONS_ROUTERS = (
     affiliate_payouts_admin_router,
     private_documents_router,
     reviews_router,
+    external_tours_admin_router,
 )
 
 ADMIN_ALIAS_ROUTERS = (
@@ -148,3 +151,5 @@ def register_api_routes(app: FastAPI) -> None:
         app.include_router(router, prefix=f"{API_PREFIX}/admin")
 
     app.include_router(public_router, prefix=f"{API_PREFIX}/public")
+    # Day Tours & Experiences (external affiliate inventory, Viator today).
+    app.include_router(external_tours_public_router, prefix=f"{API_PREFIX}/public")

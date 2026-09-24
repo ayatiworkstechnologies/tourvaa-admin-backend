@@ -85,6 +85,21 @@ class Settings(BaseSettings):
     # anywhere instead of failing.
     VIATOR_API_KEY: str = ""
     VIATOR_AFFILIATE_PID: str = ""
+    # Alias for VIATOR_AFFILIATE_PID (either name works; this one wins).
+    VIATOR_PID: str = ""
+    # "sandbox" or "production" - picks the Partner API host below. Sandbox
+    # keys only work against the sandbox host and vice versa (a sandbox key on
+    # the production host answers 401 "Invalid API Key").
+    VIATOR_ENV: str = "sandbox"
+    # Optional explicit override of the Partner API base URL.
+    VIATOR_API_BASE_URL: str = ""
+    # Deployment-level kill switch, in addition to the admin's Enable toggle
+    # (Admin -> Integrations -> Viator). Both must be on for any Viator call.
+    VIATOR_ENABLED: bool = True
+    # Prefix of the campaign value appended to Viator affiliate links, e.g.
+    # "tourvaa" -> campaign=tourvaa-day-tours.
+    VIATOR_CAMPAIGN_PREFIX: str = "tourvaa"
+    VIATOR_TIMEOUT_SECONDS: float = 15.0
 
     VAPID_PUBLIC_KEY: str = ""
     VAPID_PRIVATE_KEY_FILE: str = "vapid_private.pem"

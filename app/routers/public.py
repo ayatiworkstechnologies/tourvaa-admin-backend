@@ -634,6 +634,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
                     "image": i.image or None,
                     "image_alt_text": i.image_alt_text or "",
                     "images": _safe_json_list(i.images),
+                    "day_type": i.day_type or "standard",
                 }
                 for i in itineraries
             ],
