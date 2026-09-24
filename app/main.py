@@ -93,21 +93,6 @@ def validate_production_config() -> None:
     if len(settings.JWT_SECRET_KEY) < 32:
         errors.append("JWT_SECRET_KEY must be at least 32 characters in production")
 
-    portal_secrets = {
-        "SUPPLIER_JWT_SECRET_KEY": settings.SUPPLIER_JWT_SECRET_KEY,
-        "AGENT_JWT_SECRET_KEY": settings.AGENT_JWT_SECRET_KEY,
-        "CUSTOMER_JWT_SECRET_KEY": settings.CUSTOMER_JWT_SECRET_KEY,
-        "ADMIN_JWT_SECRET_KEY": settings.ADMIN_JWT_SECRET_KEY,
-    }
-    unset_portal_secrets = [name for name, value in portal_secrets.items() if not value]
-    if unset_portal_secrets:
-        errors.append(
-            f"{', '.join(unset_portal_secrets)} must be set to distinct values in production "
-            "(each currently falls back to the shared JWT_SECRET_KEY)"
-        )
-    elif len(set(portal_secrets.values())) < len(portal_secrets):
-        errors.append("SUPPLIER_JWT_SECRET_KEY, AGENT_JWT_SECRET_KEY, CUSTOMER_JWT_SECRET_KEY and ADMIN_JWT_SECRET_KEY must all be distinct in production")
-
     if not settings.STRIPE_WEBHOOK_SECRET:
         errors.append("STRIPE_WEBHOOK_SECRET must be set in production (Stripe webhooks are otherwise rejected at runtime)")
 

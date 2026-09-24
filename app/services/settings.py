@@ -253,8 +253,6 @@ def _setup_checks(db: Session) -> dict[str, list[tuple[str, bool]]]:
     tourvaa = _num("supplier_commission_percentage")
     agent_default = _num("agent_default_commission_percentage")
     agent_max = _num("agent_commission_max_percentage")
-    affiliate_default = _num("affiliate_default_commission_value") if (values.get("affiliate_default_commission_type") or "percentage") == "percentage" else None
-    affiliate_max = _num("affiliate_commission_max_percentage")
     deposit = _num("default_deposit_percentage")
     cutoff = _num("default_deposit_cutoff_days")
     balance_days = _num("default_balance_payment_deadline_days")
@@ -268,12 +266,6 @@ def _setup_checks(db: Session) -> dict[str, list[tuple[str, bool]]]:
     smtp_configured = bool((smtp and (smtp.host or "").strip()) or (getattr(app_settings, "SMTP_HOST", "") or "").strip())
     email_delivered = db.query(EmailLog.id).filter(EmailLog.status == "sent").first() is not None
 
-    portal_secrets = [
-        app_settings.ADMIN_JWT_SECRET_KEY, app_settings.SUPPLIER_JWT_SECRET_KEY,
-        app_settings.AGENT_JWT_SECRET_KEY, app_settings.CUSTOMER_JWT_SECRET_KEY,
-        app_settings.AFFILIATE_JWT_SECRET_KEY,
-    ]
-    secrets_set = [str(s or "").strip() for s in portal_secrets]
     import os
     try:
         workers = int(os.environ.get("WEB_CONCURRENCY", "1") or "1")
@@ -292,7 +284,6 @@ def _setup_checks(db: Session) -> dict[str, list[tuple[str, bool]]]:
         "pricing_setup_completed": [
             ("Tourvaa commission configured", tourvaa is not None and 0 < tourvaa < 100),
             ("Agent default <= agent maximum <= Tourvaa commission", _le(agent_default, agent_max) and _le(agent_max, tourvaa)),
-            ("Affiliate default <= affiliate maximum <= Tourvaa commission", (affiliate_default is None or _le(affiliate_default, affiliate_max)) and _le(affiliate_max, tourvaa)),
         ],
         "booking_rules_completed": [
             ("Deposit percentage between 1 and 100", deposit is not None and 0 < deposit <= 100),
@@ -312,7 +303,7 @@ def _setup_checks(db: Session) -> dict[str, list[tuple[str, bool]]]:
             ("Cloudinary configured", bool((getattr(app_settings, "CLOUDINARY_URL", "") or "").strip())),
         ],
         "security_check_completed": [
-            ("All portal JWT secrets set and distinct", all(secrets_set) and len(set(secrets_set)) == len(secrets_set)),
+            ("Platform JWT signing key is at least 32 characters", len((app_settings.JWT_SECRET_KEY or "").strip()) >= 32),
             ("Settings encryption key set", bool((getattr(app_settings, "SETTINGS_ENCRYPTION_KEY", "") or "").strip())),
             ("Redis configured when running more than one worker", workers <= 1 or bool((getattr(app_settings, "REDIS_URL", "") or "").strip())),
         ],
@@ -323,7 +314,7 @@ def get_setup_progress(db: Session) -> dict:
     """Platform Setup checklist progress for the admin dashboard (e.g.
     "5/7 complete"). Each step is derived from real configuration checks
     (_setup_checks) -- gateways connected, webhooks set, SMTP delivering,
-    secrets distinct -- never from a manually toggled flag. The old
+    signing key valid -- never from a manually toggled flag. The old
     *_completed AppSetting flags are still returned as `acknowledged` for
     reference but don't count towards completion."""
     flags = {
@@ -565,27 +556,19 @@ def compute_commission_preview(db: Session, sample_price=None) -> dict:
 
 
 def get_security_status(db: Session) -> dict:
-    """Read-only Security Status panel: which portal JWT secrets are
-    actually configured (not just falling back to the shared JWT_SECRET_KEY)
-    and whether Redis/Cloudinary are configured. Never exposes secret
-    values, only configured/missing -- see routers.settings for the
-    admin-only endpoint that serves this."""
+    """Read-only status for the unified JWT key and supporting services."""
     from app.config import settings as app_settings
-
-    portal_secret_keys = {
-        "admin": app_settings.ADMIN_JWT_SECRET_KEY,
-        "supplier": app_settings.SUPPLIER_JWT_SECRET_KEY,
-        "agent": app_settings.AGENT_JWT_SECRET_KEY,
-        "customer": app_settings.CUSTOMER_JWT_SECRET_KEY,
-        "affiliate": app_settings.AFFILIATE_JWT_SECRET_KEY,
-    }
-    jwt_status = {
-        portal: ("configured" if str(value or "").strip() else "missing (falls back to shared JWT_SECRET_KEY)")
-        for portal, value in portal_secret_keys.items()
-    }
+    import os
+    try:
+        workers = int(os.environ.get("WEB_CONCURRENCY", "1") or "1")
+    except ValueError:
+        workers = 1
+    jwt_secret = (app_settings.JWT_SECRET_KEY or "").strip()
     return {
-        "jwt_secrets": jwt_status,
-        "redis": "configured" if str(getattr(app_settings, "REDIS_URL", "") or "").strip() else "not configured (single-instance/in-process fallback)",
+        "jwt_secrets": {
+            "platform": "configured (single signing key)" if len(jwt_secret) >= 32 else "missing or too short (minimum 32 characters)",
+        },
+        "redis": "configured" if str(getattr(app_settings, "REDIS_URL", "") or "").strip() else ("configured (not required for one worker)" if workers <= 1 else "missing (required for multiple workers)"),
         "cloudinary": "configured" if str(getattr(app_settings, "CLOUDINARY_URL", "") or "").strip() else "not configured",
         "settings_encryption_key": "configured" if str(getattr(app_settings, "SETTINGS_ENCRYPTION_KEY", "") or "").strip() else "missing",
     }

@@ -122,7 +122,7 @@ def security_status(
     db: Session = Depends(get_db),
     _=Depends(require_permission("view-settings")),
 ):
-    """Read-only panel showing which portal JWT secrets / Redis / Cloudinary
+    """Read-only panel showing the platform JWT secret / Redis / Cloudinary
     are configured -- never exposes secret values, admin cannot edit here."""
     return {"status": "success", "data": get_security_status(db)}
 

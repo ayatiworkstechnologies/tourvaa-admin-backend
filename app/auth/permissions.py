@@ -117,27 +117,15 @@ def get_user_role_ids(user: User):
 
 def _decode_token(token: str) -> dict:
     """
-    Decode a JWT using the portal-specific secret.
-    Reads the unverified 'portal' claim first to select the correct secret,
-    then performs a full verified decode with that secret.
+    Decode and verify a JWT with the platform signing key. The unverified
+    portal claim is never used as an authorization decision; role,
+    permissions and session state are resolved from the verified user.
     """
     try:
-        unverified = jwt.get_unverified_claims(token)
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    portal = unverified.get("portal")
-    secret = settings.get_portal_secret(portal) if portal else settings.JWT_SECRET_KEY
-
-    try:
-        return jwt.decode(token, secret, algorithms=[settings.JWT_ALGORITHM])
+        return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired")
     except JWTError:
-        # If the portal-specific secret fails and portal was set, also reject immediately.
-        # If no portal claim, try the main secret (backwards compat for old tokens).
-        if portal:
-            raise HTTPException(status_code=401, detail="Invalid token")
         raise HTTPException(status_code=401, detail="Invalid token")
 
 

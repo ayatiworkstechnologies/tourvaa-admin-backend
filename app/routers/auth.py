@@ -269,15 +269,7 @@ def refresh_token(
     if not token:
         raise HTTPException(status_code=401, detail="Authorization token missing")
     try:
-        # Read portal claim without full verification to pick the correct secret
-        try:
-            unverified = jose_jwt.get_unverified_claims(token)
-            portal = unverified.get("portal")
-        except JWTError:
-            portal = None
-        secret = _settings.get_portal_secret(portal) if portal else _settings.JWT_SECRET_KEY
-
-        payload = jose_jwt.decode(token, secret, algorithms=[_settings.JWT_ALGORITHM])
+        payload = jose_jwt.decode(token, _settings.JWT_SECRET_KEY, algorithms=[_settings.JWT_ALGORITHM])
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Refresh session expired. Please log in again.")
     except JWTError:

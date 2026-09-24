@@ -25,12 +25,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-    # Per-portal JWT secrets - fall back to JWT_SECRET_KEY if not set
-    SUPPLIER_JWT_SECRET_KEY: str = ""
-    AGENT_JWT_SECRET_KEY: str = ""
-    CUSTOMER_JWT_SECRET_KEY: str = ""
-    ADMIN_JWT_SECRET_KEY: str = ""
-    AFFILIATE_JWT_SECRET_KEY: str = ""
+    # One signing key secures every portal. Portal, role, permissions,
+    # token_version and session_id are signature-protected claims.
     REQUIRE_EMAIL_VERIFICATION: bool = False
     EMAIL_VERIFICATION_EXPIRE_MINUTES: int = 1440
     OTP_EXPIRE_MINUTES: int = 10
@@ -121,25 +117,13 @@ class Settings(BaseSettings):
     DEFAULT_CURRENCY: str = "USD"
     DEFAULT_LOCALE: str = "en-US"
 
-    def get_portal_secret(self, portal: str) -> str:
-        """Return the JWT secret for the given portal, falling back to the main key."""
-        mapping = {
-            "supplier": self.SUPPLIER_JWT_SECRET_KEY,
-            "agent": self.AGENT_JWT_SECRET_KEY,
-            "customer": self.CUSTOMER_JWT_SECRET_KEY,
-            "admin": self.ADMIN_JWT_SECRET_KEY,
-            "affiliate": self.AFFILIATE_JWT_SECRET_KEY,
-        }
-        explicit = mapping.get(portal, "")
-        if explicit:
-            return explicit
-        if portal in mapping and not self.is_production:
-            # Dev convenience without the shared-secret risk: a per-portal key
-            # derived from the base one, so a token minted for one portal is
-            # never valid on another even when no per-portal secrets are set.
-            import hashlib
-            import hmac
-            return hmac.new(self.JWT_SECRET_KEY.encode(), f"portal:{portal}".encode(), hashlib.sha256).hexdigest()
+    def get_portal_secret(self, _portal: str | None = None) -> str:
+        """Return the single platform JWT signing key.
+
+        ``portal`` stays in the signature-protected claims and authorization
+        remains user/role/permission/session based; it no longer selects a
+        second deployment secret.
+        """
         return self.JWT_SECRET_KEY
 
     model_config = SettingsConfigDict(
