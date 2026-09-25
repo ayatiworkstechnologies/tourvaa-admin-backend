@@ -20,6 +20,34 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_CURRENCY_SYMBOL_FALLBACKS = {
+    "USD": "$", "EUR": "€", "GBP": "£", "INR": "₹", "JPY": "¥",
+    "CNY": "¥", "KRW": "₩", "AED": "د.إ", "SAR": "﷼", "QAR": "ر.ق",
+}
+
+
+def _currency_metadata(inv: Invoice) -> tuple[str, str]:
+    """Return the invoice's immutable charged currency and display symbol.
+
+    The database currency master is authoritative. A small fallback keeps old
+    invoices readable if their currency has since been disabled or removed.
+    """
+    code = (inv.currency or "USD").strip().upper()
+    symbol = ""
+    try:
+        from sqlalchemy.orm import object_session
+        from app.models.cms import Currency
+
+        session = object_session(inv)
+        if session is not None:
+            row = session.query(Currency.symbol).filter(Currency.code == code).first()
+            symbol = (row[0] or "").strip() if row else ""
+    except Exception:
+        # Invoice serialization/PDF generation must not fail only because a
+        # legacy currency is absent from the master table.
+        symbol = ""
+    return code, symbol or _CURRENCY_SYMBOL_FALLBACKS.get(code, code)
+
 
 def _invoice_number(invoice_id: int) -> str:
     return str(invoice_id)
@@ -99,6 +127,7 @@ def _support_contact(inv: Invoice) -> tuple[str, str]:
 
 def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | None, items: list[dict]) -> dict:
     support_email, website = _support_contact(inv)
+    currency, currency_symbol = _currency_metadata(inv)
     return {
         "support_email": support_email,
         "website": website,
@@ -113,7 +142,8 @@ def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | N
         "payment_method": _payment_method_for(booking, payment),
         "invoice_date": utcnow().strftime("%Y-%m-%d"),
         "status": inv.status or "pending",
-        "currency": inv.currency,
+        "currency": currency,
+        "currency_symbol": currency_symbol,
         "subtotal_amount": money_str(inv.subtotal_amount),
         "gst_rate": money_str(inv.gst_rate),
         "gst_amount": money_str(inv.gst_amount),
@@ -126,7 +156,8 @@ def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | N
 
 
 def serialize_invoice(inv: Invoice, detail: bool = False) -> dict:
-    data = {"id": inv.id, "invoice_number": inv.invoice_number, "booking_id": inv.booking_id, "booking_code": inv.booking.booking_code if inv.booking else None, "payment_id": inv.payment_id, "customer_id": inv.customer_id, "customer_name": inv.customer.full_name if inv.customer else None, "invoice_type": inv.invoice_type, "status": inv.status, "currency": inv.currency, "subtotal_amount": money_str(inv.subtotal_amount), "gst_rate": money_str(inv.gst_rate), "gst_amount": money_str(inv.gst_amount), "total_amount": money_str(inv.total_amount), "amount_paid": money_str(inv.amount_paid), "amount_due": money_str(inv.amount_due), "balance_due_date": inv.balance_due_date, "pdf_path": inv.pdf_path, "emailed_at": inv.emailed_at, "created_at": inv.created_at, "updated_at": inv.updated_at}
+    currency, currency_symbol = _currency_metadata(inv)
+    data = {"id": inv.id, "invoice_number": inv.invoice_number, "booking_id": inv.booking_id, "booking_code": inv.booking.booking_code if inv.booking else None, "payment_id": inv.payment_id, "customer_id": inv.customer_id, "customer_name": inv.customer.full_name if inv.customer else None, "invoice_type": inv.invoice_type, "status": inv.status, "currency": currency, "currency_symbol": currency_symbol, "subtotal_amount": money_str(inv.subtotal_amount), "gst_rate": money_str(inv.gst_rate), "gst_amount": money_str(inv.gst_amount), "total_amount": money_str(inv.total_amount), "amount_paid": money_str(inv.amount_paid), "amount_due": money_str(inv.amount_due), "balance_due_date": inv.balance_due_date, "pdf_path": inv.pdf_path, "emailed_at": inv.emailed_at, "created_at": inv.created_at, "updated_at": inv.updated_at}
     if detail:
         data["items"] = [{"id": i.id, "item_type": i.item_type, "description": i.description, "quantity": i.quantity, "unit_price": money_str(i.unit_price), "tax_amount": money_str(i.tax_amount), "total_price": money_str(i.total_price)} for i in inv.items]
     return data
@@ -428,5 +459,4 @@ def check_balance_due_reminders(db: Session) -> list[int]:
             db.rollback()
 
     return reminded
-
 

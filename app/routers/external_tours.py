@@ -172,7 +172,7 @@ def viator_sync_destinations(db: Session = Depends(get_db), _=Depends(require_an
     try:
         result = viator.sync_destinations(db)
     except ViatorNotConfigured as exc:
-        raise HTTPException(status_code=400, detail="Enable Viator and set an API key before syncing.") from exc
+        raise HTTPException(status_code=400, detail="Enable Viator and set its API key and Tourvaa affiliate PID before syncing.") from exc
     except ViatorError as exc:
         raise HTTPException(status_code=502, detail=f"Viator destination sync failed ({exc.code}).") from exc
     viator.clear_search_cache()

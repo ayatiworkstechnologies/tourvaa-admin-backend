@@ -15,7 +15,7 @@ import re
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from threading import Lock
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -134,9 +134,13 @@ def admin_enabled(db: Session) -> bool:
 
 
 def is_enabled(db: Session) -> bool:
-    """Both switches on and a key available."""
-    api_key, _ = credentials(db)
-    return bool(settings.VIATOR_ENABLED and admin_enabled(db) and api_key)
+    """Both switches, the API key, and Tourvaa's affiliate PID are required.
+
+    Without a PID, product discovery may work but outbound bookings cannot be
+    attributed to Tourvaa, so the public integration must fail closed.
+    """
+    api_key, pid = credentials(db)
+    return bool(settings.VIATOR_ENABLED and admin_enabled(db) and api_key and pid)
 
 
 def get_client(db: Session) -> ViatorClient:
@@ -609,13 +613,19 @@ def test_connection(db: Session) -> dict:
     try:
         client = get_client(db)
         sample = get_destination(db, "dubai")
-        client.search_products({
+        result = client.search_products({
             "filtering": {"destination": sample.provider_destination_id if sample else "828"},
             "pagination": {"start": 1, "count": 1},
             "currency": "USD",
         })
-        provider.last_connection_status = "connected"
-        provider.last_connection_message = f"Connected to the Viator {environment()} API"
+        _, configured_pid = credentials(db)
+        returned_pid = product_result_pid(result)
+        if returned_pid and returned_pid.casefold() != configured_pid.casefold():
+            provider.last_connection_status = "error"
+            provider.last_connection_message = "AFFILIATE_PID_MISMATCH"
+        else:
+            provider.last_connection_status = "connected"
+            provider.last_connection_message = f"Connected to the Viator {environment()} API"
     except ViatorNotConfigured:
         provider.last_connection_status = "disabled"
         provider.last_connection_message = "Viator is disabled or has no API key"
@@ -626,6 +636,23 @@ def test_connection(db: Session) -> dict:
     provider.last_connection_at = _now()
     db.commit()
     return admin_status(db)
+
+
+def product_result_pid(payload: dict) -> str | None:
+    """Read the affiliate PID Viator placed in a product result URL."""
+    products = payload.get("products") if isinstance(payload, dict) else None
+    if not isinstance(products, list):
+        return None
+    for product in products:
+        if not isinstance(product, dict):
+            continue
+        url = product.get("productUrl")
+        if not isinstance(url, str):
+            continue
+        pid = parse_qs(urlparse(url).query).get("pid", [None])[0]
+        if pid:
+            return pid.strip()
+    return None
 
 
 def admin_status(db: Session) -> dict:

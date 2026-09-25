@@ -45,6 +45,11 @@ def test_auto_invoice_type_reflects_outstanding_balance():
     assert invoices._invoice_type("tax_invoice", Decimal("50.00")) == "tax_invoice"
 
 
+def test_invoice_currency_metadata_normalizes_code_and_has_symbol_fallback():
+    assert invoices._currency_metadata(SimpleNamespace(currency="inr")) == ("INR", "₹")
+    assert invoices._currency_metadata(SimpleNamespace(currency="xyz")) == ("XYZ", "XYZ")
+
+
 def test_failed_smtp_does_not_mark_invoice_as_emailed(monkeypatch):
     invoice = SimpleNamespace(
         id=7,

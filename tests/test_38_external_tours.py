@@ -328,11 +328,13 @@ def test_sandbox_links_point_customers_at_the_live_site():
 
 
 def test_destination_link_matches_viator_day_trips_format():
-    from app.integrations.viator.service import day_trips_url
+    from app.integrations.viator.service import day_trips_url, product_result_pid
 
-    assert day_trips_url("723", "India", "P00244931", "search-form") == (
-        "https://www.viator.com/India-tours/Day-Trips-and-Excursions/d723-g5?pid=P00244931&mcid=42383&medium=link&campaign=search-form"
+    assert day_trips_url("723", "India", "P00000000", "search-form") == (
+        "https://www.viator.com/India-tours/Day-Trips-and-Excursions/d723-g5?pid=P00000000&mcid=42383&medium=link&campaign=search-form"
     )
     assert day_trips_url("743", "United Arab Emirates", "P1", "tourvaa-home").startswith(
         "https://www.viator.com/United-Arab-Emirates-tours/Day-Trips-and-Excursions/d743-g5?pid=P1&"
     )
+    assert product_result_pid({"products": [{"productUrl": "https://www.viator.com/x?pid=P00302821&mcid=42383"}]}) == "P00302821"
+    assert product_result_pid({"products": []}) is None

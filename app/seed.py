@@ -503,9 +503,9 @@ def seed_default_roles_and_permissions(db: Session):
             # Reports (supplier-scoped)
             "view-reports",
             "reports.view", "reports.supplier", "reports.export",
-            # Invoices (view + download)
-            "view-invoices",
-            "invoices.view", "invoices.download",
+            # Customer invoices are intentionally excluded. They contain the
+            # storefront total and Tourvaa markup; suppliers use their scoped
+            # ledger and payout views for financial records.
             # Notifications
             "view-notifications",
             "notifications.view",

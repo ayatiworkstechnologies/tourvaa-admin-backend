@@ -165,6 +165,10 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
         Spacer(1, 0.15 * cm),
         Paragraph(inv.get("tour_name", "-"), body_bold_style),
         Paragraph(f"Payment Method: {inv.get('payment_method', '-')}", body_style),
+        Paragraph(
+            f"Invoice Currency: {inv.get('currency', 'USD')} ({escape(str(inv.get('currency_symbol') or inv.get('currency', 'USD')))})",
+            body_style,
+        ),
     ]
     panels = Table([[billed_to, trip_details]], colWidths=[8.6 * cm, 8.6 * cm])
     panels.setStyle(TableStyle([
