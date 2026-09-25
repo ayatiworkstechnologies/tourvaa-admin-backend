@@ -270,8 +270,10 @@ class PricingPayload(BaseModel):
     supplier_price: float = Field(default=0.0, ge=0)
     final_price: float = Field(default=0.0, ge=0)
     # Admin-only markup percentage. The service ignores supplier-provided
-    # values and preserves/defaults the server-controlled markup instead.
-    admin_markup_value: float = Field(default=0.0, ge=0, le=100)
+    # values and preserves the server-controlled markup instead.
+    # None = no slab-specific markup: follow the platform default
+    # (default_admin_markup_percentage, services/markup.py).
+    admin_markup_value: float | None = Field(default=None, ge=0, le=100)
     currency: str = Field(default="USD", max_length=10)
     status: str = Field(default="active", max_length=20)
     # Optional explanation for the audit trail when Admin edits a Supplier's

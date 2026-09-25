@@ -193,6 +193,11 @@ class Tour(Base):
     # services.bookings.supplier_accept_booking's resolution order. Always
     # bound at write time to be >= the current platform minimum.
     commission_percentage = Column(Numeric(5, 2), nullable=True)
+    # Admin-only Tourvaa markup % for every pricing slab of this tour that has
+    # no markup of its own. Null = use the platform default
+    # (default_admin_markup_percentage). Order: slab > tour > default -- see
+    # services/markup.py. Never exposed to suppliers.
+    admin_markup_percentage = Column(Numeric(5, 2), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

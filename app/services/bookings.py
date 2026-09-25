@@ -1284,7 +1284,8 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # Tourvaa's admin markup from the resolved slab on top for what the
     # customer pays. price_start_per_person (no slab at all) is already a
     # storefront price, so it gets no further markup.
-    markup_percentage = money(slab.admin_markup_value or 0) if slab else money(0)
+    from app.services.markup import effective_markup_percentage
+    markup_percentage = money(effective_markup_percentage(db, slab)) if slab else money(0)
     supplier_adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
     supplier_child_unit = money(slab.child_price if slab else 0)
     price_source = "SLAB" if slab else "TOUR_BASE"
@@ -1713,7 +1714,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         pricing_slab_id=slab.id if slab else None,
         supplier_price=slab.adult_price if slab else None,
         supplier_currency=slab.currency if slab else None,
-        tourvaa_selling_price=(apply_markup(slab.adult_price, slab.admin_markup_value) if slab else None),
+        tourvaa_selling_price=(slab.storefront_adult_price if slab else None),
         display_currency=currency,
         exchange_rate=money(1),
         exchange_rate_source="same_currency",

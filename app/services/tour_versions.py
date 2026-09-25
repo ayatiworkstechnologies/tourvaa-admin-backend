@@ -313,10 +313,13 @@ def _replace_versioned_children(db: Session, tour: Tour, snapshot: dict) -> None
     # aren't part of PricingPayload's client-settable subset -- restore the
     # full row as-is so the exact previously-approved numbers come back,
     # rather than recomputing against the supplier's *current* commission.
+    # Only real columns are passed through: the serialized row also carries
+    # display-only keys (e.g. markup_follows_default) that aren't attributes.
+    pricing_columns = {c.key for c in TourPricing.__table__.columns} - {"id", "tour_id", "created_at", "updated_at"}
     db.query(TourPricing).filter(TourPricing.tour_id == tour.id).delete()
     db.flush()
     for item in snapshot.get("pricing") or []:
-        row = {k: v for k, v in item.items() if k not in ("id", "tour_id", "created_at", "updated_at")}
+        row = {k: v for k, v in item.items() if k in pricing_columns}
         db.add(TourPricing(tour_id=tour.id, **row))
 
     from app.services.tours import recalculate_price_start
@@ -336,12 +339,12 @@ def _recalculate_storefront_prices(db: Session, tour_id: int) -> None:
     # approval time as a safety net so approving keeps the storefront price
     # in sync even if a slab was touched between the edit and the approval.
     from app.models.tours import TourPricing
+    from app.services.markup import apply_storefront, default_markup_percentage
     from app.services.tours import recalculate_price_start
-    from app.utils.money import apply_markup
 
+    default = default_markup_percentage(db)
     for row in db.query(TourPricing).filter(TourPricing.tour_id == tour_id).all():
-        row.storefront_adult_price = apply_markup(max(0.0, float(row.adult_price)), row.admin_markup_value)
-        row.storefront_child_price = apply_markup(max(0.0, float(row.child_price)), row.admin_markup_value)
+        apply_storefront(db, row, default)
     recalculate_price_start(db, tour_id)
 
 

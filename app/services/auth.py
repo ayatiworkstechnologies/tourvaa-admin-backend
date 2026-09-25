@@ -26,6 +26,7 @@ from app.models.customers import Customer
 from app.models.suppliers import Supplier
 from app.models.agents import Agent
 from app.models.affiliates import Affiliate
+from app.models.cms import Country
 from app.models.sessions import LoginHistory, UserSession
 from app.services.sessions import create_session
 from app.utils.media import existing_storage_path
@@ -225,6 +226,16 @@ def register_unified_user(db: Session, data):
     if db.query(User).filter(or_(User.mobile_number == phone, User.phone == phone)).first():
         raise HTTPException(status_code=400, detail="Mobile number already exists")
 
+    # New clients send the selected database ID. The ISO fallback keeps older
+    # mobile/web clients working while still persisting a normalized country.
+    country = None
+    if data.country_id:
+        country = db.query(Country).filter(Country.id == data.country_id, Country.status == "active").first()
+        if not country:
+            raise HTTPException(status_code=400, detail="Choose a valid country")
+    else:
+        country = db.query(Country).filter(Country.country_code == data.country_iso, Country.status == "active").first()
+
     role_slug = {"CUSTOMER": "customer", "AGENT": "agent-reseller", "SUPPLIER": "supplier", "AFFILIATE": "affiliate"}[data.account_type]
     role = db.query(Role).filter(Role.slug == role_slug, Role.is_active == True).first()
     if not role:
@@ -237,7 +248,7 @@ def register_unified_user(db: Session, data):
         name=data.first_name,
         email=email,
         phone=phone,
-        country=data.country_iso,
+        country=country.country_name if country else data.country_iso,
         country_code=data.country_code,
         mobile_number=phone,
         password=None,
@@ -262,13 +273,13 @@ def register_unified_user(db: Session, data):
     ))
 
     if role_slug == "customer":
-        db.add(Customer(user_id=user.id, first_name=user.name, last_name="", full_name=user.name, email=email, phone=phone, status="inactive", email_verified=False))
+        db.add(Customer(user_id=user.id, first_name=user.name, last_name="", full_name=user.name, email=email, phone_country_code=data.country_code, phone=phone, country_id=country.id if country else None, country=country.country_name if country else data.country_iso, status="inactive", email_verified=False))
     elif role_slug == "supplier":
-        db.add(Supplier(user_id=user.id, supplier_name=user.name, status="inactive", approval_status="pending"))
+        db.add(Supplier(user_id=user.id, supplier_name=user.name, country_id=country.id if country else None, currency=country.currency_code if country else None, status="inactive", approval_status="pending"))
     elif role_slug == "affiliate":
-        db.add(Affiliate(user_id=user.id, name=user.name, email=email, phone=phone, status="inactive", approval_status="pending"))
+        db.add(Affiliate(user_id=user.id, name=user.name, email=email, phone=phone, country_id=country.id if country else None, status="inactive", approval_status="pending"))
     else:
-        db.add(Agent(user_id=user.id, agent_name=user.name, status="inactive", approval_status="pending"))
+        db.add(Agent(user_id=user.id, agent_name=user.name, country_id=country.id if country else None, status="inactive", approval_status="pending"))
 
     log_audit(
         db,
@@ -276,7 +287,7 @@ def register_unified_user(db: Session, data):
         action="registration",
         entity_type="auth",
         entity_id=user.id,
-        new_values={"email": user.email, "user_type": user.user_type, "account_status": user.account_status},
+        new_values={"email": user.email, "user_type": user.user_type, "country_id": country.id if country else None, "account_status": user.account_status},
     )
     db.commit()
     db.refresh(user)
@@ -1138,7 +1149,6 @@ def validate_reset_token(db: Session, token: str):
         raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
 
     return True
-
 
 
 

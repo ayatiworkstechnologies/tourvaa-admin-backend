@@ -194,9 +194,11 @@ def my_commission_calculator(
         # discount tier is defined against, matching how it is applied to a
         # real booking in _price_booking - reused here so the calculator
         # discount always lines up with checkout, not just the raw price.
+        from app.services.markup import effective_markup_percentage
+        markup_pct = effective_markup_percentage(db, slab)
         storefront_base = (
-            apply_markup(slab.adult_price, slab.admin_markup_value) * adults
-            + apply_markup(slab.child_price, slab.admin_markup_value) * children
+            apply_markup(slab.adult_price, markup_pct) * adults
+            + apply_markup(slab.child_price, markup_pct) * children
         )
         _tier, _amount, group_discount_ratio = _resolve_group_discount(db, tour_id, seat_travellers, storefront_base)
         currency = slab.currency or tour.currency or "USD"

@@ -365,7 +365,11 @@ def _ser_pricing(o: TourPricing) -> dict:
         # Admin-only (stripped for suppliers in routers.tours._for_actor):
         # Tourvaa's markup % and the resulting customer-facing price.
         "admin_markup_type": o.admin_markup_type or "percentage",
-        "admin_markup_value": o.admin_markup_value if o.admin_markup_value is not None else 0,
+        # None = no slab markup: inherits the tour markup, else the platform
+        # default (see services/markup.py); the storefront prices below
+        # already include whichever applies.
+        "admin_markup_value": o.admin_markup_value,
+        "markup_follows_default": o.admin_markup_value is None,
         "storefront_adult_price": o.storefront_adult_price if o.storefront_adult_price is not None else o.adult_price,
         "storefront_child_price": o.storefront_child_price if o.storefront_child_price is not None else o.child_price,
         "currency": o.currency, "status": o.status,
@@ -378,9 +382,10 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     supplier's adult_price/child_price:
       storefront_*_price     = *_price * (1 + admin markup%)   (customer pays)
       supplier_final_*_price = *_price * (1 - commission%)     (supplier gets)
-    The markup is admin-only: an admin payload sets it; a supplier payload
-    never can -- an edited slab keeps its markup and a new supplier slab
-    gets the platform default (default_admin_markup_percentage).
+    The markup is admin-only: an admin payload sets it (None = follow the
+    platform default, services/markup.py); a supplier payload never can --
+    an edited slab keeps its markup and a new supplier slab follows the
+    default.
     Commission is floor-enforced against
     resolve_effective_commission_percentage: Tour > Supplier > platform
     default), deducted from that same price to produce
@@ -396,7 +401,7 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     withholds anything while that review is pending.
     """
     from app.services.bookings import resolve_effective_commission_percentage
-    from app.services.settings import get_default_admin_markup_percentage
+    from app.services.markup import apply_storefront
     from app.services.supplier_scope import is_supplier_user
 
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
@@ -404,12 +409,12 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     if is_supplier_user(actor):
         # Suppliers can't choose the commission or the markup: keep the
         # admin-set values on an existing slab; a new slab gets the floor
-        # commission and the platform default markup.
+        # commission and follows the platform default markup (NULL).
         requested = o.commission_percentage if is_update else None
-        markup = float(o.admin_markup_value or 0) if is_update else float(get_default_admin_markup_percentage(db))
+        markup = o.admin_markup_value if is_update else None
     else:
         requested = data.commission_percentage
-        markup = float(data.admin_markup_value or 0)
+        markup = data.admin_markup_value  # None = follow the platform default
     commission = max(float(requested), float(floor)) if requested is not None else float(floor)
     o.commission_percentage = commission
     o.supplier_final_adult_price = round(max(0.0, float(o.adult_price) * (1 - commission / 100)), 2)
@@ -417,9 +422,7 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
 
     o.admin_markup_type = "percentage"
     o.admin_markup_value = markup
-    o.storefront_adult_price = apply_markup(max(0.0, float(o.adult_price)), markup)
-    o.storefront_child_price = apply_markup(max(0.0, float(o.child_price)), markup)
-    o.final_price = o.storefront_adult_price
+    apply_storefront(db, o)
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
@@ -485,12 +488,14 @@ def recalculate_price_start(db: Session, tour_id: int) -> None:
     it's always the lowest currently active, approved (storefront) adult
     selling price -- including Tourvaa's markup -- recomputed here whenever
     pricing changes or is approved."""
+    from app.services.markup import effective_markup_percentage
+
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     if not tour:
         return
     slabs = db.query(TourPricing).filter(TourPricing.tour_id == tour_id, TourPricing.status == "active").all()
     prices = [
-        s.storefront_adult_price if s.storefront_adult_price is not None else apply_markup(s.adult_price, s.admin_markup_value)
+        s.storefront_adult_price if s.storefront_adult_price is not None else apply_markup(s.adult_price, effective_markup_percentage(db, s))
         for s in slabs
     ]
     tour.price_start_per_person = min(prices) if prices else 0.0

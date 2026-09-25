@@ -210,9 +210,10 @@ class TourPricing(Base):
     #   storefront_*_price     = *_price * (1 + markup%)   <- customer pays
     #   supplier_final_*_price = *_price * (1 - commission%) <- supplier gets
     # Tourvaa earns markup + commission. 0 = storefront equals supplier price.
-    # See services/tours._apply_pricing_computation.
+    # NULL = no slab-specific markup: follows the platform default
+    # (default_admin_markup_percentage) -- see services/markup.py.
     admin_markup_type = Column(String(20), default="percentage", nullable=False)
-    admin_markup_value = Column(Numeric(12, 2), default=0, nullable=False)
+    admin_markup_value = Column(Numeric(12, 2), nullable=True)
     # Customer-facing prices, always derived from the fields above (never
     # client-supplied). Public pricing and checkout read these.
     storefront_adult_price = Column(Numeric(12, 2), nullable=True)

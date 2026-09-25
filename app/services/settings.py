@@ -915,6 +915,14 @@ def update_settings(
 
     commission_effects = _enforce_commission_bounds(db, old_values, values)
 
+    # A new default markup re-prices every slab that follows the default
+    # (no slab-specific markup), so the storefront changes immediately.
+    if "default_admin_markup_percentage" in values and str(old_values.get("default_admin_markup_percentage")) != str(values["default_admin_markup_percentage"]):
+        from app.services.markup import recompute_default_markup_slabs
+        db.flush()
+        repriced = recompute_default_markup_slabs(db)
+        commission_effects = {**(commission_effects or {}), "default_markup_repriced_slabs": repriced}
+
     log_audit(
         db,
         actor=actor,

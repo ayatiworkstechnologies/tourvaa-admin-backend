@@ -75,6 +75,7 @@ class UnifiedRegisterSchema(BaseModel):
     account_type: str
     first_name: str = Field(min_length=1, max_length=150)
     email: EmailStr
+    country_id: Optional[int] = Field(default=None, gt=0)
     country_iso: str = Field(min_length=2, max_length=2)
     country_code: str = Field(min_length=2, max_length=8)
     mobile_number: str = Field(min_length=6, max_length=20)

@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from app.main import app as _app  # noqa: F401
 from app.models.agents import Agent
 from app.models.customers import Customer
+from app.models.affiliates import Affiliate
+from app.models.cms import Country
 from app.models.roles import Role
 from app.models.suppliers import Supplier
 from app.models.users import User
@@ -23,6 +25,7 @@ def registration_data(account_type: str, **overrides):
         "account_type": account_type,
         "first_name": "Tourvaa User",
         "email": f"{account_type.lower()}@example.com",
+        "country_id": 91,
         "country_iso": "IN",
         "country_code": "+91",
         "mobile_number": "9876543210",
@@ -63,16 +66,18 @@ def test_role_policy_validation_returns_serializable_422():
         ("CUSTOMER", "customer", Customer, "not_required"),
         ("AGENT", "agent-reseller", Agent, "pending"),
         ("SUPPLIER", "supplier", Supplier, "pending"),
+        ("AFFILIATE", "affiliate", Affiliate, "pending"),
     ],
 )
 def test_every_role_starts_email_verification(monkeypatch, account_type, role_slug, profile_model, approval_status):
     data = UnifiedRegisterSchema(**registration_data(account_type))
     role = SimpleNamespace(id=7, slug=role_slug, is_active=True)
+    country = SimpleNamespace(id=91, country_name="India", country_code="IN", currency_code="INR", status="active")
     db = MagicMock()
 
     def query(model):
         result = MagicMock()
-        result.filter.return_value.first.return_value = role if model is Role else None
+        result.filter.return_value.first.return_value = role if model is Role else country if model is Country else None
         return result
 
     db.query.side_effect = query
@@ -90,6 +95,7 @@ def test_every_role_starts_email_verification(monkeypatch, account_type, role_sl
     added = [call.args[0] for call in db.add.call_args_list]
     profile = next(item for item in added if isinstance(item, profile_model))
     assert profile.status == "inactive"
+    assert profile.country_id == country.id
     if isinstance(profile, Agent):
         assert profile.approval_status == "pending"
     if isinstance(profile, Supplier):

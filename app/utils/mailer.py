@@ -4,7 +4,7 @@ import smtplib
 import threading
 from dataclasses import dataclass
 from email.message import EmailMessage
-from email.utils import formataddr, formatdate, make_msgid
+from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from html import unescape
 from typing import TYPE_CHECKING
 
@@ -159,6 +159,27 @@ def _plain_text_from_html(html: str) -> str:
     return text.strip() or "Please view this email in an HTML email client."
 
 
+def _single_line_header(value: str, field_name: str) -> str:
+    """Reject header injection and keep SMTP headers standards compliant."""
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        raise ValueError(f"{field_name} is required")
+    if "\r" in cleaned or "\n" in cleaned:
+        raise ValueError(f"{field_name} must be a single line")
+    return cleaned
+
+
+def _mailbox(value: str, field_name: str) -> str:
+    cleaned = _single_line_header(value, field_name)
+    display_name, address = parseaddr(cleaned)
+    if display_name or address != cleaned or "@" not in address:
+        raise ValueError(f"{field_name} must contain one email address")
+    local, domain = address.rsplit("@", 1)
+    if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        raise ValueError(f"{field_name} must contain a valid email address")
+    return address
+
+
 def _create_email_log(
     to_email: str,
     subject: str,
@@ -232,19 +253,22 @@ def _build_message(config: _SmtpConfig, to_email: str, subject: str, html: str, 
     if missing:
         raise RuntimeError(f"SMTP configuration is incomplete - missing: {', '.join(missing)}")
 
+    from_email = _mailbox(from_email, "from_email")
+    to_email = _mailbox(to_email, "to_email")
+    subject = _single_line_header(subject, "subject")
+    from_name = _single_line_header(config.from_name or "Tourvaa", "from_name")
+    reply_to = _mailbox(config.reply_to or from_email, "reply_to")
+
     message_id = make_msgid(domain=_domain_from_email(from_email))
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = formataddr((config.from_name, from_email))
+    message["From"] = formataddr((from_name, from_email))
     message["To"] = to_email
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = message_id
-    message["X-Mailer"] = "Tourvaa SMTP"
     message["X-Auto-Response-Suppress"] = "All"
-
-    reply_to = config.reply_to or from_email
-    if reply_to:
-        message["Reply-To"] = reply_to
+    message["Auto-Submitted"] = "auto-generated"
+    message["Reply-To"] = reply_to
 
     message.set_content(_plain_text_from_html(html))
     message.add_alternative(html, subtype="html")

@@ -44,9 +44,9 @@ def _pricing_row():
     )
 
 
-def _apply(row, *, is_supplier: bool, markup_in_payload: float, is_update: bool = True, default_markup: float = 5):
+def _apply(row, *, is_supplier: bool, markup_in_payload: float | None, is_update: bool = True, default_markup: float = 5, tour_markup: float | None = None):
     db = MagicMock()
-    db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(supplier=None)
+    db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(supplier=None, admin_markup_percentage=tour_markup)
     payload = PricingPayload(
         passenger_from=1,
         passenger_to=4,
@@ -83,12 +83,29 @@ def test_supplier_cannot_change_markup():
     assert row.storefront_adult_price == 250
 
 
-def test_new_supplier_slab_gets_default_markup():
+def test_new_supplier_slab_follows_default_markup():
     row = _pricing_row()
     _apply(row, is_supplier=True, markup_in_payload=90, is_update=False, default_markup=5)
 
-    assert row.admin_markup_value == 5
-    assert row.storefront_adult_price == 210
+    assert row.admin_markup_value is None       # follows the platform default
+    assert row.storefront_adult_price == 210    # 200 + default 5%
+
+
+def test_slab_without_markup_uses_tour_markup_before_default():
+    row = _pricing_row()
+    _apply(row, is_supplier=False, markup_in_payload=None, default_markup=5, tour_markup=15)
+
+    assert row.admin_markup_value is None
+    assert row.storefront_adult_price == 230    # 200 + tour 15% (not the 5% default)
+
+
+def test_admin_can_clear_markup_to_follow_default():
+    row = _pricing_row()  # had its own 25%
+    _apply(row, is_supplier=False, markup_in_payload=None, default_markup=10)
+
+    assert row.admin_markup_value is None
+    assert row.storefront_adult_price == 220    # 200 + default 10%
+    assert _ser_pricing(row)["markup_follows_default"] is True
 
 
 def test_automatic_discount_query_excludes_promo_codes():

@@ -1,4 +1,5 @@
 import html as _html
+import re
 
 
 def esc(value) -> str:
@@ -7,42 +8,53 @@ def esc(value) -> str:
 
 
 def base_email(title: str, intro: str, body: str, button_text: str | None = None, button_url: str | None = None):
+    """Render the shared, email-client-safe wrapper used by transactional mail."""
+    safe_title = esc(title)
+    preheader = re.sub(r"<[^>]+>", " ", f"{title}. {intro}")
+    preheader = re.sub(r"\s+", " ", _html.unescape(preheader)).strip()[:140]
     button = ""
 
     if button_text and button_url:
         button = f"""
         <tr>
           <td style="padding:28px 0 8px;">
-            <a href="{button_url}" style="display:inline-block;background:linear-gradient(135deg,#43A9F6,#2F9FE9);color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:14px 28px;border-radius:12px;box-shadow:0 4px 14px rgba(67,169,246,0.35);">
-              {button_text}
+            <a href="{esc(button_url)}" style="display:inline-block;background:#2F9FE9;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:14px 28px;border-radius:8px;">
+              {esc(button_text)}
             </a>
           </td>
         </tr>
         <tr>
           <td style="padding:10px 0 0;color:#8B93A1;font-size:12px;line-height:19px;">
             If the button does not work, copy and paste this link into your browser:<br />
-            <a href="{button_url}" style="color:#2F9FE9;word-break:break-all;">{button_url}</a>
+            <a href="{esc(button_url)}" style="color:#2F9FE9;word-break:break-all;">{esc(button_url)}</a>
           </td>
         </tr>
         """
 
     return f"""
     <!doctype html>
-    <html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <meta name="x-apple-disable-message-reformatting" />
+        <title>{safe_title}</title>
+      </head>
       <body style="margin:0;background:#F0F4F9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#121826;">
+        <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{esc(preheader)}</div>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F0F4F9;padding:40px 16px;">
           <tr>
             <td align="center">
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 2px 16px rgba(16,24,40,0.08);">
                 <tr>
-                  <td style="background:linear-gradient(135deg,#101828,#1D2939);padding:36px 36px 32px;color:#ffffff;">
+                  <td style="background:#101828;padding:36px 36px 32px;color:#ffffff;">
                     <table role="presentation" cellspacing="0" cellpadding="0">
                       <tr>
-                        <td style="width:36px;height:36px;background:linear-gradient(135deg,#43A9F6,#2F9FE9);border-radius:10px;text-align:center;vertical-align:middle;font-size:16px;font-weight:800;color:#ffffff;">T</td>
+                        <td style="width:36px;height:36px;background:#2F9FE9;border-radius:10px;text-align:center;vertical-align:middle;font-size:16px;font-weight:800;color:#ffffff;">T</td>
                         <td style="padding-left:10px;font-size:15px;font-weight:700;letter-spacing:0.2px;color:#ffffff;">Tourvaa</td>
                       </tr>
                     </table>
-                    <h1 style="margin:22px 0 0;font-size:24px;line-height:32px;font-weight:700;">{title}</h1>
+                    <h1 style="margin:22px 0 0;font-size:24px;line-height:32px;font-weight:700;">{safe_title}</h1>
                   </td>
                 </tr>
                 <tr>

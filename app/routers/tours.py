@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -360,13 +361,66 @@ def remove_gallery_image(tour_id: int, image_id: int, request: Request, db: Sess
 # suppliers ARE meant to see -- see TourPricingTab.tsx's "Your Price with
 # commission" column). Stripped here, at the API boundary, rather than only
 # hidden in the frontend.
-_ADMIN_ONLY_PRICING_FIELDS = ("admin_markup_type", "admin_markup_value", "storefront_adult_price", "storefront_child_price")
+_ADMIN_ONLY_PRICING_FIELDS = ("admin_markup_type", "admin_markup_value", "markup_follows_default", "storefront_adult_price", "storefront_child_price")
 
 
 def _for_actor(data: dict, actor: User) -> dict:
     if not is_supplier_user(actor):
         return data
     return {k: v for k, v in data.items() if k not in _ADMIN_ONLY_PRICING_FIELDS}
+
+
+class TourMarkupPayload(BaseModel):
+    # None = the tour uses the platform default markup.
+    admin_markup_percentage: float | None = Field(default=None, ge=0, le=100)
+
+
+def _tour_markup_payload(db: Session, tour) -> dict:
+    from app.services.markup import default_markup_percentage
+    return {
+        "tour_id": tour.id,
+        "admin_markup_percentage": tour.admin_markup_percentage,
+        "default_markup_percentage": default_markup_percentage(db),
+    }
+
+
+def _require_admin_for_markup(user: User) -> None:
+    # Markup is Tourvaa's margin -- never readable or settable by a supplier.
+    if is_supplier_user(user):
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+
+@router.get("/{tour_id}/markup")
+def get_tour_markup(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
+    """Admin-only: the tour's own markup (null = uses the default) and the
+    platform default, for the Publishable Price screen."""
+    from app.models.cms import Tour
+    _require_admin_for_markup(current_user)
+    tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    return {"status": "success", "data": _tour_markup_payload(db, tour)}
+
+
+@router.put("/{tour_id}/markup")
+def update_tour_markup(tour_id: int, data: TourMarkupPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    """Admin-only: set the tour's markup (null = back to the default) and
+    re-price its slabs that have no markup of their own."""
+    from app.models.cms import Tour
+    from app.services.audit import log_audit
+    from app.services.markup import set_tour_markup
+    _require_admin_for_markup(current_user)
+    tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    old = tour.admin_markup_percentage
+    repriced = set_tour_markup(db, tour, data.admin_markup_percentage)
+    log_audit(db, actor=current_user, action="update_tour_markup", entity_type="tour", entity_id=tour.id,
+              old_values={"admin_markup_percentage": str(old) if old is not None else None},
+              new_values={"admin_markup_percentage": data.admin_markup_percentage, "repriced_slabs": repriced}, request=request)
+    db.commit()
+    db.refresh(tour)
+    return {"status": "success", "data": _tour_markup_payload(db, tour)}
 
 
 @router.get("/{tour_id}/pricing")
