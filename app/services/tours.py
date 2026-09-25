@@ -3,12 +3,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, Request
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import log_audit
 from app.models.cms import Tour
+from app.utils.money import apply_markup
 from app.utils.operations import get_or_404
 from app.models.tours import (
     TourAccommodationExtra,
@@ -361,22 +362,25 @@ def _ser_pricing(o: TourPricing) -> dict:
         "supplier_price": o.supplier_price, "final_price": o.final_price,
         "supplier_final_adult_price": o.supplier_final_adult_price,
         "supplier_final_child_price": o.supplier_final_child_price,
-        # Retain these response fields for older clients while the database
-        # columns are phased out. The commission-only pricing model never
-        # adds a markup: customer price equals supplier-listed price.
-        "admin_markup_type": "percentage",
-        "admin_markup_value": 0.0,
-        "storefront_adult_price": o.adult_price,
-        "storefront_child_price": o.child_price,
+        # Admin-only (stripped for suppliers in routers.tours._for_actor):
+        # Tourvaa's markup % and the resulting customer-facing price.
+        "admin_markup_type": o.admin_markup_type or "percentage",
+        "admin_markup_value": o.admin_markup_value if o.admin_markup_value is not None else 0,
+        "storefront_adult_price": o.storefront_adult_price if o.storefront_adult_price is not None else o.adult_price,
+        "storefront_child_price": o.storefront_child_price if o.storefront_child_price is not None else o.child_price,
         "currency": o.currency, "status": o.status,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
 
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
-    """Compute the supplier payout and customer-facing price. The supplier's
-    adult_price/child_price is both the supplier-listed and customer-facing
-    price. Tourvaa commission is deducted from that base for settlement.
+    """Compute the supplier payout and customer-facing price from the
+    supplier's adult_price/child_price:
+      storefront_*_price     = *_price * (1 + admin markup%)   (customer pays)
+      supplier_final_*_price = *_price * (1 - commission%)     (supplier gets)
+    The markup is admin-only: an admin payload sets it; a supplier payload
+    never can -- an edited slab keeps its markup and a new supplier slab
+    gets the platform default (default_admin_markup_percentage).
     Commission is floor-enforced against
     resolve_effective_commission_percentage: Tour > Supplier > platform
     default), deducted from that same price to produce
@@ -385,8 +389,6 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     value is ignored -- a new slab gets the floor and an edited slab keeps
     its existing rate (raised to the floor if that has since gone up), so
     suppliers accept Tourvaa's commission rather than configure it.
-    Legacy markup fields are always reset to zero. They remain in the schema
-    temporarily for backward compatibility but never affect pricing.
     A supplier's price change takes effect immediately, like any other
     content edit (see maybe_resubmit_for_review) -- mark_repricing_required
     (called by create_pricing/update_pricing right after this) still records
@@ -394,27 +396,30 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     withholds anything while that review is pending.
     """
     from app.services.bookings import resolve_effective_commission_percentage
+    from app.services.settings import get_default_admin_markup_percentage
     from app.services.supplier_scope import is_supplier_user
 
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     floor = resolve_effective_commission_percentage(db, tour=tour, supplier=tour.supplier if tour else None)
     if is_supplier_user(actor):
-        # Suppliers can't choose the commission: keep the admin-set rate on
-        # an existing slab, otherwise use the floor.
-        existing = o.commission_percentage if is_update else None
-        requested = existing
+        # Suppliers can't choose the commission or the markup: keep the
+        # admin-set values on an existing slab; a new slab gets the floor
+        # commission and the platform default markup.
+        requested = o.commission_percentage if is_update else None
+        markup = float(o.admin_markup_value or 0) if is_update else float(get_default_admin_markup_percentage(db))
     else:
         requested = data.commission_percentage
+        markup = float(data.admin_markup_value or 0)
     commission = max(float(requested), float(floor)) if requested is not None else float(floor)
     o.commission_percentage = commission
-    o.supplier_final_adult_price = round(max(0.0, o.adult_price * (1 - commission / 100)), 2)
-    o.supplier_final_child_price = round(max(0.0, o.child_price * (1 - commission / 100)), 2)
-    o.final_price = o.adult_price
+    o.supplier_final_adult_price = round(max(0.0, float(o.adult_price) * (1 - commission / 100)), 2)
+    o.supplier_final_child_price = round(max(0.0, float(o.child_price) * (1 - commission / 100)), 2)
 
     o.admin_markup_type = "percentage"
-    o.admin_markup_value = 0.0
-    o.storefront_adult_price = round(max(0.0, o.adult_price), 2)
-    o.storefront_child_price = round(max(0.0, o.child_price), 2)
+    o.admin_markup_value = markup
+    o.storefront_adult_price = apply_markup(max(0.0, float(o.adult_price)), markup)
+    o.storefront_child_price = apply_markup(max(0.0, float(o.child_price)), markup)
+    o.final_price = o.storefront_adult_price
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
@@ -422,12 +427,12 @@ _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=Tr
 def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 
 # Only these are ever taken verbatim from the client payload -- final_price,
-# legacy admin-markup fields, and every
-# supplier_final_*/storefront_* field are exclusively computed in
-# _apply_pricing_computation, so a supplier (or a crafted request) can never
+# every supplier_final_*/storefront_* field and the admin markup are
+# exclusively computed/decided in _apply_pricing_computation (markup only
+# from an admin actor), so a supplier (or a crafted request) can never
 # smuggle in a markup or a hand-picked final price.
 _PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "child_price", "supplier_price", "currency", "status")
-_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "commission_percentage")
+_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "commission_percentage", "admin_markup_value", "storefront_adult_price", "storefront_child_price")
 
 
 def _normalize_pricing_to_usd(o: TourPricing) -> None:
@@ -478,17 +483,17 @@ def _pricing_field_diff(before: dict, o: TourPricing, actor: User, change_reason
 def recalculate_price_start(db: Session, tour_id: int) -> None:
     """Price From (Tour.price_start_per_person) is never client-editable --
     it's always the lowest currently active, approved (storefront) adult
-    selling price, recomputed here whenever pricing changes or is approved."""
+    selling price -- including Tourvaa's markup -- recomputed here whenever
+    pricing changes or is approved."""
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     if not tour:
         return
-    lowest = (
-        db.query(TourPricing)
-        .filter(TourPricing.tour_id == tour_id, TourPricing.status == "active")
-        .order_by(TourPricing.adult_price.asc())
-        .first()
-    )
-    tour.price_start_per_person = lowest.adult_price if lowest else 0.0
+    slabs = db.query(TourPricing).filter(TourPricing.tour_id == tour_id, TourPricing.status == "active").all()
+    prices = [
+        s.storefront_adult_price if s.storefront_adult_price is not None else apply_markup(s.adult_price, s.admin_markup_value)
+        for s in slabs
+    ]
+    tour.price_start_per_person = min(prices) if prices else 0.0
 
 
 def _assert_no_pricing_overlap(db: Session, tour_id: int, passenger_from: int, passenger_to: int, exclude_id: int | None = None):
@@ -513,7 +518,7 @@ def create_pricing(db: Session, tour_id: int, data: PricingPayload, actor: User,
     _require_tour(db, tour_id)
     if data.status == "active":
         _assert_no_pricing_overlap(db, tour_id, data.passenger_from, data.passenger_to)
-    o = TourPricing(tour_id=tour_id, admin_markup_type="percentage", admin_markup_value=0.0, **{key: getattr(data, key) for key in _PRICING_CLIENT_FIELDS})
+    o = TourPricing(tour_id=tour_id, **{key: getattr(data, key) for key in _PRICING_CLIENT_FIELDS})
     _normalize_pricing_to_usd(o)
     _apply_pricing_computation(db, tour_id, o, data, actor, is_update=False)
     db.add(o)
@@ -773,13 +778,33 @@ def _ser_discount(o: TourDiscount) -> dict:
         "usage_limit": o.usage_limit, "used_count": o.used_count,
         "minimum_booking_amount": o.minimum_booking_amount, "status": o.status,
         "funded_by": o.funded_by,
+        "show_on_website": bool(o.show_on_website) if o.show_on_website is not None else True,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
 
 
 def list_discounts(db: Session, tour_id: int) -> list[dict]:
+    """Tour-scoped discounts, each tagged with added_by ("supplier"/"admin",
+    or None for legacy rows with no creation history) from its version-1
+    TourDiscountHistory row -- so the view-only Discount History table can
+    show who added each discount."""
+    from app.services.supplier_scope import is_supplier_user
+
     _require_tour(db, tour_id)
-    return [_ser_discount(o) for o in db.query(TourDiscount).filter(TourDiscount.tour_id == tour_id).all()]
+    discounts = db.query(TourDiscount).filter(TourDiscount.tour_id == tour_id).all()
+    first_versions = {
+        h.discount_id: h
+        for h in db.query(TourDiscountHistory).filter(
+            TourDiscountHistory.discount_id.in_([d.id for d in discounts] or [0]),
+            TourDiscountHistory.version_number == 1,
+        )
+    }
+    result = []
+    for o in discounts:
+        creator = first_versions[o.id].changed_by_user if o.id in first_versions else None
+        added_by = None if creator is None else ("supplier" if is_supplier_user(creator) else "admin")
+        result.append({**_ser_discount(o), "added_by": added_by})
+    return result
 
 
 def _ser_discount_history(o: TourDiscountHistory) -> dict:
@@ -830,8 +855,9 @@ def list_discount_history(db: Session, disc_id: int) -> list[dict]:
 
 def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: User, request: Request | None = None) -> dict:
     _require_tour(db, tour_id)
+    data.discount_code = data.discount_code.strip().upper() if data.discount_code else None
     if data.discount_code:
-        existing = db.query(TourDiscount).filter(TourDiscount.discount_code == data.discount_code).first()
+        existing = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == data.discount_code).first()
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
     payload = data.model_dump()
@@ -855,8 +881,9 @@ def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPaylo
     it's just no longer restricted to only value/end-date like amend_discount
     below (kept for any existing callers, but the UI now uses this instead)."""
     o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
+    data.discount_code = data.discount_code.strip().upper() if data.discount_code else None
     if data.discount_code and data.discount_code != o.discount_code:
-        existing = db.query(TourDiscount).filter(TourDiscount.discount_code == data.discount_code, TourDiscount.id != disc_id).first()
+        existing = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == data.discount_code, TourDiscount.id != disc_id).first()
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
     for key, value in data.model_dump().items():
@@ -1000,10 +1027,11 @@ def list_all_discounts(db: Session, scope: str = "", search: str = "") -> list[d
 
 def create_global_discount(db: Session, data, actor: User, request: Request | None = None) -> dict:
     _validate_discount_scope(data)
+    data.discount_code = data.discount_code.strip().upper() if data.discount_code else None
     if data.tour_id:
         _require_tour(db, data.tour_id)
     if data.discount_code:
-        existing = db.query(TourDiscount).filter(TourDiscount.discount_code == data.discount_code).first()
+        existing = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == data.discount_code).first()
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
     o = TourDiscount(**data.model_dump())
@@ -1047,10 +1075,11 @@ def update_global_discount(db: Session, discount_id: int, data: GlobalDiscountPa
     if not o:
         raise HTTPException(status_code=404, detail="Discount not found")
     _validate_discount_scope(data)
+    data.discount_code = data.discount_code.strip().upper() if data.discount_code else None
     if data.tour_id:
         _require_tour(db, data.tour_id)
     if data.discount_code and data.discount_code != o.discount_code:
-        existing = db.query(TourDiscount).filter(TourDiscount.discount_code == data.discount_code, TourDiscount.id != discount_id).first()
+        existing = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == data.discount_code, TourDiscount.id != discount_id).first()
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
     for key, value in data.model_dump().items():
@@ -1122,6 +1151,7 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
         optional_activities=[BookingAddonPayload(id=i, quantity=1) for i in req.optional_activity_ids],
         extensions=[BookingAddonPayload(id=i, quantity=1) for i in req.tour_extension_ids],
     )
+    pricing_details: dict = {}
     (
         _tour, _calendar, adults, children, _total_travellers, currency, base_amount,
         activity_total, accommodation_total, extension_total, discount_amount, tax, surcharge,
@@ -1129,10 +1159,12 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
         _group_discount_amount, _group_discount_funded_by, _promo_discount_funded_by,
         service_fee, gateway_fee, _non_commissionable_addon_total, _cost_plus_customer_total,
         _cost_plus_supplier_total,
-    ) = _price_booking(db, booking_data)
+    ) = _price_booking(db, booking_data, pricing_details=pricing_details)
 
-    adult_unit = float(slab.adult_price if slab else tour.price_start_per_person)
-    child_unit = float(slab.child_price if slab else 0.0)
+    # Customer unit prices exactly as charged (markup and any date override
+    # included), straight from _price_booking.
+    adult_unit = float(pricing_details["adult_unit_price"])
+    child_unit = float(pricing_details["child_unit_price"])
 
     # Display-only discount metadata (name/code/type/value) -- purely
     # descriptive, doesn't affect discount_amount above, which already came
@@ -1141,7 +1173,7 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
     if float(discount_amount) > 0:
         row: _TourDiscount | None = None
         if req.promo_code and req.promo_code.strip():
-            row = db.query(_TourDiscount).filter(_TourDiscount.discount_code == req.promo_code.strip(), _TourDiscount.status == "active").first()
+            row = db.query(_TourDiscount).filter(func.upper(_TourDiscount.discount_code) == req.promo_code.strip().upper(), _TourDiscount.status == "active").first()
         else:
             row = find_best_discount_row(db, tour)
         if row:

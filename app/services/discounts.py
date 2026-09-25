@@ -19,6 +19,76 @@ from sqlalchemy.orm import Session
 from app.models.tours import TourDiscount
 
 
+def _scope_conditions(tour) -> list:
+    """SQL conditions for "this discount applies to `tour`": tour-specific,
+    platform-wide, or scoped to the tour's category/country (those rows
+    leave tour_id null)."""
+    conditions = [TourDiscount.tour_id == tour.id, TourDiscount.discount_scope == "all_tours"]
+    if tour.category_id:
+        conditions.append(and_(
+            TourDiscount.tour_id.is_(None),
+            TourDiscount.discount_scope == "category",
+            TourDiscount.category_id == tour.category_id,
+        ))
+    if tour.country_id:
+        conditions.append(and_(
+            TourDiscount.tour_id.is_(None),
+            TourDiscount.discount_scope == "country",
+            TourDiscount.country_id == tour.country_id,
+        ))
+    return conditions
+
+
+def _live_window_conditions(now: datetime) -> list:
+    """Started, and not past its end date. An end date is picked as a
+    calendar day in the admin (stored as that day's 00:00), so a discount
+    "valid till 31 Dec" stays live for all of 31 Dec. Same rule as the
+    promo-code check in services.bookings._resolve_discount."""
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return [
+        or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= now),
+        or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= today_start),
+    ]
+
+
+def list_public_offers(session: Session, tour) -> list[dict]:
+    """Live discounts a customer can see for `tour` on the tour page and at
+    checkout: automatic ones (no code) and promo codes the admin has marked
+    "show on website". Private codes are never listed (they still work when
+    typed). Exhausted codes (usage limit reached) are left out."""
+    if not tour or not tour.id:
+        return []
+    now = datetime.now(timezone.utc)
+    rows = (
+        session.query(TourDiscount)
+        .filter(
+            TourDiscount.status == "active",
+            *_live_window_conditions(now),
+            or_(*_scope_conditions(tour)),
+        )
+        .all()
+    )
+    offers = []
+    for d in rows:
+        requires_code = bool(d.discount_code)
+        if requires_code and not d.show_on_website:
+            continue
+        if d.usage_limit is not None and (d.used_count or 0) >= d.usage_limit:
+            continue
+        offers.append({
+            "label": d.discount_name,
+            "discount_name": d.discount_name,
+            "discount_type": d.discount_type,
+            "value": float(d.discount_value),
+            "requires_code": requires_code,
+            "discount_code": d.discount_code if requires_code else None,
+            "minimum_booking_amount": float(d.minimum_booking_amount) if d.minimum_booking_amount else None,
+            "valid_from": d.start_date.date().isoformat() if d.start_date else None,
+            "valid_to": d.end_date.date().isoformat() if d.end_date else None,
+        })
+    return offers
+
+
 def find_best_discount_row(session: Session, tour, lock: bool = False) -> TourDiscount | None:
     """Best active TourDiscount applicable to `tour`, across all three
     scopes. Highest resulting percent-off wins; ties favor the tour-specific
@@ -32,24 +102,13 @@ def find_best_discount_row(session: Session, tour, lock: bool = False) -> TourDi
     if not tour or not tour.id:
         return None
     now = datetime.now(timezone.utc)
-    scope_conditions = [TourDiscount.tour_id == tour.id, TourDiscount.discount_scope == "all_tours"]
-    if tour.category_id:
-        scope_conditions.append(and_(
-            TourDiscount.tour_id.is_(None),
-            TourDiscount.discount_scope == "category",
-            TourDiscount.category_id == tour.category_id,
-        ))
-    if tour.country_id:
-        scope_conditions.append(and_(
-            TourDiscount.tour_id.is_(None),
-            TourDiscount.discount_scope == "country",
-            TourDiscount.country_id == tour.country_id,
-        ))
     query = session.query(TourDiscount).filter(
         TourDiscount.status == "active",
-        or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= now),
-        or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= now),
-        or_(*scope_conditions),
+        # Promo-code discounts are opt-in; only code-free rows participate in
+        # automatic cart pricing.
+        TourDiscount.discount_code.is_(None),
+        *_live_window_conditions(now),
+        or_(*_scope_conditions(tour)),
     )
     if lock:
         query = query.with_for_update()

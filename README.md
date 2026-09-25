@@ -133,6 +133,8 @@ API runs at `http://127.0.0.1:8000`. Interactive docs at `http://127.0.0.1:8000/
 
 The dev server scopes auto-reload to `app/` and `alembic/`, ignoring `venv/`, `backups/`, caches, tests, SQL dumps, and seed scripts. This prevents noisy shutdown/restart cycles while running database cleanup or seed commands. To run without reload:
 
+File changes are debounced for one second so a multi-file save produces fewer overlapping Windows process restarts. The delay can be adjusted with `--reload-delay`, for example `python -m scripts.dev_server --reload-delay 2`.
+
 ```bash
 python -m scripts.dev_server --no-reload
 ```

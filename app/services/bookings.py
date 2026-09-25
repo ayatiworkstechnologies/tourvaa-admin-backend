@@ -32,10 +32,9 @@ from app.schemas.bookings import (
     SupplierDueDateUpdate,
 )
 from app.models.cms import City, Country, Tour
-from app.utils.money import as_aware_utc, money, money_str, utcnow
+from app.utils.money import apply_markup, as_aware_utc, money, money_str, utcnow
 from app.services.settings import (
     get_allow_agent_markup,
-    get_default_balance_payment_deadline_days,
     get_default_deposit_cutoff_days,
     get_default_deposit_percentage,
 )
@@ -117,7 +116,10 @@ def _parse_dt(value: str | None):
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        parsed = datetime.fromisoformat(f"{value}T00:00:00+00:00")
+        try:
+            parsed = datetime.fromisoformat(f"{value}T00:00:00+00:00")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid date '{value}' - use YYYY-MM-DD")
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
@@ -308,21 +310,34 @@ def compute_booking_financial_split(
     cost_plus_customer_amount=0,
     cost_plus_supplier_payable=0,
     commission_percentage=0,
+    supplier_base_amount=None,
 ) -> dict:
     """Pure supplier/Tourvaa money split for one booking, from amounts that
     were all resolved at pricing time (never from the tour's live slab).
 
     base_amount is the traveller amount actually charged (adult + child at
-    the resolved slab or date price, plus infants and single supplement).
+    the resolved storefront price -- supplier price plus Tourvaa's admin
+    markup -- plus infants and single supplement). supplier_base_amount is
+    the same traveller amount at the supplier's own prices (None = no
+    markup, i.e. equal to base_amount). The difference is Tourvaa's markup.
     Tax, service fee, gateway fee and agent markup are deliberately NOT
     inputs: they are customer-side buckets and never reach the supplier or
     the commission base.
+
+    Discounts are charged against the storefront price. The supplier-side
+    part of each discount is its share of the supplier price
+    (discount * supplier_base / base), split per funded_by as before; the
+    rest (the part that came off the markup) and any Tourvaa-funded part
+    is absorbed by Tourvaa. So a 10% SUPPLIER-funded discount cuts both the
+    customer price and the supplier's price by 10%, and with no markup this
+    reduces exactly to the previous behaviour.
 
     Invariant (when nothing is clamped at 0):
       supplier_net_payable + tourvaa_gross_revenue
         == base - group - promo + add-ons      (= final - tax - fees)
     """
     base_amount = money(base_amount or 0)
+    supplier_base = money(supplier_base_amount) if supplier_base_amount is not None else base_amount
     group = money(group_discount_amount or 0)
     promo = money(promo_discount_amount or 0)
     addons = money(addon_total or 0)
@@ -331,22 +346,25 @@ def compute_booking_financial_split(
     cp_supplier = money(cost_plus_supplier_payable or 0)
     pct = money(commission_percentage or 0)
 
-    group_supplier = _supplier_discount_share(group, group_discount_funded_by)
-    promo_supplier = _supplier_discount_share(promo, promo_discount_funded_by)
+    markup_amount = max(money(0), base_amount - supplier_base)
+    supplier_ratio = (supplier_base / base_amount) if base_amount > 0 and markup_amount > 0 else Decimal("1")
+    group_supplier = _supplier_discount_share(money(group * supplier_ratio), group_discount_funded_by)
+    promo_supplier = _supplier_discount_share(money(promo * supplier_ratio), promo_discount_funded_by)
     supplier_discount_share = money(group_supplier + promo_supplier)
     tourvaa_discount_share = money((group - group_supplier) + (promo - promo_supplier))
 
     commissionable_addons = max(money(0), addons - non_comm - cp_customer)
-    commission_base = max(money(0), base_amount - supplier_discount_share + commissionable_addons)
+    commission_base = max(money(0), supplier_base - supplier_discount_share + commissionable_addons)
     commission_amount = money(commission_base * pct / money(100))
     supplier_gross = money(commission_base + non_comm + cp_supplier)
     supplier_net = money(supplier_gross - commission_amount)
     cost_plus_margin = money(cp_customer - cp_supplier)
-    tourvaa_gross = money(commission_amount + cost_plus_margin - tourvaa_discount_share)
+    tourvaa_gross = money(commission_amount + markup_amount + cost_plus_margin - tourvaa_discount_share)
     return {
         "commission_percentage": pct,
         "commission_base_amount": commission_base,
         "commission_amount": commission_amount,
+        "admin_markup_amount": markup_amount,
         "supplier_gross_amount": supplier_gross,
         "supplier_net_payable": supplier_net,
         "supplier_discount_share_amount": supplier_discount_share,
@@ -370,6 +388,7 @@ def _booking_financial_split(booking: Booking, commission_percentage) -> dict:
         cost_plus_customer_amount=booking.cost_plus_customer_amount,
         cost_plus_supplier_payable=booking.cost_plus_supplier_payable,
         commission_percentage=commission_percentage,
+        supplier_base_amount=booking.supplier_base_amount,
     )
 
 
@@ -409,7 +428,7 @@ def _apply_commission_snapshot(db: Session, booking: Booking, pricing_details: d
     Tourvaa's commission is rejected rather than letting Tourvaa's net go
     negative."""
     if pricing_details:
-        for field in ("price_source", "date_price_id", "adult_unit_price", "child_unit_price", "infant_unit_price", "single_supplement_amount", "group_discount_base_amount", "group_discount_percentage"):
+        for field in ("price_source", "date_price_id", "admin_markup_percentage", "supplier_base_amount", "adult_unit_price", "child_unit_price", "infant_unit_price", "single_supplement_amount", "group_discount_base_amount", "group_discount_percentage"):
             if field in pricing_details:
                 setattr(booking, field, pricing_details[field])
 
@@ -421,6 +440,7 @@ def _apply_commission_snapshot(db: Session, booking: Booking, pricing_details: d
     split = _booking_financial_split(booking, commission_percentage)
     booking.tourvaa_commission_percentage = split["commission_percentage"]
     booking.tourvaa_commission_amount = split["commission_amount"]
+    booking.admin_markup_amount = split["admin_markup_amount"]
     booking.commission_base_amount = split["commission_base_amount"]
     booking.supplier_gross_amount = split["supplier_gross_amount"]
     booking.supplier_net_payable = split["supplier_net_payable"]
@@ -582,41 +602,31 @@ def _resolve_agent_invoice_email(db: Session, agent_id: int | None) -> str | Non
     return primary_contact.email if primary_contact else None
 
 
-def _balance_due_date(db: Session, booking: Booking) -> Optional[datetime]:
-    """When a deposit is outstanding, the date the remaining balance is due,
-    per the tour's balance_payment_deadline_days (days before departure),
-    falling back to the admin-configured default_balance_payment_deadline_days
-    setting only when the tour itself hasn't set one. None if the booking is
-    fully paid/unpaid or there's no departure date to count back from."""
-    # Agent "credit" bookings carry no deposit at all (amount_paid stays 0
-    # until the invoice is settled), and "pay_later" (Reserve Now) always
-    # uses the agent buffer-window due date rather than the tour's own
-    # balance_payment_deadline_days -- even once its reduced
-    # agent_reserve_deposit_percentage deposit has been paid, since that
-    # deposit was against the agent-specific rule, not the tour's customer-
-    # facing deposit terms. See services.tour_availability.agent_reserve_eligibility.
-    if booking.booking_source == "agent" and (
+def _balance_due_date(db: Session, booking: Booking):
+    """When a balance is outstanding on a deposit / Reserve Now booking, the
+    date it is due. None if the booking is fully paid, or has no tour or
+    departure date to count back from.
+
+    Client rule, the same for agents (Reserve Now) and customers (Secure
+    with a Deposit): the start of the Xth week before the tour's Minimum
+    Advance Booking cutoff -- the exact date checkout showed when the
+    booking was made (see tour_availability.deposit_balance_due_date).
+    Computed without regard to today's date, so it keeps returning the due
+    date after it has passed and notify_overdue_agent_balances can flag it."""
+    if money(booking.amount_pending or 0) <= 0:
+        return None
+    if booking.tour_id is None or booking.tour_start_date is None:
+        return None
+    is_agent_reserve = booking.booking_source == "agent" and (
         booking.agent_payment_method == "pay_later"
         or (booking.agent_payment_method == "credit" and money(booking.amount_paid or 0) <= 0)
-    ):
-        if money(booking.amount_pending or 0) <= 0:
-            return None
-        if booking.tour_id is None or booking.tour_start_date is None:
-            return None
-        from app.services.tour_availability import agent_reserve_eligibility
-        return agent_reserve_eligibility(db, booking.tour_id, booking.tour_start_date)["due_date"]
-
-    if money(booking.amount_paid or 0) <= 0 or money(booking.amount_pending or 0) <= 0:
+    )
+    # A customer booking with nothing paid yet has no deposit, so no balance
+    # schedule either -- it's simply unpaid.
+    if not is_agent_reserve and money(booking.amount_paid or 0) <= 0:
         return None
-    if booking.tour_start_date is None:
-        return None
-    tour = getattr(booking, "tour", None)
-    deadline_days = getattr(tour, "balance_payment_deadline_days", None) if tour else None
-    if deadline_days is None:
-        deadline_days = get_default_balance_payment_deadline_days(db)
-    if not deadline_days:
-        return None
-    return booking.tour_start_date - timedelta(days=deadline_days)
+    from app.services.tour_availability import deposit_balance_due_date
+    return deposit_balance_due_date(db, booking.tour_id, booking.tour_start_date)[0]
 
 
 def _deposit_config(db: Session, booking: Booking) -> Optional[dict]:
@@ -827,6 +837,9 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
                 "infant_unit_price": money_str(booking.infant_unit_price) if booking.infant_unit_price is not None else None,
                 "group_discount_base_amount": money_str(booking.group_discount_base_amount) if booking.group_discount_base_amount is not None else None,
                 "group_discount_percentage": str(booking.group_discount_percentage) if booking.group_discount_percentage is not None else None,
+                "admin_markup_percentage": money_str(booking.admin_markup_percentage) if booking.admin_markup_percentage is not None else None,
+                "supplier_base_amount": money_str(booking.supplier_base_amount) if booking.supplier_base_amount is not None else None,
+                "admin_markup_amount": money_str(booking.admin_markup_amount) if booking.admin_markup_amount is not None else None,
                 "commission_base_amount": money_str(booking.commission_base_amount) if booking.commission_base_amount is not None else None,
                 "supplier_gross_amount": money_str(booking.supplier_gross_amount) if booking.supplier_gross_amount is not None else None,
                 "supplier_discount_share_amount": money_str(booking.supplier_discount_share_amount) if booking.supplier_discount_share_amount is not None else None,
@@ -849,6 +862,56 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
                 "cost_plus_supplier_payable": money_str(booking.cost_plus_supplier_payable) if booking.cost_plus_supplier_payable is not None else None,
             })
     return data
+
+
+_SUPPLIER_HIDDEN_MONEY_FIELDS = ("amount_paid", "amount_pending", "agent_markup", "tax_amount", "surcharge_amount", "service_fee_amount", "gateway_fee_amount")
+
+
+def _supplier_safe(data: dict, booking: Booking) -> dict:
+    """A supplier's own view of a booking never shows the customer-side
+    money (which includes Tourvaa's admin markup, tax and fees): the headline
+    amounts are replaced by the supplier-price equivalents from the locked
+    snapshot (supplier_base_amount / supplier_gross_amount), and payment
+    amounts are dropped. Bookings without a snapshot fall back to the stored
+    amounts, which carried no markup."""
+    supplier_total = booking.supplier_gross_amount
+    if supplier_total is None and booking.supplier_net_payable is not None:
+        supplier_total = money(booking.supplier_net_payable) + money(booking.tourvaa_commission_amount or 0)
+    if supplier_total is not None:
+        for key in ("final_amount", "total_cost", "customer_selling_price", "agent_net_price"):
+            data[key] = money_str(supplier_total)
+    if booking.supplier_base_amount is not None:
+        data["base_amount"] = money_str(booking.supplier_base_amount)
+    for key in _SUPPLIER_HIDDEN_MONEY_FIELDS:
+        data[key] = None
+    if isinstance(data.get("price_breakdown"), dict):
+        pb = data["price_breakdown"]
+        for key in ("final_amount", "customer_selling_price", "agent_net_price"):
+            if key in pb and supplier_total is not None:
+                pb[key] = money_str(supplier_total)
+        if booking.supplier_base_amount is not None:
+            pb["base_amount"] = money_str(booking.supplier_base_amount)
+        for key in _SUPPLIER_HIDDEN_MONEY_FIELDS:
+            if key in pb:
+                pb[key] = None
+    if isinstance(data.get("pricing_snapshot"), dict):
+        data["pricing_snapshot"]["tourvaa_selling_price"] = None
+        data["pricing_snapshot"]["converted_customer_amount"] = None
+    if isinstance(data.get("payment_summary"), dict):
+        data["payment_summary"]["paid"] = None
+        data["payment_summary"]["pending"] = None
+    if "payments" in data:
+        data["payments"] = []
+    return data
+
+
+def serialize_booking_for_actor(db: Session, booking: Booking, actor: Optional[User], detail: bool = True) -> dict:
+    """serialize_booking with the per-role gates every actor-facing return
+    applies: supplier identity hidden from customers/agents, and customer-
+    side money (with Tourvaa's markup) hidden from suppliers."""
+    role = _user_role(actor)
+    data = serialize_booking(db, booking, detail=detail, hide_supplier_identity=role in ("customer", "agent"))
+    return _supplier_safe(data, booking) if role == "supplier" else data
 
 
 def serialize_traveller(t: BookingTraveller) -> dict:
@@ -966,8 +1029,8 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
         if consume:
             row.used_count = (row.used_count or 0) + 1
         return money(amount), (row.funded_by or "SUPPLIER")
-    code = promo_code.strip()
-    discount_query = db.query(TourDiscount).filter(TourDiscount.discount_code == code, TourDiscount.status == "active")
+    code = promo_code.strip().upper()
+    discount_query = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == code, TourDiscount.status == "active")
     if consume:
         # Row-locked so two concurrent bookings against the same promo code
         # can't both pass the usage_limit check below and both increment
@@ -976,10 +1039,16 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
     discount = discount_query.first()
     if not discount:
         raise HTTPException(status_code=400, detail="Invalid or inactive promo code")
+    # MySQL returns these DateTime columns naive (stored as UTC) -- normalize
+    # before comparing against the aware utcnow(), or this raises TypeError
+    # (a 500 at checkout for every dated promo code). End dates are picked as
+    # a calendar day in the admin, so a code "valid till 31 Dec" works all
+    # of 31 Dec -- same rule as discounts.find_best_discount_row.
     now = utcnow()
-    if discount.start_date and now < discount.start_date:
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if discount.start_date and now < as_aware_utc(discount.start_date):
         raise HTTPException(status_code=400, detail="Promo code is not yet active")
-    if discount.end_date and now > discount.end_date:
+    if discount.end_date and as_aware_utc(discount.end_date) < today_start:
         raise HTTPException(status_code=400, detail="Promo code has expired")
     if discount.usage_limit is not None and (discount.used_count or 0) >= discount.usage_limit:
         raise HTTPException(status_code=400, detail="Promo code usage limit has been reached")
@@ -1211,15 +1280,23 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # real charge currency explicitly when it differs from what they were
     # browsing in (see the booking page's price breakdown).
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
-    adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
-    child_unit = money(slab.child_price if slab else 0)
+    # Supplier prices first (slab, or a per-date override of it), then
+    # Tourvaa's admin markup from the resolved slab on top for what the
+    # customer pays. price_start_per_person (no slab at all) is already a
+    # storefront price, so it gets no further markup.
+    markup_percentage = money(slab.admin_markup_value or 0) if slab else money(0)
+    supplier_adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
+    supplier_child_unit = money(slab.child_price if slab else 0)
     price_source = "SLAB" if slab else "TOUR_BASE"
     date_override = _resolve_date_price(db, data.tour_id, calendar.tour_date if calendar else data.tour_start_date)
     if date_override:
-        adult_unit = money(date_override.adult_price)
-        child_unit = money(date_override.child_price)
+        supplier_adult_unit = money(date_override.adult_price)
+        supplier_child_unit = money(date_override.child_price)
         price_source = "DATE_OVERRIDE"
+    adult_unit = apply_markup(supplier_adult_unit, markup_percentage)
+    child_unit = apply_markup(supplier_child_unit, markup_percentage)
     per_person_amount = money(adult_unit * adults + child_unit * children)
+    supplier_per_person_amount = money(supplier_adult_unit * adults + supplier_child_unit * children)
     # Group discount is a percentage of the seat-paying (adult+child) price
     # only -- infants and the solo single-supplement below are resolved
     # after this call so the discount % is never applied to them.
@@ -1232,10 +1309,16 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # price, matching standard travel-industry practice.
     single_supplement_amount = money(getattr(tour, "single_supplement", 0) or 0) if tour and seat_travellers == 1 else money(0)
     base_amount = money(per_person_amount + infant_total + single_supplement_amount)
+    # Same traveller amount at the supplier's own prices (no markup): what
+    # settlement is based on (compute_booking_financial_split). Infants and
+    # the single supplement are tour-level amounts, not marked up.
+    supplier_base_amount = money(supplier_per_person_amount + infant_total + single_supplement_amount)
     if pricing_details is not None:
         pricing_details.update({
             "price_source": price_source,
             "date_price_id": date_override.id if date_override else None,
+            "admin_markup_percentage": markup_percentage,
+            "supplier_base_amount": supplier_base_amount,
             "adult_unit_price": adult_unit,
             "child_unit_price": child_unit,
             "infant_unit_price": infant_unit,
@@ -1465,8 +1548,7 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
         query = query.filter(Booking.booking_status == booking_status.strip().lower())
     query = query.order_by(Booking.id.asc() if sort_by == "oldest" else Booking.id.desc())
     total = query.count()
-    hide_supplier_identity = _user_role(actor) in ("customer", "agent")
-    items = [serialize_booking(db, b, hide_supplier_identity=hide_supplier_identity) for b in query.offset((page - 1) * limit).limit(limit).all()]
+    items = [serialize_booking_for_actor(db, b, actor, detail=False) for b in query.offset((page - 1) * limit).limit(limit).all()]
     return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit)), "status_counts": status_counts}
 
 
@@ -1475,11 +1557,13 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
     _ensure_booking_access(booking, actor)
     log_audit(db, actor=actor, action="view_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit()
-    return serialize_booking(
+    role = _user_role(actor)
+    data = serialize_booking(
         db, booking, detail=True,
-        include_supplier_breakdown=_user_role(actor) == "admin",
-        hide_supplier_identity=_user_role(actor) in ("customer", "agent"),
+        include_supplier_breakdown=role == "admin",
+        hide_supplier_identity=role in ("customer", "agent"),
     )
+    return _supplier_safe(data, booking) if role == "supplier" else data
 
 
 def _validate_customer_travellers(data: BookingCreate, adults: int, children: int) -> None:
@@ -1629,7 +1713,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         pricing_slab_id=slab.id if slab else None,
         supplier_price=slab.adult_price if slab else None,
         supplier_currency=slab.currency if slab else None,
-        tourvaa_selling_price=(slab.adult_price if slab else None),
+        tourvaa_selling_price=(apply_markup(slab.adult_price, slab.admin_markup_value) if slab else None),
         display_currency=currency,
         exchange_rate=money(1),
         exchange_rate_source="same_currency",
@@ -1750,7 +1834,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         background_tasks=background_tasks,
     )
 
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdate) -> None:
@@ -1934,7 +2018,7 @@ def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Opt
 
     log_audit(db, actor=actor, action="update_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -1962,7 +2046,7 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
             booking.customer.email,
         )
 
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def _cancel_booking_core(
@@ -2075,7 +2159,7 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
 
     _email_admins_booking_event(db, "Booking cancelled", f"Booking {booking.booking_code} was cancelled. Reason: {data.reason or 'Cancelled'}", booking)
 
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 OFFLINE_PAYMENT_HOLD_DAYS = 7
@@ -2218,14 +2302,14 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
             booking.supplier.user.email,
         )
 
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecisionRequest, actor: User, request: Request | None = None) -> dict:
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _start_supplier_decision(booking, "accepted"):
-        return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+        return serialize_booking_for_actor(db, booking, actor)
     booking.supplier_acceptance_status = "accepted"
     _set_status(db, booking, "confirmed", actor, "supplier", data.reason or "Supplier accepted booking")
 
@@ -2302,7 +2386,7 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
 
     _email_admins_booking_event(db, "Supplier accepted booking", f"Supplier accepted booking {booking.booking_code}.", booking)
 
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def supplier_set_due_date(db: Session, booking_id: int, data: SupplierDueDateUpdate, actor: User, request: Request | None = None) -> dict:
@@ -2318,14 +2402,14 @@ def supplier_set_due_date(db: Session, booking_id: int, data: SupplierDueDateUpd
     booking.payment_due_date = due_date
     log_audit(db, actor=actor, action="supplier_set_due_date", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(booking)
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisionRequest, actor: User, request: Request | None = None) -> dict:
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _start_supplier_decision(booking, "declined"):
-        return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+        return serialize_booking_for_actor(db, booking, actor)
     pending_before_decline = money(booking.amount_pending)
     booking.supplier_acceptance_status = "declined"
     _set_status(db, booking, "declined", actor, "supplier", data.reason or "Supplier declined booking")
@@ -2366,7 +2450,7 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
 
     _email_admins_booking_event(db, "Supplier declined booking", f"Supplier declined booking {booking.booking_code}. Reason: {data.reason or 'Declined by supplier'}", booking)
 
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def supplier_start_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
@@ -2376,7 +2460,7 @@ def supplier_start_booking(db: Session, booking_id: int, reason: str | None, act
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _validate_supplier_lifecycle_transition(booking, "ongoing"):
-        return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+        return serialize_booking_for_actor(db, booking, actor)
 
     old_values = serialize_booking(db, booking)
     transition_reason = reason or "Tour started by supplier"
@@ -2402,7 +2486,7 @@ def supplier_start_booking(db: Session, booking_id: int, reason: str | None, act
         )
     _email_agent_booking_status(db, booking, "ongoing", transition_reason)
     _email_admins_booking_event(db, "Tour started", f"Supplier started tour for booking {booking.booking_code}.", booking)
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, actor: User, request: Request | None = None) -> dict:
@@ -2411,7 +2495,7 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
     booking = get_booking_by_id(db, booking_id, for_update=True)
     _ensure_booking_access(booking, actor)
     if not _validate_supplier_lifecycle_transition(booking, "completed"):
-        return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+        return serialize_booking_for_actor(db, booking, actor)
     old_values = serialize_booking(db, booking)
     _set_status(db, booking, "completed", actor, "supplier", reason or "Tour completed by supplier")
     log_audit(db, actor=actor, action="supplier_complete_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
@@ -2437,7 +2521,7 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
         )
     _email_agent_booking_status(db, booking, "completed", reason or "Tour completed")
     _email_admins_booking_event(db, "Tour completed", f"Supplier marked booking {booking.booking_code} as completed.", booking)
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: User, request: Request | None = None) -> dict:
@@ -2472,7 +2556,7 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
         )
     _email_agent_booking_status(db, booking, "cancelled", reason)
     _email_admins_booking_event(db, "Supplier cancelled booking", f"Supplier cancelled booking {booking.booking_code}. Reason: {reason}", booking)
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def supplier_postpone_booking(
@@ -2560,7 +2644,7 @@ def supplier_postpone_booking(
         )
     _email_agent_booking_status(db, booking, "postponed", reason)
     _email_admins_booking_event(db, "Booking postponed", f"Supplier postponed booking {booking.booking_code}. Reason: {reason}", booking)
-    return serialize_booking(db, booking, detail=True, hide_supplier_identity=_user_role(actor) in ("customer", "agent"))
+    return serialize_booking_for_actor(db, booking, actor)
 
 
 def supplier_notify_parties(db: Session, booking_id: int, message: str, notify_customer: bool, notify_agent: bool, actor: User, request: Request | None = None) -> dict:

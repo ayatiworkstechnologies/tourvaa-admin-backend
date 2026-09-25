@@ -110,6 +110,11 @@ DEFAULT_SETTINGS = [
     # Moved to the "pricing" group (was "booking") per the Pricing & Commission
     # / Booking Rules settings-screen split.
     {"key": "supplier_commission_percentage", "label": "Default Tourvaa Commission (%)", "value": "10", "group": "pricing", "is_public": True},
+    # Tourvaa's admin markup (%) added on top of the supplier price to give
+    # the storefront price. Pre-filled on every new pricing slab (a slab a
+    # supplier creates gets exactly this; an admin can change it per slab).
+    # Admin-only -- never public, never shown to suppliers.
+    {"key": "default_admin_markup_percentage", "label": "Default Tourvaa Markup (%)", "value": "0", "group": "pricing", "is_public": False},
     # Platform-wide fallback deposit percentage, used only when a tour has no
     # deposit_percentage/booking_deposit of its own set (Tour.deposit_type
     # etc. - see models/cms.py). A supplier's own per-tour deposit config

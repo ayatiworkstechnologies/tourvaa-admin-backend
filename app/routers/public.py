@@ -25,7 +25,6 @@ from app.utils.ratelimit import check_rate_limit
 from app.models.tours import (
     TourAccommodationExtra,
     TourCalendar,
-    TourDiscount,
     TourExtension,
     TourExclusion,
     TourGalleryImage,
@@ -526,21 +525,11 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     activities = db.query(TourOptionalActivity).filter(TourOptionalActivity.tour_id == tour_id, TourOptionalActivity.status == "active").all()
     accommodations = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour_id, TourAccommodationExtra.status == "active").all()
     extensions = db.query(TourExtension).filter(TourExtension.tour_id == tour_id, TourExtension.status == "active").all()
-    # status == "active" alone isn't enough - an admin-created discount stays
-    # "active" across its whole lifecycle, so a since-expired or not-yet-started
-    # offer would otherwise still be advertised here even though
-    # _resolve_discount (bookings.py) already rejects it at actual checkout.
-    _discount_now = datetime.now(timezone.utc)
-    discounts = (
-        db.query(TourDiscount)
-        .filter(
-            TourDiscount.tour_id == tour_id,
-            TourDiscount.status == "active",
-            or_(TourDiscount.start_date.is_(None), TourDiscount.start_date <= _discount_now),
-            or_(TourDiscount.end_date.is_(None), TourDiscount.end_date >= _discount_now),
-        )
-        .all()
-    )
+    # Live offers for this tour (tour-specific, category/country and
+    # site-wide): automatic discounts plus promo codes marked "show on
+    # website". Same scope/date rules as checkout (services.discounts).
+    from app.services.discounts import list_public_offers
+    discounts = list_public_offers(db, tour)
     calendar = (
         db.query(TourCalendar)
         .filter(TourCalendar.tour_id == tour_id, TourCalendar.tour_date >= datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
@@ -650,7 +639,9 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "child_price": float(a.child_price_per_person) if a.child_price_per_person else None, "infant_price": float(a.infant_price_per_person) if a.infant_price_per_person else None, "pricing_mode": a.pricing_mode or "flat", "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],
             "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other", "image": (e.extension_tour.banner_image or None) if e.extension_tour else None} for e in extensions],
-            "discounts": [{"label": d.discount_name, "discount_type": d.discount_type, "value": float(d.discount_value), "valid_from": str(d.start_date) if d.start_date else None, "valid_to": str(d.end_date) if d.end_date else None} for d in discounts],
+            # requires_code=False -> applied automatically; True -> the
+            # customer applies discount_code at checkout.
+            "discounts": discounts,
             "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": max(0, c.available_seats - c.booked_seats), "status": c.status} for c in calendar],
             "min_advance_booking_days": availability_config.min_advance_booking_days if availability_config else 0,
             "agent_no_deposit_buffer_weeks": availability_config.agent_no_deposit_buffer_weeks if availability_config else 4,

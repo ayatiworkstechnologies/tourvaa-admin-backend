@@ -16,6 +16,14 @@ def money(value: Any = 0) -> Decimal:
     return amount.quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
 
 
+def apply_markup(supplier_amount: Any, markup_percentage: Any) -> Decimal:
+    """Customer (storefront) price from a supplier price and Tourvaa's admin
+    markup: supplier_amount * (1 + markup% / 100), to 2dp. The one formula
+    used by the pricing slab, the public price ladder and booking pricing."""
+    pct = Decimal(str(markup_percentage or 0))
+    return money(money(supplier_amount) * (Decimal("1") + pct / Decimal("100")))
+
+
 def money_str(value: Any = 0) -> str:
     return format(money(value), ".2f")
 

@@ -130,14 +130,23 @@ class Booking(Base):
     # single supplement), and the effective percentage it removed.
     group_discount_base_amount = Column(Numeric(12, 2), nullable=True)
     group_discount_percentage = Column(Numeric(7, 4), nullable=True)
+    # Tourvaa admin markup snapshot. base_amount / adult_unit_price etc. are
+    # the storefront (marked-up) amounts the customer was charged;
+    # supplier_base_amount is the same traveller amount at the supplier's
+    # own prices, which settlement uses. admin_markup_amount =
+    # base_amount - supplier_base_amount (before discounts). Null on bookings
+    # made before the markup existed = no markup.
+    admin_markup_percentage = Column(Numeric(5, 2), nullable=True)
+    supplier_base_amount = Column(Numeric(12, 2), nullable=True)
+    admin_markup_amount = Column(Numeric(12, 2), nullable=True)
     commission_base_amount = Column(Numeric(12, 2), nullable=True)
     supplier_gross_amount = Column(Numeric(12, 2), nullable=True)
     # How the group + promo discounts were split between supplier and
     # Tourvaa according to their funded_by values.
     supplier_discount_share_amount = Column(Numeric(12, 2), nullable=True)
     tourvaa_discount_share_amount = Column(Numeric(12, 2), nullable=True)
-    # Commission + cost-plus margin - Tourvaa-funded discounts, before any
-    # agent/affiliate payout.
+    # Commission + admin markup + cost-plus margin - Tourvaa-absorbed
+    # discounts, before any agent/affiliate payout.
     tourvaa_gross_revenue = Column(Numeric(12, 2), nullable=True)
     agent_commission_base_amount = Column(Numeric(12, 2), nullable=True)
     affiliate_commission_base_amount = Column(Numeric(12, 2), nullable=True)

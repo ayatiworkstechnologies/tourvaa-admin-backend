@@ -234,29 +234,43 @@ def assert_meets_advance_booking_window(db: Session, tour_id: int, tour_date: da
         )
 
 
+def deposit_balance_due_date(db: Session, tour_id: int, travel_date: datetime | date) -> tuple[date, int]:
+    """The balance due date for a deposit/Reserve Now booking on this tour
+    and travel date, plus the buffer weeks (X) it was derived from.
+
+    Client rule: the due date is the start of the Xth week before the
+    Minimum Advance Booking cutoff, i.e.
+        cutoff_date = travel_date - min_advance_booking_days
+        due_date    = cutoff_date - X weeks
+    so the balance always falls due before the tour stops taking bookings.
+
+    Independent of today's date on purpose: _deposit_window uses it to decide
+    eligibility at booking time, and services.bookings._balance_due_date
+    uses it afterwards (including once the date has passed, so overdue
+    balances are still detected)."""
+    o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
+    buffer_weeks = o.agent_no_deposit_buffer_weeks if o else 4
+    advance_days = o.min_advance_booking_days if o else 0
+    cutoff_date = _as_date(travel_date) - timedelta(days=advance_days or 0)
+    return cutoff_date - timedelta(weeks=buffer_weeks), buffer_weeks
+
+
 def _deposit_window(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
     """Shared eligibility window for "pay a deposit now, balance later"
     across BOTH agent (Reserve Now) and customer (Secure with a Deposit)
     booking flows - one rule, not two: eligible only if today is more than
-    agent_no_deposit_buffer_weeks weeks before the tour's min-advance-booking
-    cutoff date (travel_date - min_advance_booking_days). When eligible, the
-    balance is due that many weeks before the travel date. The buffer-weeks/
-    min-advance-days knobs live on TourAvailabilityConfig and were
-    originally agent-only naming, but the client's rule is explicitly the
-    same window for customers too (see agent_reserve_eligibility /
-    customer_deposit_eligibility below, which each just attach their own
-    role-specific deposit amount to this shared window)."""
-    o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
-    buffer_weeks = o.agent_no_deposit_buffer_weeks if o else 4
-    advance_days = o.min_advance_booking_days if o else 0
-    buffer_days = buffer_weeks * 7
-
-    travel = _as_date(travel_date)
-    cutoff_date = travel - timedelta(days=advance_days)
-    eligible = (cutoff_date - date.today()).days > buffer_days
-    due_date = travel - timedelta(days=buffer_days) if eligible else None
-
-    return {"eligible": eligible, "due_date": due_date, "buffer_weeks": buffer_weeks}
+    agent_no_deposit_buffer_weeks (X) weeks before the tour's
+    min-advance-booking cutoff date (travel_date - min_advance_booking_days),
+    i.e. only while the balance due date (deposit_balance_due_date) is still
+    in the future. The buffer-weeks/min-advance-days knobs live on
+    TourAvailabilityConfig and were originally agent-only naming, but the
+    client's rule is explicitly the same window for customers too (see
+    agent_reserve_eligibility / customer_deposit_eligibility below, which
+    each just attach their own role-specific deposit amount to this shared
+    window)."""
+    due_date, buffer_weeks = deposit_balance_due_date(db, tour_id, travel_date)
+    eligible = due_date > date.today()
+    return {"eligible": eligible, "due_date": due_date if eligible else None, "buffer_weeks": buffer_weeks}
 
 
 def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime | date) -> dict:

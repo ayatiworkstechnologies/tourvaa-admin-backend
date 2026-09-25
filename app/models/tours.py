@@ -204,16 +204,17 @@ class TourPricing(Base):
     # Supplier > platform minimum) - null means "use that resolved floor
     # directly". supplier_final_*_price = *_price * (1 - this/100).
     commission_percentage = Column(Numeric(5, 2), nullable=True)
-    # DEPRECATED: admin_markup_type/admin_markup_value are no longer applied.
-    # Confirmed business model is commission-deduction only: the supplier's
-    # own adult_price/child_price IS the customer/storefront price;
-    # supplier_final = adult_price * (1 - commission%) is Tourvaa's only
-    # margin lever. Kept as columns for backward compatibility with existing
-    # rows/API consumers -- see services/tours._apply_pricing_computation.
+    # Tourvaa's admin-only markup (percentage) on top of the supplier's
+    # adult_price/child_price. Never visible to or settable by suppliers
+    # (stripped in routers.tours._for_actor, ignored from supplier payloads).
+    #   storefront_*_price     = *_price * (1 + markup%)   <- customer pays
+    #   supplier_final_*_price = *_price * (1 - commission%) <- supplier gets
+    # Tourvaa earns markup + commission. 0 = storefront equals supplier price.
+    # See services/tours._apply_pricing_computation.
     admin_markup_type = Column(String(20), default="percentage", nullable=False)
     admin_markup_value = Column(Numeric(12, 2), default=0, nullable=False)
-    # Deprecated compatibility mirrors of adult_price/child_price. Checkout
-    # reads the canonical adult/child fields directly.
+    # Customer-facing prices, always derived from the fields above (never
+    # client-supplied). Public pricing and checkout read these.
     storefront_adult_price = Column(Numeric(12, 2), nullable=True)
     storefront_child_price = Column(Numeric(12, 2), nullable=True)
     currency = Column(String(10), default="USD", nullable=False)
@@ -226,8 +227,9 @@ class TourDatePrice(Base):
     """A per-date selling-price override for a tour, layered on top of the
     normal TourPricing slab -- e.g. a peak-season surcharge or off-peak
     discount for a specific departure date. When present for a booking's
-    date, adult_price/child_price here are used verbatim as the customer
-    price (no markup), Tourvaa's commission is deducted from them, and the
+    date, adult_price/child_price here replace the slab's supplier prices
+    (the resolved slab's admin markup is still added on top for the
+    customer price), Tourvaa's commission is deducted from them, and the
     booking snapshots price_source=DATE_OVERRIDE plus the resolved unit
     prices so settlement never re-reads this row."""
     __tablename__ = "tour_date_prices"
@@ -387,6 +389,12 @@ class TourDiscount(Base):
     # so this only matters for future Tourvaa-net-revenue accounting -- it is
     # still snapshotted onto the booking (Booking.promo_discount_funded_by).
     funded_by = Column(String(20), default="SUPPLIER", nullable=False, server_default="SUPPLIER")
+    # Promo codes only: list this code publicly (tour page + checkout
+    # "Available offers") so customers can apply it with one click. Off =
+    # private code that works only when typed (newsletter, partner, agent
+    # codes). Automatic (code-free) discounts are always shown. See
+    # services.discounts.list_public_offers.
+    show_on_website = Column(Boolean, default=True, nullable=False, server_default=sa_true())
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

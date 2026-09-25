@@ -169,7 +169,7 @@ def my_commission_calculator(
     from app.models.tours import TourPricing
     from app.models.cms import Tour
     from app.services.bookings import _resolve_group_discount, compute_supplier_commission_breakdown, resolve_effective_commission_percentage
-    from app.utils.money import money
+    from app.utils.money import apply_markup, money
 
     supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
     if not supplier:
@@ -194,7 +194,10 @@ def my_commission_calculator(
         # discount tier is defined against, matching how it is applied to a
         # real booking in _price_booking - reused here so the calculator
         # discount always lines up with checkout, not just the raw price.
-        storefront_base = money(slab.adult_price) * adults + money(slab.child_price) * children
+        storefront_base = (
+            apply_markup(slab.adult_price, slab.admin_markup_value) * adults
+            + apply_markup(slab.child_price, slab.admin_markup_value) * children
+        )
         _tier, _amount, group_discount_ratio = _resolve_group_discount(db, tour_id, seat_travellers, storefront_base)
         currency = slab.currency or tour.currency or "USD"
     else:

@@ -78,6 +78,24 @@ def _money(value):
     return money_str(value or 0)
 
 
+def _supplier_booking_value(b: Booking):
+    """What a booking is worth at the supplier's own prices (the locked
+    snapshot's supplier gross), for supplier-facing reports -- the customer
+    total includes Tourvaa's admin markup, which suppliers never see.
+    Bookings without a snapshot carried no markup, so final_amount is used."""
+    if b.supplier_gross_amount is not None:
+        return b.supplier_gross_amount
+    return b.final_amount
+
+
+def _booking_amount_column(actor: User | None):
+    """Per-booking amount to sum in a report: supplier gross for supplier
+    actors (see _supplier_booking_value), customer final amount otherwise."""
+    if _report_role(actor) == "supplier":
+        return func.coalesce(Booking.supplier_gross_amount, Booking.final_amount)
+    return Booking.final_amount
+
+
 def _amount_to_usd(amount, currency: str | None) -> float:
     """Booking.currency is always the tour/slab's currency, which is forced
     to USD at save time for any booking tied to a real Tour (see
@@ -187,7 +205,7 @@ def summary(params: dict = Depends(_period_params), db: Session = Depends(get_db
 @router.get("/bookings")
 def booking_report(params: dict = Depends(_period_params), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.view", "reports.admin"))):
     query = _scope_bookings(_apply_range(db.query(Booking), Booking.created_at, params["start"], params["end"]), db, current_user)
-    rows = query.with_entities(Booking.booking_status, Booking.currency, Booking.final_amount).all()
+    rows = query.with_entities(Booking.booking_status, Booking.currency, _booking_amount_column(current_user)).all()
     agg: dict[str, dict] = {}
     for status, currency, amount in rows:
         bucket = agg.setdefault(status, {"count": 0, "amount": 0.0})
@@ -690,7 +708,9 @@ def my_bookings_report(
             "travel_date": b.tour_start_date or b.tour_date,
             "adults": adults,
             "children": children,
-            "total_amount": _money(b.final_amount),
+            # Supplier-price value of the booking, never the customer total
+            # (which includes Tourvaa's markup, tax and fees).
+            "total_amount": _money(_supplier_booking_value(b)),
             "booking_status": b.booking_status,
             "payment_status": b.payment_status,
             "special_requests": b.customer_notes,

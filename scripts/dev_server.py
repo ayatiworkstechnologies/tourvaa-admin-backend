@@ -17,6 +17,12 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-reload", action="store_true")
+    parser.add_argument(
+        "--reload-delay",
+        type=float,
+        default=1.0,
+        help="Seconds to debounce file changes before restarting (default: 1.0).",
+    )
     args = parser.parse_args()
 
     if str(BACKEND_ROOT) not in sys.path:
@@ -27,6 +33,7 @@ def main() -> None:
         host=args.host,
         port=args.port,
         reload=not args.no_reload,
+        reload_delay=args.reload_delay,
         reload_dirs=[
             str(BACKEND_ROOT / "app"),
             str(BACKEND_ROOT / "alembic"),

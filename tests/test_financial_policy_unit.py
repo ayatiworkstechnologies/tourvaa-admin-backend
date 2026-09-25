@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from app.routers import affiliate_payouts, payments
 from app.schemas.tours import PricingPayload
+from app.services.discounts import find_best_discount_row
 from app.services.tours import _apply_pricing_computation, _ser_pricing
 
 
@@ -19,10 +20,8 @@ def test_affiliate_mark_paid_requires_dedicated_permission():
     assert '"affiliate_payouts.process",' not in source
 
 
-def test_admin_markup_is_ignored_by_commission_only_pricing():
-    db = MagicMock()
-    db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(supplier=None)
-    row = SimpleNamespace(
+def _pricing_row():
+    return SimpleNamespace(
         id=1,
         tour_id=2,
         passenger_from=1,
@@ -43,24 +42,63 @@ def test_admin_markup_is_ignored_by_commission_only_pricing():
         created_at=None,
         updated_at=None,
     )
+
+
+def _apply(row, *, is_supplier: bool, markup_in_payload: float, is_update: bool = True, default_markup: float = 5):
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(supplier=None)
     payload = PricingPayload(
         passenger_from=1,
         passenger_to=4,
         adult_price=200,
         child_price=100,
         commission_percentage=10,
-        admin_markup_value=50,
+        admin_markup_value=markup_in_payload,
     )
-    actor = SimpleNamespace(role=SimpleNamespace(slug="admin"))
-
+    actor = SimpleNamespace(role=SimpleNamespace(slug="supplier" if is_supplier else "admin"))
     with (
         patch("app.services.bookings.resolve_effective_commission_percentage", return_value=10),
-        patch("app.services.supplier_scope.is_supplier_user", return_value=False),
+        patch("app.services.supplier_scope.is_supplier_user", return_value=is_supplier),
+        patch("app.services.settings.get_default_admin_markup_percentage", return_value=default_markup),
     ):
-        _apply_pricing_computation(db, 2, row, payload, actor)
+        _apply_pricing_computation(db, 2, row, payload, actor, is_update=is_update)
 
-    assert row.admin_markup_value == 0
-    assert row.storefront_adult_price == 200
-    assert row.storefront_child_price == 100
-    assert row.supplier_final_adult_price == 180
-    assert _ser_pricing(row)["admin_markup_value"] == 0
+
+def test_admin_sets_markup_and_storefront_price():
+    row = _pricing_row()
+    _apply(row, is_supplier=False, markup_in_payload=20)
+
+    assert row.admin_markup_value == 20
+    assert row.storefront_adult_price == 240   # 200 + 20%
+    assert row.storefront_child_price == 120
+    assert row.supplier_final_adult_price == 180  # commission still on the supplier price
+    assert _ser_pricing(row)["admin_markup_value"] == 20
+
+
+def test_supplier_cannot_change_markup():
+    row = _pricing_row()  # existing admin-set markup of 25%
+    _apply(row, is_supplier=True, markup_in_payload=0)
+
+    assert row.admin_markup_value == 25
+    assert row.storefront_adult_price == 250
+
+
+def test_new_supplier_slab_gets_default_markup():
+    row = _pricing_row()
+    _apply(row, is_supplier=True, markup_in_payload=90, is_update=False, default_markup=5)
+
+    assert row.admin_markup_value == 5
+    assert row.storefront_adult_price == 210
+
+
+def test_automatic_discount_query_excludes_promo_codes():
+    query = MagicMock()
+    query.filter.return_value = query
+    query.all.return_value = []
+    db = MagicMock()
+    db.query.return_value = query
+    tour = SimpleNamespace(id=7, category_id=None, country_id=None, price_start_per_person=100)
+
+    assert find_best_discount_row(db, tour) is None
+    expressions = " ".join(str(value) for value in query.filter.call_args.args)
+    assert "tour_discounts.discount_code IS NULL" in expressions

@@ -269,8 +269,8 @@ class PricingPayload(BaseModel):
     # compatibility only - no longer applied to pricing.
     supplier_price: float = Field(default=0.0, ge=0)
     final_price: float = Field(default=0.0, ge=0)
-    # Deprecated compatibility input. It is accepted from older clients but
-    # ignored by the service; persisted markup is always zero.
+    # Admin-only markup percentage. The service ignores supplier-provided
+    # values and preserves/defaults the server-controlled markup instead.
     admin_markup_value: float = Field(default=0.0, ge=0, le=100)
     currency: str = Field(default="USD", max_length=10)
     status: str = Field(default="active", max_length=20)
@@ -499,6 +499,9 @@ class DiscountPayload(BaseModel):
     # unchanged legacy behavior) or "TOURVAA" (Tourvaa's own margin absorbs
     # it instead; see services.bookings.compute_booking_supplier_financials).
     funded_by: str = Field(default="SUPPLIER", max_length=20)
+    # Promo codes only: list the code on the tour page/checkout for one-click
+    # apply (True), or keep it private so it only works when typed (False).
+    show_on_website: bool = True
 
     @field_validator("discount_type")
     @classmethod
