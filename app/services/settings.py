@@ -533,34 +533,46 @@ def compute_commission_preview(db: Session, sample_price=None) -> dict:
     hardcoded example numbers, so the preview never drifts from reality."""
     from decimal import Decimal
 
+    # sample_price is the SUPPLIER's price. The customer pays it plus the
+    # default Tourvaa markup; commission (and agent/affiliate commission,
+    # carved out of it) is on the supplier price; Tourvaa keeps commission +
+    # markup -- the same split services.bookings.compute_booking_financial_split
+    # applies to a real booking.
     price = Decimal(str(sample_price)) if sample_price is not None else Decimal("120")
     commission_pct = get_commission_percentage(db)
     agent_pct = get_agent_default_commission(db)
     affiliate_pct = get_affiliate_default_commission(db)
+    markup_pct = Decimal(str(get_default_admin_markup_percentage(db) or 0))
 
+    customer_price = (price * (Decimal("1") + markup_pct / Decimal("100"))).quantize(Decimal("0.01"))
+    markup_amount = customer_price - price
     commission_amount = (price * commission_pct / Decimal("100")).quantize(Decimal("0.01"))
     supplier_net = price - commission_amount
     agent_amount = (price * agent_pct / Decimal("100")).quantize(Decimal("0.01"))
     affiliate_amount = (price * affiliate_pct / Decimal("100")).quantize(Decimal("0.01"))
+    tourvaa_total = commission_amount + markup_amount
 
     return {
         "sample_price": str(price),
+        "default_markup_percentage": str(markup_pct),
+        "customer_price": str(customer_price),
+        "markup_amount": str(markup_amount),
         "tourvaa_commission_percentage": str(commission_pct),
         "direct": {
             "supplier": str(supplier_net),
-            "tourvaa": str(commission_amount),
+            "tourvaa": str(tourvaa_total),
         },
         "agent": {
             "supplier": str(supplier_net),
             "agent_commission_percentage": str(agent_pct),
             "agent": str(agent_amount),
-            "tourvaa": str(commission_amount - agent_amount),
+            "tourvaa": str(tourvaa_total - agent_amount),
         },
         "affiliate": {
             "supplier": str(supplier_net),
             "affiliate_commission_percentage": str(affiliate_pct),
             "affiliate": str(affiliate_amount),
-            "tourvaa": str(commission_amount - affiliate_amount),
+            "tourvaa": str(tourvaa_total - affiliate_amount),
         },
     }
 

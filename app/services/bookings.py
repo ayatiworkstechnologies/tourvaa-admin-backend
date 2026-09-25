@@ -867,6 +867,19 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
 _SUPPLIER_HIDDEN_MONEY_FIELDS = ("amount_paid", "amount_pending", "agent_markup", "tax_amount", "surcharge_amount", "service_fee_amount", "gateway_fee_amount")
 
 
+def supplier_booking_value(booking: Booking):
+    """What a booking is worth at the supplier's own prices (the locked
+    snapshot's supplier gross) -- the amount any supplier-facing screen,
+    report or email may show. Never the customer total, which includes
+    Tourvaa's admin markup, tax and fees. Bookings without a snapshot
+    carried no markup, so their final amount is used."""
+    if booking.supplier_gross_amount is not None:
+        return booking.supplier_gross_amount
+    if booking.supplier_net_payable is not None:
+        return money(booking.supplier_net_payable) + money(booking.tourvaa_commission_amount or 0)
+    return booking.final_amount
+
+
 def _supplier_safe(data: dict, booking: Booking) -> dict:
     """A supplier's own view of a booking never shows the customer-side
     money (which includes Tourvaa's admin markup, tax and fees): the headline
@@ -874,9 +887,7 @@ def _supplier_safe(data: dict, booking: Booking) -> dict:
     snapshot (supplier_base_amount / supplier_gross_amount), and payment
     amounts are dropped. Bookings without a snapshot fall back to the stored
     amounts, which carried no markup."""
-    supplier_total = booking.supplier_gross_amount
-    if supplier_total is None and booking.supplier_net_payable is not None:
-        supplier_total = money(booking.supplier_net_payable) + money(booking.tourvaa_commission_amount or 0)
+    supplier_total = supplier_booking_value(booking)
     if supplier_total is not None:
         for key in ("final_amount", "total_cost", "customer_selling_price", "agent_net_price"):
             data[key] = money_str(supplier_total)
@@ -1815,7 +1826,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
              "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url,
              "button_text": "View booking", "button_url": portal_url},
             f"New booking assigned - {booking.booking_code}",
-            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer.full_name, booking.adults_count, booking.currency, booking.final_amount, portal_url),
+            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer.full_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
             booking.supplier.user.email,
             background_tasks=background_tasks,
         )
@@ -2299,7 +2310,7 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
              "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url,
              "button_text": "View booking", "button_url": portal_url},
             f"New booking assigned - {booking.booking_code}",
-            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, booking.final_amount, portal_url),
+            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
             booking.supplier.user.email,
         )
 

@@ -187,21 +187,30 @@ def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscou
     one slab."""
     if not pricing:
         return []
+
+    def _storefront(slab: TourPricing) -> tuple[float, float]:
+        # Customer price = supplier price + Tourvaa markup (slab > tour >
+        # default), stored on the slab by services/markup.apply_storefront --
+        # exactly what _price_booking charges. Never the raw adult_price/
+        # child_price: those are the supplier's prices.
+        adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
+        child = slab.storefront_child_price if slab.storefront_child_price is not None else (slab.child_price or 0)
+        return float(adult), float(child)
+
     if len(pricing) > 1:
-        rows = [
-            {
+        rows = []
+        for slab in pricing:
+            adult, child = _storefront(slab)
+            rows.append({
                 "persons_from": slab.passenger_from,
                 "persons_to": slab.passenger_to,
-                "price_per_person": float(slab.adult_price),
-                "child_price_per_person": float(slab.child_price or 0),
+                "price_per_person": adult,
+                "child_price_per_person": child,
                 "currency": slab.currency,
-            }
-            for slab in pricing
-        ]
+            })
     else:
         base = pricing[0]
-        base_adult = float(base.adult_price)
-        base_child = float(base.child_price or 0)
+        base_adult, base_child = _storefront(base)
         rows = []
         solo_upper = (tiers[0].min_pax - 1) if tiers else base.passenger_to
         rows.append({"persons_from": base.passenger_from, "persons_to": solo_upper, "price_per_person": base_adult, "child_price_per_person": base_child, "currency": base.currency})
