@@ -361,10 +361,13 @@ def _ser_pricing(o: TourPricing) -> dict:
         "supplier_price": o.supplier_price, "final_price": o.final_price,
         "supplier_final_adult_price": o.supplier_final_adult_price,
         "supplier_final_child_price": o.supplier_final_child_price,
-        "admin_markup_type": o.admin_markup_type,
-        "admin_markup_value": o.admin_markup_value,
-        "storefront_adult_price": o.storefront_adult_price,
-        "storefront_child_price": o.storefront_child_price,
+        # Retain these response fields for older clients while the database
+        # columns are phased out. The commission-only pricing model never
+        # adds a markup: customer price equals supplier-listed price.
+        "admin_markup_type": "percentage",
+        "admin_markup_value": 0.0,
+        "storefront_adult_price": o.adult_price,
+        "storefront_child_price": o.child_price,
         "currency": o.currency, "status": o.status,
         "created_at": o.created_at, "updated_at": o.updated_at,
     }
@@ -372,9 +375,9 @@ def _ser_pricing(o: TourPricing) -> dict:
 
 def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: PricingPayload, actor: User, is_update: bool = False) -> None:
     """Compute the supplier payout and customer-facing price. The supplier's
-    adult_price/child_price is the base price. Tourvaa commission is deducted
-    from that base for settlement, while an admin-only percentage markup is
-    added on top to produce the storefront price. Commission is floor-enforced against
+    adult_price/child_price is both the supplier-listed and customer-facing
+    price. Tourvaa commission is deducted from that base for settlement.
+    Commission is floor-enforced against
     resolve_effective_commission_percentage: Tour > Supplier > platform
     default), deducted from that same price to produce
     supplier_final_*_price ("Supplier Receives"). Only admins set a slab's
@@ -382,8 +385,8 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     value is ignored -- a new slab gets the floor and an edited slab keeps
     its existing rate (raised to the floor if that has since gone up), so
     suppliers accept Tourvaa's commission rather than configure it.
-    A supplier edit preserves the existing admin markup and a supplier can
-    never submit or view it. Admin edits may set it per pricing slab.
+    Legacy markup fields are always reset to zero. They remain in the schema
+    temporarily for backward compatibility but never affect pricing.
     A supplier's price change takes effect immediately, like any other
     content edit (see maybe_resubmit_for_review) -- mark_repricing_required
     (called by create_pricing/update_pricing right after this) still records
@@ -408,40 +411,30 @@ def _apply_pricing_computation(db: Session, tour_id: int, o: TourPricing, data: 
     o.supplier_final_child_price = round(max(0.0, o.child_price * (1 - commission / 100)), 2)
     o.final_price = o.adult_price
 
-    if is_supplier_user(actor):
-        markup = float(o.admin_markup_value or 0)
-    else:
-        if "admin_markup_value" in data.model_fields_set:
-            markup = max(0.0, float(data.admin_markup_value or 0))
-        else:
-            from app.services.settings import get_default_admin_markup_percentage
-            markup = float(get_default_admin_markup_percentage(db))
-        o.admin_markup_type = "percentage"
-        o.admin_markup_value = markup
-    o.storefront_adult_price = round(max(0.0, o.adult_price * (1 + markup / 100)), 2)
-    o.storefront_child_price = round(max(0.0, o.child_price * (1 + markup / 100)), 2)
+    o.admin_markup_type = "percentage"
+    o.admin_markup_value = 0.0
+    o.storefront_adult_price = round(max(0.0, o.adult_price), 2)
+    o.storefront_child_price = round(max(0.0, o.child_price), 2)
 
 
 _list_pricing_fn, _, _, _ = _simple_crud(TourPricing, _ser_pricing, versioned=True)
 
 def list_pricing(db, tour_id): return _list_pricing_fn(db, tour_id)
 
-# Only these are ever taken verbatim from the client payload -- markup_type,
-# final_price, admin_markup_type, admin_markup_value, and every
+# Only these are ever taken verbatim from the client payload -- final_price,
+# legacy admin-markup fields, and every
 # supplier_final_*/storefront_* field are exclusively computed in
 # _apply_pricing_computation, so a supplier (or a crafted request) can never
-# smuggle in Tourvaa's markup or a hand-picked final price. markup_value is
-# the one exception: the client value is read (in _apply_pricing_computation,
-# not here) but always floored at the supplier's agreed commission rate.
+# smuggle in a markup or a hand-picked final price.
 _PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "child_price", "supplier_price", "currency", "status")
-_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "admin_markup_value", "commission_percentage")
+_PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "commission_percentage")
 
 
 def _normalize_pricing_to_usd(o: TourPricing) -> None:
     """The currency picker on the pricing-slab form is a convenience for an
     admin/supplier who thinks in their own currency -- but USD is the
     platform's single accounting base (app/services/currency.py), and every
-    downstream calculation here (markup, commission split, storefront price,
+    downstream calculation here (commission split, storefront price,
     and the public site's display-currency conversion) assumes
     adult_price/child_price/supplier_price are already USD. Convert once,
     right after the client fields land on the model and before
@@ -491,11 +484,11 @@ def recalculate_price_start(db: Session, tour_id: int) -> None:
         return
     lowest = (
         db.query(TourPricing)
-        .filter(TourPricing.tour_id == tour_id, TourPricing.status == "active", TourPricing.storefront_adult_price.isnot(None))
-        .order_by(TourPricing.storefront_adult_price.asc())
+        .filter(TourPricing.tour_id == tour_id, TourPricing.status == "active")
+        .order_by(TourPricing.adult_price.asc())
         .first()
     )
-    tour.price_start_per_person = lowest.storefront_adult_price if lowest else 0.0
+    tour.price_start_per_person = lowest.adult_price if lowest else 0.0
 
 
 def _assert_no_pricing_overlap(db: Session, tour_id: int, passenger_from: int, passenger_to: int, exclude_id: int | None = None):
@@ -1138,8 +1131,8 @@ def calculate_price(db: Session, tour_id: int, req: PriceCalculationRequest) -> 
         _cost_plus_supplier_total,
     ) = _price_booking(db, booking_data)
 
-    adult_unit = float((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else tour.price_start_per_person)
-    child_unit = float((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0.0)
+    adult_unit = float(slab.adult_price if slab else tour.price_start_per_person)
+    child_unit = float(slab.child_price if slab else 0.0)
 
     # Display-only discount metadata (name/code/type/value) -- purely
     # descriptive, doesn't affect discount_amount above, which already came

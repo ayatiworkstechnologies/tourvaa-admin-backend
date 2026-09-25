@@ -1062,8 +1062,7 @@ def compute_supplier_commission_breakdown(raw_supplier_amount, group_discount_ra
     amount a Tour's group discount removed - see _resolve_group_discount.
     Applying the same ratio to the supplier's own raw amount means a
     discount defined once at the Tour level reduces both what the customer
-    pays and what the supplier earns from, consistently, regardless of the
-    admin markup baked into the customer-facing price."""
+    pays and what the supplier earns from consistently."""
     raw_supplier_amount = money(raw_supplier_amount)
     group_discount_ratio = money(group_discount_ratio or 0)
     commission_percentage = money(commission_percentage)
@@ -1212,8 +1211,8 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # real charge currency explicitly when it differs from what they were
     # browsing in (see the booking page's price breakdown).
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
-    adult_unit = money((slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price) if slab else (tour.price_start_per_person if tour else 0))
-    child_unit = money((slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price) if slab else 0)
+    adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
+    child_unit = money(slab.child_price if slab else 0)
     price_source = "SLAB" if slab else "TOUR_BASE"
     date_override = _resolve_date_price(db, data.tour_id, calendar.tour_date if calendar else data.tour_start_date)
     if date_override:
@@ -1630,7 +1629,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         pricing_slab_id=slab.id if slab else None,
         supplier_price=slab.adult_price if slab else None,
         supplier_currency=slab.currency if slab else None,
-        tourvaa_selling_price=(slab.storefront_adult_price if slab and slab.storefront_adult_price is not None else None),
+        tourvaa_selling_price=(slab.adult_price if slab else None),
         display_currency=currency,
         exchange_rate=money(1),
         exchange_rate_source="same_currency",

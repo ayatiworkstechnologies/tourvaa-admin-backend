@@ -193,16 +193,16 @@ def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscou
             {
                 "persons_from": slab.passenger_from,
                 "persons_to": slab.passenger_to,
-                "price_per_person": float(slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price),
-                "child_price_per_person": float(slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price or 0),
+                "price_per_person": float(slab.adult_price),
+                "child_price_per_person": float(slab.child_price or 0),
                 "currency": slab.currency,
             }
             for slab in pricing
         ]
     else:
         base = pricing[0]
-        base_adult = float(base.storefront_adult_price if base.storefront_adult_price is not None else base.adult_price)
-        base_child = float(base.storefront_child_price if base.storefront_child_price is not None else base.child_price or 0)
+        base_adult = float(base.adult_price)
+        base_child = float(base.child_price or 0)
         rows = []
         solo_upper = (tiers[0].min_pax - 1) if tiers else base.passenger_to
         rows.append({"persons_from": base.passenger_from, "persons_to": solo_upper, "price_per_person": base_adult, "child_price_per_person": base_child, "currency": base.currency})

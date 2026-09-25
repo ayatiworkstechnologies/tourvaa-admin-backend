@@ -53,12 +53,12 @@ def change_payment_status(payment_id: int, data: PaymentStatusUpdate, request: R
 
 
 @router.post("/{payment_id}/capture")
-def capture(payment_id: int, data: PaymentCapture, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.capture", "update-payments"))):
+def capture(payment_id: int, data: PaymentCapture, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.capture"))):
     return {"status": "success", "message": "Payment captured", "data": capture_payment(db, payment_id, data, actor=current_user, request=request)}
 
 
 @router.post("/{payment_id}/void")
-def void(payment_id: int, data: PaymentVoid, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.void", "update-payments"))):
+def void(payment_id: int, data: PaymentVoid, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.void"))):
     return {"status": "success", "message": "Payment voided", "data": void_payment(db, payment_id, data, actor=current_user, request=request)}
 
 
@@ -68,6 +68,6 @@ def refund_payment(
     data: RefundRequest,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_any_permission("payments.refund", "update-payments")),
+    current_user: User = Depends(require_any_permission("payments.refund")),
 ):
     return {"status": "success", "message": "Refund processed successfully", "data": process_refund(db, payment_id, data, actor=current_user, request=request)}

@@ -113,7 +113,7 @@ python -m alembic upgrade head
 python -m alembic current
 ```
 
-The current schema head is `20260924_0002`. The external-tours and destination-card migrations follow the booking financial snapshot; revision `20260924_0002` adds editable `rating` and `package_count` fields to `cms_popular_destinations`. Run `python -m alembic heads` any time to confirm the true current head instead of trusting this README, which can go stale as new migrations land.
+The current schema head is `20260925_0001`. It normalizes all pricing slabs to the commission-only model: customer price equals the supplier-listed price and Tourvaa's commission is deducted during settlement. Run `python -m alembic heads` any time to confirm the true current head instead of trusting this README, which can go stale as new migrations land.
 
 Seed everything (RBAC, geo, payment gateways) without deleting application data:
 

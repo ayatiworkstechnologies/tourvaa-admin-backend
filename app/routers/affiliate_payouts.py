@@ -95,5 +95,5 @@ def mark_processing(payout_id: int, db: Session = Depends(get_db), current_user=
 
 
 @router.post("/affiliate-payouts/{payout_id}/mark-paid")
-def mark_paid(payout_id: int, data: AffiliatePayoutMarkPaid, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliate_payouts.process", "affiliate_payouts.mark_paid"))):
+def mark_paid(payout_id: int, data: AffiliatePayoutMarkPaid, db: Session = Depends(get_db), current_user=Depends(require_any_permission("affiliate_payouts.mark_paid"))):
     return {"status": "success", "message": "Payout marked paid", "data": service.mark_payout_paid(db, payout_id, payment_reference=data.payment_reference, admin_notes=data.admin_notes, actor=current_user)}

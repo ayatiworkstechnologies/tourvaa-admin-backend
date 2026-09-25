@@ -212,8 +212,8 @@ class TourPricing(Base):
     # rows/API consumers -- see services/tours._apply_pricing_computation.
     admin_markup_type = Column(String(20), default="percentage", nullable=False)
     admin_markup_value = Column(Numeric(12, 2), default=0, nullable=False)
-    # storefront_adult_price/storefront_child_price are what bookings.py
-    # actually charges -- the true customer-facing price.
+    # Deprecated compatibility mirrors of adult_price/child_price. Checkout
+    # reads the canonical adult/child fields directly.
     storefront_adult_price = Column(Numeric(12, 2), nullable=True)
     storefront_child_price = Column(Numeric(12, 2), nullable=True)
     currency = Column(String(10), default="USD", nullable=False)

@@ -255,13 +255,9 @@ class GalleryImagePayload(BaseModel):
 class PricingPayload(BaseModel):
     passenger_from: int = Field(ge=1)
     passenger_to: int = Field(ge=1)
-    # adult_price/child_price are the supplier's own net asking price
-    # ("Your Price to Tourvaa"). Two independent layers are computed from
-    # them in services.tours._apply_pricing_computation:
-    #  - commission_percentage below (supplier-side, floor-enforced) ->
-    #    supplier_final_*_price ("Supplier Receives").
-    #  - admin_markup_value (admin-only) -> storefront_*_price, what
-    #    bookings.py actually charges the customer at checkout.
+    # adult_price/child_price are the public customer prices. Tourvaa's
+    # floor-enforced commission is deducted from them to produce the
+    # supplier_final_* settlement amounts.
     adult_price: float = Field(ge=0)
     child_price: float = Field(default=0.0, ge=0)
     # This slab's own commission rate. Floor-enforced server-side against
@@ -273,10 +269,8 @@ class PricingPayload(BaseModel):
     # compatibility only - no longer applied to pricing.
     supplier_price: float = Field(default=0.0, ge=0)
     final_price: float = Field(default=0.0, ge=0)
-    # Admin-only retail markup added on top of adult_price/child_price to
-    # produce the storefront price - deliberately no min/max (admin sets
-    # whatever's needed). Ignored for a supplier actor, see
-    # routers.tours._ADMIN_ONLY_PRICING_FIELDS / _apply_pricing_computation.
+    # Deprecated compatibility input. It is accepted from older clients but
+    # ignored by the service; persisted markup is always zero.
     admin_markup_value: float = Field(default=0.0, ge=0, le=100)
     currency: str = Field(default="USD", max_length=10)
     status: str = Field(default="active", max_length=20)

@@ -34,7 +34,6 @@ def test_create_pricing_slab(headers, first_tour_id):
         "adult_price": 250.0,
         "child_price": 150.0,
         "supplier_price": 180.0,
-        "admin_markup_value": 10.0,
         "final_price": 300.0,
         "currency": "USD",
     }
@@ -54,7 +53,6 @@ def test_update_pricing_slab(headers, first_tour_id):
     resp = requests.put(f"{BASE_URL}/tours/{first_tour_id}/pricing/{_PRICING_ID}",
                         headers=headers, json={"adult_price": 275.0, "final_price": 330.0,
                                                "passenger_from": 1, "passenger_to": 4,
-                                               "admin_markup_value": 12.0,
                                                "currency": "USD"}, timeout=10)
     assert resp.status_code in (200, 201, 204)
 

@@ -194,9 +194,7 @@ def my_commission_calculator(
         # discount tier is defined against, matching how it is applied to a
         # real booking in _price_booking - reused here so the calculator
         # discount always lines up with checkout, not just the raw price.
-        storefront_adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
-        storefront_child = slab.storefront_child_price if slab.storefront_child_price is not None else slab.child_price
-        storefront_base = money(storefront_adult) * adults + money(storefront_child) * children
+        storefront_base = money(slab.adult_price) * adults + money(slab.child_price) * children
         _tier, _amount, group_discount_ratio = _resolve_group_discount(db, tour_id, seat_travellers, storefront_base)
         currency = slab.currency or tour.currency or "USD"
     else:
