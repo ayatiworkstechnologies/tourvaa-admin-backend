@@ -5,6 +5,7 @@ test-mode checkout-session creation, and agent "Reserve Now" (no deposit)
 auto-invoice generation. These are pytest.ini's requests-based / live-server
 integration tests, same convention as the rest of this suite.
 """
+import pytest
 import requests
 
 from tests.conftest import BASE_URL, skip_if_readonly
@@ -23,12 +24,16 @@ def _create_booking(headers, tour_id, payment_type="full", extra=None):
     return requests.post(f"{BASE_URL}/bookings", json=payload, headers=headers, timeout=30)
 
 
+def _booking_or_skip(headers, tour_id, payment_type="full", extra=None):
+    response = _create_booking(headers, tour_id, payment_type, extra)
+    if response.status_code not in (200, 201):
+        pytest.skip(f"No bookable pricing/calendar fixture: {response.status_code} {response.text[:200]}")
+    return response.json()["data"]
+
+
 @skip_if_readonly()
 def test_full_payment_marks_booking_paid(headers, first_tour_id):
-    resp = _create_booking(headers, first_tour_id, "full")
-    if resp.status_code not in (200, 201):
-        return  # no bookable pricing/calendar in this environment
-    booking = resp.json()["data"]
+    booking = _booking_or_skip(headers, first_tour_id, "full")
     amount = float(booking["amount_pending"])
     sim = requests.post(f"{BASE_URL}/payments/test/simulate", json={"booking_id": booking["id"], "amount": amount, "note": "full payment e2e"}, headers=headers, timeout=10)
     assert sim.status_code in (200, 201), sim.text
@@ -39,10 +44,7 @@ def test_full_payment_marks_booking_paid(headers, first_tour_id):
 
 @skip_if_readonly()
 def test_deposit_then_remaining_balance_reaches_paid(headers, first_tour_id):
-    resp = _create_booking(headers, first_tour_id, "partial")
-    if resp.status_code not in (200, 201):
-        return
-    booking = resp.json()["data"]
+    booking = _booking_or_skip(headers, first_tour_id, "partial")
     total = float(booking["amount_pending"])
     deposit = round(total * 0.3, 2)
     sim1 = requests.post(f"{BASE_URL}/payments/test/simulate", json={"booking_id": booking["id"], "amount": deposit, "note": "deposit e2e"}, headers=headers, timeout=10)
@@ -58,10 +60,7 @@ def test_deposit_then_remaining_balance_reaches_paid(headers, first_tour_id):
 
 @skip_if_readonly()
 def test_refund_reverts_paid_booking(headers, first_tour_id):
-    resp = _create_booking(headers, first_tour_id, "full")
-    if resp.status_code not in (200, 201):
-        return
-    booking = resp.json()["data"]
+    booking = _booking_or_skip(headers, first_tour_id, "full")
     amount = float(booking["amount_pending"])
     requests.post(f"{BASE_URL}/payments/test/simulate", json={"booking_id": booking["id"], "amount": amount, "note": "refund e2e setup"}, headers=headers, timeout=10)
     payments = requests.get(f"{BASE_URL}/payments", headers=headers, params={"booking_id": booking["id"]}, timeout=10).json().get("items", [])
@@ -79,10 +78,7 @@ def test_stripe_create_session_returns_real_checkout_url(headers, first_tour_id)
     gw = requests.get(f"{BASE_URL}/payments/gateways/status", headers=headers, timeout=10).json().get("data", {})
     if not gw.get("stripe"):
         return  # Stripe not configured in this environment
-    resp = _create_booking(headers, first_tour_id, "full")
-    if resp.status_code not in (200, 201):
-        return
-    booking = resp.json()["data"]
+    booking = _booking_or_skip(headers, first_tour_id, "full")
     session = requests.post(f"{BASE_URL}/payments/stripe/create-session", json={
         "booking_id": booking["id"], "amount": float(booking["amount_pending"]), "currency": booking.get("currency", "USD"),
         "success_url": "https://example.com/success", "cancel_url": "https://example.com/cancel",
@@ -96,12 +92,73 @@ def test_agent_reserve_now_generates_invoice_without_payment(headers, first_tour
     agents = requests.get(f"{BASE_URL}/agents", headers=headers, params={"limit": 1}, timeout=10).json().get("items", [])
     if not agents:
         return
-    resp = _create_booking(headers, first_tour_id, "full", extra={
+    booking = _booking_or_skip(headers, first_tour_id, "full", extra={
         "booking_source": "agent", "agent_id": agents[0]["id"], "agent_payment_method": "pay_later",
     })
-    if resp.status_code not in (200, 201):
-        return
-    booking = resp.json()["data"]
     assert booking["payment_status"] == "credit_approval_pending"
     invoices = requests.get(f"{BASE_URL}/invoices", headers=headers, params={"booking_id": booking["id"]}, timeout=10).json().get("items", [])
     assert len(invoices) > 0
+
+
+@skip_if_readonly()
+def test_paid_booking_acceptance_creates_supplier_ledger(headers, first_tour_id):
+    suppliers_response = requests.get(
+        f"{BASE_URL}/suppliers", headers=headers, params={"limit": 20}, timeout=10
+    )
+    assert suppliers_response.status_code == 200, suppliers_response.text
+    suppliers_body = suppliers_response.json()
+    suppliers = suppliers_body.get("items", suppliers_body.get("data", []))
+    active = next(
+        (
+            supplier
+            for supplier in suppliers
+            if supplier.get("status") == "active"
+            and str(supplier.get("approval_status", "")).lower() in {"approved", "not_required"}
+        ),
+        None,
+    )
+    if not active:
+        pytest.skip("No approved active supplier fixture is available")
+
+    booking = _booking_or_skip(headers, first_tour_id, "full")
+    booking_id = booking["id"]
+    supplier_id = active["id"]
+
+    assigned = requests.post(
+        f"{BASE_URL}/bookings/{booking_id}/assign-supplier",
+        json={"supplier_id": supplier_id, "reason": "payment workflow e2e"},
+        headers=headers,
+        timeout=10,
+    )
+    assert assigned.status_code == 200, assigned.text
+
+    amount = float(assigned.json()["data"]["amount_pending"])
+    paid = requests.post(
+        f"{BASE_URL}/payments/test/simulate",
+        json={"booking_id": booking_id, "amount": amount, "note": "acceptance ledger e2e"},
+        headers=headers,
+        timeout=10,
+    )
+    assert paid.status_code in (200, 201), paid.text
+
+    accepted = requests.post(
+        f"{BASE_URL}/supplier/bookings/{booking_id}/accept",
+        json={"reason": "accepted by payment workflow e2e"},
+        headers=headers,
+        timeout=10,
+    )
+    assert accepted.status_code == 200, accepted.text
+    accepted_booking = accepted.json()["data"]
+    assert accepted_booking["supplier_acceptance_status"] == "accepted"
+    assert accepted_booking["booking_status"] == "confirmed"
+
+    ledger_response = requests.get(
+        f"{BASE_URL}/suppliers/{supplier_id}/ledger",
+        headers=headers,
+        params={"limit": 100},
+        timeout=10,
+    )
+    assert ledger_response.status_code == 200, ledger_response.text
+    ledger_body = ledger_response.json()
+    ledger_rows = ledger_body.get("items", ledger_body.get("data", []))
+    assert any(row.get("booking_id") == booking_id for row in ledger_rows), ledger_body
