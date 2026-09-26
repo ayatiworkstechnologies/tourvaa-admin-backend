@@ -67,6 +67,16 @@ class ApiSettingsUpdate(BaseModel):
     viator_api_key_placeholder: Optional[str] = None
     viator_affiliate_pid: Optional[str] = None
     viator_enabled: Optional[bool] = None
+    google_oauth_client_id: Optional[str] = None
+    google_oauth_client_secret: Optional[str] = None
+    google_oauth_enabled: Optional[bool] = None
+    facebook_oauth_app_id: Optional[str] = None
+    facebook_oauth_app_secret: Optional[str] = None
+    facebook_oauth_enabled: Optional[bool] = None
+    apple_oauth_service_id: Optional[str] = None
+    apple_oauth_private_key: Optional[str] = None
+    apple_oauth_metadata: Optional[str] = None
+    apple_oauth_enabled: Optional[bool] = None
 
 
 class SmtpSettingsUpdate(BaseModel):

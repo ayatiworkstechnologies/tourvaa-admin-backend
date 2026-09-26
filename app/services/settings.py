@@ -374,6 +374,9 @@ DEFAULT_API_SETTINGS = [
     # (PID). Read at runtime by app/services/viator.py for the public
     # "External Day Trips" section.
     {"api_name": "viator", "api_key": "", "api_secret": "", "api_url": "", "is_enabled": False},
+    {"api_name": "oauth_google", "api_key": "", "api_secret": "", "api_url": "", "is_enabled": False},
+    {"api_name": "oauth_facebook", "api_key": "", "api_secret": "", "api_url": "", "is_enabled": False},
+    {"api_name": "oauth_apple", "api_key": "", "api_secret": "", "api_url": "", "is_enabled": False},
 ]
 
 
@@ -1217,6 +1220,9 @@ def get_api_settings_payload(db: Session):
     sms_service = rows.get("sms_service")
     brightlane = rows.get("brightlane")
     viator = rows.get("viator")
+    oauth_google = rows.get("oauth_google")
+    oauth_facebook = rows.get("oauth_facebook")
+    oauth_apple = rows.get("oauth_apple")
 
     gm_key = decrypt_secret(google_maps.api_key if google_maps else "")
     em_key = decrypt_secret(email_service.api_key if email_service else "")
@@ -1239,6 +1245,16 @@ def get_api_settings_payload(db: Session):
         "viator_api_key_placeholder": mask_secret(viator_key),
         "viator_affiliate_pid": viator_pid,
         "viator_enabled": bool(viator.is_enabled) if viator else False,
+        "google_oauth_client_id": mask_secret(decrypt_secret(oauth_google.api_key if oauth_google else "")),
+        "google_oauth_client_secret": mask_secret(decrypt_secret(oauth_google.api_secret if oauth_google else "")),
+        "google_oauth_enabled": bool(oauth_google.is_enabled) if oauth_google else False,
+        "facebook_oauth_app_id": mask_secret(decrypt_secret(oauth_facebook.api_key if oauth_facebook else "")),
+        "facebook_oauth_app_secret": mask_secret(decrypt_secret(oauth_facebook.api_secret if oauth_facebook else "")),
+        "facebook_oauth_enabled": bool(oauth_facebook.is_enabled) if oauth_facebook else False,
+        "apple_oauth_service_id": mask_secret(decrypt_secret(oauth_apple.api_key if oauth_apple else "")),
+        "apple_oauth_private_key": mask_secret(decrypt_secret(oauth_apple.api_secret if oauth_apple else "")),
+        "apple_oauth_metadata": oauth_apple.api_url if oauth_apple else "",
+        "apple_oauth_enabled": bool(oauth_apple.is_enabled) if oauth_apple else False,
     }
 
 
@@ -1261,6 +1277,16 @@ def update_api_settings_payload(
         "viator_api_key_placeholder": ("viator", "api_key"),
         "viator_affiliate_pid": ("viator", "api_secret"),
         "viator_enabled": ("viator", "is_enabled"),
+        "google_oauth_client_id": ("oauth_google", "api_key"),
+        "google_oauth_client_secret": ("oauth_google", "api_secret"),
+        "google_oauth_enabled": ("oauth_google", "is_enabled"),
+        "facebook_oauth_app_id": ("oauth_facebook", "api_key"),
+        "facebook_oauth_app_secret": ("oauth_facebook", "api_secret"),
+        "facebook_oauth_enabled": ("oauth_facebook", "is_enabled"),
+        "apple_oauth_service_id": ("oauth_apple", "api_key"),
+        "apple_oauth_private_key": ("oauth_apple", "api_secret"),
+        "apple_oauth_metadata": ("oauth_apple", "api_url"),
+        "apple_oauth_enabled": ("oauth_apple", "is_enabled"),
     }
 
     updates_by_api = {}

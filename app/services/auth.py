@@ -165,12 +165,13 @@ def get_auth_user_payload(db: Session, user: User):
     }
 
 
-def build_password_reset_url(token: str, client_type: str | None = "web"):
+def build_password_reset_url(token: str, client_type: str | None = "web", role_slug: str | None = None):
     if client_type == "mobile":
         separator = "&" if "?" in settings.MOBILE_DEEP_LINK_URL else "?"
         return f"{settings.MOBILE_DEEP_LINK_URL}{separator}token={token}"
 
-    return f"{settings.FRONTEND_URL}/reset-password?token={token}"
+    url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+    return f"{url}&role={quote(role_slug, safe='')}" if role_slug else url
 
 def build_email_verification_url(token: str, redirect: str | None = None):
     url = f"{settings.FRONTEND_URL}/auth/verify-email?token={token}"
@@ -1002,7 +1003,8 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web", ba
 
     db.commit()
 
-    reset_url = build_password_reset_url(token, client_type)
+    role_slug = user.role.slug if user.role else None
+    reset_url = build_password_reset_url(token, client_type, role_slug)
     subject, html = render_database_email(
         db,
         "password_reset",
@@ -1149,7 +1151,6 @@ def validate_reset_token(db: Session, token: str):
         raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
 
     return True
-
 
 
 

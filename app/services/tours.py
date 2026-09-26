@@ -848,6 +848,20 @@ def _record_discount_version(db: Session, discount: TourDiscount, change_type: s
     ))
 
 
+def _amendment_change_type(change_kinds: list[str]) -> str:
+    """Return a history label that always fits TourDiscountHistory.change_type.
+
+    Joining both legacy labels produces
+    ``validity_extended_percentage_changed`` (36 characters), while the
+    persisted column is intentionally VARCHAR(30). Keep the individual audit
+    labels for single-field amendments and use a concise combined label when
+    both fields change in one request.
+    """
+    if len(change_kinds) > 1:
+        return "validity_and_value_changed"
+    return change_kinds[0] if change_kinds else "amended"
+
+
 def list_discount_history(db: Session, disc_id: int) -> list[dict]:
     return [
         _ser_discount_history(o) for o in
@@ -910,16 +924,20 @@ def amend_discount(db: Session, tour_id: int, disc_id: int, data: DiscountAmendm
     o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
     change_kinds = []
     if data.new_end_date is not None:
-        if o.end_date is not None and data.new_end_date <= o.end_date:
+        if o.end_date is not None and data.new_end_date < o.end_date:
             raise HTTPException(status_code=400, detail="New end date must be later than the current end date")
-        o.end_date = data.new_end_date
-        change_kinds.append("validity_extended")
+        if o.end_date is None or data.new_end_date > o.end_date:
+            o.end_date = data.new_end_date
+            change_kinds.append("validity_extended")
     if data.new_discount_value is not None:
         if o.discount_type == "percentage" and data.new_discount_value > 100:
             raise HTTPException(status_code=400, detail="A percentage discount_value cannot exceed 100")
-        o.discount_value = data.new_discount_value
-        change_kinds.append("percentage_changed")
-    _record_discount_version(db, o, "_".join(change_kinds) or "amended", actor, reason=data.reason)
+        if float(o.discount_value) != data.new_discount_value:
+            o.discount_value = data.new_discount_value
+            change_kinds.append("percentage_changed")
+    if not change_kinds:
+        raise HTTPException(status_code=400, detail="Change the discount value or extend the end date")
+    _record_discount_version(db, o, _amendment_change_type(change_kinds), actor, reason=data.reason)
     log_audit(db, actor=actor, action="amend_discount", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()
@@ -1055,16 +1073,20 @@ def amend_global_discount(db: Session, discount_id: int, data: DiscountAmendment
         raise HTTPException(status_code=404, detail="Discount not found")
     change_kinds = []
     if data.new_end_date is not None:
-        if o.end_date is not None and data.new_end_date <= o.end_date:
+        if o.end_date is not None and data.new_end_date < o.end_date:
             raise HTTPException(status_code=400, detail="New end date must be later than the current end date")
-        o.end_date = data.new_end_date
-        change_kinds.append("validity_extended")
+        if o.end_date is None or data.new_end_date > o.end_date:
+            o.end_date = data.new_end_date
+            change_kinds.append("validity_extended")
     if data.new_discount_value is not None:
         if o.discount_type == "percentage" and data.new_discount_value > 100:
             raise HTTPException(status_code=400, detail="A percentage discount_value cannot exceed 100")
-        o.discount_value = data.new_discount_value
-        change_kinds.append("percentage_changed")
-    _record_discount_version(db, o, "_".join(change_kinds) or "amended", actor, reason=data.reason)
+        if float(o.discount_value) != data.new_discount_value:
+            o.discount_value = data.new_discount_value
+            change_kinds.append("percentage_changed")
+    if not change_kinds:
+        raise HTTPException(status_code=400, detail="Change the discount value or extend the end date")
+    _record_discount_version(db, o, _amendment_change_type(change_kinds), actor, reason=data.reason)
     log_audit(db, actor=actor, action="amend_discount", entity_type="discount", entity_id=discount_id, request=request)
     db.commit()
     db.refresh(o)

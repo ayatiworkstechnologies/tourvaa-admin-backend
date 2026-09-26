@@ -45,10 +45,12 @@ from app.routers.permissions import router as permissions_router
 from app.routers.private_documents import router as private_documents_router
 from app.routers.profile import router as profile_router
 from app.routers.public import router as public_router
+from app.routers.public_leads import router as public_leads_router
 from app.routers.reports import router as reports_router
 from app.routers.reviews import router as reviews_router
 from app.routers.roles import router as roles_router
 from app.routers.sessions import router as sessions_router
+from app.routers.social_auth import router as social_auth_router
 from app.routers.settings import router as settings_router
 from app.routers.supplier_ledger import router as supplier_ledger_router
 from app.routers.suppliers import router as suppliers_router
@@ -110,8 +112,10 @@ OPERATIONS_ROUTERS = (
     messaging_ticket_router,
     messaging_ws_router,
     notifications_router,
+    public_leads_router,
     reports_router,
     sessions_router,
+    social_auth_router,
     activity_logs_router,
     audit_logs_alias_router,
     bookings_supplier_router,
