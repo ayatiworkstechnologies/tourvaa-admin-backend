@@ -1028,8 +1028,11 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
     if not promo_code or not promo_code.strip():
         if not tour:
             return money(0), None
-        from app.services.discounts import find_best_discount_row, discount_amount_for
-        row = find_best_discount_row(db, tour, lock=consume)
+        from app.services.discounts import find_active_discount_stack, discount_amount_for
+        # Supplier discounts have already reduced the supplier units before
+        # markup in _price_booking. Only Tourvaa's own discount belongs here,
+        # after markup, against the publishable/storefront subtotal.
+        row = find_active_discount_stack(db, tour, lock=consume)["tourvaa"]
         if not row or money(subtotal) < money(row.minimum_booking_amount or 0):
             return money(0), None
         if row.usage_limit is not None and (row.used_count or 0) >= row.usage_limit:
@@ -1039,7 +1042,7 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
             return money(0), None
         if consume:
             row.used_count = (row.used_count or 0) + 1
-        return money(amount), (row.funded_by or "SUPPLIER")
+        return money(amount), "TOURVAA"
     code = promo_code.strip().upper()
     discount_query = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == code, TourDiscount.status == "active")
     if consume:
@@ -1291,10 +1294,9 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # real charge currency explicitly when it differs from what they were
     # browsing in (see the booking page's price breakdown).
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
-    # Supplier prices first (slab, or a per-date override of it), then
-    # Tourvaa's admin markup from the resolved slab on top for what the
-    # customer pays. price_start_per_person (no slab at all) is already a
-    # storefront price, so it gets no further markup.
+    # Supplier prices first (slab, or a per-date override of it). An active
+    # supplier discount reduces these units BEFORE Tourvaa markup. Tourvaa's
+    # own discount is resolved later against the marked-up storefront subtotal.
     from app.services.markup import effective_markup_percentage
     markup_percentage = money(effective_markup_percentage(db, slab)) if slab else money(0)
     supplier_adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
@@ -1305,6 +1307,21 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         supplier_adult_unit = money(date_override.adult_price)
         supplier_child_unit = money(date_override.child_price)
         price_source = "DATE_OVERRIDE"
+    if slab and tour:
+        from app.services.discounts import find_active_discount_stack, discount_amount_for
+        supplier_discount = find_active_discount_stack(db, tour, lock=consume_discount)["supplier"]
+        raw_supplier_total = money(supplier_adult_unit * adults + supplier_child_unit * children)
+        if supplier_discount and raw_supplier_total >= money(supplier_discount.minimum_booking_amount or 0):
+            supplier_discount_amount = min(
+                money(discount_amount_for(supplier_discount, float(raw_supplier_total))),
+                raw_supplier_total,
+            )
+            if supplier_discount_amount > 0 and raw_supplier_total > 0:
+                supplier_factor = (raw_supplier_total - supplier_discount_amount) / raw_supplier_total
+                supplier_adult_unit = money(supplier_adult_unit * supplier_factor)
+                supplier_child_unit = money(supplier_child_unit * supplier_factor)
+                if consume_discount:
+                    supplier_discount.used_count = (supplier_discount.used_count or 0) + 1
     adult_unit = apply_markup(supplier_adult_unit, markup_percentage)
     child_unit = apply_markup(supplier_child_unit, markup_percentage)
     per_person_amount = money(adult_unit * adults + child_unit * children)

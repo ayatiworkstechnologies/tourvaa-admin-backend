@@ -22,6 +22,7 @@ from app.routers.checkout import router as checkout_router
 from app.routers.client import router as client_router
 from app.routers.cms_geo import router as geo_router
 from app.routers.cms_geo_seed import router as geo_seed_router
+from app.routers.google_auth import router as google_auth_router
 from app.routers.cms import router as cms_router
 from app.routers.customers_portal import router as customer_portal_router
 from app.routers.customers_portal import wishlist_router
@@ -65,6 +66,7 @@ API_PREFIX = "/api"
 
 CORE_ROUTERS = (
     auth_router,
+    google_auth_router,
     users_router,
     roles_router,
     permissions_router,

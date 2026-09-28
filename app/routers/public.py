@@ -153,27 +153,36 @@ def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
     with the admin/supplier preview (services.cms._active_discount) and
     booking-creation's auto-apply (services.bookings._resolve_discount) so
     all three always agree."""
-    from app.services.discounts import find_best_discount_row, discount_percent_for_display
+    from app.services.discounts import find_active_discount_stack, discount_percent_for_display
     best: dict[int, dict] = {}
     for tour in tours:
-        row = find_best_discount_row(db, tour)
-        if not row:
+        stack = find_active_discount_stack(db, tour)
+        supplier_row, tourvaa_row = stack["supplier"], stack["tourvaa"]
+        if not supplier_row and not tourvaa_row:
             continue
         base_price = float(tour.price_start_per_person or 0)
         if base_price <= 0:
             continue
-        pct = discount_percent_for_display(row, base_price)
-        if pct <= 0:
+        supplier_pct = discount_percent_for_display(supplier_row, base_price) if supplier_row else 0
+        supplier_price = round(base_price * (1 - supplier_pct / 100), 2)
+        tourvaa_pct = discount_percent_for_display(tourvaa_row, supplier_price) if tourvaa_row else 0
+        display_pct = tourvaa_pct or supplier_pct
+        if display_pct <= 0:
             continue
         best[tour.id] = {
-            "discount_percentage": pct,
-            "original_price_per_person": base_price,
-            "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
+            "discount_percentage": display_pct,
+            "supplier_discount_percentage": supplier_pct or None,
+            "tourvaa_discount_percentage": tourvaa_pct or None,
+            # When Tourvaa adds an offer, its comparison price is the
+            # supplier-discounted, marked-up publishable price. Otherwise the
+            # supplier's original discount compares against the raw storefront.
+            "original_price_per_person": supplier_price if tourvaa_pct else base_price,
+            "discounted_price_per_person": round(supplier_price * (1 - tourvaa_pct / 100), 2),
         }
     return best
 
 
-def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscountTier], discount_percentage: float = 0.0) -> list[dict]:
+def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscountTier], discount_info: dict | None = None, discount_percentage: float = 0.0) -> list[dict]:
     """A tour can have several independently-priced pax-range TourPricing
     slabs (see services.tours._apply_pricing_computation) -- when it does,
     each slab already IS a row of the public price ladder, so this just
@@ -235,13 +244,18 @@ def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscou
     # would show pre-discount numbers while the admin screen and the
     # storefront's own "Save X% today" badge both already reflect the
     # discounted price.
-    if discount_percentage:
-        factor = 1 - discount_percentage / 100
+    supplier_pct = float((discount_info or {}).get("supplier_discount_percentage") or 0)
+    tourvaa_pct = float((discount_info or {}).get("tourvaa_discount_percentage") or discount_percentage or 0)
+    if supplier_pct or tourvaa_pct:
         for row in rows:
-            row["original_price_per_person"] = row["price_per_person"]
-            row["original_child_price_per_person"] = row["child_price_per_person"]
-            row["price_per_person"] = round(max(0.0, row["price_per_person"] * factor), 2)
-            row["child_price_per_person"] = round(max(0.0, row["child_price_per_person"] * factor), 2)
+            raw_adult = row["price_per_person"]
+            raw_child = row["child_price_per_person"]
+            supplier_adult = raw_adult * (1 - supplier_pct / 100)
+            supplier_child = raw_child * (1 - supplier_pct / 100)
+            row["original_price_per_person"] = round(supplier_adult if tourvaa_pct else raw_adult, 2)
+            row["original_child_price_per_person"] = round(supplier_child if tourvaa_pct else raw_child, 2)
+            row["price_per_person"] = round(max(0.0, supplier_adult * (1 - tourvaa_pct / 100)), 2)
+            row["child_price_per_person"] = round(max(0.0, supplier_child * (1 - tourvaa_pct / 100)), 2)
     return rows
 
 
@@ -644,7 +658,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
             # actually charges at checkout - see _public_pricing_rows for
             # how the base price + group discount tiers are expanded into
             # these traveller-count rows.
-            "pricing": _public_pricing_rows(pricing, group_discount_tiers, (own_discount_map.get(tour_id) or {}).get("discount_percentage") or 0),
+            "pricing": _public_pricing_rows(pricing, group_discount_tiers, own_discount_map.get(tour_id)),
             "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "child_price": float(a.child_price_per_person) if a.child_price_per_person else None, "infant_price": float(a.infant_price_per_person) if a.infant_price_per_person else None, "pricing_mode": a.pricing_mode or "flat", "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],
             "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other", "image": (e.extension_tour.banner_image or None) if e.extension_tour else None} for e in extensions],

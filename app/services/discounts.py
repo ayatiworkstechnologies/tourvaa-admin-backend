@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from app.models.tours import TourDiscount
+from app.models.tours import TourDiscount, TourDiscountHistory
+from app.models.users import User
 
 
 def _scope_conditions(tour) -> list:
@@ -89,6 +90,65 @@ def list_public_offers(session: Session, tour) -> list[dict]:
     return offers
 
 
+def _discount_source(session: Session, row: TourDiscount) -> str:
+    """Return who owns the discount, independent of the legacy funded_by value.
+
+    Older admin-created discounts were accidentally persisted as SUPPLIER
+    because the editor never sent funded_by.  The immutable version-1 history
+    is therefore authoritative when available.  funded_by remains the fallback
+    for imported/legacy rows without history.
+    """
+    first = (
+        session.query(TourDiscountHistory.changed_by)
+        .filter(TourDiscountHistory.discount_id == row.id, TourDiscountHistory.version_number == 1)
+        .first()
+    )
+    if first and first[0]:
+        user = session.query(User).filter(User.id == first[0]).first()
+        if user:
+            from app.services.supplier_scope import is_supplier_user
+            return "SUPPLIER" if is_supplier_user(user) else "TOURVAA"
+    return "TOURVAA" if (row.funded_by or "SUPPLIER").upper() == "TOURVAA" else "SUPPLIER"
+
+
+def find_active_discount_stack(session: Session, tour, lock: bool = False) -> dict[str, TourDiscount | None]:
+    """Best automatic supplier and Tourvaa discounts, independently.
+
+    Supplier discounts reduce the supplier price before markup.  Tourvaa
+    discounts reduce the resulting storefront price afterwards.  They are not
+    competing rows: both may apply to the same booking.
+    """
+    result: dict[str, TourDiscount | None] = {"supplier": None, "tourvaa": None}
+    if not tour or not tour.id:
+        return result
+    now = datetime.now(timezone.utc)
+    query = session.query(TourDiscount).filter(
+        TourDiscount.status == "active",
+        TourDiscount.discount_code.is_(None),
+        *_live_window_conditions(now),
+        or_(*_scope_conditions(tour)),
+    )
+    if lock:
+        query = query.with_for_update()
+    rows = [r for r in query.all() if r.usage_limit is None or (r.used_count or 0) < r.usage_limit]
+    base_price = float(tour.price_start_per_person or 0)
+
+    def score(row: TourDiscount) -> tuple[bool, float]:
+        if row.discount_type == "percentage":
+            pct = float(row.discount_value)
+        else:
+            pct = (float(row.discount_value) / base_price * 100) if base_price > 0 else 0
+        return row.tour_id == tour.id, min(90.0, max(0.0, pct))
+
+    for source, key in (("SUPPLIER", "supplier"), ("TOURVAA", "tourvaa")):
+        owned = [row for row in rows if _discount_source(session, row) == source]
+        if owned:
+            best = max(owned, key=score)
+            if score(best)[1] > 0:
+                result[key] = best
+    return result
+
+
 def find_best_discount_row(session: Session, tour, lock: bool = False) -> TourDiscount | None:
     """Best active TourDiscount applicable to `tour`, across all three
     scopes. Highest resulting percent-off wins; ties favor the tour-specific
@@ -99,33 +159,10 @@ def find_best_discount_row(session: Session, tour, lock: bool = False) -> TourDi
     concurrent bookings can both read used_count < usage_limit and both
     increment it, letting the code be used more times than usage_limit
     permits (classic check-then-act race)."""
-    if not tour or not tour.id:
-        return None
-    now = datetime.now(timezone.utc)
-    query = session.query(TourDiscount).filter(
-        TourDiscount.status == "active",
-        # Promo-code discounts are opt-in; only code-free rows participate in
-        # automatic cart pricing.
-        TourDiscount.discount_code.is_(None),
-        *_live_window_conditions(now),
-        or_(*_scope_conditions(tour)),
-    )
-    if lock:
-        query = query.with_for_update()
-    rows = query.all()
-    if not rows:
-        return None
-
-    base_price = float(tour.price_start_per_person or 0)
-
-    def pct_for(row: TourDiscount) -> float:
-        if base_price <= 0:
-            return 0.0
-        pct = float(row.discount_value) if row.discount_type == "percentage" else (float(row.discount_value) / base_price) * 100
-        return round(min(90.0, max(0.0, pct)), 2)
-
-    best = max(rows, key=lambda row: (row.tour_id == tour.id, pct_for(row)))
-    return best if pct_for(best) > 0 else None
+    stack = find_active_discount_stack(session, tour, lock=lock)
+    # The public badge always advertises Tourvaa's offer when present;
+    # otherwise it falls back to the supplier's original discount.
+    return stack["tourvaa"] or stack["supplier"]
 
 
 def discount_percent_for_display(row: TourDiscount, base_price: float) -> float:

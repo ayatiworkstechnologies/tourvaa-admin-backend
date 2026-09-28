@@ -880,6 +880,10 @@ def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: Use
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
     payload = data.model_dump()
+    from app.services.supplier_scope import is_supplier_user
+    # Ownership determines the calculation stage; never trust the hidden
+    # client field (the UI historically sent SUPPLIER for admin discounts).
+    payload["funded_by"] = "SUPPLIER" if is_supplier_user(actor) else "TOURVAA"
     o = TourDiscount(tour_id=tour_id, **payload)
     db.add(o)
     db.flush()
@@ -905,8 +909,12 @@ def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPaylo
         existing = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == data.discount_code, TourDiscount.id != disc_id).first()
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
+    original_funded_by = o.funded_by
     for key, value in data.model_dump().items():
         setattr(o, key, value)
+    # Editing a discount cannot silently transfer it between the supplier
+    # and Tourvaa calculation stages.
+    o.funded_by = original_funded_by
     _record_discount_version(db, o, "edited", actor)
     log_audit(db, actor=actor, action="update_discount", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
@@ -1057,7 +1065,9 @@ def create_global_discount(db: Session, data, actor: User, request: Request | No
         existing = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == data.discount_code).first()
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
-    o = TourDiscount(**data.model_dump())
+    payload = data.model_dump()
+    payload["funded_by"] = "TOURVAA"
+    o = TourDiscount(**payload)
     db.add(o)
     db.flush()
     _record_discount_version(db, o, "created", actor)
@@ -1109,8 +1119,10 @@ def update_global_discount(db: Session, discount_id: int, data: GlobalDiscountPa
         existing = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == data.discount_code, TourDiscount.id != discount_id).first()
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
+    original_funded_by = o.funded_by
     for key, value in data.model_dump().items():
         setattr(o, key, value)
+    o.funded_by = original_funded_by
     _record_discount_version(db, o, "edited", actor)
     log_audit(db, actor=actor, action="update_discount", entity_type="discount", entity_id=discount_id, request=request)
     db.commit()

@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str = ""
     API_BASE_URL: str = "http://127.0.0.1:8000"
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = ""
     ALLOWED_ORIGINS: str = "*"
     # Only trust X-Forwarded-For for rate-limiting when requests genuinely
     # pass through a proxy that sets it - otherwise it's a header any direct

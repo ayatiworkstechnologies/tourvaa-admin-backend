@@ -137,23 +137,29 @@ def _active_discount(item: Tour) -> dict | None:
     admin/supplier "Basic tour details" preview, the public storefront, and
     what's actually charged at booking creation always agree."""
     from sqlalchemy.orm import object_session
-    from app.services.discounts import find_best_discount_row, discount_percent_for_display
+    from app.services.discounts import find_active_discount_stack, discount_percent_for_display
     session = object_session(item)
     if session is None:
         return None
-    row = find_best_discount_row(session, item)
-    if not row:
+    stack = find_active_discount_stack(session, item)
+    supplier_row, tourvaa_row = stack["supplier"], stack["tourvaa"]
+    if not supplier_row and not tourvaa_row:
         return None
     base_price = float(item.price_start_per_person or 0)
     if base_price <= 0:
         return None
-    pct = discount_percent_for_display(row, base_price)
+    supplier_pct = discount_percent_for_display(supplier_row, base_price) if supplier_row else 0
+    supplier_price = round(base_price * (1 - supplier_pct / 100), 2)
+    tourvaa_pct = discount_percent_for_display(tourvaa_row, supplier_price) if tourvaa_row else 0
+    pct = tourvaa_pct or supplier_pct
     if pct <= 0:
         return None
     return {
         "discount_percentage": pct,
-        "original_price_per_person": base_price,
-        "discounted_price_per_person": round(base_price * (1 - pct / 100), 2),
+        "supplier_discount_percentage": supplier_pct or None,
+        "tourvaa_discount_percentage": tourvaa_pct or None,
+        "original_price_per_person": supplier_price if tourvaa_pct else base_price,
+        "discounted_price_per_person": round(supplier_price * (1 - tourvaa_pct / 100), 2),
     }
 
 
