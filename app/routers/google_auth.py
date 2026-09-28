@@ -12,10 +12,12 @@ from app.config import settings
 from app.database import get_db
 from app.models.customers import Customer
 from app.models.roles import Role
+from app.models.settings import ApiSetting
 from app.models.users import User, UserRole, UserStatusHistory
 from app.routers.auth import _set_auth_cookies
 from app.services.auth import _finalize_login
 from app.utils.money import utcnow
+from app.utils.crypto import decrypt_secret
 
 
 router = APIRouter(prefix="/auth", tags=["Google Authentication"])
@@ -28,17 +30,33 @@ def _frontend_redirect(path: str = "/login", **params: str) -> RedirectResponse:
     return RedirectResponse(target, status_code=303)
 
 
+def _google_oauth_config(db: Session) -> tuple[str, str, str]:
+    """Resolve Admin Settings first, with environment variables as fallback."""
+    row = db.query(ApiSetting).filter(ApiSetting.api_name == "oauth_google").first()
+    if row:
+        if not row.is_enabled:
+            return "", "", ""
+        client_id = str(decrypt_secret(row.api_key) or "").strip()
+        client_secret = str(decrypt_secret(row.api_secret) or "").strip()
+    else:
+        client_id = settings.GOOGLE_CLIENT_ID.strip()
+        client_secret = settings.GOOGLE_CLIENT_SECRET.strip()
+    redirect_uri = settings.GOOGLE_REDIRECT_URI.strip() or f"{settings.FRONTEND_URL.rstrip('/')}/api/auth/google/callback"
+    return client_id, client_secret, redirect_uri
+
+
 @router.get("/google")
-async def google_login(redirect: str = "") -> RedirectResponse:
-    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET or not settings.GOOGLE_REDIRECT_URI:
+async def google_login(redirect: str = "", db: Session = Depends(get_db)) -> RedirectResponse:
+    client_id, client_secret, redirect_uri = _google_oauth_config(db)
+    if not client_id or not client_secret or not redirect_uri:
         raise HTTPException(status_code=503, detail="Google authentication is not configured")
     if redirect and (not redirect.startswith("/") or redirect.startswith("//")):
         raise HTTPException(status_code=400, detail="Invalid redirect path")
 
     state = create_token({"redirect": redirect}, token_type="google_oauth_state", expires_minutes=10)
     params = {
-        "client_id": settings.GOOGLE_CLIENT_ID,
-        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "openid email profile",
         "access_type": "offline",
@@ -48,15 +66,15 @@ async def google_login(redirect: str = "") -> RedirectResponse:
     return RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params))
 
 
-async def _google_identity(code: str) -> dict:
+async def _google_identity(code: str, client_id: str, client_secret: str, redirect_uri: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as client:
         token_response = await client.post(
             "https://oauth2.googleapis.com/token",
             data={
                 "code": code,
-                "client_id": settings.GOOGLE_CLIENT_ID,
-                "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
             },
         )
@@ -133,10 +151,13 @@ async def google_callback(
         return _frontend_redirect(oauth_error="google_invalid_callback")
 
     try:
+        client_id, client_secret, redirect_uri = _google_oauth_config(db)
+        if not client_id or not client_secret or not redirect_uri:
+            return _frontend_redirect(oauth_error="google_not_configured")
         state_payload = jwt.decode(state, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         if state_payload.get("token_type") != "google_oauth_state":
             raise JWTError("Invalid OAuth state")
-        identity = await _google_identity(code)
+        identity = await _google_identity(code, client_id, client_secret, redirect_uri)
         user = _find_or_create_google_user(db, identity)
         if user.two_factor_enabled:
             return _frontend_redirect(oauth_error="google_2fa_requires_password_login")
