@@ -46,7 +46,17 @@ def start_social_auth(provider: str, request: Request, redirect: str = "", db: S
     return RedirectResponse(url)
 
 
-@router.api_route("/{provider}/callback", methods=["GET", "POST"], name="social_auth_callback")
+@router.api_route(
+    "/{provider}/callback",
+    methods=["GET", "POST"],
+    name="social_auth_callback",
+    # One handler deliberately accepts both GET (Google/Facebook) and POST
+    # (Apple). FastAPI otherwise emits the same generated operation ID twice
+    # while building OpenAPI. These internal provider callbacks are not a
+    # consumer API, so keep them out of the schema rather than publishing a
+    # duplicate/ambiguous operation.
+    include_in_schema=False,
+)
 async def social_auth_callback(provider: str, request: Request):
     # Callback exchange is intentionally fail-closed until the provider keys
     # have been validated in the deployment. This prevents accepting an
