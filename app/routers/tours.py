@@ -76,6 +76,7 @@ from app.services.tours import (
     list_discount_history,
     list_date_prices,
     list_discounts,
+    _is_supplier_owned_discount,
     list_group_discount_tiers,
     list_exclusions,
     list_extensions,
@@ -596,7 +597,7 @@ def remove_unavailable(tour_id: int, date_id: int, request: Request, db: Session
 @router.get("/{tour_id}/discounts")
 def tour_discounts(tour_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(VIEW))):
     _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
-    return {"status": "success", "data": list_discounts(db, tour_id)}
+    return {"status": "success", "data": list_discounts(db, tour_id, supplier_only=is_supplier_user(current_user))}
 
 
 @router.post("/{tour_id}/discounts")
@@ -608,6 +609,12 @@ def add_discount(tour_id: int, data: DiscountPayload, request: Request, db: Sess
 @router.put("/{tour_id}/discounts/{discount_id}")
 def edit_tour_discount(tour_id: int, discount_id: int, data: DiscountPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
     _assert_supplier_owns_tour(db, tour_id, current_user)
+    if is_supplier_user(current_user):
+        from app.services.tours import _child_or_404
+        from app.models.tours import TourDiscount
+        discount = _child_or_404(db, TourDiscount, discount_id, tour_id, "Discount")
+        if not _is_supplier_owned_discount(db, discount):
+            raise HTTPException(status_code=404, detail="Discount not found")
     # Suppliers may only extend a discount's validity or raise its value --
     # never rename/recode/rescope/reactivate it outright. That's enforced
     # via the amend endpoint below; block the free-form full edit here.
@@ -619,6 +626,12 @@ def edit_tour_discount(tour_id: int, discount_id: int, data: DiscountPayload, re
 @router.patch("/{tour_id}/discounts/{discount_id}/amend")
 def amend_tour_discount(tour_id: int, discount_id: int, data: DiscountAmendment, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
     _assert_supplier_owns_tour(db, tour_id, current_user)
+    if is_supplier_user(current_user):
+        from app.services.tours import _child_or_404
+        from app.models.tours import TourDiscount
+        discount = _child_or_404(db, TourDiscount, discount_id, tour_id, "Discount")
+        if not _is_supplier_owned_discount(db, discount):
+            raise HTTPException(status_code=404, detail="Discount not found")
     return {"status": "success", "data": amend_discount(db, tour_id, discount_id, data, current_user, request)}
 
 
@@ -637,7 +650,11 @@ def tour_discount_history(tour_id: int, discount_id: int, db: Session = Depends(
     _assert_supplier_owns_tour(db, tour_id, current_user, view_only=True)
     from app.services.tours import _child_or_404
     from app.models.tours import TourDiscount
-    _child_or_404(db, TourDiscount, discount_id, tour_id, "Discount")
+    discount = _child_or_404(db, TourDiscount, discount_id, tour_id, "Discount")
+    if is_supplier_user(current_user) and not _is_supplier_owned_discount(db, discount):
+        # Do not reveal the existence/history of TourVaa-funded offers to a
+        # supplier. A 404 is intentional here rather than a permission leak.
+        raise HTTPException(status_code=404, detail="Discount not found")
     return {"status": "success", "data": list_discount_history(db, discount_id)}
 
 

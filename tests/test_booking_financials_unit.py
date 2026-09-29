@@ -25,6 +25,23 @@ def test_direct_booking_split_120_at_10_percent():
     assert r["tourvaa_gross_revenue"] == D("12.00")
 
 
+def test_supplier_offer_is_discounted_before_commission():
+    """A supplier's 10% offer cuts their settlement base before Tourvaa
+    takes its 10% commission: 100 -> 90 -> 9 commission -> 81 payout.
+
+    The storefront amount may include markup (135 here), but that markup
+    must never inflate the supplier commission or reduce the payout.
+    """
+    r = compute_booking_financial_split(
+        base_amount=135,
+        supplier_base_amount=90,
+        commission_percentage=10,
+    )
+    assert r["commission_base_amount"] == D("90.00")
+    assert r["commission_amount"] == D("9.00")
+    assert r["supplier_net_payable"] == D("81.00")
+
+
 def test_agent_commission_is_carved_out_of_tourvaa_share():
     split = compute_booking_financial_split(base_amount=120, commission_percentage=10)
     agent = SimpleNamespace(discount_type="percentage", discount_value=D("3"))

@@ -1009,7 +1009,7 @@ def _validate_supplier_lifecycle_transition(booking: Booking, target_status: str
     return True
 
 
-def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consume: bool = False):
+def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consume: bool = False, travel_date=None):
     """Look up and validate a promo code against tour_discounts. Raises 400 if the
     code doesn't exist or doesn't apply. When no code is supplied, auto-applies
     the same best-active discount the storefront/booking-flow already
@@ -1032,7 +1032,7 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
         # Supplier discounts have already reduced the supplier units before
         # markup in _price_booking. Only Tourvaa's own discount belongs here,
         # after markup, against the publishable/storefront subtotal.
-        row = find_active_discount_stack(db, tour, lock=consume)["tourvaa"]
+        row = find_active_discount_stack(db, tour, lock=consume, effective_at=travel_date)["tourvaa"]
         if not row or money(subtotal) < money(row.minimum_booking_amount or 0):
             return money(0), None
         if row.usage_limit is not None and (row.used_count or 0) >= row.usage_limit:
@@ -1307,9 +1307,10 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         supplier_adult_unit = money(date_override.adult_price)
         supplier_child_unit = money(date_override.child_price)
         price_source = "DATE_OVERRIDE"
+    discount_travel_date = calendar.tour_date if calendar and calendar.tour_date else _parse_dt(data.tour_start_date)
     if slab and tour:
         from app.services.discounts import find_active_discount_stack, discount_amount_for
-        supplier_discount = find_active_discount_stack(db, tour, lock=consume_discount)["supplier"]
+        supplier_discount = find_active_discount_stack(db, tour, lock=consume_discount, effective_at=discount_travel_date)["supplier"]
         raw_supplier_total = money(supplier_adult_unit * adults + supplier_child_unit * children)
         if supplier_discount and raw_supplier_total >= money(supplier_discount.minimum_booking_amount or 0):
             supplier_discount_amount = min(
@@ -1472,7 +1473,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # subtotal, so a promo percentage never gets computed against an amount
     # the customer was never actually going to pay.
     subtotal = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total)
-    discount, promo_discount_funded_by = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount)
+    discount, promo_discount_funded_by = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount, travel_date=discount_travel_date)
     # tax_percentage applies to the discounted subtotal (never on top of a
     # discount the customer isn't actually being charged); service_fee is a
     # flat per-booking amount, not per-traveller -- mirrors the group-discount

@@ -145,7 +145,7 @@ def _ser_overview(o: TourOverview):
     }
 
 
-def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
+def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime | None = None) -> dict[int, dict]:
     """Best active discount per tour (tour-specific, or category/country-
     wide), expressed as a percentage off price_start_per_person (a
     fixed-amount discount is converted to its percentage-equivalent for the
@@ -156,7 +156,7 @@ def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
     from app.services.discounts import find_active_discount_stack, discount_percent_for_display
     best: dict[int, dict] = {}
     for tour in tours:
-        stack = find_active_discount_stack(db, tour)
+        stack = find_active_discount_stack(db, tour, effective_at=effective_at)
         supplier_row, tourvaa_row = stack["supplier"], stack["tourvaa"]
         if not supplier_row and not tourvaa_row:
             continue
@@ -173,6 +173,8 @@ def _active_discount_map(db: Session, tours: list[Tour]) -> dict[int, dict]:
             "discount_percentage": display_pct,
             "supplier_discount_percentage": supplier_pct or None,
             "tourvaa_discount_percentage": tourvaa_pct or None,
+            "supplier_discount_name": supplier_row.discount_name if supplier_row else None,
+            "tourvaa_discount_name": tourvaa_row.discount_name if tourvaa_row else None,
             # When Tourvaa adds an offer, its comparison price is the
             # supplier-discounted, marked-up publishable price. Otherwise the
             # supplier's original discount compares against the raw storefront.
@@ -274,6 +276,10 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, revie
         "price_start_per_person": item.price_start_per_person,
         "currency": item.currency,
         "discount_percentage": discount_info["discount_percentage"] if discount_info else None,
+        "supplier_discount_percentage": discount_info["supplier_discount_percentage"] if discount_info else None,
+        "tourvaa_discount_percentage": discount_info["tourvaa_discount_percentage"] if discount_info else None,
+        "supplier_discount_name": discount_info.get("supplier_discount_name") if discount_info else None,
+        "tourvaa_discount_name": discount_info.get("tourvaa_discount_name") if discount_info else None,
         "original_price_per_person": discount_info["original_price_per_person"] if discount_info else None,
         "discounted_price_per_person": discount_info["discounted_price_per_person"] if discount_info else None,
         "country_name": country_name,
@@ -506,7 +512,7 @@ def public_tour_deposit_options(tour_id: int, travel_date: str = Query(...), db:
 
 
 @router.get("/tours/{country_slug}/{tour_slug}")
-def public_tour_detail_by_slug(country_slug: str, tour_slug: str, db: Session = Depends(get_db)):
+def public_tour_detail_by_slug(country_slug: str, tour_slug: str, travel_date: str = Query(default=""), db: Session = Depends(get_db)):
     """Resolve the canonical public tour URL and reject mismatched countries."""
     from fastapi import HTTPException
 
@@ -519,11 +525,11 @@ def public_tour_detail_by_slug(country_slug: str, tour_slug: str, db: Session = 
             status_code=404,
             detail={"message": "Tour not found for this country", "canonical_path": f"/tours/{expected_country}/{tour.slug}"},
         )
-    return public_tour_detail(tour.slug, db)
+    return public_tour_detail(tour.slug, travel_date, db)
 
 
 @router.get("/tours/{tour_id}")
-def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
+def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: Session = Depends(get_db)):
     from fastapi import HTTPException
     lookup = Tour.id == int(tour_id) if tour_id.isdigit() else Tour.slug == tour_id
     tour = db.query(Tour).filter(lookup, Tour.status == "published").first()
@@ -531,6 +537,12 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Tour not found")
 
     tour_id = tour.id
+    effective_at = None
+    if travel_date:
+        try:
+            effective_at = datetime.fromisoformat(travel_date).replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="travel_date must be an ISO date (YYYY-MM-DD)")
 
     overview = db.query(TourOverview).filter(TourOverview.tour_id == tour_id).first()
     itineraries = db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id).order_by(TourItinerary.day_number.asc()).all()
@@ -587,7 +599,7 @@ def public_tour_detail(tour_id: str, db: Session = Depends(get_db)):
     ]
     similar_discount_map = _active_discount_map(db, similar_tour_rows)
     similar_tours = [_public_tour(st, discount_map=similar_discount_map) for st in similar_tour_rows]
-    own_discount_map = _active_discount_map(db, [tour])
+    own_discount_map = _active_discount_map(db, [tour], effective_at=effective_at)
 
     return {
         "status": "success",

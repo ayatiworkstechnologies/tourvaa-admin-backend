@@ -111,7 +111,7 @@ def _discount_source(session: Session, row: TourDiscount) -> str:
     return "TOURVAA" if (row.funded_by or "SUPPLIER").upper() == "TOURVAA" else "SUPPLIER"
 
 
-def find_active_discount_stack(session: Session, tour, lock: bool = False) -> dict[str, TourDiscount | None]:
+def find_active_discount_stack(session: Session, tour, lock: bool = False, effective_at: datetime | None = None) -> dict[str, TourDiscount | None]:
     """Best automatic supplier and Tourvaa discounts, independently.
 
     Supplier discounts reduce the supplier price before markup.  Tourvaa
@@ -121,7 +121,13 @@ def find_active_discount_stack(session: Session, tour, lock: bool = False) -> di
     result: dict[str, TourDiscount | None] = {"supplier": None, "tourvaa": None}
     if not tour or not tour.id:
         return result
-    now = datetime.now(timezone.utc)
+    # Automatic tour offers are seasonal travel offers: their validity is
+    # evaluated against the selected departure when one is known. Falling
+    # back to now preserves the behaviour for tour-listing pages with no
+    # departure selected.
+    now = effective_at or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     query = session.query(TourDiscount).filter(
         TourDiscount.status == "active",
         TourDiscount.discount_code.is_(None),

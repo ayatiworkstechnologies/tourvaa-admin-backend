@@ -788,7 +788,29 @@ def _ser_discount(o: TourDiscount) -> dict:
     }
 
 
-def list_discounts(db: Session, tour_id: int) -> list[dict]:
+def _is_supplier_owned_discount(db: Session, discount: TourDiscount) -> bool:
+    """Whether a discount belongs in the supplier's private workspace.
+
+    The initial history author is authoritative because old admin-created
+    discounts were sometimes persisted with ``funded_by=SUPPLIER``.  For
+    imported rows without history, retain the legacy funded_by fallback.
+    """
+    from app.services.supplier_scope import is_supplier_user
+
+    first = (
+        db.query(TourDiscountHistory)
+        .filter(
+            TourDiscountHistory.discount_id == discount.id,
+            TourDiscountHistory.version_number == 1,
+        )
+        .first()
+    )
+    if first and first.changed_by_user:
+        return is_supplier_user(first.changed_by_user)
+    return (discount.funded_by or "SUPPLIER").upper() != "TOURVAA"
+
+
+def list_discounts(db: Session, tour_id: int, supplier_only: bool = False) -> list[dict]:
     """Tour-scoped discounts, each tagged with added_by ("supplier"/"admin",
     or None for legacy rows with no creation history) from its version-1
     TourDiscountHistory row -- so the view-only Discount History table can
@@ -808,6 +830,13 @@ def list_discounts(db: Session, tour_id: int) -> list[dict]:
     for o in discounts:
         creator = first_versions[o.id].changed_by_user if o.id in first_versions else None
         added_by = None if creator is None else ("supplier" if is_supplier_user(creator) else "admin")
+        # Supplier accounts may manage and audit only their own offers. A
+        # TourVaa storefront offer is commercial/admin-only information and
+        # never belongs in this list, even for legacy rows with the wrong
+        # funded_by value.
+        is_supplier_owned = added_by == "supplier" if added_by is not None else (o.funded_by or "SUPPLIER").upper() != "TOURVAA"
+        if supplier_only and not is_supplier_owned:
+            continue
         result.append({**_ser_discount(o), "added_by": added_by})
     return result
 
