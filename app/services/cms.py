@@ -2,7 +2,7 @@ from datetime import timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, Request
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from app.services.audit import log_audit
@@ -182,7 +182,16 @@ def list_countries(db: Session, page: int, limit: int, search: str = ""):
     if search:
         pattern = f"%{search.strip()}%"
         query = query.filter(or_(Country.country_name.ilike(pattern), Country.country_code.ilike(pattern)))
-    return simple_paginate(query.order_by(Country.country_name.asc()), page, limit, _country)
+    # Country Settings is also the public selector control panel. Put enabled
+    # countries first so administrators immediately see what is live, then
+    # keep each group alphabetical for predictable searching and paging.
+    active_first = case((Country.status == "active", 0), else_=1)
+    return simple_paginate(
+        query.order_by(active_first.asc(), Country.country_name.asc()),
+        page,
+        limit,
+        _country,
+    )
 
 
 def _flag_from_iso2(code: str) -> str:
