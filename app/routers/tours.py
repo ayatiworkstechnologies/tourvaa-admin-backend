@@ -615,11 +615,10 @@ def edit_tour_discount(tour_id: int, discount_id: int, data: DiscountPayload, re
         discount = _child_or_404(db, TourDiscount, discount_id, tour_id, "Discount")
         if not _is_supplier_owned_discount(db, discount):
             raise HTTPException(status_code=404, detail="Discount not found")
-    # Suppliers may only extend a discount's validity or raise its value --
-    # never rename/recode/rescope/reactivate it outright. That's enforced
-    # via the amend endpoint below; block the free-form full edit here.
-    if "supplier" in ((current_user.role.slug if current_user.role else "") or "").lower():
-        raise HTTPException(status_code=403, detail="Suppliers can only extend a discount's validity or increase its value -- use the amend action instead")
+        # Ownership is determined by the authenticated account, never by a
+        # request field. A supplier may edit only their own supplier-funded
+        # offer and cannot move it into TourVaa's storefront discount stage.
+        data.funded_by = "SUPPLIER"
     return {"status": "success", "data": update_discount(db, tour_id, discount_id, data, current_user, request)}
 
 
@@ -638,10 +637,12 @@ def amend_tour_discount(tour_id: int, discount_id: int, data: DiscountAmendment,
 @router.patch("/{tour_id}/discounts/{discount_id}/deactivate")
 def deactivate_tour_discount(tour_id: int, discount_id: int, data: DiscountDeactivateRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
     _assert_supplier_owns_tour(db, tour_id, current_user)
-    # Suppliers must not be able to delete/deactivate their own discount
-    # records -- only admins can.
-    if "supplier" in ((current_user.role.slug if current_user.role else "") or "").lower():
-        raise HTTPException(status_code=403, detail="Suppliers cannot delete or deactivate discounts -- contact an administrator")
+    if is_supplier_user(current_user):
+        from app.services.tours import _child_or_404
+        from app.models.tours import TourDiscount
+        discount = _child_or_404(db, TourDiscount, discount_id, tour_id, "Discount")
+        if not _is_supplier_owned_discount(db, discount):
+            raise HTTPException(status_code=404, detail="Discount not found")
     return {"status": "success", "data": deactivate_discount(db, tour_id, discount_id, current_user, data.reason, request)}
 
 

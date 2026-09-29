@@ -83,12 +83,19 @@ def test_discount_history_lists_versions(headers, first_tour_id):
     assert len(data) >= 1
 
 
-def test_discount_edit_and_delete_are_removed(headers, first_tour_id):
-    if not _DISCOUNT_ID:
-        pytest.skip("No discount created")
-    put_resp = requests.put(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}",
-                            headers=headers, json={"discount_name": "x"}, timeout=10)
-    assert put_resp.status_code in (404, 405)
-    delete_resp = requests.delete(f"{BASE_URL}/tours/{first_tour_id}/discounts/{_DISCOUNT_ID}",
-                                  headers=headers, timeout=10)
-    assert delete_resp.status_code in (404, 405)
+def test_discount_management_routes_support_audited_edit_and_soft_delete():
+    """Discounts are edited in place and deleted by deactivation.
+
+    A real DELETE would remove the price/audit record used by historical
+    bookings, so the product deliberately uses the deactivate route as its
+    safe delete/archive operation.
+    """
+    from app.main import app
+
+    paths = app.openapi()["paths"]
+    item_path = "/api/tours/{tour_id}/discounts/{discount_id}"
+    deactivate_path = f"{item_path}/deactivate"
+
+    assert "put" in paths[item_path]
+    assert "patch" in paths[deactivate_path]
+    assert "delete" not in paths[item_path]

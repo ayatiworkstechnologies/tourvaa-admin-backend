@@ -987,8 +987,8 @@ def deactivate_discount(db: Session, tour_id: int, disc_id: int, actor: User, re
     bookings, without touching the row or its history -- a discount that has
     already been used (TourDiscount.used_count > 0, or referenced by a real
     booking's discount_amount) must keep existing so past bookings' price
-    breakdowns still resolve correctly. Reactivating isn't exposed here;
-    that would need its own confirmation flow if ever needed."""
+    breakdowns still resolve correctly. Re-activation is handled through the
+    normal audited update endpoint."""
     o = _child_or_404(db, TourDiscount, disc_id, tour_id, "Discount")
     if o.status == "inactive":
         raise HTTPException(status_code=409, detail="This discount is already inactive")
