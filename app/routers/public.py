@@ -175,6 +175,11 @@ def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime 
             "tourvaa_discount_percentage": tourvaa_pct or None,
             "supplier_discount_name": supplier_row.discount_name if supplier_row else None,
             "tourvaa_discount_name": tourvaa_row.discount_name if tourvaa_row else None,
+            # Explicit price stages for storefront clients. Keep the legacy
+            # original_price_per_person comparison value below unchanged: it
+            # is the price immediately before a TourVaa offer.
+            "storefront_original_price_per_person": base_price,
+            "supplier_discounted_price_per_person": supplier_price,
             # When Tourvaa adds an offer, its comparison price is the
             # supplier-discounted, marked-up publishable price. Otherwise the
             # supplier's original discount compares against the raw storefront.
@@ -254,6 +259,12 @@ def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscou
             raw_child = row["child_price_per_person"]
             supplier_adult = raw_adult * (1 - supplier_pct / 100)
             supplier_child = raw_child * (1 - supplier_pct / 100)
+            # Preserve each stage so a client never has to reverse-engineer
+            # a percentage (which can lose cents with fixed-value offers).
+            row["storefront_original_price_per_person"] = round(raw_adult, 2)
+            row["storefront_original_child_price_per_person"] = round(raw_child, 2)
+            row["supplier_discounted_price_per_person"] = round(supplier_adult, 2)
+            row["supplier_discounted_child_price_per_person"] = round(supplier_child, 2)
             row["original_price_per_person"] = round(supplier_adult if tourvaa_pct else raw_adult, 2)
             row["original_child_price_per_person"] = round(supplier_child if tourvaa_pct else raw_child, 2)
             row["price_per_person"] = round(max(0.0, supplier_adult * (1 - tourvaa_pct / 100)), 2)
@@ -280,6 +291,8 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, revie
         "tourvaa_discount_percentage": discount_info["tourvaa_discount_percentage"] if discount_info else None,
         "supplier_discount_name": discount_info.get("supplier_discount_name") if discount_info else None,
         "tourvaa_discount_name": discount_info.get("tourvaa_discount_name") if discount_info else None,
+        "storefront_original_price_per_person": discount_info.get("storefront_original_price_per_person") if discount_info else None,
+        "supplier_discounted_price_per_person": discount_info.get("supplier_discounted_price_per_person") if discount_info else None,
         "original_price_per_person": discount_info["original_price_per_person"] if discount_info else None,
         "discounted_price_per_person": discount_info["discounted_price_per_person"] if discount_info else None,
         "country_name": country_name,

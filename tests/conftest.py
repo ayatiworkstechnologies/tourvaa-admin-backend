@@ -9,9 +9,36 @@ import time
 import pytest
 import requests
 
+def _configured_admin_password() -> str:
+    """Resolve the super-admin password the test suite should authenticate with.
+
+    Precedence: TOURVAA_TEST_ADMIN_PASSWORD -> SUPER_ADMIN_PASSWORD (process env)
+    -> the app's own configured value from .env -> last-resort default.
+
+    Reading the app settings matters: SUPER_ADMIN_PASSWORD lives in .env, which
+    is NOT loaded into the pytest process's environment. Without this fallback the
+    suite silently fell back to the hardcoded "Admin@123" default while the real
+    super-admin used a different password - every admin login then 401'd, the
+    failed-attempt counter climbed to LOGIN_MAX_FAILED_ATTEMPTS, and the account
+    locked itself out (HTTP 423) for the whole run.
+    """
+    for name in ("TOURVAA_TEST_ADMIN_PASSWORD", "SUPER_ADMIN_PASSWORD"):
+        value = os.environ.get(name)
+        if value:
+            return value
+    try:
+        from app.config import settings
+        if settings.SUPER_ADMIN_PASSWORD:
+            return settings.SUPER_ADMIN_PASSWORD
+    except Exception:  # pragma: no cover - app not importable, fall through
+        pass
+    return "Admin@123"
+
+
+
 BASE_URL = os.environ.get("TOURVAA_TEST_BASE_URL", "http://127.0.0.1:8000/api").rstrip("/")
 ADMIN_EMAIL = os.environ.get("TOURVAA_TEST_ADMIN_EMAIL", os.environ.get("SUPER_ADMIN_EMAIL", "admin@tourvaa.com"))
-ADMIN_PASSWORD = os.environ.get("TOURVAA_TEST_ADMIN_PASSWORD", os.environ.get("SUPER_ADMIN_PASSWORD", "Admin@123"))
+ADMIN_PASSWORD = _configured_admin_password()
 
 WRITE_TESTS = os.environ.get("TOURVAA_WRITE_TESTS", "0") == "1"
 
@@ -66,6 +93,80 @@ def login_with_retry(email: str, password: str, attempts: int = 12, backoff: flo
         last = resp
         time.sleep(backoff)
     return last
+
+
+# Disposable account used ONLY to exercise the wrong-password branch of
+# POST /auth/login. Fixed email (not a unique() one) so repeated full-suite runs
+# refresh the same row instead of piling up new users.
+NEGATIVE_LOGIN_EMAIL = "pytest.wrongpassword@tourvaa.test"
+NEGATIVE_LOGIN_PASSWORD = "CorrectHorse9!"
+
+
+def ensure_negative_login_account() -> str:
+    """Create/refresh a disposable account for bad-password login tests.
+
+    Why this exists: the account lockout policy (LOGIN_MAX_FAILED_ATTEMPTS,
+    default 5) is enforced per *user row*, so any test that deliberately posts a
+    bad password MUST NOT aim at the shared super-admin account. Doing so
+    increments the real admin's failed_login_attempts; once it reaches the
+    threshold the admin is locked for LOGIN_LOCKOUT_MINUTES and every
+    session-scoped fixture that logs in as the admin (token/headers, and with
+    them the whole downstream suite - supplier/agent portals, reports, dashboard,
+    reviews) dies at fixture setup with HTTP 423. The suite poisons itself and
+    every later run stays broken until the lock expires.
+
+    This account is refreshed (password re-set, lockout counters cleared) on
+    every call, so it can absorb an arbitrary number of bad-password attempts
+    without affecting any other test.
+
+    Uses a customer-role account: login_user() checks the password BEFORE the
+    email-verification gate, so a bad password still returns 401 without the
+    account needing to be verified or approved.
+    """
+    import app.main  # noqa: F401 - ensures every model is registered before mapper configuration
+    from app.utils.money import utcnow
+    from app.database import SessionLocal
+    from app.models.users import User, UserRole
+    from app.models.roles import Role
+    from app.models.customers import Customer
+    from app.auth.security import hash_password
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == NEGATIVE_LOGIN_EMAIL).first()
+        if user is None:
+            role = db.query(Role).filter(Role.slug == "customer", Role.is_active == True).first()
+            assert role, "Role 'customer' is not seeded"
+            user = User(
+                name="Pytest Wrong Password",
+                email=NEGATIVE_LOGIN_EMAIL,
+                phone="+919000000001",
+                country_code="+91",
+                mobile_number="+919000000001",
+                password=hash_password(NEGATIVE_LOGIN_PASSWORD),
+                role_id=role.id,
+                user_type="CUSTOMER",
+                is_active=True,
+                approval_status="NOT_REQUIRED",
+                email_verified=True,
+                email_verified_at=utcnow(),
+                account_status="ACTIVE",
+            )
+            db.add(user)
+            db.flush()
+            db.add(UserRole(user_id=user.id, role_id=role.id))
+            db.add(Customer(user_id=user.id, first_name="Pytest", last_name="WrongPassword",
+                            full_name="Pytest Wrong Password", email=NEGATIVE_LOGIN_EMAIL,
+                            phone="+919000000001", status="active", email_verified=True))
+        # Always reset: known password, no lingering lockout from a prior run.
+        user.password = hash_password(NEGATIVE_LOGIN_PASSWORD)
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.is_active = True
+        db.commit()
+        return NEGATIVE_LOGIN_EMAIL
+    finally:
+        db.close()
 
 
 def create_active_account(role_slug: str, user_type: str, name: str, email: str, phone: str, password: str):
