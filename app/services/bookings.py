@@ -41,6 +41,7 @@ from app.services.settings import (
 from app.models.customers import Customer
 from app.models.agents import Agent
 from app.models.suppliers import Supplier
+from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierPayoutItem
 from app.models.tours import TourAccommodationExtra, TourCalendar, TourDatePrice, TourDiscount, TourExtension, TourGroupDiscountTier, TourOptionalActivity, TourPricing, TourUnavailableDate
 from app.models.users import User
 
@@ -691,6 +692,9 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "customer_name": booking.customer.full_name if booking.customer else None,
         "customer_email": booking.customer.email if booking.customer else None,
         "tour_id": booking.tour_id,
+        "tour_slug": booking.tour.slug if booking.tour else None,
+        "tour_image": booking.tour.banner_image if booking.tour else None,
+        "tour_country_name": booking.tour.country.country_name if booking.tour and booking.tour.country else booking.country,
         "tour_calendar_id": booking.tour_calendar_id,
         # Kept even when hide_supplier_identity is set: it's never rendered
         # in the customer/agent UI, only used as a "does this booking have a
@@ -810,6 +814,21 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         # serializer (see get_booking_detail's include_supplier_breakdown gate).
         if include_supplier_breakdown:
             breakdown = compute_booking_supplier_financials(db, booking)
+            supplier_ledger = (
+                db.query(SupplierLedger)
+                .filter(SupplierLedger.booking_id == booking.id)
+                .order_by(SupplierLedger.id.desc())
+                .first()
+            )
+            supplier_payout = None
+            if supplier_ledger:
+                supplier_payout = (
+                    db.query(SupplierPayout)
+                    .join(SupplierPayoutItem, SupplierPayoutItem.payout_id == SupplierPayout.id)
+                    .filter(SupplierPayoutItem.ledger_id == supplier_ledger.id)
+                    .order_by(SupplierPayout.paid_at.desc(), SupplierPayout.id.desc())
+                    .first()
+                )
             data["supplier_breakdown"] = {
                 "currency": breakdown["currency"],
                 "gross_amount": money_str(breakdown["gross_amount"]),
@@ -824,6 +843,8 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
                 # payouts). Tax, service fee and gateway fee are separate
                 # pass-through buckets, not margin.
                 "tourvaa_margin": money_str(booking.tourvaa_gross_revenue) if booking.tourvaa_gross_revenue is not None else money_str(breakdown["commission_amount"]),
+                "payment_status": supplier_ledger.status if supplier_ledger else "pending",
+                "payment_date": supplier_payout.paid_at if supplier_payout and supplier_payout.status == "paid" else None,
             } if breakdown else None
             # Booking financial snapshot (see Booking model /
             # _apply_commission_snapshot) - admin-only, same gate as
@@ -923,6 +944,72 @@ def serialize_booking_for_actor(db: Session, booking: Booking, actor: Optional[U
     role = _user_role(actor)
     data = serialize_booking(db, booking, detail=detail, hide_supplier_identity=role in ("customer", "agent"))
     return _supplier_safe(data, booking) if role == "supplier" else data
+
+
+def _agent_payment_summary(db: Session, booking: Booking) -> dict | None:
+    """Return agent-only settlement data from the authoritative ledger records."""
+    if booking.booking_source != "agent" or booking.agent_id is None:
+        return None
+
+    from app.models.agent_ledger import AgentLedger, AgentPayout, AgentPayoutItem
+    from app.models.invoices import Invoice
+
+    ledger = db.query(AgentLedger).filter(AgentLedger.booking_id == booking.id).order_by(AgentLedger.id.desc()).first()
+    payout = None
+    if ledger:
+        payout = (
+            db.query(AgentPayout)
+            .join(AgentPayoutItem, AgentPayoutItem.payout_id == AgentPayout.id)
+            .filter(AgentPayoutItem.ledger_id == ledger.id, AgentPayout.status == "paid")
+            .order_by(AgentPayout.paid_at.desc(), AgentPayout.id.desc())
+            .first()
+        )
+    invoice = db.query(Invoice).filter(Invoice.booking_id == booking.id).order_by(Invoice.id.desc()).first()
+    reserved = (booking.agent_payment_method or "").lower() in {"pay_later", "credit", "bank_transfer"}
+
+    return {
+        "transaction_type": "Booking Reserved" if reserved else "Full Payment",
+        "is_reserved": reserved,
+        "amount_paid": money_str(booking.amount_paid),
+        "total_booking_amount": money_str(booking.final_amount),
+        "commission_percentage": money_str(ledger.commission_percentage if ledger else booking.agent_commission_percentage),
+        "commission_amount": money_str(ledger.commission_amount if ledger else booking.agent_commission_amount),
+        "commission_payable": money_str(ledger.net_payable if ledger else booking.agent_commission_amount),
+        "commission_status": ledger.status if ledger else "pending",
+        "commission_payment_date": payout.paid_at.isoformat() if payout and payout.paid_at else None,
+        "agent_price": money_str(booking.agent_net_price),
+        "invoice_status": invoice.status if invoice else "pending",
+        "payment_due_date": (
+            invoice.balance_due_date.isoformat() if invoice and invoice.balance_due_date
+            else booking.payment_due_date.isoformat() if booking.payment_due_date else None
+        ),
+    }
+
+
+def _supplier_payment_summary(db: Session, booking: Booking) -> dict | None:
+    """Supplier-safe settlement fields; never includes the customer price."""
+    breakdown = compute_booking_supplier_financials(db, booking)
+    if not breakdown:
+        return None
+    ledger = db.query(SupplierLedger).filter(SupplierLedger.booking_id == booking.id).order_by(SupplierLedger.id.desc()).first()
+    payout = None
+    if ledger:
+        payout = (
+            db.query(SupplierPayout)
+            .join(SupplierPayoutItem, SupplierPayoutItem.payout_id == SupplierPayout.id)
+            .filter(SupplierPayoutItem.ledger_id == ledger.id, SupplierPayout.status == "paid")
+            .order_by(SupplierPayout.paid_at.desc(), SupplierPayout.id.desc())
+            .first()
+        )
+    return {
+        "currency": breakdown["currency"],
+        "gross_amount": money_str(breakdown["gross_amount"]),
+        "commission_percentage": money_str(breakdown["commission_percentage"]),
+        "commission_amount": money_str(breakdown["commission_amount"]),
+        "net_payable": money_str(breakdown["net_payable"]),
+        "payment_status": ledger.status if ledger else "pending",
+        "payment_date": payout.paid_at.isoformat() if payout and payout.paid_at else None,
+    }
 
 
 def serialize_traveller(t: BookingTraveller) -> dict:
@@ -1540,6 +1627,18 @@ def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
 
 def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_status: str = "", payment_status: str = "", supplier_acceptance_status: str = "", country_id: Optional[int] = None, supplier_id: Optional[int] = None, agent_id: Optional[int] = None, tour_id: Optional[int] = None, start_date: str = "", end_date: str = "", sort_by: str = "newest", actor: Optional[User] = None) -> dict:
     query = db.query(Booking).options(joinedload(Booking.customer))
+    # Gateway checkout needs a booking ID before redirecting to Stripe/PayPal.
+    # Until money is received that row is only a provisional checkout record,
+    # not a user-visible booking. Hiding it here keeps abandoned/back-button
+    # checkouts out of customer, supplier, agent and admin booking lists. Paid
+    # and partially-paid bookings remain visible even if their workflow status
+    # has not advanced yet.
+    query = query.filter(
+        or_(
+            Booking.booking_status != "pending_payment",
+            Booking.payment_status.notin_(("unpaid", "pending")),
+        )
+    )
     role = _user_role(actor)
     if role == "supplier":
         query = query.join(Booking.supplier).filter_by(user_id=actor.id)
@@ -1593,7 +1692,12 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
         include_supplier_breakdown=role == "admin",
         hide_supplier_identity=role in ("customer", "agent"),
     )
-    return _supplier_safe(data, booking) if role == "supplier" else data
+    if role in ("admin", "agent"):
+        data["agent_payment_summary"] = _agent_payment_summary(db, booking)
+    if role == "supplier":
+        data = _supplier_safe(data, booking)
+        data["supplier_payment_summary"] = _supplier_payment_summary(db, booking)
+    return data
 
 
 def _validate_customer_travellers(data: BookingCreate, adults: int, children: int) -> None:
