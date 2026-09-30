@@ -22,6 +22,10 @@ CMS_CREATE_PERMS = ("website_cms.create",)
 CMS_EDIT_PERMS = ("website_cms.edit",)
 CMS_DELETE_PERMS = ("website_cms.delete",)
 CMS_VIEW_PERMS = ("website_cms.view", "website_cms.edit", "website_cms.create")
+BLOG_VIEW_PERMS = ("blogs.view", *CMS_VIEW_PERMS)
+BLOG_CREATE_PERMS = ("blogs.create", *CMS_CREATE_PERMS)
+BLOG_EDIT_PERMS = ("blogs.edit", *CMS_EDIT_PERMS)
+BLOG_DELETE_PERMS = ("blogs.delete", *CMS_DELETE_PERMS)
 
 
 def _require_view_for_unfiltered(unfiltered: bool, current_user: "User | None", db: Session) -> None:
@@ -197,26 +201,27 @@ def upsert_content_block(key: str, data: ContentBlockPayload, db: Session = Depe
 
 @router.get("/blogs")
 def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(default=False), slug: str = Query(default=""), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
-    _require_view_for_unfiltered(not active_only, current_user, db)
+    if not active_only and not user_has_any_permission(db, current_user, *BLOG_VIEW_PERMS):
+        raise HTTPException(status_code=403, detail="blogs.view permission required to view drafts")
     return {"status": "success", **service.list_blogs(db, pagination["page"], pagination["limit"], active_only, slug)}
 
 @router.get("/blogs/{item_id}")
 def get_blog(item_id: int, db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
     blog = service.get_blog(db, item_id)
-    if blog.get("status") != "published" and not user_has_any_permission(db, current_user, *CMS_VIEW_PERMS):
+    if blog.get("status") != "published" and not user_has_any_permission(db, current_user, *BLOG_VIEW_PERMS):
         raise HTTPException(status_code=404, detail="Blog not found")
     return {"status": "success", "data": blog}
 
 @router.post("/blogs")
-def create_blog(data: BlogPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_CREATE_PERMS))):
+def create_blog(data: BlogPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*BLOG_CREATE_PERMS))):
     return {"status": "success", "data": service.create_blog(db, data)}
 
 @router.put("/blogs/{item_id}")
-def update_blog(item_id: int, data: BlogPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_EDIT_PERMS))):
+def update_blog(item_id: int, data: BlogPayload, db: Session = Depends(get_db), _=Depends(require_any_permission(*BLOG_EDIT_PERMS))):
     return {"status": "success", "data": service.update_blog(db, item_id, data)}
 
 @router.delete("/blogs/{item_id}")
-def delete_blog(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*CMS_DELETE_PERMS))):
+def delete_blog(item_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission(*BLOG_DELETE_PERMS))):
     service.delete_blog(db, item_id)
     return {"status": "success", "message": "Blog deleted"}
 

@@ -51,6 +51,7 @@ MODULES = [
     ("email", "Email Templates"),
     ("settings", "Settings"),
     ("website_cms", "Website CMS"),
+    ("blogs", "Blogs"),
     ("chatbot", "Chatbot"),
     ("profile", "Profile"),
 ]
@@ -157,6 +158,7 @@ OPERATIONAL_PERMISSIONS = [
     ("supplier_ledger", "Supplier Ledger", ["view", "create_payout", "approve", "mark_paid", "export"]),
     ("agent_ledger", "Agent Ledger", ["view", "create_payout", "approve", "mark_paid", "export"]),
     ("website_cms", "Website CMS", ["view", "create", "edit", "delete"]),
+    ("blogs", "Blogs", ["view", "create", "edit", "delete"]),
 ]
 
 # Booking lifecycle, financial, and system module granular permissions

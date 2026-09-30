@@ -127,6 +127,8 @@ class Blog(Base):
     excerpt = Column(Text, nullable=True)
     content = Column(Text, nullable=True)
     featured_image = Column(String(255), nullable=True)
+    banner_title = Column(String(200), nullable=True)
+    banner_alt = Column(String(300), nullable=True)
     author = Column(String(120), nullable=True)
     tags = Column(JSON, nullable=True)
     seo_title = Column(String(200), nullable=True)

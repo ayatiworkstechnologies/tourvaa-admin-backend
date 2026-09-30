@@ -23,6 +23,13 @@ BOOKING_INFO_PHRASES = (
     "when do i travel", "my upcoming",
 )
 
+TRAVEL_GUIDE_PHRASES = (
+    "plan a trip", "plan my trip", "trip planning", "travel guide",
+    "build an itinerary", "make an itinerary", "travel itinerary",
+    "things to do", "what should i pack", "what to pack", "packing list",
+    "family trip", "family tour", "honeymoon", "couples trip", "solo trip",
+)
+
 
 def _normalise(value: str) -> str:
     return " ".join(value.lower().strip().split())
@@ -37,6 +44,39 @@ def _keyword_score(message: str, *texts: str | None) -> int:
 def _wants_booking_info(user_message: str) -> bool:
     msg = _normalise(user_message)
     return any(phrase in msg for phrase in BOOKING_INFO_PHRASES)
+
+
+def _is_travel_guide_request(user_message: str) -> bool:
+    msg = _normalise(user_message)
+    return any(phrase in msg for phrase in TRAVEL_GUIDE_PHRASES)
+
+
+def _travel_guide_reply(db: Session, user_message: str) -> tuple[str, str | None, dict | None]:
+    """Helpful, bounded travel-planning guidance when the visitor has not
+    yet selected a specific Tourvaa product. Facts about a tour still come
+    from the RAG/catalogue flow below; this only guides the next decision."""
+    msg = _normalise(user_message)
+    if "pack" in msg:
+        return (
+            "A good starting packing list is: travel documents, any visa or entry documents you need, medication, a reusable water bottle, weather-appropriate layers, comfortable walking shoes, a power adapter, and travel insurance details.\n\nTell me your destination, travel month, and tour style (city, beach, nature, or adventure) and I will tailor the list.",
+            None,
+            None,
+        )
+
+    if any(word in msg for word in ("family", "honeymoon", "couple", "solo")):
+        tours = _top_tours(db, limit=4)
+        reply = (
+            "I can help you find the right trip. For a tailored recommendation, share your destination, travel dates, traveller ages, budget, and preferred pace.\n\n"
+            "Here are a few popular tours to begin with - open one to check its itinerary and availability:"
+        )
+        return reply, "show_tours", {"tours": _tour_cards(tours)} if tours else None
+
+    return (
+        "I would love to help plan your trip. Send me these details and I will guide you to suitable tours:\n"
+        "- Destination or region\n- Travel dates or month\n- Number of travellers and ages of children, if any\n- Interests (culture, food, wildlife, beach, adventure, or relaxation)\n- Approximate budget\n\nYou can also ask for popular destinations or top tours.",
+        None,
+        None,
+    )
 
 
 def _get_customer_bookings_context(db: Session, customer_id: int) -> str:
@@ -526,6 +566,9 @@ def _answer_with_rag(
         if "bye" in msg:
             return "Goodbye! Have a great day, and happy travels.", None, None
         return _rule_based_reply(db, user_message, faqs)
+
+    if _is_travel_guide_request(user_message):
+        return _travel_guide_reply(db, user_message)
 
     from app.services import rag_answer
 

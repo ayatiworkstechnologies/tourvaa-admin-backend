@@ -506,6 +506,16 @@ def dashboard_summary(
         completed = booking_query.filter(Booking.booking_status == "completed").count()
         cancelled = booking_query.filter(Booking.booking_status.in_(["cancelled", "declined", "refunded"])).count()
         eligible_query = booking_query.filter(Booking.booking_status.notin_(["cancelled", "declined", "refunded"]))
+        # Monetary booking fields are stored in the booking's captured
+        # currency. Never label a sum of USD, INR, NZD, etc. as a single
+        # currency on the agent dashboard: that would look like a real amount
+        # while being mathematically meaningless. The frontend therefore
+        # shows money only when this filtered summary is single-currency.
+        summary_currencies = sorted({
+            str(row[0] or "USD").upper()
+            for row in eligible_query.with_entities(Booking.currency).distinct().all()
+        })
+        summary_currency = summary_currencies[0] if len(summary_currencies) == 1 else None
         paid_revenue = float(eligible_query.with_entities(
             sqlfunc.coalesce(sqlfunc.sum(Booking.amount_paid), 0)
         ).scalar() or 0)
@@ -546,6 +556,9 @@ def dashboard_summary(
                 "commission_earned": commission_earned,
                 "gross_booking_value": gross_value,
                 "pending_payments": _safe_query_sum(eligible_query, Booking.amount_pending),
+                "currency": summary_currency,
+                "has_mixed_currencies": len(summary_currencies) > 1,
+                "currencies": summary_currencies,
                 "discount_type": agent.discount_type,
                 "discount_value": float(agent.discount_value or 0),
                 "agent_approval_status": agent.approval_status,

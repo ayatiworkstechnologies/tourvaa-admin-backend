@@ -87,6 +87,8 @@ class BlogPayload(BaseModel):
     excerpt: Optional[str] = None
     content: Optional[str] = None
     featured_image: Optional[str] = None
+    banner_title: Optional[str] = None
+    banner_alt: Optional[str] = None
     author: Optional[str] = None
     tags: Optional[List[str]] = None
     seo_title: Optional[str] = None

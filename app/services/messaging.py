@@ -12,6 +12,7 @@ from app.models.customers import Customer
 from app.models.messaging import BookingConversation, BookingMessage, Conversation, Message
 from app.models.suppliers import Supplier
 from app.models.users import User
+from app.services.notifications import enqueue_notification, notify_admins
 from app.services.messaging_ws import ws_manager
 from app.utils.money import utcnow
 
@@ -19,6 +20,12 @@ logger = logging.getLogger(__name__)
 
 PARTICIPANT_TYPES = ("agent", "supplier", "customer", "affiliate")
 PREVIEW_LENGTH = 160
+
+
+def _notification_preview(body: str) -> str:
+    """Keep notification and browser-push bodies short and readable."""
+    clean = " ".join((body or "").split())
+    return clean if len(clean) <= PREVIEW_LENGTH else f"{clean[:PREVIEW_LENGTH - 1].rstrip()}…"
 
 
 def participant_type_for_user(user: User) -> Optional[str]:
@@ -159,6 +166,15 @@ async def send_message_as_participant(db: Session, user: User, body: str) -> dic
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
     conv.admin_unread_count = (conv.admin_unread_count or 0) + 1
+    sender_name = _participant_profile(db, conv.participant_type, user).get("name") or "A portal user"
+    notify_admins(
+        db,
+        notification_type="support_message_received",
+        title=f"New {conv.participant_type} support message",
+        message=f"{sender_name}: {_notification_preview(body)}",
+        entity_type="conversation",
+        entity_id=conv.id,
+    )
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
@@ -185,6 +201,15 @@ async def send_message_as_admin(db: Session, conversation_id: int, admin_user: U
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
     conv.participant_unread_count = (conv.participant_unread_count or 0) + 1
+    enqueue_notification(
+        db,
+        user_id=conv.participant_user_id,
+        notification_type="support_message_received",
+        title="New message from Tourvaa Admin",
+        message=_notification_preview(body),
+        entity_type="conversation",
+        entity_id=conv.id,
+    )
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
@@ -397,6 +422,15 @@ async def send_booking_message_as_initiator(db: Session, booking_id: int, actor:
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
     conv.supplier_unread_count = (conv.supplier_unread_count or 0) + 1
+    enqueue_notification(
+        db,
+        user_id=conv.supplier_user_id,
+        notification_type="booking_message_received",
+        title="New booking message",
+        message=_notification_preview(body),
+        entity_type="booking_conversation",
+        entity_id=conv.id,
+    )
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
@@ -420,6 +454,15 @@ async def send_booking_message_as_supplier(db: Session, conversation_id: int, su
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
     conv.initiator_unread_count = (conv.initiator_unread_count or 0) + 1
+    enqueue_notification(
+        db,
+        user_id=conv.initiator_user_id,
+        notification_type="booking_message_received",
+        title="New booking message",
+        message=_notification_preview(body),
+        entity_type="booking_conversation",
+        entity_id=conv.id,
+    )
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
