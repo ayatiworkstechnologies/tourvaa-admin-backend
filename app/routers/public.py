@@ -60,6 +60,8 @@ class PublicPriceQuoteRequest(BaseModel):
     travel_date: str = Field(min_length=10, max_length=32)
     adults: int = Field(ge=1, le=99)
     children: int = Field(default=0, ge=0, le=99)
+    optional_activity_ids: list[int] = Field(default_factory=list)
+    tour_extension_ids: list[int] = Field(default_factory=list)
 
 
 @router.post("/contact")
@@ -565,7 +567,7 @@ def public_tour_price_quote(
     group tiers, taxes, service fees, and gateway fees in lockstep with the
     amount that will be charged later.
     """
-    check_rate_limit(request, "public-price-quote", max_calls=30, window_seconds=60)
+    check_rate_limit(request, "public-price-quote", max_calls=180, window_seconds=60)
     tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
     if not tour:
         raise HTTPException(status_code=404, detail="Tour not found")
@@ -581,7 +583,7 @@ def public_tour_price_quote(
     if not calendar:
         raise HTTPException(status_code=400, detail="Selected tour date is unavailable")
 
-    from app.schemas.bookings import BookingCreate
+    from app.schemas.bookings import BookingAddonPayload, BookingCreate
     from app.services.bookings import calculate_booking_price
 
     quote = calculate_booking_price(db, BookingCreate(
@@ -595,6 +597,8 @@ def public_tour_price_quote(
         adults_count=payload.adults,
         children_count=payload.children,
         currency=tour.currency or "USD",
+        optional_activities=[BookingAddonPayload(id=item_id, quantity=1) for item_id in payload.optional_activity_ids],
+        extensions=[BookingAddonPayload(id=item_id, quantity=1) for item_id in payload.tour_extension_ids],
     ))
     return {"status": "success", "data": quote}
 

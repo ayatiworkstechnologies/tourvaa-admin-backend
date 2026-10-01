@@ -1556,16 +1556,22 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             non_commissionable_addon_total += total
         extension_rows.append((row, qty, unit, total))
 
-    # Group discount is applied before the promo code, off the group-discounted
-    # subtotal, so a promo percentage never gets computed against an amount
-    # the customer was never actually going to pay.
-    subtotal = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total)
-    discount, promo_discount_funded_by = _resolve_discount(db, data.promo_code, tour, subtotal, consume=consume_discount, travel_date=discount_travel_date)
-    # tax_percentage applies to the discounted subtotal (never on top of a
-    # discount the customer isn't actually being charged); service_fee is a
-    # flat per-booking amount, not per-traveller -- mirrors the group-discount
-    # -then-promo-code ordering just above.
-    taxable_amount = money(subtotal - discount)
+    # Group and promotional discounts apply to the tour fare only. Extras are
+    # separately selected products, so they must never increase the value of a
+    # tour offer or be discounted by it.
+    discounted_tour_amount = money(base_amount - group_discount_amount)
+    addon_total = money(activity_total + accommodation_total + extension_total)
+    discount, promo_discount_funded_by = _resolve_discount(
+        db,
+        data.promo_code,
+        tour,
+        discounted_tour_amount,
+        consume=consume_discount,
+        travel_date=discount_travel_date,
+    )
+    # Tax remains payable on the full selected order, after the tour-only
+    # discount; service_fee is a flat per-booking amount.
+    taxable_amount = money(discounted_tour_amount - discount + addon_total)
     tax_percentage = money(getattr(tour, "tax_percentage", 0) or 0) if tour else money(0)
     tax = money(taxable_amount * tax_percentage / money(100)) if tax_percentage > 0 else money(0)
     service_fee = money(getattr(tour, "service_fee", 0) or 0) if tour else money(0)
@@ -1576,7 +1582,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     gateway_fee_percentage = money(getattr(tour, "gateway_fee_percentage", 0) or 0) if tour else money(0)
     gateway_fee = money((taxable_amount + tax) * gateway_fee_percentage / money(100)) if gateway_fee_percentage > 0 else money(0)
     surcharge = money(service_fee + gateway_fee)
-    final = money(base_amount - group_discount_amount + activity_total + accommodation_total + extension_total - discount + tax + surcharge)
+    final = money(discounted_tour_amount + addon_total - discount + tax + surcharge)
     if final < 0:
         raise HTTPException(status_code=400, detail="Final amount cannot be negative")
     return tour, calendar, adults, children, total_travellers, currency, base_amount, activity_total, accommodation_total, extension_total, discount, tax, surcharge, final, activity_rows, accommodation_rows, extension_rows, slab, group_tier, group_discount_amount, group_discount_funded_by, promo_discount_funded_by, service_fee, gateway_fee, non_commissionable_addon_total, cost_plus_customer_total, cost_plus_supplier_total
