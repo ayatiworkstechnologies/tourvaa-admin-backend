@@ -54,6 +54,19 @@ class Settings(BaseSettings):
     SUPER_ADMIN_PASSWORD: str = "Admin@123"
     SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP: bool = False
 
+    # Bootstrap logins for the two day-to-day back-office roles.
+    # Keep these separate from the super-admin account so production can use
+    # distinct credentials and rotate each account independently.
+    ADMIN_NAME: str = "Admin"
+    ADMIN_EMAIL: str = "admin.user@tourvaa.com"
+    ADMIN_PASSWORD: str = "AdminUser@123"
+    ADMIN_RESET_PASSWORD_ON_STARTUP: bool = False
+
+    SUB_ADMIN_NAME: str = "Sub Admin"
+    SUB_ADMIN_EMAIL: str = "subadmin@tourvaa.com"
+    SUB_ADMIN_PASSWORD: str = "SubAdmin@123"
+    SUB_ADMIN_RESET_PASSWORD_ON_STARTUP: bool = False
+
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 465
     SMTP_USERNAME: str | None = None

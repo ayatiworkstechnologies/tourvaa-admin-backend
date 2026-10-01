@@ -33,6 +33,8 @@ MODULES = [
     ("resellers", "Resellers"),
     ("customers", "Customers"),
     ("countries", "Countries"),
+    ("states", "States"),
+    ("currencies", "Currencies"),
     ("cities", "Cities"),
     ("tours", "Tours"),
     ("categories", "Tour Categories"),
@@ -52,6 +54,11 @@ MODULES = [
     ("settings", "Settings"),
     ("website_cms", "Website CMS"),
     ("blogs", "Blogs"),
+    ("affiliate_links", "Affiliate Links"),
+    ("affiliate_commission_rules", "Affiliate Commission Rules"),
+    ("affiliate_payouts", "Affiliate Payouts"),
+    ("affiliate_reports", "Affiliate Reports"),
+    ("affiliate_settings", "Affiliate Settings"),
     ("chatbot", "Chatbot"),
     ("profile", "Profile"),
 ]
@@ -74,7 +81,8 @@ def permission_slug(action: str, module: str):
     return f"delete-{module}"
 
 
-# 27 modules x 4 HTTP actions = 108 base permissions
+# Every admin module receives the four legacy HTTP-action permissions; the
+# granular permissions below cover the newer operation-specific policies.
 DEFAULT_PERMISSIONS = [
     {
         "name": f"{label} {module_label}",
@@ -154,11 +162,14 @@ OPERATIONAL_PERMISSIONS = [
     ("cities", "Cities", ["view", "create", "edit", "disable"]),
     ("categories", "Categories", ["view", "create", "edit", "disable"]),
     ("subcategories", "Sub-Categories", ["view", "create", "edit", "disable"]),
-    ("tours", "Tours", ["view", "create", "edit", "publish", "disable"]),
+    ("tours", "Tours", ["view", "create", "edit", "publish", "disable", "delete"]),
     ("supplier_ledger", "Supplier Ledger", ["view", "create_payout", "approve", "mark_paid", "export"]),
     ("agent_ledger", "Agent Ledger", ["view", "create_payout", "approve", "mark_paid", "export"]),
     ("website_cms", "Website CMS", ["view", "create", "edit", "delete"]),
     ("blogs", "Blogs", ["view", "create", "edit", "delete"]),
+    ("chatbot", "Chatbot", ["view", "create", "edit", "delete"]),
+    ("profile", "Profile", ["view", "edit"]),
+    ("settings", "Settings", ["view", "create"]),
 ]
 
 # Booking lifecycle, financial, and system module granular permissions
@@ -221,26 +232,35 @@ def assign_user_role_if_missing(db: Session, user: User, role: Role):
         db.add(UserRole(user_id=user.id, role_id=role.id))
 
 
-def seed_super_admin_user(db: Session, role: Role | None):
+def seed_bootstrap_user(
+    db: Session,
+    role: Role | None,
+    *,
+    name: str,
+    email: str,
+    password: str,
+    reset_password: bool,
+    password_setting: str,
+):
     if not role:
         return
 
-    default_password = Settings.model_fields["SUPER_ADMIN_PASSWORD"].default
-    if settings.APP_ENV.lower() == "production" and settings.SUPER_ADMIN_PASSWORD == default_password:
-        # A warning alone still let startup proceed and seed the most
-        # privileged account in the system with a publicly-known password -
-        # refuse to start instead.
+    default_password = Settings.model_fields[password_setting].default
+    if settings.is_production and password == default_password:
         raise RuntimeError(
-            "SUPER_ADMIN_PASSWORD is still the default value in a production environment. "
-            "Set a real password via the SUPER_ADMIN_PASSWORD env var before starting."
+            f"{password_setting} is still the default value in a production environment. "
+            f"Set a real password via the {password_setting} env var before starting."
         )
 
-    email = settings.SUPER_ADMIN_EMAIL.strip().lower()
+    email = email.strip().lower()
+    if not email:
+        raise RuntimeError(f"The email configured for the {role.slug} bootstrap user cannot be empty.")
+
     user = db.query(User).filter(User.email == email).first()
 
     if not user:
         user = User(
-            name=settings.SUPER_ADMIN_NAME.strip() or "Super Admin",
+            name=name.strip() or role.name,
             email=email,
             phone="",
             profile_image="",
@@ -249,7 +269,7 @@ def seed_super_admin_user(db: Session, role: Role | None):
             state="",
             city="",
             pincode="",
-            password=hash_password(settings.SUPER_ADMIN_PASSWORD),
+            password=hash_password(password),
             role_id=role.id,
             is_active=True,
             approval_status="approved",
@@ -259,14 +279,48 @@ def seed_super_admin_user(db: Session, role: Role | None):
         assign_user_role_if_missing(db, user, role)
         return
 
-    user.name = user.name or settings.SUPER_ADMIN_NAME.strip() or "Super Admin"
+    user.name = user.name or name.strip() or role.name
     user.role_id = role.id
     assign_user_role_if_missing(db, user, role)
     user.is_active = True
     user.approval_status = "approved"
 
-    if settings.SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP:
-        user.password = hash_password(settings.SUPER_ADMIN_PASSWORD)
+    if reset_password:
+        user.password = hash_password(password)
+
+
+def seed_default_login_users(db: Session, roles_by_slug: dict[str, Role]) -> None:
+    accounts = (
+        (
+            "super-admin", settings.SUPER_ADMIN_NAME, settings.SUPER_ADMIN_EMAIL,
+            settings.SUPER_ADMIN_PASSWORD, settings.SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP,
+            "SUPER_ADMIN_PASSWORD",
+        ),
+        (
+            "admin", settings.ADMIN_NAME, settings.ADMIN_EMAIL,
+            settings.ADMIN_PASSWORD, settings.ADMIN_RESET_PASSWORD_ON_STARTUP,
+            "ADMIN_PASSWORD",
+        ),
+        (
+            "sub-admin", settings.SUB_ADMIN_NAME, settings.SUB_ADMIN_EMAIL,
+            settings.SUB_ADMIN_PASSWORD, settings.SUB_ADMIN_RESET_PASSWORD_ON_STARTUP,
+            "SUB_ADMIN_PASSWORD",
+        ),
+    )
+    emails = [email.strip().lower() for _, _, email, _, _, _ in accounts]
+    if len(emails) != len(set(emails)):
+        raise RuntimeError("Super-admin, admin, and sub-admin bootstrap emails must be unique.")
+
+    for role_slug, name, email, password, reset_password, password_setting in accounts:
+        seed_bootstrap_user(
+            db,
+            roles_by_slug.get(role_slug),
+            name=name,
+            email=email,
+            password=password,
+            reset_password=reset_password,
+            password_setting=password_setting,
+        )
 
 
 
@@ -330,7 +384,7 @@ def seed_default_roles_and_permissions(db: Session):
     if super_admin:
         for permission in permissions:
             assign_if_missing(db, super_admin, permission)
-        seed_super_admin_user(db, super_admin)
+    seed_default_login_users(db, roles_by_slug)
 
     # Pre-compute slug lists used across multiple roles
     _customer_granular = [p["slug"] for p in CUSTOMER_GRANULAR_PERMISSIONS]
@@ -357,9 +411,11 @@ def seed_default_roles_and_permissions(db: Session):
         "supplier_ledger.approve", "supplier_ledger.mark_paid",
         "agent_ledger.approve", "agent_ledger.mark_paid",
         "affiliate_payouts.approve", "affiliate_payouts.mark_paid",
+        "affiliate_settings.manage", "settings.create",
     }
     _sub_admin_operational = [
-        s for s in _all_operational if s not in _sub_admin_financial_excluded
+        s for s in _all_operational
+        if s not in _sub_admin_financial_excluded and not s.endswith(".delete")
     ]
     _sub_admin_booking_lifecycle_no_system = [
         s for s in _booking_lifecycle_no_system if s not in _sub_admin_financial_excluded
@@ -418,6 +474,7 @@ def seed_default_roles_and_permissions(db: Session):
             "view-chatbot", "create-chatbot", "update-chatbot", "delete-chatbot",
             # Profile
             "view-profile", "update-profile", "profile.view",
+            "profile.edit",
             # All operational granular permissions
             *_all_operational,
             # All booking-lifecycle / financial / system granular permissions
@@ -474,6 +531,7 @@ def seed_default_roles_and_permissions(db: Session):
             "view-chatbot", "create-chatbot", "update-chatbot",
             # Profile
             "view-profile", "update-profile", "profile.view",
+            "profile.edit",
             # All operational granular permissions, minus payout approve/mark-paid
             *_sub_admin_operational,
             # Booking-lifecycle granular -- exclude system-only actions and
@@ -516,6 +574,7 @@ def seed_default_roles_and_permissions(db: Session):
             "supplier_ledger.view", "supplier_ledger.create_payout",
             # Profile
             "view-profile", "update-profile", "profile.view",
+            "profile.edit",
         ],
 
         # ------------------------------------------------------------------
@@ -561,6 +620,7 @@ def seed_default_roles_and_permissions(db: Session):
             "agent_ledger.view", "agent_ledger.create_payout",
             # Profile
             "view-profile", "update-profile", "profile.view",
+            "profile.edit",
         ],
 
         # ------------------------------------------------------------------
@@ -589,6 +649,7 @@ def seed_default_roles_and_permissions(db: Session):
             "notifications.view",
             # Profile
             "view-profile", "update-profile", "profile.view",
+            "profile.edit",
         ],
 
         # ------------------------------------------------------------------

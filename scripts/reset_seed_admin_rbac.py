@@ -114,10 +114,15 @@ def run_rbac_seed(db) -> None:
         .order_by(Role.id.asc())
         .all()
     ]
-    admin_email = settings.SUPER_ADMIN_EMAIL.strip().lower()
-    _ok(f"Super admin  : {admin_email}")
-    _ok("Password     : configured securely (value hidden)")
-    _ok(f"Admin users  : {db.query(User).filter(User.email == admin_email).count()}")
+    bootstrap_emails = (
+        ("Super admin", settings.SUPER_ADMIN_EMAIL.strip().lower()),
+        ("Admin", settings.ADMIN_EMAIL.strip().lower()),
+        ("Sub admin", settings.SUB_ADMIN_EMAIL.strip().lower()),
+    )
+    for label, email in bootstrap_emails:
+        count = db.query(User).filter(User.email == email).count()
+        _ok(f"{label:<12}: {email} ({count} user)")
+    _ok("Passwords    : configured securely (values hidden)")
     _ok(f"Roles        : {', '.join(role_slugs)}")
     _ok(f"Admin modules: {db.query(AdminModule).count()} seeded / updated")
     _ok(f"Permissions  : {db.query(Permission).count()} seeded / updated")

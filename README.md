@@ -98,6 +98,16 @@ SUPER_ADMIN_EMAIL=admin@tourvaa.com
 SUPER_ADMIN_PASSWORD=replace_with_a_unique_strong_password
 SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false
 
+ADMIN_NAME=Admin
+ADMIN_EMAIL=admin.user@tourvaa.com
+ADMIN_PASSWORD=replace_with_a_different_strong_password
+ADMIN_RESET_PASSWORD_ON_STARTUP=false
+
+SUB_ADMIN_NAME=Sub Admin
+SUB_ADMIN_EMAIL=subadmin@tourvaa.com
+SUB_ADMIN_PASSWORD=replace_with_another_strong_password
+SUB_ADMIN_RESET_PASSWORD_ON_STARTUP=false
+
 ```
 
 > **Security:** Generate a strong JWT secret with `python -c "import secrets; print(secrets.token_hex(32))"`. Use a unique production super-admin password and keep `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false` after bootstrap.
@@ -141,11 +151,11 @@ python -m scripts.dev_server --no-reload
 
 ---
 
-## Super-admin Bootstrap
+## Back-office Login Bootstrap
 
-Startup and the RBAC seed create the configured super-admin when it does not exist. Credentials come from `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`; the seed command no longer prints the password.
+Startup and the RBAC seed create the configured super-admin, admin, and sub-admin users when they do not exist. Their credentials come from the corresponding `SUPER_ADMIN_*`, `ADMIN_*`, and `SUB_ADMIN_*` variables; the seed command never prints passwords. All three email addresses must be unique.
 
-For an existing super-admin, the password is changed from configuration only when `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=true`. Keep that setting `false` in production except during an intentional, controlled password recovery.
+For an existing bootstrap user, the password is changed from configuration only when that account's `*_RESET_PASSWORD_ON_STARTUP` option is `true`. Keep all reset options `false` in production except during an intentional, controlled password recovery.
 
 ---
 
