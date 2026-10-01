@@ -632,6 +632,24 @@ def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: S
         except ValueError:
             raise HTTPException(status_code=400, detail="travel_date must be an ISO date (YYYY-MM-DD)")
 
+    # The public page selects the first available departure as soon as its
+    # calendar arrives.  Use that same date for an initial detail request so
+    # seasonal prices do not briefly reflect today's offers before the client
+    # sends its follow-up request with the selected departure.
+    calendar = (
+        db.query(TourCalendar)
+        .filter(
+            TourCalendar.tour_id == tour_id,
+            TourCalendar.tour_date >= datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+            TourCalendar.status.notin_(("unavailable", "cancelled")),
+        )
+        .order_by(TourCalendar.tour_date.asc())
+        .all()
+    )
+    if effective_at is None and calendar:
+        first_departure = calendar[0].tour_date
+        effective_at = first_departure if first_departure.tzinfo else first_departure.replace(tzinfo=timezone.utc)
+
     date_override = None
     if effective_at is not None:
         date_override = (
@@ -665,12 +683,6 @@ def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: S
     # website". Same scope/date rules as checkout (services.discounts).
     from app.services.discounts import list_public_offers
     discounts = list_public_offers(db, tour)
-    calendar = (
-        db.query(TourCalendar)
-        .filter(TourCalendar.tour_id == tour_id, TourCalendar.tour_date >= datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0))
-        .order_by(TourCalendar.tour_date.asc())
-        .all()
-    )
     from app.models.tours import TourAvailabilityConfig
     availability_config = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
     similar_links = db.query(TourSimilar).filter(TourSimilar.tour_id == tour_id).all()

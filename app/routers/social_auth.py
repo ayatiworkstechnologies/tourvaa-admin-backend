@@ -49,7 +49,10 @@ def provider_status(db: Session = Depends(get_db)):
 
 @router.get("/{provider}/start")
 def start_social_auth(provider: str, request: Request, redirect: str = "", db: Session = Depends(get_db)):
-    if provider not in {"google", "facebook", "apple"}:
+    # Google has its own /auth/google flow and callback. Keeping it out of
+    # this router prevents a started flow from reaching a callback that
+    # intentionally rejects it.
+    if provider not in {"facebook", "apple"}:
         raise HTTPException(status_code=404, detail="Unknown social provider")
     row, client_id = _provider(db, provider)
     if not row or not row.is_enabled or not client_id or not row.api_secret:
