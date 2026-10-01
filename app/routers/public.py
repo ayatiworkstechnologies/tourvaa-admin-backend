@@ -25,6 +25,7 @@ from app.utils.ratelimit import check_rate_limit
 from app.models.tours import (
     TourAccommodationExtra,
     TourCalendar,
+    TourDatePrice,
     TourExtension,
     TourExclusion,
     TourGalleryImage,
@@ -37,6 +38,8 @@ from app.models.tours import (
     TourPricing,
     TourSimilar,
 )
+from app.services.markup import effective_markup_percentage
+from app.utils.money import apply_markup
 
 router = APIRouter(tags=["Public"])
 
@@ -50,6 +53,13 @@ class ContactMessageRequest(BaseModel):
     enquiry_type: str = Field(default="General enquiry", max_length=50)
     subject: str = Field(min_length=1, max_length=200)
     message: str = Field(min_length=1, max_length=5000)
+
+
+class PublicPriceQuoteRequest(BaseModel):
+    """The small, safe subset of a booking needed to price the public card."""
+    travel_date: str = Field(min_length=10, max_length=32)
+    adults: int = Field(ge=1, le=99)
+    children: int = Field(default=0, ge=0, le=99)
 
 
 @router.post("/contact")
@@ -189,7 +199,15 @@ def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime 
     return best
 
 
-def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscountTier], discount_info: dict | None = None, discount_percentage: float = 0.0) -> list[dict]:
+def _public_pricing_rows(
+    pricing: list[TourPricing],
+    tiers: list[TourGroupDiscountTier],
+    discount_info: dict | None = None,
+    discount_percentage: float = 0.0,
+    *,
+    db: Session | None = None,
+    date_override: TourDatePrice | None = None,
+) -> list[dict]:
     """A tour can have several independently-priced pax-range TourPricing
     slabs (see services.tours._apply_pricing_computation) -- when it does,
     each slab already IS a row of the public price ladder, so this just
@@ -209,8 +227,17 @@ def _public_pricing_rows(pricing: list[TourPricing], tiers: list[TourGroupDiscou
         # default), stored on the slab by services/markup.apply_storefront --
         # exactly what _price_booking charges. Never the raw adult_price/
         # child_price: those are the supplier's prices.
-        adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
-        child = slab.storefront_child_price if slab.storefront_child_price is not None else (slab.child_price or 0)
+        # A departure-specific rate replaces the supplier rate, then receives
+        # the same slab markup as checkout. Without this branch the public
+        # selector showed the default slab price until the customer reached
+        # checkout, even though the admin had set a price for that date.
+        if date_override is not None and db is not None:
+            markup = effective_markup_percentage(db, slab)
+            adult = apply_markup(date_override.adult_price or 0, markup)
+            child = apply_markup(date_override.child_price or 0, markup)
+        else:
+            adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
+            child = slab.storefront_child_price if slab.storefront_child_price is not None else (slab.child_price or 0)
         return float(adult), float(child)
 
     if len(pricing) > 1:
@@ -524,6 +551,54 @@ def public_tour_deposit_options(tour_id: int, travel_date: str = Query(...), db:
     }
 
 
+@router.post("/tours/{tour_id}/price-quote")
+def public_tour_price_quote(
+    tour_id: int,
+    payload: PublicPriceQuoteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Server-authoritative total for the public date/traveller selector.
+
+    This deliberately calls the checkout calculator rather than duplicating
+    pricing rules in the browser. It keeps date overrides, fixed discounts,
+    group tiers, taxes, service fees, and gateway fees in lockstep with the
+    amount that will be charged later.
+    """
+    check_rate_limit(request, "public-price-quote", max_calls=30, window_seconds=60)
+    tour = db.query(Tour).filter(Tour.id == tour_id, Tour.status == "published").first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    try:
+        travel_date = datetime.fromisoformat(payload.travel_date).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="travel_date must be an ISO date (YYYY-MM-DD)")
+    calendar = (
+        db.query(TourCalendar)
+        .filter(TourCalendar.tour_id == tour_id, func.date(TourCalendar.tour_date) == travel_date)
+        .first()
+    )
+    if not calendar:
+        raise HTTPException(status_code=400, detail="Selected tour date is unavailable")
+
+    from app.schemas.bookings import BookingCreate
+    from app.services.bookings import calculate_booking_price
+
+    quote = calculate_booking_price(db, BookingCreate(
+        customer_id=0,
+        tour_id=tour_id,
+        tour_calendar_id=calendar.id,
+        tour_date=travel_date.isoformat(),
+        tour_start_date=travel_date.isoformat(),
+        no_of_adults=payload.adults,
+        no_of_children=payload.children,
+        adults_count=payload.adults,
+        children_count=payload.children,
+        currency=tour.currency or "USD",
+    ))
+    return {"status": "success", "data": quote}
+
+
 @router.get("/tours/{country_slug}/{tour_slug}")
 def public_tour_detail_by_slug(country_slug: str, tour_slug: str, travel_date: str = Query(default=""), db: Session = Depends(get_db)):
     """Resolve the canonical public tour URL and reject mismatched countries."""
@@ -556,6 +631,18 @@ def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: S
             effective_at = datetime.fromisoformat(travel_date).replace(tzinfo=timezone.utc)
         except ValueError:
             raise HTTPException(status_code=400, detail="travel_date must be an ISO date (YYYY-MM-DD)")
+
+    date_override = None
+    if effective_at is not None:
+        date_override = (
+            db.query(TourDatePrice)
+            .filter(
+                TourDatePrice.tour_id == tour_id,
+                TourDatePrice.price_date == effective_at.date(),
+                TourDatePrice.status == "active",
+            )
+            .first()
+        )
 
     overview = db.query(TourOverview).filter(TourOverview.tour_id == tour_id).first()
     itineraries = db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id).order_by(TourItinerary.day_number.asc()).all()
@@ -683,7 +770,13 @@ def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: S
             # actually charges at checkout - see _public_pricing_rows for
             # how the base price + group discount tiers are expanded into
             # these traveller-count rows.
-            "pricing": _public_pricing_rows(pricing, group_discount_tiers, own_discount_map.get(tour_id)),
+            "pricing": _public_pricing_rows(
+                pricing,
+                group_discount_tiers,
+                own_discount_map.get(tour_id),
+                db=db,
+                date_override=date_override,
+            ),
             "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "child_price": float(a.child_price_per_person) if a.child_price_per_person else None, "infant_price": float(a.infant_price_per_person) if a.infant_price_per_person else None, "pricing_mode": a.pricing_mode or "flat", "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],
             "extensions": [{"id": e.id, "title": e.extension_title, "description": e.extension_note or "", "duration_days": None, "price": float(e.extra_price) if e.extra_price else None, "category": e.category or "other", "image": (e.extension_tour.banner_image or None) if e.extension_tour else None} for e in extensions],

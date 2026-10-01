@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.services.audit import log_audit
 from app.models.bookings import Booking
+from app.services.bookings import _booking_seat_count
 from app.models.cancellations import CancellationRequest, RefundRule
 from app.schemas.cancellations import (
     CancellationApprove, CancellationReject, CancellationRequestCreate,
@@ -246,6 +247,11 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
     if data.refund_amount is not None:
         _validate_refund_value(amount=data.refund_amount)
         req.refund_amount = money(data.refund_amount)
+        # The amount is authoritative when an administrator overrides it.
+        # Keep the displayed percentage aligned with that amount so the
+        # customer and finance team never see conflicting refund values.
+        paid_amount = money(req.booking.amount_paid)
+        req.refund_percentage = money((req.refund_amount * 100) / paid_amount) if paid_amount > 0 else money(0)
     elif data.refund_percentage is not None:
         booking = req.booking
         req.refund_amount = money((money(booking.amount_paid) * money(data.refund_percentage)) / 100)
@@ -253,7 +259,13 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
     if money(req.refund_amount) > money(req.booking.amount_paid):
         raise HTTPException(status_code=422, detail="Refund amount cannot exceed the amount paid for this booking")
 
-    req.status = "approved"
+    # A zero-value approved cancellation has nothing to send to a gateway.
+    # Mark it complete immediately instead of leaving an unnecessary manual
+    # "Process refund" action in the admin queue.
+    no_refund_due = money(req.refund_amount) <= 0
+    req.status = "refund_processed" if no_refund_due else "approved"
+    if no_refund_due:
+        req.refund_processed_at = utcnow()
     req.admin_notes = data.admin_notes
     req.reviewed_by = actor.id
     req.reviewed_at = utcnow()
@@ -267,7 +279,9 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
     booking.cancelled_at = utcnow()
     booking.cancelled_by = actor.id
     if booking.calendar:
-        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - (booking.total_travellers or 0))
+        # Infants are tracked as travellers but do not reserve a calendar
+        # seat when the booking is made, so release the exact same seat count.
+        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
 
     from app.models.bookings import BookingStatusHistory
     db.add(BookingStatusHistory(
@@ -315,7 +329,7 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
             cancellation_approved_email(booking.customer.full_name, booking.booking_code, booking.tour_name, req.refund_amount, req.currency, login_url),
         )
 
-    log_audit(db, actor=actor, action="approve_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": "approved", "refund_amount": str(req.refund_amount)}, request=request)
+    log_audit(db, actor=actor, action="approve_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": req.status, "refund_amount": str(req.refund_amount)}, request=request)
     return _serialize_request(req)
 
 
