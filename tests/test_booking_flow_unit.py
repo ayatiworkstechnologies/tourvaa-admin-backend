@@ -16,9 +16,10 @@ from app.services.payments import _derive_booking_status, _ensure_payment_access
 from app.routers.payments_gateway import _ensure_booking_payment_access, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
 from app.schemas.agents import AgentSelfUpdate
-from app.schemas.suppliers import SupplierSelfUpdate
+from app.schemas.suppliers import SupplierSelfUpdate, SupplierUpdate
 from app.services.agent_scope import is_agent_user
 from app.services.supplier_scope import is_supplier_user, reject_supplier_review_action
+from app.services.suppliers import update_supplier
 # `_validate_payment_request` now takes (db, booking, amount, current_user)
 # and falls back to the admin-configured platform deposit defaults
 # (default_deposit_percentage / default_deposit_cutoff_days) when a tour has
@@ -46,6 +47,25 @@ def booking(**overrides):
 def test_supplier_self_update_rejects_admin_managed_fields():
     with pytest.raises(ValidationError):
         SupplierSelfUpdate(status="active")
+
+
+def test_supplier_cannot_lower_an_agreed_commission_rate(monkeypatch):
+    """The self-service UI's increase-only rule must hold for direct API use."""
+    supplier = SimpleNamespace(id=7, user_id=41, commission_percentage=15)
+    monkeypatch.setattr("app.services.suppliers.get_supplier", lambda _db, _supplier_id: supplier)
+    monkeypatch.setattr("app.services.suppliers.serialize_supplier", lambda _supplier: {})
+    monkeypatch.setattr("app.services.settings.get_commission_percentage", lambda _db: 10)
+
+    with pytest.raises(HTTPException) as exc:
+        update_supplier(
+            SimpleNamespace(),
+            supplier.id,
+            SupplierUpdate(commission_percentage=14),
+            SimpleNamespace(id=supplier.user_id),
+        )
+
+    assert exc.value.status_code == 400
+    assert "only be increased" in exc.value.detail
 
 
 def test_supplier_role_is_scoped_and_cannot_review_tours():
