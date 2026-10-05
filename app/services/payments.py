@@ -38,6 +38,19 @@ def _email_customer_payment_received(db: Session, payment: Payment, amount) -> N
         f"Payment received - {booking.booking_code}",
         payment_received_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
     )
+    # An agent who made the reservation is a booking party too: they need the
+    # same payment receipt, while Tourvaa keeps an operational record.
+    from app.services.notifications import enqueue_notification, notify_admins
+    if booking.agent and booking.agent.user_id:
+        enqueue_notification(db, user_id=booking.agent.user_id, notification_type="payment_received", title="Payment received", message=f"Payment of {booking.currency} {amount} was received for booking {booking.booking_code}.", entity_type="payment", entity_id=payment.id)
+        if booking.agent.user and booking.agent.user.email:
+            send_templated_email(
+                db, booking.agent.user.email, "payment_received",
+                {"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "currency": booking.currency, "amount": amount, "login_url": f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}", "button_text": "View booking", "button_url": f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"},
+                f"Payment received - {booking.booking_code}",
+                payment_received_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"),
+            )
+    notify_admins(db, notification_type="payment_received", title="Payment received", message=f"Payment of {booking.currency} {amount} was received for booking {booking.booking_code}.", entity_type="payment", entity_id=payment.id)
 
 
 def _email_customer_refund_processed(db: Session, payment: Payment, amount) -> None:
@@ -132,6 +145,7 @@ def _status_after_payment_sync(booking: Booking, payment_status: str) -> str | N
 
 
 def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
+    was_paid = booking.payment_status == "paid"
     payments = db.query(Payment).filter(Payment.booking_id == booking.id).all()
     captured = sum(money(p.captured_amount or p.paid_amount or 0) for p in payments if p.payment_status not in {"voided", "failed"})
     refunded = sum(money(p.refunded_amount or 0) for p in payments)
@@ -160,6 +174,9 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
             record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=booking.currency or "USD")
         except Exception:
             logger.warning("Affiliate conversion recording failed for booking %s", booking.id, exc_info=True)
+    if booking.payment_status == "paid" and not was_paid:
+        from app.services.bookings import notify_paid_booking_ready_for_supplier
+        notify_paid_booking_ready_for_supplier(db, booking)
 
 
 def _sync_customer_payment_fields(db: Session, customer: Customer) -> None:
@@ -510,7 +527,5 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
 
 def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "", actor: Optional[User] = None) -> dict:
     return get_payments(db, page=page, limit=limit, customer_id=customer_id, payment_status=payment_status, payment_method=payment_method, actor=actor)
-
-
 
 

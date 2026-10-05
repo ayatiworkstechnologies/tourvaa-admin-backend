@@ -13,10 +13,10 @@ from app.schemas.bookings import (
     MessageReplyCreate,
     BookingCreate,
     BookingStatusUpdate,
+    BookingTravelDateUpdate,
     BookingUpdate,
     SupplierDecisionRequest,
     SupplierDueDateUpdate,
-    SupplierPostponeRequest,
     SupplierNotifyRequest,
 )
 from app.services.bookings import (
@@ -38,9 +38,9 @@ from app.services.bookings import (
     supplier_complete_booking,
     supplier_decline_booking,
     supplier_notify_parties,
-    supplier_postpone_booking,
     supplier_set_due_date,
     update_booking,
+    update_booking_travel_date,
     update_booking_status,
 )
 from app.auth.permissions import require_any_permission, get_current_user
@@ -138,6 +138,11 @@ def edit_booking(booking_id: int, data: BookingUpdate, request: Request, db: Ses
     return {"status": "success", "message": "Booking updated successfully", "data": update_booking(db, booking_id, data, actor=current_user, request=request)}
 
 
+@router.patch("/{booking_id}/travel-date")
+def change_booking_travel_date(booking_id: int, data: BookingTravelDateUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.edit", "update-bookings"))):
+    return {"status": "success", "message": "Booking travel date updated successfully", "data": update_booking_travel_date(db, booking_id, data, actor=current_user, request=request)}
+
+
 @router.patch("/{booking_id}/status")
 def change_booking_status(booking_id: int, data: BookingStatusUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "bookings.edit", "update-bookings"))):
     return {"status": "success", "message": "Booking status updated successfully", "data": update_booking_status(db, booking_id, data, actor=current_user, request=request)}
@@ -218,7 +223,7 @@ def supplier_set_due_date_endpoint(booking_id: int, data: SupplierDueDateUpdate,
 
 @supplier_router.patch("/{booking_id}/cancel")
 def supplier_cancel(booking_id: int, data: BookingCancelRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
-    return {"status": "success", "message": "Booking cancelled", "data": supplier_cancel_booking(db, booking_id, data.reason or "Cancelled by supplier", current_user, request)}
+    return {"status": "success", "message": "Supplier withdrawal recorded; internal reassignment is required", "data": supplier_cancel_booking(db, booking_id, data.reason or "Cancelled by supplier", current_user, request)}
 
 
 @supplier_router.post("/{booking_id}/communications")
@@ -229,23 +234,6 @@ def supplier_create_communication(booking_id: int, data: BookingCommunicationCre
 @supplier_router.post("/communications/{communication_id}/replies")
 def supplier_reply_communication(communication_id: int, data: MessageReplyCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
     return {"status": "success", "data": add_communication_reply(db, communication_id, data.message, current_user, request)}
-
-
-@supplier_router.patch("/{booking_id}/postpone")
-def supplier_postpone(booking_id: int, data: SupplierPostponeRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.update_status", "update-bookings"))):
-    return {
-        "status": "success",
-        "message": "Booking postponed",
-        "data": supplier_postpone_booking(
-            db,
-            booking_id,
-            data.reason,
-            data.new_tour_date,
-            current_user,
-            request,
-            new_tour_calendar_id=data.new_tour_calendar_id,
-        ),
-    }
 
 
 @supplier_router.post("/{booking_id}/notify")

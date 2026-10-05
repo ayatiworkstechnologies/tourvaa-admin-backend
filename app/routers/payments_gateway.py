@@ -100,6 +100,11 @@ class PayPalCaptureRequest(BaseModel):
     payment_id: int
 
 
+class PendingPaymentAbandonRequest(BaseModel):
+    booking_id: int
+    payment_id: Optional[int] = None
+
+
 # helpers
 
 
@@ -246,6 +251,34 @@ def _validate_payment_request(db: Session, booking: Booking, amount: Decimal, cu
         if requested < minimum:
             raise HTTPException(status_code=400, detail=f"Deposit must be at least {minimum:.2f}")
     return requested
+
+
+@router.post("/abandon-pending")
+def abandon_pending_gateway_payment(
+    body: PendingPaymentAbandonRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Release a gateway checkout attempt after the customer returns via its
+    cancel URL.  No funds were captured, so this must not alter the booking's
+    balance; it only prevents an abandoned pending attempt from reserving the
+    full amount and blocking a fresh Stripe/PayPal checkout."""
+    booking = _booking_or_404(db, body.booking_id, for_update=True)
+    _ensure_booking_payment_access(booking, current_user)
+    query = db.query(Payment).filter(
+        Payment.booking_id == booking.id,
+        Payment.payment_status == "pending",
+        Payment.gateway.in_(("stripe", "paypal")),
+    )
+    if body.payment_id is not None:
+        query = query.filter(Payment.id == body.payment_id)
+    payments = query.with_for_update().all()
+    for payment in payments:
+        payment.payment_status = "abandoned"
+        payment.pending_amount = Decimal("0")
+        payment.failure_reason = "Customer cancelled gateway checkout"
+    db.commit()
+    return {"status": "success", "message": "Pending payment attempt released", "data": {"released": len(payments)}}
 
 
 def _validate_payment_currency(booking: Booking, requested_currency: str) -> str:

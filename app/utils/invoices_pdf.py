@@ -110,9 +110,9 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
 
     # ---- Header: brand block (left) + invoice title block (right) ----
     header_left = [
-        Paragraph("TOURVAA", brand_style),
+        Paragraph(escape(str(inv.get("invoice_brand_name") or "Tourvaa")).upper(), brand_style),
         Spacer(1, 0.1 * cm),
-        Paragraph("Curated journeys, effortlessly booked.", tagline_style),
+        Paragraph(escape(str(inv.get("invoice_brand_tagline") or "Curated journeys, effortlessly booked.")), tagline_style),
     ]
     header_right = [
         Paragraph("INVOICE", invoice_title_style),
@@ -273,12 +273,12 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     # ---- Footer ----
     story.append(HRFlowable(width="100%", thickness=0.5, color=LINE))
     story.append(Spacer(1, 0.3 * cm))
-    story.append(Paragraph("Thank you for booking with <b>Tourvaa</b>.", center_style))
+    story.append(Paragraph(escape(str(inv.get("invoice_footer_thanks") or "Thank you for booking with Tourvaa.")), center_style))
     support_email = escape(str(data.get("support_email") or "support@tourvaa.com"))
     website = escape(str(data.get("website") or "www.tourvaa.com"))
     story.append(Paragraph(f"For queries contact {support_email} &nbsp;|&nbsp; {website}", center_style))
     story.append(Spacer(1, 0.15 * cm))
-    story.append(Paragraph("This is a system-generated invoice and does not require a signature.", center_style))
+    story.append(Paragraph(escape(str(inv.get("invoice_footer_legal") or "This is a system-generated invoice and does not require a signature.")), center_style))
 
     doc.build(story)
 

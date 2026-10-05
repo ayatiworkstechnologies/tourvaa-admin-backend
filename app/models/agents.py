@@ -94,6 +94,7 @@ class AgentInvoicing(Base):
     contact_name = Column(String(150), default="", nullable=False)
     email = Column(String(150), default="", nullable=False)
     phone = Column(String(30), default="", nullable=False)
+    preferred_payment_method = Column(String(30), default="", nullable=False)
     account_name = Column(String(150), default="", nullable=False)
     account_number = Column(String(100), default="", nullable=False)
     bank_name = Column(String(150), default="", nullable=False)
@@ -102,6 +103,10 @@ class AgentInvoicing(Base):
     iban = Column(String(100), default="", nullable=False)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)
     tax_number = Column(String(100), default="", nullable=False)
+    billing_address = Column(Text, nullable=True)
+    billing_city = Column(String(100), default="", nullable=False)
+    billing_state = Column(String(100), default="", nullable=False)
+    billing_postal_code = Column(String(30), default="", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

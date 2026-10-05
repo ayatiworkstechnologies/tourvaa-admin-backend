@@ -96,6 +96,13 @@ DEFAULT_SETTINGS = [
     {"key": "default_currency", "label": "Default Currency", "value": "USD", "group": "general", "is_public": True},
     {"key": "logo", "label": "Logo URL", "value": "", "group": "general", "is_public": True},
     {"key": "favicon", "label": "Favicon URL", "value": "", "group": "general", "is_public": True},
+    # Invoice PDF copy is kept in editable AppSetting rows so admins can
+    # maintain the approved document template without a deployment. Layout,
+    # financial values, and statutory tax fields remain server-controlled.
+    {"key": "invoice_brand_name", "label": "Invoice Brand Name", "value": "Tourvaa", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_brand_tagline", "label": "Invoice Brand Tagline", "value": "Curated journeys, effortlessly booked.", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_footer_thanks", "label": "Invoice Footer Thank-you", "value": "Thank you for booking with Tourvaa.", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_footer_legal", "label": "Invoice Footer Legal Notice", "value": "This is a system-generated invoice and does not require a signature.", "group": "invoice_pdf", "is_public": False},
     {"key": "booking_prefix", "label": "Booking Prefix", "value": "TVA", "group": "booking", "is_public": False},
     # Admin-configured MINIMUM supplier commission percentage -- UI label is
     # "Default Tourvaa Commission" (this is the ONLY commission Tourvaa

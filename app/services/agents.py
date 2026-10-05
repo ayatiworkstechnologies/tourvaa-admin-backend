@@ -21,11 +21,10 @@ logger = logging.getLogger(__name__)
 
 AGENT_DOCUMENT_TYPES = {
     "company_registration": {"label": "Business Registration Certificate", "required": True},
-    "tax_certificate": {"label": "Tax Registration (GST / VAT / TIN)", "required": True},
-    "identity_proof": {"label": "Owner / Authorized Signatory ID", "required": True},
-    "bank_details": {"label": "Bank Proof / Cancelled Cheque", "required": True},
-    "travel_license": {"label": "Travel License / IATA Accreditation", "required": False},
-    "address_proof": {"label": "Business Address Proof", "required": False},
+    "iata_accreditation": {"label": "IATA Accreditation", "required": True},
+    "industry_certification": {"label": "Industry Certification", "required": True},
+    "other_licences": {"label": "Other Licences", "required": True},
+    "supporting_documents": {"label": "Additional Supporting Documents", "required": True},
 }
 REQUIRED_AGENT_DOCUMENT_TYPES = {
     key for key, metadata in AGENT_DOCUMENT_TYPES.items() if metadata["required"]
@@ -88,6 +87,7 @@ def serialize_agent(item: Agent):
             "contact_name": item.invoicing.contact_name,
             "email": item.invoicing.email,
             "phone": item.invoicing.phone,
+            "preferred_payment_method": item.invoicing.preferred_payment_method,
             "account_name": item.invoicing.account_name,
             "account_number": item.invoicing.account_number,
             "bank_name": item.invoicing.bank_name,
@@ -96,6 +96,10 @@ def serialize_agent(item: Agent):
             "iban": item.invoicing.iban,
             "country_id": item.invoicing.country_id,
             "tax_number": item.invoicing.tax_number,
+            "billing_address": item.invoicing.billing_address,
+            "billing_city": item.invoicing.billing_city,
+            "billing_state": item.invoicing.billing_state,
+            "billing_postal_code": item.invoicing.billing_postal_code,
         } if item.invoicing else None,
     })
     return data

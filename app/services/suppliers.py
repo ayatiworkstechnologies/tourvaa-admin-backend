@@ -154,6 +154,16 @@ def _serialize_vehicle(v) -> dict:
 
 
 def serialize_supplier(item: Supplier):
+    # The address and the initial named contact are owned by the linked User
+    # account, not by the Supplier table.  Include them in the staff payload
+    # so an admin reviewing a registration sees the information the supplier
+    # actually submitted, without copying it into a second source of truth.
+    account = item.user
+    registration_contact = {
+        "full_name": account.name,
+        "email": account.email,
+        "phone": account.phone or account.mobile_number or "",
+    } if account else None
     data = serialize_common_review(item, "supplier_name", "supplier_code")
     data.update(
         {
@@ -162,6 +172,8 @@ def serialize_supplier(item: Supplier):
             "commission_percentage": str(item.commission_percentage) if item.commission_percentage is not None else None,
             "onboarding_completed_at": item.onboarding_completed_at,
             "commission_accepted_at": item.commission_accepted_at,
+            "business_address": account.address if account else "",
+            "registration_contact": registration_contact,
             "contacts": relationship_list(item.contacts, _contact),
             "vehicles": relationship_list(item.vehicles, _serialize_vehicle),
             "documents": relationship_list(item.documents, _document),
@@ -196,6 +208,7 @@ def serialize_supplier(item: Supplier):
 
 def list_suppliers(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = "", sort_by: str = ""):
     base_query = db.query(Supplier).options(
+        joinedload(Supplier.user),
         joinedload(Supplier.country),
         joinedload(Supplier.city),
         joinedload(Supplier.business_info),
@@ -209,7 +222,25 @@ def list_suppliers(db: Session, page: int, limit: int, search: str = "", country
 
 
 def get_supplier(db: Session, supplier_id: int):
-    return get_or_404(db, Supplier, supplier_id, "Supplier")
+    item = (
+        db.query(Supplier)
+        .options(
+            joinedload(Supplier.user),
+            joinedload(Supplier.country),
+            joinedload(Supplier.city),
+            joinedload(Supplier.business_info),
+            joinedload(Supplier.invoicing),
+            selectinload(Supplier.contacts),
+            selectinload(Supplier.vehicles),
+            selectinload(Supplier.documents),
+            selectinload(Supplier.approval_history),
+        )
+        .filter(Supplier.id == supplier_id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return item
 
 
 def export_suppliers_directory(db: Session) -> list[dict]:

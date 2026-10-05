@@ -113,7 +113,7 @@ DEFAULT_EMAIL_TEMPLATES = [
         "name": "Booking Confirmed",
         "subject": "Your booking is confirmed - {{booking_code}}",
         "body": (
-            "Great news! Your Tourvaa booking has been confirmed by the supplier.\n\n"
+            "Great news! Your Tourvaa booking is now confirmed.\n\n"
             "Booking ID: {{booking_code}}\n"
             "Tour: {{tour_name}}\n"
             "Date: {{tour_date}}\n"
@@ -166,6 +166,21 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Adults: {{adults}}\n"
             "Total: {{currency}} {{total}}\n\n"
             "Please log in to your supplier portal to accept or decline this booking.\n\nView booking: {{portal_url}}"
+        ),
+    },
+    {
+        "key": "supplier_booking_confirmed",
+        "name": "Supplier Booking Confirmed",
+        "subject": "Booking confirmed - {{booking_code}}",
+        "body": (
+            "The booking you accepted is now confirmed.\n\n"
+            "Booking ID: {{booking_code}}\n"
+            "Tour: {{tour_name}}\n"
+            "Date: {{tour_date}}\n"
+            "Customer: {{customer_name}}\n"
+            "Adults: {{adults}}\n"
+            "Total: {{currency}} {{total}}\n\n"
+            "Review the booking details and prepare for the tour.\n\nView booking: {{portal_url}}"
         ),
     },
 
@@ -230,6 +245,18 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Reason: {{reason}}\n\n"
             "Your booking remains active. Contact our support team if you have questions.\n\nView booking: {{login_url}}"
         ),
+    },
+    {
+        "key": "booking_reminder",
+        "name": "Booking Reminder",
+        "subject": "Your tour is coming up - {{booking_code}}",
+        "body": "Hi {{name}}, your booking {{booking_code}} for {{tour_name}} is scheduled for {{tour_date}}. Please review your booking details and contact Tourvaa if you need help.\n\nView booking: {{login_url}}",
+    },
+    {
+        "key": "review_request",
+        "name": "Review Request",
+        "subject": "How was your tour? - {{booking_code}}",
+        "body": "Hi {{name}}, your tour {{tour_name}} is complete. We'd love to hear about your experience with booking {{booking_code}}.\n\nLeave a review: {{login_url}}",
     },
     {
         "key": "new_booking_admin",

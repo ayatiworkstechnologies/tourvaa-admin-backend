@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.bookings import Booking
+from app.models.payments import Payment
 from app.schemas.bookings import BookingCreate
 from app.services.bookings import calculate_booking_price, create_booking, get_booking_detail, get_bookings, serialize_booking
 from app.auth.permissions import get_current_user
-from app.utils.money import money
+from app.utils.money import money, utcnow
 from app.utils.pagination import pagination_params
 from app.utils.ratelimit import check_rate_limit
 from app.models.cms import Tour
@@ -35,6 +36,7 @@ from app.auth.security import verify_password
 from app.services.auth import change_password_everywhere
 from app.schemas.profile import PasswordUpdate
 from app.schemas.cms import slugify
+from app.services.audit import log_audit
 
 router = APIRouter(prefix="/customer", tags=["Customer Portal"])
 wishlist_router = APIRouter(prefix="/wishlist", tags=["Wishlist"])
@@ -229,6 +231,9 @@ def create_customer_booking(payload: dict, request: Request, background_tasks: B
 def customer_booking_detail(booking_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     _current_customer(db, current_user)
     data = get_booking_detail(db, booking_id, actor=current_user, request=request)
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if booking:
+        data["cancellation_eligibility"] = cancellations_service.customer_cancellation_eligibility(db, booking)
     from app.models.reviews import TourReview
     # Lets the portal hide the review form once this booking has been reviewed.
     data["has_review"] = db.query(TourReview.id).filter(TourReview.booking_id == booking_id).first() is not None
@@ -263,6 +268,62 @@ def request_booking_cancellation(booking_id: int, data: CustomerCancellationCrea
         request=request,
     )
     return {"status": "success", "message": "Cancellation request submitted", "data": result}
+
+
+@router.post("/bookings/{booking_id}/remove-unpaid")
+def remove_unpaid_booking(booking_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Discard a customer's provisional booking before any money is paid.
+
+    This deliberately is not a cancellation request: it is only available for
+    an unpaid checkout hold, releases its seats, and remains hidden from all
+    portal lists. A booking with any recorded payment must use the normal
+    customer cancellation workflow instead.
+    """
+    customer = _current_customer(db, current_user)
+    booking = (
+        db.query(Booking)
+        .filter(Booking.id == booking_id, Booking.customer_id == customer.id)
+        .with_for_update()
+        .first()
+    )
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if booking.booking_status != "pending_payment" or booking.payment_status not in {"unpaid", "pending"} or money(booking.amount_paid) > 0:
+        raise HTTPException(status_code=400, detail="Only an unpaid booking can be removed. Request cancellation for a paid booking.")
+
+    paid_payment_exists = (
+        db.query(Payment.id)
+        .filter(Payment.booking_id == booking.id)
+        .filter((Payment.captured_amount > 0) | (Payment.paid_amount > 0))
+        .first()
+        is not None
+    )
+    if paid_payment_exists:
+        raise HTTPException(status_code=400, detail="A payment is recorded for this booking. Please request cancellation instead.")
+
+    pending_before_removal = money(booking.amount_pending)
+    if booking.calendar:
+        seats = (booking.adults_count or booking.no_of_adults or 0) + (booking.children_count or booking.no_of_children or 0)
+        booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - seats)
+    customer.upcoming_bookings = max(0, (customer.upcoming_bookings or 0) - 1)
+    customer.total_amount_pending = max(0, money(customer.total_amount_pending or 0) - pending_before_removal)
+    booking.booking_status = "cancelled"
+    booking.payment_status = "cancelled"
+    booking.cancellation_source = "customer_unpaid_removed"
+    booking.cancellation_reason = "Removed by customer before payment"
+    booking.cancelled_at = utcnow()
+    booking.cancelled_by = current_user.id
+    log_audit(
+        db,
+        actor=current_user,
+        action="remove_unpaid_customer_booking",
+        entity_type="booking",
+        entity_id=booking.id,
+        new_values={"booking_status": booking.booking_status, "cancellation_source": booking.cancellation_source},
+        request=request,
+    )
+    db.commit()
+    return {"status": "success", "message": "Unpaid booking removed"}
 
 
 @router.post("/bookings/{booking_id}/pay")

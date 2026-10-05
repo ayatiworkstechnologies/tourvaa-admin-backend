@@ -275,7 +275,7 @@ def booking_confirmed_email(name: str, booking_code: str, tour_name: str, tour_d
         "Booking confirmed",
         f"Hi {esc(name)},",
         (
-            f"Great news! Your Tourvaa booking has been confirmed by the supplier. {status_badge('Confirmed', 'success')}<br /><br />"
+            f"Great news! Your Tourvaa booking is now confirmed. {status_badge('Confirmed', 'success')}<br /><br />"
             f"{summary}<br />"
             "Get ready for your trip! You can view your full booking details using the button below."
         ),
@@ -344,6 +344,49 @@ def supplier_booking_assigned_email(supplier_name: str, booking_code: str, tour_
             f"A new booking has been assigned to you on Tourvaa and is awaiting your acceptance. {status_badge('Action required', 'warning')}<br /><br />"
             f"{summary}<br />"
             "Please log in to your supplier portal to accept or decline this booking."
+        ),
+        "View booking",
+        portal_url,
+    )
+
+
+def booking_reminder_email(name: str, booking_code: str, tour_name: str, tour_date: str, login_url: str):
+    return base_email(
+        "Your tour is coming up",
+        f"Hi {esc(name)},",
+        (
+            f"A reminder that your booking <strong>{esc(booking_code)}</strong> for "
+            f"<strong>{esc(tour_name)}</strong> is scheduled for <strong>{esc(tour_date)}</strong>.<br /><br />"
+            "Please review the booking details and contact Tourvaa if you need help."
+        ),
+        "View booking",
+        login_url,
+    )
+
+
+def review_request_email(name: str, booking_code: str, tour_name: str, login_url: str):
+    return base_email(
+        "How was your tour?",
+        f"Hi {esc(name)},",
+        (
+            f"Your tour <strong>{esc(tour_name)}</strong> is complete. We'd love to hear about your experience "
+            f"with booking <strong>{esc(booking_code)}</strong>.<br /><br />"
+            "Your feedback helps other travellers make informed choices."
+        ),
+        "Leave a review",
+        login_url,
+    )
+
+
+def supplier_booking_confirmed_email(supplier_name: str, booking_code: str, tour_name: str, tour_date: str, customer_name: str, adults: int | str, currency: str, total: str | float, portal_url: str):
+    summary = _summary_card(_booking_rows(booking_code, tour_name, tour_date, adults, currency, total, extra=[("Customer", esc(customer_name))]))
+    return base_email(
+        "Booking confirmed",
+        f"Hi {esc(supplier_name)},",
+        (
+            f"The booking you accepted is now confirmed. {status_badge('Confirmed', 'success')}<br /><br />"
+            f"{summary}<br />"
+            "You can review the booking details and prepare for the tour in your supplier portal."
         ),
         "View booking",
         portal_url,

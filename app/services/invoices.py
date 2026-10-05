@@ -113,16 +113,45 @@ def _support_contact(inv: Invoice) -> tuple[str, str]:
     (no seed/commit) because invoices are built mid-transaction."""
     from urllib.parse import urlparse
     from sqlalchemy.orm import object_session
+    from sqlalchemy.orm.exc import UnmappedInstanceError
     from app.config import settings as app_settings
     from app.models.settings import AppSetting
 
     email = ""
-    session = object_session(inv)
+    try:
+        session = object_session(inv)
+    except UnmappedInstanceError:
+        # Keep PDF regeneration usable in isolated/unit contexts where the
+        # invoice-like object is not attached to SQLAlchemy.
+        session = None
     if session is not None:
         row = session.query(AppSetting).filter(AppSetting.key == "support_email").first()
         email = (row.value or "").strip() if row else ""
     host = urlparse(app_settings.FRONTEND_URL or "").netloc
     return email or "support@tourvaa.com", host or "www.tourvaa.com"
+
+
+def _invoice_template_copy(inv: Invoice) -> dict[str, str]:
+    """Load admin-editable copy for the fixed, compliant invoice layout."""
+    from sqlalchemy.orm import object_session
+    from sqlalchemy.orm.exc import UnmappedInstanceError
+    from app.models.settings import AppSetting
+
+    defaults = {
+        "invoice_brand_name": "Tourvaa",
+        "invoice_brand_tagline": "Curated journeys, effortlessly booked.",
+        "invoice_footer_thanks": "Thank you for booking with Tourvaa.",
+        "invoice_footer_legal": "This is a system-generated invoice and does not require a signature.",
+    }
+    try:
+        session = object_session(inv)
+    except UnmappedInstanceError:
+        session = None
+    if session is None:
+        return defaults
+    rows = session.query(AppSetting).filter(AppSetting.key.in_(defaults)).all()
+    values = {row.key: (row.value or "").strip() for row in rows}
+    return {key: values.get(key) or default for key, default in defaults.items()}
 
 
 def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | None, items: list[dict]) -> dict:
@@ -131,6 +160,7 @@ def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | N
     return {
         "support_email": support_email,
         "website": website,
+        **_invoice_template_copy(inv),
         "invoice_number": inv.invoice_number,
         "booking_code": booking.booking_code or str(booking.id),
         # Same fallback as _traveller_names above: Customer.full_name is
@@ -459,4 +489,3 @@ def check_balance_due_reminders(db: Session) -> list[int]:
             db.rollback()
 
     return reminded
-

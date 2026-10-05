@@ -39,6 +39,20 @@ def approve_cancellation(request_id: int, data: CancellationApprove, request: Re
     return {"status": "success", "message": "Cancellation approved and booking cancelled", "data": result}
 
 
+@router.patch("/bookings/{booking_id}/cancellation-request/approve")
+def approve_booking_cancellation(
+    booking_id: int,
+    data: CancellationApprove,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_permission("bookings.cancel", "bookings.update_status")),
+):
+    result = service.approve_booking_cancellation_request(
+        db, booking_id=booking_id, data=data, actor=current_user, request=request,
+    )
+    return {"status": "success", "message": "Cancellation approved and booking cancelled", "data": result}
+
+
 @router.patch("/cancellations/{request_id}/reject")
 def reject_cancellation(request_id: int, data: CancellationReject, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("bookings.cancel", "bookings.update_status"))):
     result = service.reject_request(db, request_id=request_id, data=data, actor=current_user, request=request)

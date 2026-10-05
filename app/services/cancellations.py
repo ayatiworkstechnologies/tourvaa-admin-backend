@@ -90,6 +90,42 @@ def _calculate_refund_percentage(db: Session, booking: Booking) -> Decimal:
     return Decimal("0")
 
 
+def customer_cancellation_eligibility(db: Session, booking: Booking) -> dict:
+    """Return the self-service cancellation rule shown in the customer portal.
+
+    Only a 100% refund tier is a free-cancellation window. Other tiers are
+    handled by Tourvaa support so customers do not submit an inaccurate
+    self-service refund request.
+    """
+    refund_percentage = _calculate_refund_percentage(db, booking)
+    return {
+        "is_free_cancellation_eligible": refund_percentage >= Decimal("100"),
+        "refund_percentage": str(refund_percentage),
+    }
+
+
+def supplier_cancellation_terms(db: Session, booking: Booking) -> dict:
+    """Describe the supplier's liability under the active cancellation tier.
+
+    Refund rules describe the customer's refundable percentage. The remaining
+    percentage is the supplier cancellation liability displayed before the
+    supplier confirms a cancellation.
+    """
+    refund_percentage = _calculate_refund_percentage(db, booking)
+    liability_percentage = money(max(Decimal("0"), Decimal("100") - refund_percentage))
+    if liability_percentage <= 0:
+        tier = "no_charge"
+    elif liability_percentage >= 100:
+        tier = "full_liability"
+    else:
+        tier = "partial_liability"
+    return {
+        "tier": tier,
+        "liability_percentage": str(liability_percentage),
+        "refund_percentage": str(refund_percentage),
+    }
+
+
 def _validate_refund_value(*, percentage: Decimal | None = None, amount: Decimal | None = None) -> None:
     if percentage is not None and (percentage < 0 or percentage > 100):
         raise HTTPException(status_code=422, detail="Refund percentage must be between 0 and 100")
@@ -157,6 +193,11 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
         raise HTTPException(status_code=400, detail="A cancellation request is already pending for this booking")
 
     refund_pct = _calculate_refund_percentage(db, booking)
+    if refund_pct < Decimal("100"):
+        raise HTTPException(
+            status_code=400,
+            detail="The free cancellation period has ended. Please contact Tourvaa for cancellation assistance.",
+        )
     refund_amount = money((money(booking.amount_paid) * refund_pct) / 100)
 
     req = CancellationRequest(
@@ -331,6 +372,24 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
 
     log_audit(db, actor=actor, action="approve_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": req.status, "refund_amount": str(req.refund_amount)}, request=request)
     return _serialize_request(req)
+
+
+def approve_booking_cancellation_request(db: Session, booking_id: int, data: CancellationApprove, actor: User, request=None) -> dict:
+    """Approve the one outstanding customer cancellation for a booking.
+
+    This is intentionally separate from a generic booking status update so an
+    administrator cannot accidentally bypass the refund, ledger reversal, and
+    customer-notification work performed by ``approve_request``.
+    """
+    pending_request = (
+        db.query(CancellationRequest.id)
+        .filter(CancellationRequest.booking_id == booking_id, CancellationRequest.status == "pending")
+        .order_by(CancellationRequest.id.desc())
+        .first()
+    )
+    if not pending_request:
+        raise HTTPException(status_code=404, detail="No pending cancellation request was found for this booking")
+    return approve_request(db, pending_request.id, data, actor, request)
 
 
 def reject_request(db: Session, request_id: int, data: CancellationReject, actor: User, request=None) -> dict:

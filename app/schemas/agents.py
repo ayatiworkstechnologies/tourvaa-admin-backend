@@ -88,6 +88,7 @@ class AgentInvoicingUpdate(BaseModel):
     contact_name: str | None = Field(default=None, max_length=150)
     email: str | None = Field(default=None, max_length=150)
     phone: str | None = Field(default=None, max_length=30)
+    preferred_payment_method: str | None = Field(default=None, max_length=30)
     account_name: str | None = Field(default=None, max_length=150)
     account_number: str | None = Field(default=None, max_length=100)
     bank_name: str | None = Field(default=None, max_length=150)
@@ -96,8 +97,12 @@ class AgentInvoicingUpdate(BaseModel):
     iban: str | None = Field(default=None, max_length=100)
     country_id: int | None = None
     tax_number: str | None = Field(default=None, max_length=100)
+    billing_address: str | None = Field(default=None, max_length=500)
+    billing_city: str | None = Field(default=None, max_length=100)
+    billing_state: str | None = Field(default=None, max_length=100)
+    billing_postal_code: str | None = Field(default=None, max_length=30)
 
-    @field_validator("contact_name", "email", "phone", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban", "tax_number")
+    @field_validator("contact_name", "email", "phone", "preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban", "tax_number", "billing_address", "billing_city", "billing_state", "billing_postal_code")
     @classmethod
     def trim_optional_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value

@@ -68,11 +68,28 @@ def _serialize_payout(row: AgentPayout) -> dict:
 # -- ledger --
 
 
-def create_ledger_entry(db: Session, *, booking: Booking, agent_id: int, gross_amount: Decimal, commission_amount: Decimal) -> AgentLedger:
+def create_ledger_entry(
+    db: Session,
+    *,
+    booking: Booking,
+    agent_id: int,
+    gross_amount: Decimal,
+    commission_amount: Decimal,
+    commission_percentage: Decimal | None = None,
+) -> AgentLedger:
     """Called from booking service when an agent booking is created."""
     gross_amount = money(gross_amount)
     commission_amount = money(min(commission_amount, gross_amount)) if gross_amount > 0 else money(0)
-    commission_percentage = money((commission_amount / gross_amount) * 100) if gross_amount > 0 else Decimal("0")
+    # The approved rate is applied to the commission base, which may differ
+    # from the customer-facing booking total because of markup, discounts or
+    # non-commissionable items. Persist that approved rate; deriving it from
+    # the gross customer amount makes a 3% approval appear as (for example)
+    # 2.71% in Agent and Admin portals.
+    commission_percentage = money(
+        commission_percentage
+        if commission_percentage is not None
+        else (commission_amount / gross_amount) * 100 if gross_amount > 0 else 0
+    )
     entry = AgentLedger(
         agent_id=agent_id,
         booking_id=booking.id,

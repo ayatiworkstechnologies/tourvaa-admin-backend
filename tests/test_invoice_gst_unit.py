@@ -34,6 +34,14 @@ def test_zero_gst_keeps_the_full_amount_as_subtotal():
     )
 
 
+def test_invoice_template_copy_has_safe_defaults_without_a_database_session():
+    template = invoices._invoice_template_copy(SimpleNamespace())
+
+    assert template["invoice_brand_name"] == "Tourvaa"
+    assert template["invoice_brand_tagline"] == "Curated journeys, effortlessly booked."
+    assert "system-generated" in template["invoice_footer_legal"]
+
+
 def test_invoice_schema_rejects_gst_rate_above_one_hundred_percent():
     with pytest.raises(ValidationError):
         InvoiceGenerateRequest(booking_id=1, gst_rate=Decimal("1.01"))

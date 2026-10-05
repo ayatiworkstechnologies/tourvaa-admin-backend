@@ -170,6 +170,11 @@ class BookingUpdate(BaseModel):
     affiliate_id: Optional[int] = None
 
 
+class BookingTravelDateUpdate(BaseModel):
+    tour_date: str = Field(min_length=10, max_length=32)
+    reason: str = Field(min_length=3, max_length=500)
+
+
 class BookingStatusUpdate(BaseModel):
     booking_status: str
     reason: Optional[str] = None

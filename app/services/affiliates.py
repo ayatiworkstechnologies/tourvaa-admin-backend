@@ -11,13 +11,12 @@ from app.models.roles import Role
 from app.models.users import User, UserRole
 from app.utils.money import utcnow
 
-# Smaller than SUPPLIER_DOCUMENT_TYPES -- affiliates are individuals/small
-# marketers promoting Tourvaa, not running a tour-operating business, so
-# there's no equivalent of a trade license / company registration to ask for.
 AFFILIATE_DOCUMENT_TYPES = {
-    "identity_proof": {"label": "Identity Proof (Passport / National ID)", "required": True},
-    "bank_details": {"label": "Bank Account Details / Cheque", "required": True},
-    "tax_certificate": {"label": "Tax Registration Certificate (if applicable)", "required": False},
+    "company_registration": {"label": "Business Registration Certificate", "required": True},
+    "iata_accreditation": {"label": "IATA Accreditation", "required": True},
+    "industry_certification": {"label": "Industry Certification", "required": True},
+    "other_licences": {"label": "Other Licences", "required": True},
+    "supporting_documents": {"label": "Additional Supporting Documents", "required": True},
 }
 REQUIRED_AFFILIATE_DOCUMENT_TYPES = {key for key, metadata in AFFILIATE_DOCUMENT_TYPES.items() if metadata["required"]}
 
@@ -77,11 +76,19 @@ def serialize_affiliate(item: Affiliate):
             "contact_name": item.invoicing.contact_name,
             "email": item.invoicing.email,
             "phone": item.invoicing.phone,
+            "preferred_payment_method": item.invoicing.preferred_payment_method,
             "account_name": item.invoicing.account_name,
             "account_number": item.invoicing.account_number,
             "bank_name": item.invoicing.bank_name,
+            "bank_branch": item.invoicing.bank_branch,
+            "swift_code": item.invoicing.swift_code,
+            "iban": item.invoicing.iban,
             "country_id": item.invoicing.country_id,
             "tax_number": item.invoicing.tax_number,
+            "billing_address": item.invoicing.billing_address,
+            "billing_city": item.invoicing.billing_city,
+            "billing_state": item.invoicing.billing_state,
+            "billing_postal_code": item.invoicing.billing_postal_code,
         } if item.invoicing else None,
     }
 

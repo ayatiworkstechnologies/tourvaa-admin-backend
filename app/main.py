@@ -418,6 +418,28 @@ async def _report_schedule_loop():
 # whole days), so an hourly check is plenty responsive without extra load.
 BALANCE_DUE_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
 
+# Booking reminders use durable communication markers and may be checked
+# hourly; this avoids duplicate sends after an application restart.
+BOOKING_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
+
+
+async def _booking_reminder_loop():
+    from app.services.bookings import check_booking_reminders
+    from app.utils.distributed_lock import acquire_sweep_lock
+
+    while True:
+        await asyncio.sleep(BOOKING_REMINDER_SWEEP_INTERVAL_SECONDS)
+        try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "booking_reminder", BOOKING_REMINDER_SWEEP_INTERVAL_SECONDS - 60):
+                continue
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(check_booking_reminders, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Booking reminder sweep failed")
+
 
 async def _balance_due_reminder_loop():
     from app.services.invoices import check_balance_due_reminders
@@ -538,6 +560,7 @@ async def start_background_jobs():
         _background_tasks.append(asyncio.create_task(_expire_stale_bookings_loop()))
         _background_tasks.append(asyncio.create_task(_report_schedule_loop()))
         _background_tasks.append(asyncio.create_task(_balance_due_reminder_loop()))
+        _background_tasks.append(asyncio.create_task(_booking_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_tour_availability_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_wishlist_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_chat_retention_loop()))

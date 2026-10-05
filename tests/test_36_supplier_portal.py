@@ -160,7 +160,7 @@ def test_supplier_booking_detail_not_found(supplier_headers):
 def test_supplier_booking_actions_on_nonexistent_booking(supplier_headers):
     for action, method in [
         ("accept", "post"), ("decline", "post"), ("notify", "post"),
-        ("ongoing", "patch"), ("complete", "patch"), ("cancel", "patch"), ("postpone", "patch"),
+        ("ongoing", "patch"), ("complete", "patch"), ("cancel", "patch"),
     ]:
         resp = requests.request(
             method, f"{BASE_URL}/supplier/bookings/999999999/{action}",
@@ -168,6 +168,14 @@ def test_supplier_booking_actions_on_nonexistent_booking(supplier_headers):
             headers=supplier_headers, timeout=10,
         )
         assert resp.status_code in (403, 404, 422), f"{action}: {resp.text}"
+
+
+def test_supplier_cannot_postpone_bookings(supplier_headers):
+    resp = requests.patch(
+        f"{BASE_URL}/supplier/bookings/999999999/postpone",
+        json={"reason": "test"}, headers=supplier_headers, timeout=10,
+    )
+    assert resp.status_code == 404, resp.text
 
 
 def test_supplier_booking_status_history_not_found(supplier_headers):
