@@ -32,11 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 SUPPLIER_DOCUMENT_TYPES = {
-    "company_registration": {"label": "Company Registration Certificate", "required": True},
-    "trade_license": {"label": "Trade License", "required": True},
-    "tax_certificate": {"label": "Tax Registration Certificate", "required": True},
-    "identity_proof": {"label": "Identity Proof (Passport / Emirates ID)", "required": True},
-    "bank_details": {"label": "Bank Account Details / Cheque", "required": True},
+    "company_registration": {"label": "Business Registration Certificate", "required": True},
+    "operating_licence": {"label": "Relevant Operating Licence", "required": False},
+    "public_liability_insurance": {"label": "Public Liability Insurance Certificate", "required": False},
+    "tourism_accreditation": {"label": "Tourism Accreditation", "required": False},
+    "industry_certification": {"label": "Industry Certification", "required": False},
+    "safety_certification": {"label": "Safety Certification", "required": False},
+    "other_licences": {"label": "Other Licences", "required": False},
+    "supporting_documents": {"label": "Additional Supporting Documents", "required": False},
 }
 REQUIRED_SUPPLIER_DOCUMENT_TYPES = {
     key for key, metadata in SUPPLIER_DOCUMENT_TYPES.items() if metadata["required"]
@@ -78,7 +81,7 @@ def _approval_history(item):
 
 
 def _contact(item):
-    return {key: getattr(item, key) for key in ["id", "contact_name", "designation", "phone", "email", "alternate_phone", "is_primary", "created_at", "updated_at"]}
+    return {key: getattr(item, key) for key in ["id", "contact_name", "first_name", "last_name", "designation", "phone", "email", "alternate_phone", "preferred_contact_method", "is_primary", "created_at", "updated_at"]}
 
 
 def _document(item):
@@ -186,12 +189,16 @@ def serialize_supplier(item: Supplier):
                 "destinations_sold": item.business_info.destinations_sold,
                 "gst_tax_number": item.business_info.gst_tax_number,
                 "business_registration_number": item.business_info.business_registration_number,
+                "trading_name": item.business_info.trading_name,
+                "business_email": item.business_info.business_email,
+                "website_url": item.business_info.website_url,
                 "approval_status": item.business_info.approval_status,
             } if item.business_info else None,
             "invoicing": {
                 "contact_name": item.invoicing.contact_name,
                 "email": item.invoicing.email,
                 "phone": item.invoicing.phone,
+                "preferred_payment_method": item.invoicing.preferred_payment_method,
                 "account_name": item.invoicing.account_name,
                 "account_number": item.invoicing.account_number,
                 "bank_name": item.invoicing.bank_name,
@@ -200,6 +207,10 @@ def serialize_supplier(item: Supplier):
                 "iban": item.invoicing.iban,
                 "country_id": item.invoicing.country_id,
                 "tax_number": item.invoicing.tax_number,
+                "billing_address": item.invoicing.billing_address,
+                "billing_city": item.invoicing.billing_city,
+                "billing_state": item.invoicing.billing_state,
+                "billing_postal_code": item.invoicing.billing_postal_code,
             } if item.invoicing else None,
         }
     )
@@ -378,6 +389,8 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
         # intentional and must be applied, not skipped.
         for k, v in contact_data.items():
             setattr(item.contacts[0], k, v)
+        if contact_data.get("first_name") is not None or contact_data.get("last_name") is not None:
+            item.contacts[0].contact_name = " ".join(part for part in [item.contacts[0].first_name, item.contacts[0].last_name] if part).strip()
 
     if business_data:
         if not item.business_info:

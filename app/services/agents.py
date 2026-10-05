@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 AGENT_DOCUMENT_TYPES = {
     "company_registration": {"label": "Business Registration Certificate", "required": True},
     "iata_accreditation": {"label": "IATA Accreditation", "required": True},
-    "industry_certification": {"label": "Industry Certification", "required": True},
-    "other_licences": {"label": "Other Licences", "required": True},
-    "supporting_documents": {"label": "Additional Supporting Documents", "required": True},
+    "industry_certification": {"label": "Industry Certification", "required": False},
+    "other_licences": {"label": "Other Licences", "required": False},
+    "supporting_documents": {"label": "Additional Supporting Documents", "required": False},
 }
 REQUIRED_AGENT_DOCUMENT_TYPES = {
     key for key, metadata in AGENT_DOCUMENT_TYPES.items() if metadata["required"]
@@ -32,7 +32,7 @@ REQUIRED_AGENT_DOCUMENT_TYPES = {
 
 
 def _contact(item):
-    return {key: getattr(item, key) for key in ["id", "contact_name", "designation", "phone", "email", "alternate_phone", "is_primary", "created_at", "updated_at"]}
+    return {key: getattr(item, key) for key in ["id", "contact_name", "first_name", "last_name", "designation", "phone", "email", "alternate_phone", "preferred_contact_method", "is_primary", "created_at", "updated_at"]}
 
 
 def _document(item):
@@ -81,6 +81,10 @@ def serialize_agent(item: Agent):
             "destinations_sold": item.business_info.destinations_sold,
             "iata_registration_number": item.business_info.iata_registration_number,
             "gst_tax_number": item.business_info.gst_tax_number,
+            "trading_name": item.business_info.trading_name,
+            "business_email": item.business_info.business_email,
+            "website_url": item.business_info.website_url,
+            "business_registration_number": item.business_info.business_registration_number,
             "approval_status": item.business_info.approval_status,
         } if item.business_info else None,
         "invoicing": {
@@ -346,6 +350,8 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
         for key, value in contact_data.items():
             if value is not None:
                 setattr(primary, key, value)
+        if contact_data.get("first_name") is not None or contact_data.get("last_name") is not None:
+            primary.contact_name = " ".join(part for part in [primary.first_name, primary.last_name] if part).strip()
 
     if business_data:
         if not item.business_info:

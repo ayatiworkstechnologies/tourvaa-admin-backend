@@ -71,10 +71,13 @@ class SupplierCreate(BaseModel):
 
 class SupplierContactUpdate(BaseModel):
     contact_name: str | None = Field(default=None, max_length=150)
+    first_name: str | None = Field(default=None, max_length=75)
+    last_name: str | None = Field(default=None, max_length=75)
     designation: str | None = Field(default=None, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
     email: str | None = Field(default=None, max_length=150)
     alternate_phone: str | None = Field(default=None, max_length=30)
+    preferred_contact_method: str | None = Field(default=None, max_length=20)
 
 class SupplierBusinessInfoUpdate(BaseModel):
     years_in_business: int | None = Field(default=None, ge=0)
@@ -84,11 +87,15 @@ class SupplierBusinessInfoUpdate(BaseModel):
     destinations_sold: str | None = Field(default=None)
     gst_tax_number: str | None = Field(default=None, max_length=100)
     business_registration_number: str | None = Field(default=None, max_length=100)
+    trading_name: str | None = Field(default=None, max_length=150)
+    business_email: str | None = Field(default=None, max_length=150)
+    website_url: str | None = Field(default=None, max_length=255)
 
 class SupplierInvoicingUpdate(BaseModel):
     contact_name: str | None = Field(default=None, max_length=150)
     email: str | None = Field(default=None, max_length=150)
     phone: str | None = Field(default=None, max_length=30)
+    preferred_payment_method: str | None = Field(default=None, max_length=30)
     account_name: str | None = Field(default=None, max_length=150)
     account_number: str | None = Field(default=None, max_length=100)
     bank_name: str | None = Field(default=None, max_length=150)
@@ -97,6 +104,10 @@ class SupplierInvoicingUpdate(BaseModel):
     iban: str | None = Field(default=None, max_length=100)
     country_id: int | None = None
     tax_number: str | None = Field(default=None, max_length=100)
+    billing_address: str | None = Field(default=None, max_length=500)
+    billing_city: str | None = Field(default=None, max_length=100)
+    billing_state: str | None = Field(default=None, max_length=100)
+    billing_postal_code: str | None = Field(default=None, max_length=30)
 
 class SupplierUpdate(BaseModel):
     supplier_name: str | None = Field(default=None, max_length=150)

@@ -70,6 +70,19 @@ def _email_customer_refund_processed(db: Session, payment: Payment, amount) -> N
         f"Refund processed - {booking.booking_code}",
         refund_processed_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
     )
+    # Agent-made reservations need the same final refund confirmation as the
+    # traveller. This is deliberately sent only after the gateway/payment
+    # record is marked refunded, not when a cancellation is merely requested.
+    if booking.agent and booking.agent.user and booking.agent.user.email:
+        agent_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
+        send_templated_email(
+            db, booking.agent.user.email, "refund_processed",
+            {"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "currency": booking.currency, "amount": amount, "login_url": agent_url,
+             "button_text": "View booking", "button_url": agent_url},
+            f"Refund processed - {booking.booking_code}",
+            refund_processed_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, agent_url),
+        )
 
 
 def serialize_transaction(row: PaymentTransaction) -> dict:
@@ -527,5 +540,4 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
 
 def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "", actor: Optional[User] = None) -> dict:
     return get_payments(db, page=page, limit=limit, customer_id=customer_id, payment_status=payment_status, payment_method=payment_method, actor=actor)
-
 

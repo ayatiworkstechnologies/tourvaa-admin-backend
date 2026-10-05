@@ -58,12 +58,15 @@ class AgentCreate(BaseModel):
 
 class AgentContactUpdate(BaseModel):
     contact_name: str | None = Field(default=None, max_length=150)
+    first_name: str | None = Field(default=None, max_length=75)
+    last_name: str | None = Field(default=None, max_length=75)
     designation: str | None = Field(default=None, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
     email: str | None = Field(default=None, max_length=150)
     alternate_phone: str | None = Field(default=None, max_length=30)
+    preferred_contact_method: str | None = Field(default=None, max_length=20)
 
-    @field_validator("contact_name", "designation", "phone", "email", "alternate_phone")
+    @field_validator("contact_name", "first_name", "last_name", "designation", "phone", "email", "alternate_phone", "preferred_contact_method")
     @classmethod
     def trim_optional_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
@@ -77,8 +80,12 @@ class AgentBusinessInfoUpdate(BaseModel):
     destinations_sold: str | None = None
     iata_registration_number: str | None = Field(default=None, max_length=100)
     gst_tax_number: str | None = Field(default=None, max_length=100)
+    trading_name: str | None = Field(default=None, max_length=150)
+    business_email: str | None = Field(default=None, max_length=150)
+    website_url: str | None = Field(default=None, max_length=255)
+    business_registration_number: str | None = Field(default=None, max_length=100)
 
-    @field_validator("certificate_of_incorporation", "target_market", "destinations_sold", "iata_registration_number", "gst_tax_number")
+    @field_validator("certificate_of_incorporation", "target_market", "destinations_sold", "iata_registration_number", "gst_tax_number", "trading_name", "business_email", "website_url", "business_registration_number")
     @classmethod
     def trim_optional_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
