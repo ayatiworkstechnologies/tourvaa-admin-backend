@@ -346,8 +346,15 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
     if "commission_percentage" in update_data and update_data["commission_percentage"] is not None:
         from app.services.settings import get_commission_percentage
         minimum = get_commission_percentage(db)
-        if Decimal(str(update_data["commission_percentage"])) < minimum:
+        requested_commission = Decimal(str(update_data["commission_percentage"]))
+        current_commission = Decimal(str(item.commission_percentage)) if item.commission_percentage is not None else minimum
+        if requested_commission < minimum:
             raise HTTPException(status_code=400, detail=f"Commission percentage cannot be lower than the platform minimum of {minimum}%")
+        # Supplier self-service is intentionally increase-only. Keeping this
+        # here (rather than only in the profile UI) prevents an API client
+        # from reducing an agreed commercial rate.
+        if actor.id == item.user_id and requested_commission < current_commission:
+            raise HTTPException(status_code=400, detail=f"Commission percentage can only be increased from the current {current_commission}% rate")
 
     # If the country changed and the caller didn't also explicitly set a
     # currency in this same request, re-derive the currency from the new
