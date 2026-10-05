@@ -19,6 +19,7 @@ from app.models.cms import City, Country, Tour, TourCategory
 from app.models.cancellations import CancellationRequest
 from app.models.reviews import TourReview
 from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierPayoutItem
+from app.models.agent_ledger import AgentLedger
 from app.auth.permissions import require_any_permission
 from app.utils.money import money_str, utcnow
 from app.models.customers import Customer
@@ -286,11 +287,61 @@ def agent_report(params: dict = Depends(_period_params), db: Session = Depends(g
     query = _apply_range(query, Booking.created_at, params["start"], params["end"])
     agg: dict[int, dict] = {}
     for aid, name, booking_id, currency, amount in query.all():
-        bucket = agg.setdefault(aid, {"name": name, "count": 0, "amount": 0.0})
+        bucket = agg.setdefault(aid, {
+            "name": name,
+            "count": 0,
+            "amount": 0.0,
+            "commission_earned": 0.0,
+            "commission_paid": 0.0,
+            "commission_outstanding": 0.0,
+        })
         if booking_id is not None:
             bucket["count"] += 1
             bucket["amount"] += _amount_to_usd(amount, currency)
-    return {"status": "success", "data": [{"agent_id": aid, "agent_name": v["name"], "bookings": v["count"], "amount": _money(v["amount"])} for aid, v in agg.items()]}
+
+    # The ledger is the source of truth for the commission promised to, paid
+    # to, and still owed to an agent.  Keep its period aligned to the booking
+    # report so the booking and commission figures always describe the same
+    # set of bookings.  A reversed ledger row is retained for audit history,
+    # but no longer represents earned/outstanding commission.
+    ledger_query = db.query(
+        AgentLedger.agent_id,
+        AgentLedger.currency,
+        AgentLedger.commission_amount,
+        AgentLedger.amount_paid,
+        AgentLedger.amount_pending,
+        AgentLedger.status,
+    ).join(Booking, AgentLedger.booking_id == Booking.id)
+    ledger_query = _apply_range(ledger_query, Booking.created_at, params["start"], params["end"])
+    for aid, currency, commission, paid, outstanding, status in ledger_query.all():
+        bucket = agg.setdefault(aid, {
+            "name": None,
+            "count": 0,
+            "amount": 0.0,
+            "commission_earned": 0.0,
+            "commission_paid": 0.0,
+            "commission_outstanding": 0.0,
+        })
+        if status != "refunded":
+            bucket["commission_earned"] += _amount_to_usd(commission, currency)
+        bucket["commission_paid"] += _amount_to_usd(paid, currency)
+        bucket["commission_outstanding"] += _amount_to_usd(outstanding, currency)
+
+    return {
+        "status": "success",
+        "data": [
+            {
+                "agent_id": aid,
+                "agent_name": v["name"] or f"Agent #{aid}",
+                "bookings": v["count"],
+                "amount": _money(v["amount"]),
+                "commission_earned": _money(v["commission_earned"]),
+                "commission_paid": _money(v["commission_paid"]),
+                "commission_outstanding": _money(v["commission_outstanding"]),
+            }
+            for aid, v in agg.items()
+        ],
+    }
 
 
 @router.get("/customers")
