@@ -348,9 +348,26 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
     # after payment credentials are locked.
     bank_fields = {"preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban"}
     existing_invoicing = getattr(item, "invoicing", None)
-    if actor.id == item.user_id and existing_invoicing and invoicing_data and any(key in bank_fields for key in invoicing_data):
-        if any(getattr(existing_invoicing, key, None) for key in bank_fields):
-            raise HTTPException(status_code=400, detail="Bank details are locked after saving. Contact Tourvaa support to request a change.")
+    if actor.id == item.user_id and existing_invoicing and invoicing_data:
+        bank_is_locked = any(getattr(existing_invoicing, key, None) for key in bank_fields)
+        if bank_is_locked:
+            changed_bank_fields = []
+            for key in bank_fields.intersection(invoicing_data):
+                submitted = invoicing_data[key]
+                # A masked value is display-only and must never replace the
+                # saved credential or be treated as an edit request.
+                if isinstance(submitted, str) and "*" in submitted:
+                    continue
+                current = getattr(existing_invoicing, key, None)
+                if (submitted or "") != (current or ""):
+                    changed_bank_fields.append(key)
+            if changed_bank_fields:
+                raise HTTPException(status_code=400, detail="Bank details are locked after saving. Contact Tourvaa support to request a change.")
+            # The self-service form can submit its complete invoicing object.
+            # Remove unchanged credentials so a non-bank profile save cannot
+            # overwrite them or trip the lock on a later request.
+            for key in bank_fields:
+                invoicing_data.pop(key, None)
 
     for key, value in update_data.items():
         setattr(item, key, value)

@@ -100,6 +100,32 @@ def test_locked_partner_bank_details_do_not_lock_billing_country(monkeypatch, se
     assert record.invoicing.country_id == 64
 
 
+def test_agent_profile_save_allows_unchanged_locked_bank_details(monkeypatch):
+    """A complete self-service form must not fail just by echoing saved bank fields."""
+    record = SimpleNamespace(
+        id=7,
+        user_id=41,
+        invoicing=SimpleNamespace(
+            preferred_payment_method="bank_transfer", account_name="Test", account_number="1234",
+            bank_name="Bank", bank_branch="Branch", swift_code="SWIFT", iban="",
+            country_id=1,
+        ),
+        contacts=[], business_info=None,
+    )
+    monkeypatch.setattr("app.services.agents.get_agent", lambda _db, _id: record)
+    monkeypatch.setattr("app.services.agents.serialize_agent", lambda _record, **_kwargs: {})
+    payload = AgentUpdate(invoicing=AgentInvoicingUpdate(
+        preferred_payment_method="bank_transfer", account_name="Test", account_number="1234",
+        bank_name="Bank", bank_branch="Branch", swift_code="SWIFT", iban="",
+        country_id=64,
+    ))
+
+    update_agent(_DbCommitStub(), record.id, payload, SimpleNamespace(id=record.user_id))
+
+    assert record.invoicing.account_number == "1234"
+    assert record.invoicing.country_id == 64
+
+
 def test_supplier_cannot_lower_an_agreed_commission_rate(monkeypatch):
     """The self-service UI's increase-only rule must hold for direct API use."""
     supplier = SimpleNamespace(id=7, user_id=41, commission_percentage=15)
