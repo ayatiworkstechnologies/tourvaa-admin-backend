@@ -5,6 +5,7 @@ the tour page showed 100/95/90 while admin and checkout used 105/99.75/94.50."""
 from types import SimpleNamespace
 
 from app.routers.public import _public_pricing_rows
+from app.services.discounts import combined_discount_percent
 
 
 def _slab(pax_from, pax_to, adult, child, store_adult, store_child):
@@ -60,3 +61,7 @@ def test_supplier_only_discount_keeps_original_for_badge():
     )
     assert rows[0]["original_price_per_person"] == 150
     assert rows[0]["price_per_person"] == 135
+
+
+def test_stacked_discount_badge_uses_the_effective_saving():
+    assert combined_discount_percent(10, 15) == 23.5

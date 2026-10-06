@@ -156,7 +156,15 @@ def _serialize_vehicle(v) -> dict:
     }
 
 
-def serialize_supplier(item: Supplier):
+def _mask_bank_identifier(value: str | None) -> str:
+    """Return an account identifier suitable for the supplier self-service view."""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    return f"{'*' * max(0, len(value) - 4)}{value[-4:]}"
+
+
+def serialize_supplier(item: Supplier, *, mask_bank_details: bool = False):
     # The address and the initial named contact are owned by the linked User
     # account, not by the Supplier table.  Include them in the staff payload
     # so an admin reviewing a registration sees the information the supplier
@@ -200,12 +208,17 @@ def serialize_supplier(item: Supplier):
                 "phone": item.invoicing.phone,
                 "preferred_payment_method": item.invoicing.preferred_payment_method,
                 "account_name": item.invoicing.account_name,
-                "account_number": item.invoicing.account_number,
+                "account_number": _mask_bank_identifier(item.invoicing.account_number) if mask_bank_details else item.invoicing.account_number,
                 "bank_name": item.invoicing.bank_name,
                 "bank_branch": item.invoicing.bank_branch,
                 "swift_code": item.invoicing.swift_code,
-                "iban": item.invoicing.iban,
+                "iban": _mask_bank_identifier(item.invoicing.iban) if mask_bank_details else item.invoicing.iban,
+                "bank_country_id": item.invoicing.bank_country_id,
                 "country_id": item.invoicing.country_id,
+                "bank_details_locked": any(
+                    getattr(item.invoicing, key, None)
+                    for key in ("preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban", "bank_country_id")
+                ),
                 "tax_number": item.invoicing.tax_number,
                 "billing_address": item.invoicing.billing_address,
                 "billing_city": item.invoicing.billing_city,
@@ -354,6 +367,12 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
     business_data = update_data.pop("business_info", None)
     invoicing_data = update_data.pop("invoicing", None)
 
+    bank_fields = {"preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban", "bank_country_id"}
+    existing_invoicing = getattr(item, "invoicing", None)
+    if actor.id == item.user_id and existing_invoicing and invoicing_data and any(key in bank_fields for key in invoicing_data):
+        if any(getattr(existing_invoicing, key, None) for key in bank_fields):
+            raise HTTPException(status_code=400, detail="Bank details are locked after saving. Contact Tourvaa support to request a change.")
+
     if "commission_percentage" in update_data and update_data["commission_percentage"] is not None:
         from app.services.settings import get_commission_percentage
         minimum = get_commission_percentage(db)
@@ -411,7 +430,7 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
     log_audit(db, actor=actor, action="update_supplier", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
     db.commit()
     db.refresh(item)
-    return serialize_supplier(item)
+    return serialize_supplier(item, mask_bank_details=actor.id == item.user_id)
 
 
 def complete_supplier_onboarding(db: Session, supplier_id: int, actor: User, request: Request | None = None):

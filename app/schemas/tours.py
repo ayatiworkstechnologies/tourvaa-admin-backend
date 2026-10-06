@@ -429,7 +429,6 @@ class AvailabilityConfigPayload(BaseModel):
     availability_end_date: datetime | None = None
     min_advance_booking_days: int = Field(default=0, ge=0)
     agent_no_deposit_buffer_weeks: int = Field(default=4, ge=0)
-    agent_reserve_deposit_percentage: float = Field(default=30.0, ge=0, le=100)
     frequency: str | None = None
     frequency_week: int | None = Field(default=None, ge=1, le=4)
     # Monthly only: 1-4 = 1st-4th occurrence of each chosen weekday, 5 = the last one.
@@ -531,6 +530,8 @@ class DiscountPayload(BaseModel):
     def validate_percentage_bound(self) -> "DiscountPayload":
         if self.discount_type == "percentage" and self.discount_value > 100:
             raise ValueError("A percentage discount_value cannot exceed 100")
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
         return self
 
 

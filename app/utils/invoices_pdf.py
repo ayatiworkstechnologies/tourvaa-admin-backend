@@ -187,11 +187,11 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     # ---- Line items ----
     header_row = [
         Paragraph("#", ParagraphStyle("th", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold")),
-        Paragraph("Description", ParagraphStyle("th", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold")),
-        Paragraph("Qty", ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
-        Paragraph("Unit Price", ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
-        Paragraph("Tax", ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
-        Paragraph("Total", ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
+        Paragraph(str(inv.get("invoice_column_description") or "Description"), ParagraphStyle("th", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold")),
+        Paragraph(str(inv.get("invoice_column_quantity") or "Qty"), ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
+        Paragraph(str(inv.get("invoice_column_unit_price") or "Unit Price"), ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
+        Paragraph(str(inv.get("invoice_column_tax") or "Tax"), ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
+        Paragraph(str(inv.get("invoice_column_total") or "Total"), ParagraphStyle("thr", parent=body_style, textColor=colors.white, fontName="Helvetica-Bold", alignment=TA_RIGHT)),
     ]
     table_data = [header_row]
     amt_right = ParagraphStyle("amtr", parent=item_desc_style, alignment=TA_RIGHT)
@@ -232,7 +232,7 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
         [f"Tax / GST ({gst_pct})", _money(inv, inv["gst_amount"])],
         ["Total", _money(inv, inv["total_amount"])],
         ["Amount Paid", _money(inv, inv["amount_paid"])],
-        ["Amount Due", _money(inv, inv["amount_due"])],
+        [str(inv.get("invoice_label_amount_due") or "Amount Due"), _money(inv, inv["amount_due"])],
         ["Balance Due Date", inv.get("balance_due_date") or "Fully paid"],
     ]
     totals_table = Table(totals_rows, colWidths=[5.4 * cm, 4.0 * cm])

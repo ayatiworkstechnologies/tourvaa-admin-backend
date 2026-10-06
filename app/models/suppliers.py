@@ -162,6 +162,9 @@ class SupplierInvoicing(Base):
     bank_branch = Column(String(150), default="", nullable=False)
     swift_code = Column(String(50), default="", nullable=False)
     iban = Column(String(100), default="", nullable=False)
+    # Bank country is deliberately separate from the billing country. A
+    # supplier can be paid in a country other than their invoice address.
+    bank_country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)
     tax_number = Column(String(100), default="", nullable=False)
     billing_address = Column(Text, nullable=True)

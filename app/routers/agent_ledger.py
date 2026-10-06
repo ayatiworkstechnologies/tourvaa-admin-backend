@@ -60,12 +60,12 @@ def approve_payout(payout_id: int, request: Request, db: Session = Depends(get_d
 
 
 @router.patch("/agent-payouts/{payout_id}/mark-paid")
-def mark_paid(payout_id: int, data: AgentPayoutMarkPaid, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("agent_ledger.mark_paid", "update-agent_ledger"))):
+def mark_paid(payout_id: int, data: AgentPayoutMarkPaid, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("agent_ledger.mark_paid"))):
     result = service.mark_payout_paid(db, payout_id=payout_id, data=data, actor=current_user, request=request)
     return {"status": "success", "message": "Payout marked as paid", "data": result}
 
 
 @router.post("/agent-payouts/{payout_id}/mark-paid")
-def mark_paid_post(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("agent_ledger.mark_paid", "update-agent_ledger"))):
+def mark_paid_post(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("agent_ledger.mark_paid"))):
     result = service.mark_payout_paid(db, payout_id=payout_id, data=AgentPayoutMarkPaid(), actor=current_user, request=request)
     return {"status": "success", "message": "Payout marked as paid", "data": result}

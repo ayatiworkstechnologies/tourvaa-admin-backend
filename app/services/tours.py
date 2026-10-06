@@ -810,6 +810,132 @@ def _is_supplier_owned_discount(db: Session, discount: TourDiscount) -> bool:
     return (discount.funded_by or "SUPPLIER").upper() != "TOURVAA"
 
 
+def _discount_dates_overlap(
+    start_date: datetime | None,
+    end_date: datetime | None,
+    other_start_date: datetime | None,
+    other_end_date: datetime | None,
+) -> bool:
+    """Whether two inclusive validity windows overlap.
+
+    A missing start/end date represents an open-ended window.  This is kept
+    separate from the database query so the rule is identical for automatic
+    discounts and promo codes, and is straightforward to test.
+    """
+    return (
+        (start_date is None or other_end_date is None or start_date <= other_end_date)
+        and (end_date is None or other_start_date is None or end_date >= other_start_date)
+    )
+
+
+def _discount_applies_to_tour(discount: TourDiscount, tour: Tour) -> bool:
+    """Return whether a persisted discount can apply to ``tour``."""
+    if discount.tour_id == tour.id or discount.discount_scope == "all_tours":
+        return True
+    if discount.discount_scope == "category":
+        return bool(tour.category_id and discount.category_id == tour.category_id)
+    if discount.discount_scope == "country":
+        return bool(tour.country_id and discount.country_id == tour.country_id)
+    return False
+
+
+def _candidate_discount_applies_to_tour(
+    *, scope: str, tour_id: int | None, category_id: int | None, country_id: int | None, tour: Tour
+) -> bool:
+    if tour_id == tour.id or scope == "all_tours":
+        return True
+    if scope == "category":
+        return bool(tour.category_id and category_id == tour.category_id)
+    if scope == "country":
+        return bool(tour.country_id and country_id == tour.country_id)
+    return False
+
+
+def _discount_scopes_overlap(
+    db: Session,
+    *,
+    scope: str,
+    tour_id: int | None,
+    category_id: int | None,
+    country_id: int | None,
+    existing: TourDiscount,
+) -> bool:
+    """Whether the candidate and an existing offer can affect one tour."""
+    if scope == "all_tours" or existing.discount_scope == "all_tours":
+        return True
+    if tour_id:
+        return _discount_applies_to_tour(existing, _require_tour(db, tour_id))
+    if existing.tour_id:
+        return _candidate_discount_applies_to_tour(
+            scope=scope,
+            tour_id=tour_id,
+            category_id=category_id,
+            country_id=country_id,
+            tour=_require_tour(db, existing.tour_id),
+        )
+    if scope == existing.discount_scope == "category":
+        return category_id == existing.category_id
+    if scope == existing.discount_scope == "country":
+        return country_id == existing.country_id
+    # A category offer and a country offer overlap only when there is a tour
+    # matching both targets.  Ask the database rather than rejecting two
+    # otherwise unrelated campaigns.
+    if {scope, existing.discount_scope} == {"category", "country"}:
+        category = category_id if scope == "category" else existing.category_id
+        country = country_id if scope == "country" else existing.country_id
+        return bool(
+            db.query(Tour.id)
+            .filter(Tour.category_id == category, Tour.country_id == country)
+            .first()
+        )
+    return False
+
+
+def _assert_no_discount_overlap(
+    db: Session,
+    *,
+    start_date: datetime | None,
+    end_date: datetime | None,
+    scope: str,
+    tour_id: int | None,
+    category_id: int | None,
+    country_id: int | None,
+    funded_by: str,
+    exclude_discount_id: int | None = None,
+) -> None:
+    """Prevent concurrent discounts from the same commercial owner.
+
+    Supplier and TourVaa offers remain separate intentional pricing stages:
+    supplier discount -> markup -> TourVaa discount.  Within either stage a
+    tour must have at most one active offer for a given time window, whether
+    it is automatic or a promo code.
+    """
+    source = (funded_by or "SUPPLIER").upper()
+    active_discounts = db.query(TourDiscount).filter(TourDiscount.status == "active").all()
+    for existing in active_discounts:
+        if exclude_discount_id is not None and existing.id == exclude_discount_id:
+            continue
+        if (existing.funded_by or "SUPPLIER").upper() != source:
+            continue
+        if not _discount_dates_overlap(start_date, end_date, existing.start_date, existing.end_date):
+            continue
+        if _discount_scopes_overlap(
+            db,
+            scope=scope,
+            tour_id=tour_id,
+            category_id=category_id,
+            country_id=country_id,
+            existing=existing,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This discount overlaps an active discount for the same tour or audience. "
+                    "Choose a different date range."
+                ),
+            )
+
+
 def list_discounts(db: Session, tour_id: int, supplier_only: bool = False) -> list[dict]:
     """Tour-scoped discounts, each tagged with added_by ("supplier"/"admin",
     or None for legacy rows with no creation history) from its version-1
@@ -913,6 +1039,17 @@ def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: Use
     # Ownership determines the calculation stage; never trust the hidden
     # client field (the UI historically sent SUPPLIER for admin discounts).
     payload["funded_by"] = "SUPPLIER" if is_supplier_user(actor) else "TOURVAA"
+    if data.status == "active":
+        _assert_no_discount_overlap(
+            db,
+            start_date=data.start_date,
+            end_date=data.end_date,
+            scope=data.discount_scope,
+            tour_id=tour_id,
+            category_id=data.category_id,
+            country_id=data.country_id,
+            funded_by=payload["funded_by"],
+        )
     o = TourDiscount(tour_id=tour_id, **payload)
     db.add(o)
     db.flush()
@@ -939,6 +1076,18 @@ def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPaylo
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
     original_funded_by = o.funded_by
+    if data.status == "active":
+        _assert_no_discount_overlap(
+            db,
+            start_date=data.start_date,
+            end_date=data.end_date,
+            scope=data.discount_scope,
+            tour_id=tour_id,
+            category_id=data.category_id,
+            country_id=data.country_id,
+            funded_by=original_funded_by,
+            exclude_discount_id=disc_id,
+        )
     for key, value in data.model_dump().items():
         setattr(o, key, value)
     # Editing a discount cannot silently transfer it between the supplier
@@ -974,6 +1123,18 @@ def amend_discount(db: Session, tour_id: int, disc_id: int, data: DiscountAmendm
             change_kinds.append("percentage_changed")
     if not change_kinds:
         raise HTTPException(status_code=400, detail="Change the discount value or extend the end date")
+    if o.status == "active":
+        _assert_no_discount_overlap(
+            db,
+            start_date=o.start_date,
+            end_date=data.new_end_date if data.new_end_date is not None else o.end_date,
+            scope=o.discount_scope,
+            tour_id=tour_id,
+            category_id=o.category_id,
+            country_id=o.country_id,
+            funded_by=o.funded_by,
+            exclude_discount_id=disc_id,
+        )
     _record_discount_version(db, o, _amendment_change_type(change_kinds), actor, reason=data.reason)
     log_audit(db, actor=actor, action="amend_discount", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
@@ -1096,6 +1257,17 @@ def create_global_discount(db: Session, data, actor: User, request: Request | No
             raise HTTPException(status_code=409, detail="Discount code already exists")
     payload = data.model_dump()
     payload["funded_by"] = "TOURVAA"
+    if data.status == "active":
+        _assert_no_discount_overlap(
+            db,
+            start_date=data.start_date,
+            end_date=data.end_date,
+            scope=data.discount_scope,
+            tour_id=data.tour_id,
+            category_id=data.category_id,
+            country_id=data.country_id,
+            funded_by=payload["funded_by"],
+        )
     o = TourDiscount(**payload)
     db.add(o)
     db.flush()
@@ -1125,6 +1297,18 @@ def amend_global_discount(db: Session, discount_id: int, data: DiscountAmendment
             change_kinds.append("percentage_changed")
     if not change_kinds:
         raise HTTPException(status_code=400, detail="Change the discount value or extend the end date")
+    if o.status == "active":
+        _assert_no_discount_overlap(
+            db,
+            start_date=o.start_date,
+            end_date=data.new_end_date if data.new_end_date is not None else o.end_date,
+            scope=o.discount_scope,
+            tour_id=o.tour_id,
+            category_id=o.category_id,
+            country_id=o.country_id,
+            funded_by=o.funded_by,
+            exclude_discount_id=discount_id,
+        )
     _record_discount_version(db, o, _amendment_change_type(change_kinds), actor, reason=data.reason)
     log_audit(db, actor=actor, action="amend_discount", entity_type="discount", entity_id=discount_id, request=request)
     db.commit()
@@ -1149,6 +1333,18 @@ def update_global_discount(db: Session, discount_id: int, data: GlobalDiscountPa
         if existing:
             raise HTTPException(status_code=409, detail="Discount code already exists")
     original_funded_by = o.funded_by
+    if data.status == "active":
+        _assert_no_discount_overlap(
+            db,
+            start_date=data.start_date,
+            end_date=data.end_date,
+            scope=data.discount_scope,
+            tour_id=data.tour_id,
+            category_id=data.category_id,
+            country_id=data.country_id,
+            funded_by=original_funded_by,
+            exclude_discount_id=discount_id,
+        )
     for key, value in data.model_dump().items():
         setattr(o, key, value)
     o.funded_by = original_funded_by

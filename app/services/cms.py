@@ -137,7 +137,7 @@ def _active_discount(item: Tour) -> dict | None:
     admin/supplier "Basic tour details" preview, the public storefront, and
     what's actually charged at booking creation always agree."""
     from sqlalchemy.orm import object_session
-    from app.services.discounts import find_active_discount_stack, discount_percent_for_display
+    from app.services.discounts import combined_discount_percent, find_active_discount_stack, discount_percent_for_display
     session = object_session(item)
     if session is None:
         return None
@@ -151,7 +151,7 @@ def _active_discount(item: Tour) -> dict | None:
     supplier_pct = discount_percent_for_display(supplier_row, base_price) if supplier_row else 0
     supplier_price = round(base_price * (1 - supplier_pct / 100), 2)
     tourvaa_pct = discount_percent_for_display(tourvaa_row, supplier_price) if tourvaa_row else 0
-    pct = tourvaa_pct or supplier_pct
+    pct = combined_discount_percent(supplier_pct, tourvaa_pct)
     if pct <= 0:
         return None
     return {
@@ -402,6 +402,20 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     payload = data.model_dump()
     payload.pop("expected_updated_at", None)
     subcategory_ids = payload.pop("subcategory_ids", [])
+    # Tax and service fees are checkout charges controlled by Tourvaa. A
+    # supplier may submit the shared TourPayload, but cannot set or overwrite
+    # either charge through the API (including imports/direct requests).
+    from app.services.supplier_scope import is_supplier_user
+    if is_supplier_user(actor):
+        payload["tax_percentage"] = item.tax_percentage if tour_id else 0
+        payload["service_fee"] = item.service_fee if tour_id else 0
+        # Search metadata is administered centrally. Keep it unchanged for
+        # supplier edits and avoid accepting it on supplier-created tours.
+        for field in (
+            "seo_title", "seo_description", "seo_keywords", "focus_keyword",
+            "canonical_url", "open_graph_image", "search_visibility", "image_alt_text", "slug",
+        ):
+            payload[field] = getattr(item, field) if tour_id else (True if field == "search_visibility" else "")
     # Status is workflow-controlled: only the publish/disable toggle
     # (PATCH /tours/{id}/status) and the version-approval flow may change it.
     # New tours always start as draft; existing status is left untouched here.

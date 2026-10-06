@@ -179,6 +179,25 @@ def _prior_status_before_cancellation_request(db: Session, booking_id: int) -> s
     return row.old_status if row and row.old_status else "confirmed"
 
 
+def _notify_agent_cancellation_update(db: Session, booking: Booking, status: str, reason: str) -> None:
+    """Mirror cancellation lifecycle emails to the booking's Agent, if any."""
+    if not (booking.agent and booking.agent.user and booking.agent.user.email):
+        return
+    from app.utils.email_templates import booking_status_update_email
+    from app.utils.notification_triggers import send_templated_email
+
+    login_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
+    title = status.replace("_", " ").title()
+    send_templated_email(
+        db, booking.agent.user.email, "booking_status_update",
+        {"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+         "new_status": title, "reason": reason or "", "login_url": login_url,
+         "button_text": "View booking", "button_url": login_url},
+        f"Booking update - {booking.booking_code}",
+        booking_status_update_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, title, reason or "", login_url),
+    )
+
+
 def create_request(db: Session, data: CancellationRequestCreate, actor: User, request=None) -> dict:
     booking = db.query(Booking).filter(Booking.id == data.booking_id).first()
     if not booking:
@@ -196,7 +215,7 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
     if refund_pct < Decimal("100"):
         raise HTTPException(
             status_code=400,
-            detail="The free cancellation period has ended. Please contact Tourvaa for cancellation assistance.",
+            detail="The free-cancellation period has ended. Please contact Tourvaa Support for cancellation assistance.",
         )
     refund_amount = money((money(booking.amount_paid) * refund_pct) / 100)
 
@@ -246,6 +265,7 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
             f"Cancellation request received - {booking.booking_code}",
             cancellation_requested_email(booking.customer.full_name, booking.booking_code, booking.tour_name, refund_amount, req.currency, login_url),
         )
+    _notify_agent_cancellation_update(db, booking, "cancellation requested", data.reason or "Cancellation request received")
 
     from app.utils.email_templates import admin_booking_event_email
     from app.utils.notification_triggers import email_admins
@@ -369,6 +389,7 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
             f"Cancellation approved - {booking.booking_code}",
             cancellation_approved_email(booking.customer.full_name, booking.booking_code, booking.tour_name, req.refund_amount, req.currency, login_url),
         )
+    _notify_agent_cancellation_update(db, booking, "cancellation approved", f"Refund: {req.refund_amount} {req.currency}")
 
     log_audit(db, actor=actor, action="approve_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": req.status, "refund_amount": str(req.refund_amount)}, request=request)
     return _serialize_request(req)
@@ -390,6 +411,24 @@ def approve_booking_cancellation_request(db: Session, booking_id: int, data: Can
     if not pending_request:
         raise HTTPException(status_code=404, detail="No pending cancellation request was found for this booking")
     return approve_request(db, pending_request.id, data, actor, request)
+
+
+def reject_booking_cancellation_request(db: Session, booking_id: int, data: CancellationReject, actor: User, request=None) -> dict:
+    """Reject the one outstanding customer cancellation for a booking.
+
+    Booking-detail actions operate on a booking ID, while the cancellations
+    queue operates on request IDs. Resolving the pending request here keeps
+    both admin entry points on the same audited rejection workflow.
+    """
+    pending_request = (
+        db.query(CancellationRequest.id)
+        .filter(CancellationRequest.booking_id == booking_id, CancellationRequest.status == "pending")
+        .order_by(CancellationRequest.id.desc())
+        .first()
+    )
+    if not pending_request:
+        raise HTTPException(status_code=404, detail="No pending cancellation request was found for this booking")
+    return reject_request(db, pending_request.id, data, actor, request)
 
 
 def reject_request(db: Session, request_id: int, data: CancellationReject, actor: User, request=None) -> dict:
@@ -437,6 +476,7 @@ def reject_request(db: Session, request_id: int, data: CancellationReject, actor
             f"Cancellation request rejected - {booking.booking_code}",
             cancellation_rejected_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.admin_notes or "", login_url),
         )
+    _notify_agent_cancellation_update(db, booking, "cancellation rejected", data.admin_notes or "Cancellation request rejected")
 
     log_audit(db, actor=actor, action="reject_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": "rejected"}, request=request)
     return _serialize_request(req)

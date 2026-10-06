@@ -101,6 +101,12 @@ DEFAULT_SETTINGS = [
     # financial values, and statutory tax fields remain server-controlled.
     {"key": "invoice_brand_name", "label": "Invoice Brand Name", "value": "Tourvaa", "group": "invoice_pdf", "is_public": False},
     {"key": "invoice_brand_tagline", "label": "Invoice Brand Tagline", "value": "Curated journeys, effortlessly booked.", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_column_description", "label": "Invoice Description Column", "value": "Description", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_column_quantity", "label": "Invoice Quantity Column", "value": "Qty", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_column_unit_price", "label": "Invoice Unit Price Column", "value": "Unit Price", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_column_tax", "label": "Invoice Tax Column", "value": "Tax", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_column_total", "label": "Invoice Total Column", "value": "Total", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_label_amount_due", "label": "Invoice Amount Due Label", "value": "Amount Due", "group": "invoice_pdf", "is_public": False},
     {"key": "invoice_footer_thanks", "label": "Invoice Footer Thank-you", "value": "Thank you for booking with Tourvaa.", "group": "invoice_pdf", "is_public": False},
     {"key": "invoice_footer_legal", "label": "Invoice Footer Legal Notice", "value": "This is a system-generated invoice and does not require a signature.", "group": "invoice_pdf", "is_public": False},
     {"key": "booking_prefix", "label": "Booking Prefix", "value": "TVA", "group": "booking", "is_public": False},

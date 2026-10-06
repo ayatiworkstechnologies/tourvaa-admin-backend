@@ -671,20 +671,6 @@ def _deposit_config(db: Session, booking: Booking) -> Optional[dict]:
     }
 
 
-def _agent_reserve_deposit_info(db: Session, booking: Booking) -> Optional[dict]:
-    """For an agent 'Reserve Now' (pay_later) booking, the reduced deposit
-    it requires - the frontend uses minimum_amount as the amount to charge
-    right after booking creation, instead of the full total. None for any
-    other booking (the normal deposit_config above applies there)."""
-    if booking.booking_source != "agent" or booking.agent_payment_method != "pay_later" or booking.tour_id is None:
-        return None
-    from app.services.tour_availability import agent_reserve_deposit_amount, agent_reserve_eligibility
-    total = money(booking.customer_selling_price or booking.total_cost or 0)
-    minimum = agent_reserve_deposit_amount(db, booking.tour_id, total)
-    percentage = agent_reserve_eligibility(db, booking.tour_id, booking.tour_start_date)["deposit_percentage"] if booking.tour_start_date else None
-    return {"percentage": percentage, "minimum_amount": money_str(minimum)}
-
-
 def serialize_booking(db: Session, booking: Booking, detail: bool = False, include_supplier_breakdown: bool = False, hide_supplier_identity: bool = False) -> dict:
     data = {
         "id": booking.id,
@@ -806,7 +792,6 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
             },
             "payment_summary": {"status": booking.payment_status, "paid": money_str(booking.amount_paid), "pending": money_str(booking.amount_pending), "balance_due_date": _balance_due_date(db, booking)},
             "deposit_config": _deposit_config(db, booking),
-            "agent_reserve_deposit": _agent_reserve_deposit_info(db, booking),
             "invoice_summary": None,
         })
         # Admin-only: what the supplier is owed after commission, alongside
@@ -900,6 +885,19 @@ def supplier_booking_value(booking: Booking):
     if booking.supplier_net_payable is not None:
         return money(booking.supplier_net_payable) + money(booking.tourvaa_commission_amount or 0)
     return booking.final_amount
+
+
+def _is_booking_fully_paid(booking: Booking) -> bool:
+    """Whether a supplier may be asked to action the booking.
+
+    The booking payment status is the primary workflow state, but checking the
+    captured amount too prevents a stale ``paid`` flag from exposing a
+    supplier assignment before checkout has actually settled.
+    """
+    if booking.payment_status != "paid":
+        return False
+    total = money(booking.final_amount or booking.total_cost or 0)
+    return total <= 0 or money(booking.amount_paid or 0) >= total
 
 
 def _supplier_safe(data: dict, booking: Booking) -> dict:
@@ -1356,6 +1354,11 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         raise HTTPException(status_code=404, detail="Tour not found")
     if tour and tour.status != "published":
         raise HTTPException(status_code=400, detail="Tour must be published before booking")
+    if tour and tour.max_group_size and seat_travellers > tour.max_group_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This tour allows a maximum of {tour.max_group_size} travellers per booking",
+        )
     if calendar:
         if calendar.tour_id != data.tour_id:
             raise HTTPException(status_code=400, detail="Calendar date does not belong to tour")
@@ -1710,6 +1713,10 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
     role = _user_role(actor)
     if role == "supplier":
         query = query.join(Booking.supplier).filter_by(user_id=actor.id)
+        # Keep withdrawals available to Operations for reassignment and any
+        # contractual-liability review, but remove them from the withdrawing
+        # supplier's actionable booking queue as soon as they are submitted.
+        query = query.filter(Booking.booking_status != "supplier_reassignment_required")
     elif role == "agent":
         query = query.join(Booking.agent).filter_by(user_id=actor.id)
     elif role == "customer":
@@ -1816,6 +1823,14 @@ def _validate_agreements(db: Session, data: BookingCreate, tour) -> None:
 
 
 def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = None, request: Optional[Request] = None, background_tasks: BackgroundTasks | None = None) -> dict:
+    # Portal users may only create bookings in their own role. In particular,
+    # a customer must never be able to attach an Agent ID (or spoof an agent
+    # booking source) through a crafted request. An agent booking deliberately
+    # has two parties: the agent who created it and the selected customer.
+    # Traveller email addresses never establish the Agent relationship.
+    if actor and _user_role(actor) == "customer":
+        if data.booking_source != "customer" or data.agent_id is not None:
+            raise HTTPException(status_code=403, detail="Customers cannot create or attach agent bookings")
     if data.booking_source == "customer" and not data.customer_id:
         raise HTTPException(status_code=400, detail="customer_id is required for customer bookings")
     customer = db.query(Customer).filter(Customer.id == data.customer_id).first()
@@ -1900,13 +1915,11 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     if data.booking_source == "agent" and data.agent_payment_method == "credit":
         payment_status = "credit_approval_pending"
         booking_status = "pending_credit_approval"
+    elif data.booking_source == "agent" and data.agent_payment_method == "pay_later":
+        payment_status = "credit_approval_pending"
+        booking_status = "pending_credit_approval"
     elif data.booking_source == "agent" and data.agent_payment_method == "bank_transfer":
         payment_status = "bank_transfer_pending"
-    # "pay_later" (Reserve Now) used to skip payment entirely (same
-    # credit_approval_pending path as "credit"), but now requires an
-    # immediate agent_reserve_deposit_percentage deposit - so it follows the
-    # normal pending_payment/pending flow like a full-payment booking, just
-    # with a reduced minimum (enforced in payments_gateway._minimum_deposit_amount).
     booking = Booking(
         customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, affiliate_attribution_id=resolved_attribution.id if resolved_attribution else None, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
@@ -2384,6 +2397,7 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
     )
     expired_ids: list[int] = []
     expired_codes: list[str] = []
+    expired_bookings: list[Booking] = []
     for booking in candidates:
         reason = f"Automatically cancelled - no payment received in time"
         old_values = serialize_booking(db, booking)
@@ -2436,6 +2450,7 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
         )
         expired_ids.append(booking.id)
         expired_codes.append(booking.booking_code or _booking_code(db, booking.id, booking.booking_source))
+        expired_bookings.append(booking)
 
     if expired_ids:
         db.commit()
@@ -2452,6 +2467,21 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
             "Bookings auto-cancelled",
             admin_booking_event_email("Bookings auto-cancelled", detail, codes, "", admin_url),
         )
+        from app.utils.email_templates import booking_status_update_email
+        for booking in expired_bookings:
+            reason = "Payment was not completed before the booking hold expired."
+            if booking.customer and booking.customer.email:
+                customer_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+                _send_booking_email(
+                    db, "booking_status_update",
+                    {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+                     "new_status": "Expired", "reason": reason, "login_url": customer_url,
+                     "button_text": "View booking", "button_url": customer_url},
+                    f"Booking expired - {booking.booking_code}",
+                    booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, "expired", reason, customer_url),
+                    booking.customer.email,
+                )
+            _email_agent_booking_status(db, booking, "booking expired", reason)
     return expired_ids
 
 
@@ -2473,7 +2503,7 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
     log_audit(db, actor=actor, action="assign_supplier", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
 
-    if booking.payment_status == "paid" and booking.supplier and booking.supplier.user and booking.supplier.user.email:
+    if _is_booking_fully_paid(booking) and booking.supplier and booking.supplier.user and booking.supplier.user.email:
         from app.utils.email_templates import supplier_booking_assigned_email
         customer_name = booking.customer.full_name if booking.customer else "Customer"
         portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
@@ -2817,12 +2847,24 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
     )
     db.commit(); db.refresh(booking)
     _email_admins_booking_event(db, "Supplier withdrawal requires reassignment", f"Supplier withdrew from booking {booking.booking_code}. Reason: {reason}", booking)
+    if booking.supplier and booking.supplier.user and booking.supplier.user.email:
+        from app.utils.email_templates import booking_status_update_email
+        portal_url = f"{settings.FRONTEND_URL}/supplier/bookings"
+        _send_booking_email(
+            db, "booking_status_update",
+            {"name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "new_status": "Withdrawal request received", "reason": reason, "login_url": portal_url,
+             "button_text": "View bookings", "button_url": portal_url},
+            f"Supplier withdrawal received - {booking.booking_code}",
+            booking_status_update_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, "withdrawal request received", reason, portal_url),
+            booking.supplier.user.email,
+        )
     return serialize_booking_for_actor(db, booking, actor)
 
 
 def notify_paid_booking_ready_for_supplier(db: Session, booking: Booking) -> None:
     """Send operational assignment emails only after the booking is fully paid."""
-    if booking.payment_status != "paid":
+    if not _is_booking_fully_paid(booking):
         return
     from app.services.notifications import enqueue_notification, notify_admins
     from app.utils.email_templates import new_booking_admin_email, supplier_booking_assigned_email
@@ -3079,6 +3121,9 @@ def add_communication(db: Session, booking_id: int, data: BookingCommunicationCr
 
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
+    recipients = _communication_recipients(booking, data.visibility) if data.visibility != "internal" else []
+    if data.visibility != "internal" and not recipients:
+        raise HTTPException(status_code=400, detail=f"This booking has no {data.visibility} recipient to contact")
     row = BookingCommunication(booking_id=booking.id, sender_user_id=actor.id, sender_type=_user_role(actor), message_type=data.message_type, subject=data.subject, message=data.message, visibility=data.visibility)
     db.add(row)
     log_audit(db, actor=actor, action="create_booking_communication", entity_type="booking", entity_id=booking.id, request=request)
@@ -3088,7 +3133,7 @@ def add_communication(db: Session, booking_id: int, data: BookingCommunicationCr
     if data.visibility != "internal":
         subject = data.subject or f"Update on your booking {booking.booking_code or booking.id}"
         body = f"<p>{escape(data.message)}</p>"
-        for _label, email in _communication_recipients(booking, data.visibility):
+        for _label, email in recipients:
             try_send_email(email, subject, body, template_key="booking_communication", entity_type="booking_communication", entity_id=row.id)
 
     return serialize_communication(row)

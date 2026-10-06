@@ -123,7 +123,7 @@ def my_supplier(db: Session = Depends(get_db), current_user: User = Depends(get_
     supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier profile not found")
-    return {"status": "success", "data": serialize_supplier(supplier)}
+    return {"status": "success", "data": serialize_supplier(supplier, mask_bank_details=True)}
 
 
 @router.get("/document-requirements")

@@ -338,10 +338,10 @@ def booking_status_update_email(name: str, booking_code: str, tour_name: str, ne
 def supplier_booking_assigned_email(supplier_name: str, booking_code: str, tour_name: str, tour_date: str, customer_name: str, adults: int | str, currency: str, total: str | float, portal_url: str):
     summary = _summary_card(_booking_rows(booking_code, tour_name, tour_date, adults, currency, total, extra=[("Customer", esc(customer_name))]))
     return base_email(
-        "New booking assigned to you",
+        "Paid booking assigned to you",
         f"Hi {esc(supplier_name)},",
         (
-            f"A new booking has been assigned to you on Tourvaa and is awaiting your acceptance. {status_badge('Action required', 'warning')}<br /><br />"
+            f"A fully paid booking has been assigned to you on Tourvaa and is awaiting your acceptance. {status_badge('Action required', 'warning')}<br /><br />"
             f"{summary}<br />"
             "Please log in to your supplier portal to accept or decline this booking."
         ),

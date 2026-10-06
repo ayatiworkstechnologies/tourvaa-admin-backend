@@ -122,7 +122,7 @@ def my_agent(db: Session = Depends(get_db), current_user: User = Depends(get_cur
     agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent profile not found")
-    data = serialize_agent(agent)
+    data = serialize_agent(agent, mask_bank_details=True)
     data["activity"] = _agent_activity_for_actor(db, current_user, agent.id)
     return {"status": "success", "data": data}
 

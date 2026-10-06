@@ -42,7 +42,7 @@ def my_affiliate(db: Session = Depends(get_db), current_user: User = Depends(get
     affiliate = db.query(Affiliate).filter(Affiliate.user_id == current_user.id).first()
     if not affiliate:
         raise HTTPException(status_code=404, detail="Affiliate profile not found")
-    return {"status": "success", "data": serialize_affiliate(affiliate)}
+    return {"status": "success", "data": serialize_affiliate(affiliate, mask_bank_details=True)}
 
 
 @router.post("/me/accept-commission")

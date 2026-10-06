@@ -155,25 +155,10 @@ def _minimum_deposit_amount(db: Session, booking: Booking) -> Decimal:
     default_deposit_cutoff_days settings only for whichever of those the
     tour itself hasn't set - a supplier's own per-tour values always win.
 
-    An agent 'Reserve Now' (pay_later) booking's very first payment uses a
-    different, agent-specific floor (agent_reserve_deposit_percentage) in
-    place of the tour's customer-facing deposit rule entirely - its own
-    eligibility window was already enforced at booking creation
-    (tour_availability.agent_reserve_eligibility), so no cutoff check
-    applies here. Once that initial deposit is paid, any further payment
-    toward the remaining balance falls through to the normal rule below."""
+    Agent Reserve Now bookings are invoiced and paid later, so they do not
+    enter this gateway deposit calculation."""
     full = money(booking.amount_pending or 0)
     tour = getattr(booking, "tour", None)
-
-    if (
-        getattr(booking, "booking_source", None) == "agent"
-        and getattr(booking, "agent_payment_method", None) == "pay_later"
-        and money(getattr(booking, "amount_paid", 0) or 0) <= 0
-        and tour is not None
-    ):
-        from app.services.tour_availability import agent_reserve_deposit_amount
-        total = money(booking.customer_selling_price or booking.total_cost or full)
-        return min(agent_reserve_deposit_amount(db, tour.id, total), full)
 
     # A customer's very first payment on this booking follows the same
     # eligibility window as the agent branch above (see

@@ -48,7 +48,6 @@ def _ser_config(o: TourAvailabilityConfig) -> dict:
         "availability_end_date": o.availability_end_date,
         "min_advance_booking_days": o.min_advance_booking_days,
         "agent_no_deposit_buffer_weeks": o.agent_no_deposit_buffer_weeks,
-        "agent_reserve_deposit_percentage": o.agent_reserve_deposit_percentage,
         "frequency": o.frequency,
         "frequency_week": o.frequency_week,
         "frequency_weeks": o.frequency_weeks or ([o.frequency_week] if o.frequency == "monthly" and o.frequency_week else []),
@@ -124,7 +123,6 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
     o.availability_end_date = data.availability_end_date
     o.min_advance_booking_days = data.min_advance_booking_days
     o.agent_no_deposit_buffer_weeks = data.agent_no_deposit_buffer_weeks
-    o.agent_reserve_deposit_percentage = data.agent_reserve_deposit_percentage
     o.frequency = data.frequency
     o.frequency_week = data.frequency_week
     o.frequency_weeks = data.frequency_weeks if data.frequency == "monthly" else []
@@ -266,21 +264,16 @@ def _deposit_window(db: Session, tour_id: int, travel_date: datetime | date) -> 
     TourAvailabilityConfig and were originally agent-only naming, but the
     client's rule is explicitly the same window for customers too (see
     agent_reserve_eligibility / customer_deposit_eligibility below, which
-    each just attach their own role-specific deposit amount to this shared
-    window)."""
+    customer_deposit_eligibility below. Agent Reserve Now uses the window to
+    decide whether an invoice/pay-later reservation is available."""
     due_date, buffer_weeks = deposit_balance_due_date(db, tour_id, travel_date)
     eligible = due_date > date.today()
     return {"eligible": eligible, "due_date": due_date if eligible else None, "buffer_weeks": buffer_weeks}
 
 
 def agent_reserve_eligibility(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
-    """Whether an agent booking this tour today may Reserve Now with the
-    reduced agent_reserve_deposit_percentage deposit, and the balance due
-    date if so. See _deposit_window for the eligibility rule itself."""
-    o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
-    deposit_percentage = o.agent_reserve_deposit_percentage if o else 30.0
-    window = _deposit_window(db, tour_id, travel_date)
-    return {**window, "deposit_percentage": deposit_percentage}
+    """Whether an agent may Reserve Now and be invoiced later with no deposit."""
+    return _deposit_window(db, tour_id, travel_date)
 
 
 def customer_deposit_eligibility(db: Session, tour_id: int, travel_date: datetime | date) -> dict:
@@ -289,8 +282,7 @@ def customer_deposit_eligibility(db: Session, tour_id: int, travel_date: datetim
     eligibility window as agent_reserve_eligibility (see _deposit_window),
     paired with the tour's own customer-facing deposit terms
     (Tour.deposit_type/deposit_percentage/booking_deposit, set on the Tour
-    editor's Deposit & Cancellation step) rather than the agent-specific
-    agent_reserve_deposit_percentage."""
+    editor's Deposit & Cancellation step)."""
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     window = _deposit_window(db, tour_id, travel_date)
     if not window["eligible"] or tour is None:
@@ -313,19 +305,6 @@ def customer_deposit_eligibility(db: Session, tour_id: int, travel_date: datetim
         "deposit_percentage": float(percentage) if percentage is not None else None,
         "booking_deposit": float(fixed) if fixed else None,
     }
-
-
-def agent_reserve_deposit_amount(db: Session, tour_id: int, total_amount) -> "Decimal":
-    """The minimum amount an agent must pay to Reserve Now this tour, given
-    the booking's total - agent_reserve_deposit_percentage of total_amount,
-    quantized to 2dp. Shared by booking creation (serialized for the
-    frontend to charge) and payment validation (the enforced floor)."""
-    from decimal import Decimal
-    from app.utils.money import money
-
-    o = db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id == tour_id).first()
-    pct = o.agent_reserve_deposit_percentage if o else 30.0
-    return money(money(total_amount) * Decimal(str(pct)) / Decimal("100"))
 
 
 def check_availability_end_date_reminders(db: Session) -> None:

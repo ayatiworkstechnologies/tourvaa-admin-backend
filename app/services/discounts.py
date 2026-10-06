@@ -181,6 +181,17 @@ def discount_percent_for_display(row: TourDiscount, base_price: float) -> float:
     return round(min(90.0, max(0.0, pct)))
 
 
+def combined_discount_percent(supplier_pct: float, tourvaa_pct: float) -> float:
+    """Return the effective saving from the two sequential storefront offers.
+
+    A supplier 10% discount followed by a Tourvaa 15% discount saves 23.5%
+    from the original public price, not 15% and not a misleading 25%.
+    """
+    supplier = min(100.0, max(0.0, float(supplier_pct or 0)))
+    tourvaa = min(100.0, max(0.0, float(tourvaa_pct or 0)))
+    return round(100 * (1 - (1 - supplier / 100) * (1 - tourvaa / 100)), 2)
+
+
 def discount_amount_for(row: TourDiscount | None, subtotal: float) -> float:
     """Currency amount to subtract from `subtotal` for this discount row."""
     if not row or subtotal <= 0:

@@ -384,6 +384,26 @@ def get_booking_conversation_thread_for_initiator(db: Session, booking_id: int, 
     return _serialize_booking_conversation(conv, with_messages=True, hide_supplier_identity=True)
 
 
+def list_booking_conversation_threads_for_admin(db: Session, booking_id: int) -> list[dict]:
+    """Return every portal conversation attached to a booking for Admin.
+
+    Customer/agent portal messages are stored separately from the legacy
+    internal ``BookingCommunication`` log. Admin needs a read-only view of
+    the actual booking conversation(s) without creating a new thread or
+    changing either participant's unread state.
+    """
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    conversations = (
+        db.query(BookingConversation)
+        .filter(BookingConversation.booking_id == booking_id)
+        .order_by(BookingConversation.created_at.asc(), BookingConversation.id.asc())
+        .all()
+    )
+    return [_serialize_booking_conversation(conversation, with_messages=True) for conversation in conversations]
+
+
 def _get_booking_conversation_for_supplier(db: Session, conversation_id: int, supplier_user: User) -> BookingConversation:
     conv = db.query(BookingConversation).filter(BookingConversation.id == conversation_id).first()
     if not conv or conv.supplier_user_id != supplier_user.id:

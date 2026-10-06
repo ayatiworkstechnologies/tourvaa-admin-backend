@@ -231,11 +231,12 @@ def register_unified_user(db: Session, data):
     # mobile/web clients working while still persisting a normalized country.
     country = None
     if data.country_id:
-        country = db.query(Country).filter(Country.id == data.country_id, Country.status == "active").first()
-        if not country:
-            raise HTTPException(status_code=400, detail="Choose a valid country")
+        # Registration must be globally available. A country record can be
+        # temporarily inactive or absent from the admin-managed geo catalogue;
+        # it must not block a supplier who has selected a valid phone-country.
+        country = db.query(Country).filter(Country.id == data.country_id).first()
     else:
-        country = db.query(Country).filter(Country.country_code == data.country_iso, Country.status == "active").first()
+        country = db.query(Country).filter(Country.country_code == data.country_iso).first()
 
     role_slug = {"CUSTOMER": "customer", "AGENT": "agent-reseller", "SUPPLIER": "supplier", "AFFILIATE": "affiliate"}[data.account_type]
     role = db.query(Role).filter(Role.slug == role_slug, Role.is_active == True).first()
@@ -1151,7 +1152,6 @@ def validate_reset_token(db: Session, token: str):
         raise HTTPException(status_code=403, detail="Account is not eligible for password reset")
 
     return True
-
 
 
 

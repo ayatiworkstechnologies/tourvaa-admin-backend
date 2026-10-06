@@ -102,6 +102,7 @@ class SupplierInvoicingUpdate(BaseModel):
     bank_branch: str | None = Field(default=None, max_length=150)
     swift_code: str | None = Field(default=None, max_length=50)
     iban: str | None = Field(default=None, max_length=100)
+    bank_country_id: int | None = None
     country_id: int | None = None
     tax_number: str | None = Field(default=None, max_length=100)
     billing_address: str | None = Field(default=None, max_length=500)

@@ -142,6 +142,7 @@ def _invoice_template_copy(inv: Invoice) -> dict[str, str]:
         "invoice_brand_tagline": "Curated journeys, effortlessly booked.",
         "invoice_footer_thanks": "Thank you for booking with Tourvaa.",
         "invoice_footer_legal": "This is a system-generated invoice and does not require a signature.",
+        "invoice_column_description": "Description", "invoice_column_quantity": "Qty", "invoice_column_unit_price": "Unit Price", "invoice_column_tax": "Tax", "invoice_column_total": "Total", "invoice_label_amount_due": "Amount Due",
     }
     try:
         session = object_session(inv)

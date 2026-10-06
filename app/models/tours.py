@@ -326,12 +326,11 @@ class TourAvailabilityConfig(Base):
     availability_end_date = Column(DateTime(timezone=True), nullable=True)
     min_advance_booking_days = Column(Integer, default=0, nullable=False)
     # How many weeks before the min-advance-booking cutoff date an agent may
-    # still Reserve Now with the reduced agent_reserve_deposit_percentage
-    # deposit; closer than that they only see Pay in Full Today. See
-    # services.tour_availability.agent_reserve_eligibility.
+    # still Reserve Now, Pay Later; closer than that they only see Pay in
+    # Full Today. See services.tour_availability.agent_reserve_eligibility.
     agent_no_deposit_buffer_weeks = Column(Integer, default=4, nullable=False)
-    # Percentage of the booking total an agent must pay to Reserve Now within
-    # the buffer window above (was previously $0/no deposit at all).
+    # Legacy, retained only for existing database compatibility. Reserve Now
+    # is now an invoice/pay-later flow and never reads this value.
     agent_reserve_deposit_percentage = Column(Float, default=30.0, nullable=False)
     # "weekly" | "fortnightly" | "monthly", NULL until a schedule is saved.
     frequency = Column(String(20), nullable=True)

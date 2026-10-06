@@ -165,7 +165,7 @@ def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime 
     with the admin/supplier preview (services.cms._active_discount) and
     booking-creation's auto-apply (services.bookings._resolve_discount) so
     all three always agree."""
-    from app.services.discounts import find_active_discount_stack, discount_percent_for_display
+    from app.services.discounts import combined_discount_percent, find_active_discount_stack, discount_percent_for_display
     best: dict[int, dict] = {}
     for tour in tours:
         stack = find_active_discount_stack(db, tour, effective_at=effective_at)
@@ -178,7 +178,7 @@ def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime 
         supplier_pct = discount_percent_for_display(supplier_row, base_price) if supplier_row else 0
         supplier_price = round(base_price * (1 - supplier_pct / 100), 2)
         tourvaa_pct = discount_percent_for_display(tourvaa_row, supplier_price) if tourvaa_row else 0
-        display_pct = tourvaa_pct or supplier_pct
+        display_pct = combined_discount_percent(supplier_pct, tourvaa_pct)
         if display_pct <= 0:
             continue
         best[tour.id] = {
@@ -376,20 +376,34 @@ def public_tours(
 ):
     query = db.query(Tour).filter(Tour.status == "published")
     if search:
-        pat = f"%{search.strip()}%"
-        query = query.filter(
-            or_(
-                Tour.title.ilike(pat),
-                Tour.tour_code.ilike(pat),
-                Tour.slug.ilike(pat),
-                Tour.short_description.ilike(pat),
-                Tour.start_location.ilike(pat),
-                Tour.finish_location.ilike(pat),
-                Tour.country.has(Country.country_name.ilike(pat)),
-                Tour.city.has(City.city_name.ilike(pat)),
-                Tour.category.has(TourCategory.category_name.ilike(pat)),
+        term = search.strip()
+        if term:
+            pat = f"%{term}%"
+            itinerary_tour_ids = db.query(TourItinerary.tour_id).filter(
+                or_(
+                    TourItinerary.day_title.ilike(pat),
+                    TourItinerary.location_name.ilike(pat),
+                    TourItinerary.short_description.ilike(pat),
+                    TourItinerary.long_description.ilike(pat),
+                    TourItinerary.activities.ilike(pat),
+                    TourItinerary.optional_activities.ilike(pat),
+                )
             )
-        )
+            query = query.filter(
+                or_(
+                    Tour.title.ilike(pat),
+                    Tour.tour_code.ilike(pat),
+                    Tour.slug.ilike(pat),
+                    Tour.short_description.ilike(pat),
+                    Tour.long_description.ilike(pat),
+                    Tour.start_location.ilike(pat),
+                    Tour.finish_location.ilike(pat),
+                    Tour.country.has(Country.country_name.ilike(pat)),
+                    Tour.city.has(City.city_name.ilike(pat)),
+                    Tour.category.has(TourCategory.category_name.ilike(pat)),
+                    Tour.id.in_(itinerary_tour_ids),
+                )
+            )
     if country:
         c = db.query(Country).filter(Country.country_name.ilike(country)).first()
         if not c:
@@ -802,7 +816,6 @@ def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: S
             "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": max(0, c.available_seats - c.booked_seats), "status": c.status} for c in calendar],
             "min_advance_booking_days": availability_config.min_advance_booking_days if availability_config else 0,
             "agent_no_deposit_buffer_weeks": availability_config.agent_no_deposit_buffer_weeks if availability_config else 4,
-            "agent_reserve_deposit_percentage": availability_config.agent_reserve_deposit_percentage if availability_config else 30.0,
             "availability_end_date": str(availability_config.availability_end_date.date()) if availability_config and availability_config.availability_end_date else None,
             "similar_tours": similar_tours,
             "cancellation_policy": [

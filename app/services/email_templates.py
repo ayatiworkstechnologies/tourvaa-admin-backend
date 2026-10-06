@@ -156,9 +156,9 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "supplier_booking_assigned",
         "name": "Supplier Booking Assigned",
-        "subject": "New booking assigned - {{booking_code}}",
+        "subject": "Paid booking assigned - {{booking_code}}",
         "body": (
-            "A new booking has been assigned to you on Tourvaa and is awaiting your acceptance.\n\n"
+            "A fully paid booking has been assigned to you on Tourvaa and is awaiting your acceptance.\n\n"
             "Booking ID: {{booking_code}}\n"
             "Tour: {{tour_name}}\n"
             "Date: {{tour_date}}\n"
@@ -337,6 +337,14 @@ def seed_email_templates(db: Session):
 
         if not template:
             db.add(EmailTemplate(**item, is_active=True))
+        elif template.key == "booking_confirmed" and template.body:
+            # Upgrade only the obsolete supplier-attribution sentence shown
+            # in older installations. Do not overwrite any other admin-edited
+            # subject/body content when seeding defaults.
+            legacy_copy = "Great news! Your Tourvaa booking has been confirmed by the supplier."
+            corrected_copy = "Great news! Your Tourvaa booking is now confirmed."
+            if legacy_copy in template.body:
+                template.body = template.body.replace(legacy_copy, corrected_copy)
 
     db.commit()
 

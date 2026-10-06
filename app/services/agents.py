@@ -59,7 +59,12 @@ def _document(item):
     }
 
 
-def serialize_agent(item: Agent):
+def _mask_bank_identifier(value: str | None) -> str:
+    value = (value or "").strip()
+    return f"{'*' * max(0, len(value) - 4)}{value[-4:]}" if value else ""
+
+
+def serialize_agent(item: Agent, *, mask_bank_details: bool = False):
     data = serialize_common_review(item, "agent_name", "agent_code")
     data.update({
         "agent_type": item.agent_type,
@@ -93,12 +98,13 @@ def serialize_agent(item: Agent):
             "phone": item.invoicing.phone,
             "preferred_payment_method": item.invoicing.preferred_payment_method,
             "account_name": item.invoicing.account_name,
-            "account_number": item.invoicing.account_number,
+            "account_number": _mask_bank_identifier(item.invoicing.account_number) if mask_bank_details else item.invoicing.account_number,
             "bank_name": item.invoicing.bank_name,
             "bank_branch": item.invoicing.bank_branch,
             "swift_code": item.invoicing.swift_code,
-            "iban": item.invoicing.iban,
+            "iban": _mask_bank_identifier(item.invoicing.iban) if mask_bank_details else item.invoicing.iban,
             "country_id": item.invoicing.country_id,
+            "bank_details_locked": any(getattr(item.invoicing, field, None) for field in ("preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban")),
             "tax_number": item.invoicing.tax_number,
             "billing_address": item.invoicing.billing_address,
             "billing_city": item.invoicing.billing_city,
@@ -225,7 +231,7 @@ def accept_agent_commission(db: Session, agent_id: int, actor: User, request: Re
         log_audit(db, actor=actor, action="accept_agent_commission", entity_type="agent", entity_id=item.id, request=request)
         db.commit()
         db.refresh(item)
-    return serialize_agent(item)
+    return serialize_agent(item, mask_bank_details=actor.id == item.user_id)
 
 
 def export_agents_directory(db: Session) -> list[dict]:
@@ -338,6 +344,14 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
     business_data = update_data.pop("business_info", None)
     invoicing_data = update_data.pop("invoicing", None)
 
+    # country_id is the invoicing/billing country and must remain editable
+    # after payment credentials are locked.
+    bank_fields = {"preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban"}
+    existing_invoicing = getattr(item, "invoicing", None)
+    if actor.id == item.user_id and existing_invoicing and invoicing_data and any(key in bank_fields for key in invoicing_data):
+        if any(getattr(existing_invoicing, key, None) for key in bank_fields):
+            raise HTTPException(status_code=400, detail="Bank details are locked after saving. Contact Tourvaa support to request a change.")
+
     for key, value in update_data.items():
         setattr(item, key, value)
 
@@ -372,7 +386,7 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
     log_audit(db, actor=actor, action="update_agent", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)
-    return serialize_agent(item)
+    return serialize_agent(item, mask_bank_details=actor.id == item.user_id)
 
 
 def approve_agent(db: Session, agent_id: int, actor: User, request: Request | None = None):

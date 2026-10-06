@@ -62,6 +62,20 @@ def unread_summary(db: Session = Depends(get_db), _current_user: User = Depends(
     return {"status": "success", "data": messaging_service.admin_unread_summary(db)}
 
 
+@router.get("/booking-conversations/{booking_id}")
+def booking_conversations_for_admin(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(require_any_permission("bookings.view", "view-bookings", "messages.view")),
+):
+    """Read the customer/agent <-> supplier messages for one booking.
+
+    This deliberately does not create a conversation or alter participant
+    unread counts; it is the admin audit view for the booking detail page.
+    """
+    return {"status": "success", "data": messaging_service.list_booking_conversation_threads_for_admin(db, booking_id)}
+
+
 @router.get("/conversations/{conversation_id}")
 def conversation_thread(conversation_id: int, db: Session = Depends(get_db), _current_user: User = Depends(require_any_permission("messages.view"))):
     return {"status": "success", "data": messaging_service.get_conversation_thread_admin(db, conversation_id)}

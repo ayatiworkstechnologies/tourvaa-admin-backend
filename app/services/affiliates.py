@@ -14,9 +14,9 @@ from app.utils.money import utcnow
 AFFILIATE_DOCUMENT_TYPES = {
     "company_registration": {"label": "Business Registration Certificate", "required": True},
     "iata_accreditation": {"label": "IATA Accreditation", "required": True},
-    "industry_certification": {"label": "Industry Certification", "required": True},
-    "other_licences": {"label": "Other Licences", "required": True},
-    "supporting_documents": {"label": "Additional Supporting Documents", "required": True},
+    "industry_certification": {"label": "Industry Certification", "required": False},
+    "other_licences": {"label": "Other Licences", "required": False},
+    "supporting_documents": {"label": "Additional Supporting Documents", "required": False},
 }
 REQUIRED_AFFILIATE_DOCUMENT_TYPES = {key for key, metadata in AFFILIATE_DOCUMENT_TYPES.items() if metadata["required"]}
 
@@ -34,7 +34,12 @@ def _document(item):
     return data
 
 
-def serialize_affiliate(item: Affiliate):
+def _mask_bank_identifier(value: str | None) -> str:
+    value = (value or "").strip()
+    return f"{'*' * max(0, len(value) - 4)}{value[-4:]}" if value else ""
+
+
+def serialize_affiliate(item: Affiliate, *, mask_bank_details: bool = False):
     country = item.country
     city = item.city
     return {
@@ -78,12 +83,13 @@ def serialize_affiliate(item: Affiliate):
             "phone": item.invoicing.phone,
             "preferred_payment_method": item.invoicing.preferred_payment_method,
             "account_name": item.invoicing.account_name,
-            "account_number": item.invoicing.account_number,
+            "account_number": _mask_bank_identifier(item.invoicing.account_number) if mask_bank_details else item.invoicing.account_number,
             "bank_name": item.invoicing.bank_name,
             "bank_branch": item.invoicing.bank_branch,
             "swift_code": item.invoicing.swift_code,
-            "iban": item.invoicing.iban,
+            "iban": _mask_bank_identifier(item.invoicing.iban) if mask_bank_details else item.invoicing.iban,
             "country_id": item.invoicing.country_id,
+            "bank_details_locked": any(getattr(item.invoicing, field, None) for field in ("preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban")),
             "tax_number": item.invoicing.tax_number,
             "billing_address": item.invoicing.billing_address,
             "billing_city": item.invoicing.billing_city,
@@ -132,7 +138,7 @@ def accept_affiliate_commission(db: Session, affiliate_id: int, actor: User, req
         log_audit(db, actor=actor, action="accept_affiliate_commission", entity_type="affiliate", entity_id=item.id, request=request)
         db.commit()
         db.refresh(item)
-    return serialize_affiliate(item)
+    return serialize_affiliate(item, mask_bank_details=actor.id == item.user_id)
 
 
 def create_affiliate(db: Session, data: AffiliateCreate, actor: User, request: Request | None = None):
@@ -189,6 +195,14 @@ def update_affiliate(db: Session, affiliate_id: int, data: AffiliateUpdate, acto
     marketing_data = update_data.pop("marketing_info", None)
     invoicing_data = update_data.pop("invoicing", None)
 
+    # country_id represents the invoice/billing country, not an immutable
+    # payment credential, so it remains editable after bank details lock.
+    bank_fields = {"preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban"}
+    existing_invoicing = getattr(item, "invoicing", None)
+    if actor.id == item.user_id and existing_invoicing and invoicing_data and any(key in bank_fields for key in invoicing_data):
+        if any(getattr(existing_invoicing, key, None) for key in bank_fields):
+            raise HTTPException(status_code=400, detail="Bank details are locked after saving. Contact Tourvaa support to request a change.")
+
     for key, value in update_data.items():
         if value is not None:
             setattr(item, key, str(value).strip() if isinstance(value, str) else value)
@@ -214,7 +228,7 @@ def update_affiliate(db: Session, affiliate_id: int, data: AffiliateUpdate, acto
     log_audit(db, actor=actor, action="update_affiliate", entity_type="affiliate", entity_id=item.id, old_values=old, new_values=serialize_affiliate(item), request=request)
     db.commit()
     db.refresh(item)
-    return serialize_affiliate(item)
+    return serialize_affiliate(item, mask_bank_details=actor.id == item.user_id)
 
 
 def submit_affiliate_verification(db: Session, user: User, request: Request | None = None):

@@ -6,20 +6,26 @@ from pydantic import ValidationError
 
 from app.services.bookings import (
     _booking_seat_count,
+    _is_booking_fully_paid,
     _price_booking,
     _start_supplier_decision,
     _validate_booking_status_transition,
     _validate_customer_travellers,
     _validate_supplier_lifecycle_transition,
+    create_booking,
 )
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
 from app.routers.payments_gateway import _ensure_booking_payment_access, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
 from app.schemas.agents import AgentSelfUpdate
-from app.schemas.suppliers import SupplierSelfUpdate, SupplierUpdate
+from app.schemas.agents import AgentInvoicingUpdate, AgentUpdate
+from app.schemas.affiliates import AffiliateInvoicingUpdate, AffiliateUpdate
+from app.schemas.suppliers import SupplierInvoicingUpdate, SupplierSelfUpdate, SupplierUpdate
 from app.services.agent_scope import is_agent_user
 from app.services.supplier_scope import is_supplier_user, reject_supplier_review_action
-from app.services.suppliers import update_supplier
+from app.services.suppliers import _mask_bank_identifier, update_supplier
+from app.services.agents import update_agent
+from app.services.affiliates import update_affiliate
 # `_validate_payment_request` now takes (db, booking, amount, current_user)
 # and falls back to the admin-configured platform deposit defaults
 # (default_deposit_percentage / default_deposit_cutoff_days) when a tour has
@@ -47,6 +53,50 @@ def booking(**overrides):
 def test_supplier_self_update_rejects_admin_managed_fields():
     with pytest.raises(ValidationError):
         SupplierSelfUpdate(status="active")
+
+
+def test_supplier_bank_country_and_masked_identifiers_are_supported():
+    """Suppliers retain a distinct bank country but never receive full saved IDs."""
+    payload = SupplierInvoicingUpdate(bank_country_id=64, account_number="1234567890122323")
+    assert payload.bank_country_id == 64
+    assert _mask_bank_identifier(payload.account_number) == "************2323"
+    assert _mask_bank_identifier("123") == "123"
+
+
+class _DbCommitStub:
+    def add(self, _item):
+        pass
+
+    def commit(self):
+        pass
+
+    def refresh(self, _item):
+        pass
+
+
+@pytest.mark.parametrize(
+    ("service_path", "update", "invoicing", "record_name"),
+    [
+        ("app.services.agents", update_agent, AgentInvoicingUpdate(country_id=64), "agent"),
+        ("app.services.affiliates", update_affiliate, AffiliateInvoicingUpdate(country_id=64), "affiliate"),
+    ],
+)
+def test_locked_partner_bank_details_do_not_lock_billing_country(monkeypatch, service_path, update, invoicing, record_name):
+    """Changing billing country must not be mistaken for editing bank credentials."""
+    record = SimpleNamespace(
+        id=7,
+        user_id=41,
+        invoicing=SimpleNamespace(
+            preferred_payment_method="bank_transfer", account_name="Test", account_number="1234",
+            bank_name="Bank", bank_branch="Branch", swift_code="", iban="", country_id=1,
+        ),
+        contacts=[], business_info=None, marketing_info=None,
+    )
+    monkeypatch.setattr(f"{service_path}.get_{record_name}", lambda _db, _id: record)
+    monkeypatch.setattr(f"{service_path}.serialize_{record_name}", lambda _record, **_kwargs: {})
+    payload = AgentUpdate(invoicing=invoicing) if record_name == "agent" else AffiliateUpdate(invoicing=invoicing)
+    update(_DbCommitStub(), record.id, payload, SimpleNamespace(id=record.user_id))
+    assert record.invoicing.country_id == 64
 
 
 def test_supplier_cannot_lower_an_agreed_commission_rate(monkeypatch):
@@ -184,6 +234,36 @@ def test_total_travellers_includes_infants_but_seat_count_does_not():
     assert priced[4] == 4
     row = SimpleNamespace(adults_count=2, children_count=1, no_of_adults=2, no_of_children=1)
     assert _booking_seat_count(row) == 3
+
+
+def test_booking_rejects_more_travellers_than_the_tour_group_limit():
+    tour = SimpleNamespace(id=9, status="published", max_group_size=6)
+
+    class TourQuery:
+        def filter(self, *_args):
+            return self
+
+        def first(self):
+            return tour
+
+    class Db:
+        def query(self, _model):
+            return TourQuery()
+
+    data = BookingCreate(
+        tour_id=tour.id,
+        customer_id=1,
+        booking_source="admin",
+        no_of_adults=7,
+        no_of_children=0,
+        no_of_infants=0,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        _price_booking(Db(), data)
+
+    assert exc.value.status_code == 400
+    assert "maximum of 6 travellers" in exc.value.detail
 
 
 def payment_booking(**overrides):
@@ -355,6 +435,24 @@ def test_agent_traveller_manifest_is_required():
     with pytest.raises(HTTPException) as exc:
         _validate_customer_travellers(data, adults=1, children=0)
     assert exc.value.status_code == 400
+
+
+def test_supplier_assignment_email_requires_a_settled_booking_total():
+    assert _is_booking_fully_paid(SimpleNamespace(payment_status="paid", final_amount=100, total_cost=100, amount_paid=100)) is True
+    assert _is_booking_fully_paid(SimpleNamespace(payment_status="paid", final_amount=100, total_cost=100, amount_paid=0)) is False
+    assert _is_booking_fully_paid(SimpleNamespace(payment_status="partially_paid", final_amount=100, total_cost=100, amount_paid=100)) is False
+
+
+def test_customer_cannot_attach_an_agent_to_a_booking():
+    """A traveller email/customer_id cannot create an Agent portal link."""
+    data = BookingCreate(customer_id=1, agent_id=7, booking_source="customer", no_of_adults=1)
+    actor = SimpleNamespace(id=42, role=SimpleNamespace(slug="customer"), user_roles=[])
+
+    with pytest.raises(HTTPException) as exc:
+        create_booking(SimpleNamespace(), data, actor=actor)
+
+    assert exc.value.status_code == 403
+    assert "cannot create or attach agent bookings" in exc.value.detail
 
 
 def test_agent_self_update_rejects_admin_only_fields():

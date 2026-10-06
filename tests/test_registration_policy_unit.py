@@ -101,3 +101,24 @@ def test_every_role_starts_email_verification(monkeypatch, account_type, role_sl
     if isinstance(profile, Supplier):
         assert profile.approval_status == "pending"
     send_verification.assert_called_once_with(db, user, "raw-token", None)
+
+
+def test_supplier_registration_allows_a_phone_country_missing_from_the_geo_catalogue(monkeypatch):
+    data = UnifiedRegisterSchema(**registration_data("SUPPLIER", country_id=None, country_iso="AU", country_code="+61"))
+    role = SimpleNamespace(id=7, slug="supplier", is_active=True)
+    db = MagicMock()
+
+    def query(model):
+        result = MagicMock()
+        result.filter.return_value.first.return_value = role if model is Role else None
+        return result
+
+    db.query.side_effect = query
+    monkeypatch.setattr(auth, "create_password_reset_token", lambda: ("raw-token", "hashed-token"))
+    monkeypatch.setattr(auth, "send_email_verification", lambda *_args: None)
+
+    user = auth.register_unified_user(db, data)
+
+    assert user.country == "AU"
+    supplier = next(item for item in (call.args[0] for call in db.add.call_args_list) if isinstance(item, Supplier))
+    assert supplier.country_id is None
