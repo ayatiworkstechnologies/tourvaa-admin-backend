@@ -4,7 +4,7 @@ supplier's own adult_price/child_price. Guards against a regression where
 the tour page showed 100/95/90 while admin and checkout used 105/99.75/94.50."""
 from types import SimpleNamespace
 
-from app.routers.public import _public_pricing_rows
+from app.routers.public import _advertised_discount_percent, _public_bookable_slots, _public_pricing_rows
 from app.services.discounts import combined_discount_percent
 
 
@@ -65,3 +65,22 @@ def test_supplier_only_discount_keeps_original_for_badge():
 
 def test_stacked_discount_badge_uses_the_effective_saving():
     assert combined_discount_percent(10, 15) == 23.5
+
+
+def test_stacked_discount_badge_advertises_the_sum_of_its_offer_components():
+    assert _advertised_discount_percent(10, 15) == 25
+
+
+def test_public_departure_slots_respect_the_tour_group_limit():
+    departure = SimpleNamespace(available_seats=10, booked_seats=0)
+    assert _public_bookable_slots(departure, max_group_size=6) == 6
+
+
+def test_public_departure_slots_preserve_lower_remaining_capacity():
+    departure = SimpleNamespace(available_seats=10, booked_seats=7)
+    assert _public_bookable_slots(departure, max_group_size=6) == 0
+
+
+def test_public_departure_slots_decrease_after_a_booking_with_legacy_capacity():
+    departure = SimpleNamespace(available_seats=10, booked_seats=1)
+    assert _public_bookable_slots(departure, max_group_size=6) == 5

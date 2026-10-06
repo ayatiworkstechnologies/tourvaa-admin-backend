@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.services.bookings import (
+    _bookable_calendar_capacity,
     _booking_seat_count,
     _is_booking_fully_paid,
     _price_booking,
@@ -264,6 +265,12 @@ def test_booking_rejects_more_travellers_than_the_tour_group_limit():
 
     assert exc.value.status_code == 400
     assert "maximum of 6 travellers" in exc.value.detail
+
+
+def test_calendar_remaining_capacity_decreases_from_the_group_limit_after_a_booking():
+    tour = SimpleNamespace(max_group_size=6)
+    calendar = SimpleNamespace(available_seats=10, booked_seats=1)
+    assert _bookable_calendar_capacity(tour, calendar) - calendar.booked_seats == 5
 
 
 def payment_booking(**overrides):

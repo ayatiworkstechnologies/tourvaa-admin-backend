@@ -46,6 +46,24 @@ router = APIRouter(tags=["Public"])
 PAGE_SIZE = 12
 
 
+def _public_bookable_slots(departure: TourCalendar, max_group_size: int | None) -> int:
+    """Return the number a customer can select in one public booking.
+
+    A calendar row represents the departure's total remaining capacity, while
+    ``max_group_size`` is the maximum allowed in a single reservation.  The
+    storefront must expose the stricter of those limits so it never advertises
+    a quantity the booking endpoint will reject.
+    """
+    # The group limit is the departure's customer-facing capacity. Apply it
+    # before subtracting confirmed/pending travellers: with six sellable
+    # seats and one booking, the storefront must show five seats left (not
+    # six merely because the calendar's legacy capacity is larger).
+    capacity = max(0, departure.available_seats or 0)
+    if max_group_size:
+        capacity = min(capacity, max_group_size) if capacity else max_group_size
+    return max(0, capacity - (departure.booked_seats or 0))
+
+
 class ContactMessageRequest(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     email: EmailStr
@@ -157,6 +175,17 @@ def _ser_overview(o: TourOverview):
     }
 
 
+def _advertised_discount_percent(supplier_pct: float, tourvaa_pct: float) -> float:
+    """Customer-facing offer label for stacked supplier and Tourvaa offers.
+
+    Pricing remains sequential (and is calculated by the booking service),
+    but storefront badges advertise the visible components: 10% + 15% is a
+    25% offer. Keeping this here makes category, homepage, and search cards
+    agree with the tour-detail badge.
+    """
+    return round(max(0.0, min(100.0, supplier_pct + tourvaa_pct)), 2)
+
+
 def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime | None = None) -> dict[int, dict]:
     """Best active discount per tour (tour-specific, or category/country-
     wide), expressed as a percentage off price_start_per_person (a
@@ -165,7 +194,7 @@ def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime 
     with the admin/supplier preview (services.cms._active_discount) and
     booking-creation's auto-apply (services.bookings._resolve_discount) so
     all three always agree."""
-    from app.services.discounts import combined_discount_percent, find_active_discount_stack, discount_percent_for_display
+    from app.services.discounts import find_active_discount_stack, discount_percent_for_display
     best: dict[int, dict] = {}
     for tour in tours:
         stack = find_active_discount_stack(db, tour, effective_at=effective_at)
@@ -178,7 +207,7 @@ def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime 
         supplier_pct = discount_percent_for_display(supplier_row, base_price) if supplier_row else 0
         supplier_price = round(base_price * (1 - supplier_pct / 100), 2)
         tourvaa_pct = discount_percent_for_display(tourvaa_row, supplier_price) if tourvaa_row else 0
-        display_pct = combined_discount_percent(supplier_pct, tourvaa_pct)
+        display_pct = _advertised_discount_percent(supplier_pct, tourvaa_pct)
         if display_pct <= 0:
             continue
         best[tour.id] = {
@@ -339,7 +368,7 @@ def _public_tour(item: Tour, departures: list[TourCalendar] | None = None, revie
             {
                 "id": departure.id,
                 "date": str(departure.tour_date.date()),
-                "slots": max(0, departure.available_seats - departure.booked_seats),
+                "slots": _public_bookable_slots(departure, item.max_group_size),
                 "status": departure.status,
             }
             for departure in (departures or [])
@@ -813,7 +842,7 @@ def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: S
             # requires_code=False -> applied automatically; True -> the
             # customer applies discount_code at checkout.
             "discounts": discounts,
-            "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": max(0, c.available_seats - c.booked_seats), "status": c.status} for c in calendar],
+            "calendar": [{"id": c.id, "date": str(c.tour_date.date() if c.tour_date else ""), "slots": _public_bookable_slots(c, tour.max_group_size), "status": c.status} for c in calendar],
             "min_advance_booking_days": availability_config.min_advance_booking_days if availability_config else 0,
             "agent_no_deposit_buffer_weeks": availability_config.agent_no_deposit_buffer_weeks if availability_config else 4,
             "availability_end_date": str(availability_config.availability_end_date.date()) if availability_config and availability_config.availability_end_date else None,

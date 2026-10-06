@@ -1332,6 +1332,20 @@ def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict |
         "customer_price_currency": currency,
     }
 
+def _bookable_calendar_capacity(tour: Tour | None, calendar: TourCalendar) -> int:
+    """Effective sellable capacity for a departure.
+
+    Calendar capacity may be higher than a tour's group limit on legacy
+    schedules. The public page and every booking path must treat the lower
+    value as the total sellable capacity for that departure.
+    """
+    capacity = int(calendar.available_seats or 0)
+    group_limit = int(tour.max_group_size or 0) if tour else 0
+    if group_limit:
+        return min(capacity, group_limit) if capacity else group_limit
+    return capacity
+
+
 def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False, pricing_details: dict | None = None):
     """Price a booking. When pricing_details (a dict) is passed it is filled
     with the resolved price source, unit prices and group-discount base so
@@ -1364,7 +1378,8 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             raise HTTPException(status_code=400, detail="Calendar date does not belong to tour")
         if calendar.status not in {"available", "active"}:
             raise HTTPException(status_code=400, detail="Selected tour date is not available")
-        if calendar.available_seats and calendar.booked_seats + seat_travellers > calendar.available_seats:
+        effective_capacity = _bookable_calendar_capacity(tour, calendar)
+        if effective_capacity and calendar.booked_seats + seat_travellers > effective_capacity:
             raise HTTPException(status_code=409, detail="Not enough seats available")
     if data.tour_id:
         # Check both the requested start date and the selected calendar
@@ -2908,6 +2923,7 @@ def update_booking_travel_date(db: Session, booking_id: int, data: BookingTravel
         raise HTTPException(status_code=400, detail="Invalid travel date")
 
     old_values = {"tour_date": booking.tour_date, "tour_calendar_id": booking.tour_calendar_id}
+    tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
     new_calendar = None
     if booking.tour_id:
         new_calendar = (
@@ -2923,7 +2939,8 @@ def update_booking_travel_date(db: Session, booking_id: int, data: BookingTravel
 
     if new_calendar and new_calendar.id != booking.tour_calendar_id:
         seats = _booking_seat_count(booking)
-        if new_calendar.available_seats and (new_calendar.booked_seats or 0) + seats > new_calendar.available_seats:
+        effective_capacity = _bookable_calendar_capacity(tour, new_calendar)
+        if effective_capacity and (new_calendar.booked_seats or 0) + seats > effective_capacity:
             raise HTTPException(status_code=409, detail="Not enough seats are available on the requested tour date")
         old_calendar = (
             db.query(TourCalendar).filter(TourCalendar.id == booking.tour_calendar_id).with_for_update().first()
@@ -2985,6 +3002,7 @@ def supplier_postpone_booking(
     if booking.booking_status in ("cancelled", "completed", "declined"):
         raise HTTPException(status_code=400, detail=f"Cannot postpone a {booking.booking_status} booking")
     old_values = serialize_booking(db, booking)
+    tour = db.query(Tour).filter(Tour.id == booking.tour_id).first() if booking.tour_id else None
     parsed_new_date = None
     if new_tour_date:
         try:
@@ -3013,7 +3031,8 @@ def supplier_postpone_booking(
             raise HTTPException(status_code=400, detail="New calendar date is not available")
         seats = _booking_seat_count(booking)
         if new_calendar.id != booking.tour_calendar_id:
-            if new_calendar.available_seats and (new_calendar.booked_seats or 0) + seats > new_calendar.available_seats:
+            effective_capacity = _bookable_calendar_capacity(tour, new_calendar)
+            if effective_capacity and (new_calendar.booked_seats or 0) + seats > effective_capacity:
                 raise HTTPException(status_code=409, detail="Not enough seats available on the new tour date")
             old_calendar = (
                 db.query(TourCalendar)
