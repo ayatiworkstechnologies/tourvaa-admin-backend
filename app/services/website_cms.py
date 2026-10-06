@@ -61,8 +61,10 @@ ALLOWED_CONTENT_BLOCK_KEYS = {
     "travel_advice_hero", "travel_advice_categories", "travel_advice_articles", "travel_advice_essentials",
     "supplier_portal_hero", "supplier_portal_metrics", "supplier_portal_capabilities", "supplier_portal_steps",
     "supplier_portal_documents", "supplier_portal_expectations", "supplier_portal_faqs", "supplier_portal_cta",
+    "supplier_portal_footer",
     "agent_portal_hero", "agent_portal_metrics", "agent_portal_tools", "agent_portal_steps",
     "agent_portal_documents", "agent_portal_expectations", "agent_portal_faqs", "agent_portal_cta",
+    "agent_portal_footer",
     "affiliate_portal_hero", "affiliate_portal_stats", "affiliate_portal_perks", "affiliate_portal_ideal_for", "affiliate_portal_cta",
 }
 
