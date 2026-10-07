@@ -101,7 +101,11 @@ def serialize_agent(item: Agent, *, mask_bank_details: bool = False):
             "account_number": _mask_bank_identifier(item.invoicing.account_number) if mask_bank_details else item.invoicing.account_number,
             "bank_name": item.invoicing.bank_name,
             "bank_branch": item.invoicing.bank_branch,
-            "swift_code": item.invoicing.swift_code,
+            # A locked self-service profile must never receive the complete
+            # bank identifiers again.  The UI can display the final four
+            # characters for recognition, but the stored value remains
+            # available only to authorised back-office users.
+            "swift_code": _mask_bank_identifier(item.invoicing.swift_code) if mask_bank_details else item.invoicing.swift_code,
             "iban": _mask_bank_identifier(item.invoicing.iban) if mask_bank_details else item.invoicing.iban,
             "country_id": item.invoicing.country_id,
             "bank_details_locked": any(getattr(item.invoicing, field, None) for field in ("preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban")),

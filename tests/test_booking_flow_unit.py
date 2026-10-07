@@ -29,7 +29,7 @@ from app.schemas.suppliers import SupplierInvoicingUpdate, SupplierSelfUpdate, S
 from app.services.agent_scope import is_agent_user
 from app.services.supplier_scope import is_supplier_user, reject_supplier_review_action
 from app.services.suppliers import _mask_bank_identifier, update_supplier
-from app.services.agents import update_agent
+from app.services.agents import _mask_bank_identifier as mask_agent_bank_identifier, update_agent
 from app.services.affiliates import update_affiliate
 # `_validate_payment_request` now takes (db, booking, amount, current_user)
 # and falls back to the admin-configured platform deposit defaults
@@ -66,6 +66,12 @@ def test_supplier_bank_country_and_masked_identifiers_are_supported():
     assert payload.bank_country_id == 64
     assert _mask_bank_identifier(payload.account_number) == "************2323"
     assert _mask_bank_identifier("123") == "123"
+
+
+def test_agent_bank_identifiers_only_expose_the_last_four_characters():
+    """The agent portal must not receive complete locked payout identifiers."""
+    assert mask_agent_bank_identifier("1234567890122323") == "************2323"
+    assert mask_agent_bank_identifier("ABCDEFGH1234") == "********1234"
 
 
 class _DbCommitStub:
