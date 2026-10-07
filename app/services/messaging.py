@@ -298,6 +298,10 @@ def _serialize_booking_message(msg: BookingMessage, *, hide_supplier_identity: b
         # on _serialize_booking_conversation - same policy, this is the
         # per-message counterpart of it).
         "sender_name": None if (hide_supplier_identity and is_supplier_message) else (msg.sender.name if msg.sender else None),
+        # Admin replies are routed to one side of the split booking thread.
+        # The frontend needs this value both for the immediate POST response
+        # and when it reloads the conversation history.
+        "recipient_role": msg.recipient_role,
         "body": None if msg.is_deleted else msg.body,
         "is_deleted": msg.is_deleted,
         "created_at": msg.created_at,

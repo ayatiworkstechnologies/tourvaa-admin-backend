@@ -9,6 +9,7 @@ from app.services.bookings import (
     _booking_email_recipient,
     _booking_seat_count,
     _ensure_booking_access,
+    _hide_agent_reservation_payment_from_supplier,
     _is_booking_fully_paid,
     _price_booking,
     _start_supplier_decision,
@@ -53,6 +54,33 @@ def booking(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def test_supplier_view_masks_agent_reservation_payment_and_enables_decision_state():
+    row = booking(
+        booking_source="agent",
+        payment_status="credit_approval_pending",
+        agent_payment_method="credit",
+    )
+    data = {
+        "booking_status": "pending_credit_approval",
+        "payment_status": "credit_approval_pending",
+        "payment_type": "full",
+        "agent_payment_method": "credit",
+        "agent_reference": "PRIVATE-REF",
+        "status_history": [
+            {"old_status": None, "new_status": "pending_credit_approval"},
+        ],
+    }
+
+    result = _hide_agent_reservation_payment_from_supplier(data, row)
+
+    assert result["booking_status"] == "pending_supplier_acceptance"
+    assert result["payment_status"] is None
+    assert result["payment_type"] is None
+    assert result["agent_payment_method"] is None
+    assert result["agent_reference"] is None
+    assert result["status_history"] == []
 
 
 def test_supplier_self_update_rejects_admin_managed_fields():
@@ -324,10 +352,10 @@ def test_booking_rejects_more_travellers_than_the_tour_group_limit():
     assert "maximum of 6 travellers" in exc.value.detail
 
 
-def test_calendar_remaining_capacity_decreases_from_the_group_limit_after_a_booking():
+def test_calendar_remaining_capacity_uses_departure_capacity_not_booking_group_limit():
     tour = SimpleNamespace(max_group_size=6)
-    calendar = SimpleNamespace(available_seats=10, booked_seats=1)
-    assert _bookable_calendar_capacity(tour, calendar) - calendar.booked_seats == 5
+    calendar = SimpleNamespace(available_seats=20, booked_seats=4)
+    assert _bookable_calendar_capacity(tour, calendar) - calendar.booked_seats == 16
 
 
 def payment_booking(**overrides):

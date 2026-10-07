@@ -1,9 +1,7 @@
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import ExpiredSignatureError, JWTError, jwt
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
 from app.models.permissions import Permission, RolePermission
 from app.models.sessions import UserSession
@@ -11,6 +9,7 @@ from app.models.users import User, UserRole
 from app.models.suppliers import Supplier
 from app.models.agents import Agent
 from app.models.affiliates import Affiliate
+from app.auth.security import decode_auth_token, get_auth_domain_for_role
 
 bearer_scheme = HTTPBearer(auto_error=False)
 ACCESS_COOKIE_NAME = "tourvaa_access"
@@ -116,17 +115,13 @@ def get_user_role_ids(user: User):
 
 
 def _decode_token(token: str) -> dict:
-    """
-    Decode and verify a JWT with the platform signing key. The unverified
-    portal claim is never used as an authorization decision; role,
-    permissions and session state are resolved from the verified user.
-    """
-    try:
-        return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-    except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    return decode_auth_token(token)
+
+
+def _ensure_token_domain_matches_user(payload: dict, user: User) -> None:
+    role_slug = user.role.slug if user.role else ""
+    if payload.get("auth_domain") != get_auth_domain_for_role(role_slug):
+        raise HTTPException(status_code=401, detail="Token domain does not match user role")
 
 
 def _request_token(request: Request, credentials: HTTPAuthorizationCredentials | None) -> str:
@@ -169,6 +164,8 @@ def get_current_user(
 
     if not user:
         raise HTTPException(status_code=401, detail="Invalid user")
+
+    _ensure_token_domain_matches_user(payload, user)
 
     if token_version is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Token has expired")
@@ -329,6 +326,7 @@ def require_portal(expected_portal: str):
 
         if not user:
             raise HTTPException(status_code=401, detail="Invalid user")
+        _ensure_token_domain_matches_user(payload, user)
         if token_version is None or token_version != user.token_version:
             raise HTTPException(status_code=401, detail="Token has expired")
         _ensure_session_active(db, payload)

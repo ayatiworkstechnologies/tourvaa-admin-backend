@@ -15,8 +15,8 @@ class TourOverview(Base):
     end_location = Column(String(150), default="", nullable=False)
     group_size = Column(String(100), default="", nullable=False)
     tour_type = Column(String(100), default="", nullable=False)
+    vehicle_style = Column(String(100), default="", nullable=False)
     # Configured by the tour owner: e.g. a driver-guide or a dedicated guide.
-    # Vehicle/tour style itself is derived from Tour.max_group_size.
     guide_style = Column(String(50), default="", nullable=False)
     physical_rating = Column(String(20), default="easy", nullable=False)
     overview_icon_data = Column(JSON, nullable=True)

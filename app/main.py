@@ -90,8 +90,14 @@ def validate_production_config() -> None:
     if settings.SUPER_ADMIN_PASSWORD == "Admin@123":
         errors.append("SUPER_ADMIN_PASSWORD must be changed from its default value in production")
 
-    if len(settings.JWT_SECRET_KEY) < 32:
-        errors.append("JWT_SECRET_KEY must be at least 32 characters in production")
+    staff_secret = settings.get_auth_secret("staff")
+    portal_secret = settings.get_auth_secret("portal")
+    if len(staff_secret) < 32:
+        errors.append("STAFF_JWT_SECRET_KEY must be at least 32 characters in production")
+    if len(portal_secret) < 32:
+        errors.append("PORTAL_JWT_SECRET_KEY must be at least 32 characters in production")
+    if staff_secret == portal_secret:
+        errors.append("STAFF_JWT_SECRET_KEY and PORTAL_JWT_SECRET_KEY must be different")
 
     if not settings.STRIPE_WEBHOOK_SECRET:
         errors.append("STRIPE_WEBHOOK_SECRET must be set in production (Stripe webhooks are otherwise rejected at runtime)")

@@ -24,6 +24,7 @@ def test_tour_overview_save(headers, first_tour_id):
         "end_location": "Dubai Mall",
         "group_size": "2-15",
         "tour_type": "group",
+        "vehicle_style": "Mini coach",
         "physical_rating": "easy",
     }
     resp = requests.post(f"{BASE_URL}/tours/{first_tour_id}/overview", headers=headers,

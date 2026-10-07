@@ -46,6 +46,7 @@ class TourOverviewPayload(BaseModel):
     end_location: str = Field(default="", max_length=150)
     group_size: str = Field(default="", max_length=100)
     tour_type: str = Field(default="", max_length=100)
+    vehicle_style: str = Field(default="", max_length=100)
     guide_style: str = Field(default="", max_length=50)
     physical_rating: str = Field(default="easy", max_length=20)
     overview_icon_data: list[dict[str, Any]] | None = None
@@ -446,6 +447,12 @@ class CalendarPayload(BaseModel):
         if v not in CALENDAR_STATUSES:
             raise ValueError(f"status must be one of {CALENDAR_STATUSES}")
         return v
+
+    @model_validator(mode="after")
+    def validate_capacity(self):
+        if self.available_seats < self.booked_seats:
+            raise ValueError("Total seats cannot be lower than booked seats")
+        return self
 
 
 # recurring availability schedule

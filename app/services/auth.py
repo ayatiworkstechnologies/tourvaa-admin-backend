@@ -34,6 +34,7 @@ from app.auth.security import (
     create_otp_code,
     create_password_reset_token,
     create_token,
+    decode_auth_token,
     get_portal_for_role,
     hash_otp_code,
     hash_password,
@@ -456,10 +457,9 @@ def resend_registration_verification(db: Session, email: str, redirect: str | No
 
 
 def change_registration_email(db: Session, change_token: str, email: str, redirect: str | None = None):
-    from jose import JWTError, jwt
     try:
-        payload = jwt.decode(change_token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-    except JWTError:
+        payload = decode_auth_token(change_token)
+    except HTTPException:
         raise HTTPException(status_code=400, detail="Change-email session has expired")
     if payload.get("token_type") != "registration_change":
         raise HTTPException(status_code=400, detail="Invalid change-email session")
@@ -546,7 +546,10 @@ def login_user(db: Session, data, request=None):
         return {
             "two_factor_required": True,
             "pending_token": create_token(
-                {"user_id": user.id}, token_type="2fa_pending", expires_minutes=5,
+                {"user_id": user.id},
+                portal=get_portal_for_role(user.role.slug if user.role else ""),
+                token_type="2fa_pending",
+                expires_minutes=5,
             ),
         }
 
@@ -712,13 +715,12 @@ def disable_two_factor(db: Session, user: User, password: str) -> None:
 
 
 def verify_two_factor_login(db: Session, data, request=None) -> dict:
-    from jose import JWTError, jwt
     from app.utils.crypto import decrypt_secret
     from app.utils.totp import verify_and_consume_backup_code, verify_totp_code
 
     try:
-        claims = jwt.decode(data.pending_token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-    except JWTError:
+        claims = decode_auth_token(data.pending_token)
+    except HTTPException:
         raise HTTPException(status_code=401, detail="This verification step has expired. Please log in again.")
     if claims.get("token_type") != "2fa_pending":
         raise HTTPException(status_code=401, detail="Invalid verification token")

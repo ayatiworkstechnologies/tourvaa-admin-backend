@@ -73,6 +73,8 @@ APP_DEBUG=true
 DATABASE_URL=mysql+pymysql://USER:PASSWORD@HOST:3306/DATABASE_NAME
 
 JWT_SECRET_KEY=replace_with_a_strong_random_secret_32_chars_minimum
+STAFF_JWT_SECRET_KEY=replace_with_a_unique_staff_secret_32_chars_minimum
+PORTAL_JWT_SECRET_KEY=replace_with_a_different_portal_secret_32_chars_minimum
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
@@ -110,7 +112,7 @@ SUB_ADMIN_RESET_PASSWORD_ON_STARTUP=false
 
 ```
 
-> **Security:** Generate a strong JWT secret with `python -c "import secrets; print(secrets.token_hex(32))"`. Use a unique production super-admin password and keep `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false` after bootstrap.
+> **Security:** Generate separate strong staff and portal JWT secrets with `python -c "import secrets; print(secrets.token_hex(32))"`. Staff covers super-admin/admin/sub-admin. Portal covers customer/agent/supplier/affiliate. Use a unique production super-admin password and keep `SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP=false` after bootstrap.
 
 ### 4. Create the MySQL database
 

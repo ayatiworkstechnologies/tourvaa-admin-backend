@@ -1,7 +1,8 @@
 from datetime import timedelta
 import hashlib
 import secrets
-from jose import jwt
+from jose import ExpiredSignatureError, JWTError, jwt
+from fastapi import HTTPException
 from passlib.context import CryptContext
 from app.config import settings
 from app.utils.money import utcnow
@@ -41,6 +42,36 @@ def get_portal_for_role(role_slug: str) -> str:
     return ROLE_SLUG_TO_PORTAL.get((role_slug or "").lower(), "admin")
 
 
+def get_auth_domain_for_portal(portal: str | None) -> str:
+    return "staff" if portal == "admin" else "portal"
+
+
+def get_auth_domain_for_role(role_slug: str) -> str:
+    return get_auth_domain_for_portal(get_portal_for_role(role_slug))
+
+
+def decode_auth_token(token: str) -> dict:
+    """Verify a token against exactly one of the two authentication domains."""
+    expired = False
+    for auth_domain in ("staff", "portal"):
+        try:
+            payload = jwt.decode(
+                token,
+                settings.get_auth_secret(auth_domain),
+                algorithms=[settings.JWT_ALGORITHM],
+            )
+            if payload.get("auth_domain") != auth_domain:
+                raise HTTPException(status_code=401, detail="Invalid token domain")
+            return payload
+        except ExpiredSignatureError:
+            expired = True
+        except JWTError:
+            continue
+    if expired:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    raise HTTPException(status_code=401, detail="Invalid token")
+
+
 def create_token(data: dict, portal: str | None = None, *, token_type: str = "access", expires_minutes: int | None = None):
     token_data = data.copy()
 
@@ -48,12 +79,14 @@ def create_token(data: dict, portal: str | None = None, *, token_type: str = "ac
         minutes=expires_minutes if expires_minutes is not None else settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
 
-    if portal:
-        token_data["portal"] = portal
+    resolved_portal = portal or token_data.get("portal") or "customer"
+    auth_domain = get_auth_domain_for_portal(resolved_portal)
+    token_data["portal"] = resolved_portal
+    token_data["auth_domain"] = auth_domain
 
     token_data.update({"exp": expire_time, "token_type": token_type})
 
-    secret = settings.get_portal_secret(portal) if portal else settings.JWT_SECRET_KEY
+    secret = settings.get_auth_secret(auth_domain)
 
     token = jwt.encode(
         token_data,

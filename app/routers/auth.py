@@ -10,7 +10,7 @@ from app.utils.ratelimit import check_rate_limit
 from app.utils.money import utcnow
 from app.models.users import User
 from app.config import settings
-from app.auth.security import create_token
+from app.auth.security import create_token, decode_auth_token, get_auth_domain_for_role
 
 from app.schemas.auth import (
     ForceLogoutSchema,
@@ -257,8 +257,6 @@ def refresh_token(
     data: RefreshTokenSchema | None = None,
     db: Session = Depends(get_db),
 ):
-    from jose import jwt as jose_jwt, JWTError, ExpiredSignatureError
-    from app.config import settings as _settings
     from app.models.sessions import UserSession
 
     token = request.cookies.get(REFRESH_COOKIE_NAME, "")
@@ -269,11 +267,11 @@ def refresh_token(
     if not token:
         raise HTTPException(status_code=401, detail="Authorization token missing")
     try:
-        payload = jose_jwt.decode(token, _settings.JWT_SECRET_KEY, algorithms=[_settings.JWT_ALGORITHM])
-    except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Refresh session expired. Please log in again.")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        payload = decode_auth_token(token)
+    except HTTPException as exc:
+        if exc.detail == "Token has expired":
+            raise HTTPException(status_code=401, detail="Refresh session expired. Please log in again.")
+        raise
     if payload.get("token_type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
@@ -284,6 +282,8 @@ def refresh_token(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if payload.get("auth_domain") != get_auth_domain_for_role(user.role.slug if user.role else ""):
+        raise HTTPException(status_code=401, detail="Token domain does not match user role")
     if token_version is None or token_version != user.token_version:
         raise HTTPException(status_code=401, detail="Session invalidated. Please log in again.")
     if user.account_status != "ACTIVE" or not user.is_active:

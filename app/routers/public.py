@@ -48,21 +48,13 @@ PAGE_SIZE = 12
 
 
 def _public_bookable_slots(departure: TourCalendar, max_group_size: int | None) -> int:
-    """Return the number a customer can select in one public booking.
+    """Return total seats remaining on a departure.
 
-    A calendar row represents the departure's total remaining capacity, while
-    ``max_group_size`` is the maximum allowed in a single reservation.  The
-    storefront must expose the stricter of those limits so it never advertises
-    a quantity the booking endpoint will reject.
+    ``available_seats`` is the departure capacity. ``max_group_size`` limits
+    one reservation and must not reduce the displayed departure capacity.
     """
-    # The group limit is the departure's customer-facing capacity. Apply it
-    # before subtracting confirmed/pending travellers: with six sellable
-    # seats and one booking, the storefront must show five seats left (not
-    # six merely because the calendar's legacy capacity is larger).
-    capacity = max(0, departure.available_seats or 0)
-    if max_group_size:
-        capacity = min(capacity, max_group_size) if capacity else max_group_size
-    return max(0, capacity - (departure.booked_seats or 0))
+    del max_group_size  # Kept in the signature for existing callers.
+    return max(0, (departure.available_seats or 0) - (departure.booked_seats or 0))
 
 
 class ContactMessageRequest(BaseModel):
@@ -165,6 +157,7 @@ def _ser_overview(o: TourOverview):
         "end_location": o.end_location,
         "group_size": o.group_size,
         "tour_type": o.tour_type,
+        "vehicle_style": o.vehicle_style or "",
         "guide_style": o.guide_style or "",
         "physical_rating": o.physical_rating,
         "why_choose_this_tour": o.why_choose_this_tour,
@@ -240,6 +233,7 @@ def _public_pricing_rows(
     *,
     db: Session | None = None,
     date_override: TourDatePrice | None = None,
+    max_group_size: int | None = None,
 ) -> list[dict]:
     """A tour can have several independently-priced pax-range TourPricing
     slabs (see services.tours._apply_pricing_computation) -- when it does,
@@ -329,6 +323,11 @@ def _public_pricing_rows(
             row["original_child_price_per_person"] = round(supplier_child if tourvaa_pct else raw_child, 2)
             row["price_per_person"] = round(max(0.0, supplier_adult * (1 - tourvaa_pct / 100)), 2)
             row["child_price_per_person"] = round(max(0.0, supplier_child * (1 - tourvaa_pct / 100)), 2)
+    if max_group_size:
+        rows = [row for row in rows if row["persons_from"] <= max_group_size]
+        for row in rows:
+            if row["persons_to"] is None or row["persons_to"] > max_group_size:
+                row["persons_to"] = max_group_size
     return rows
 
 
@@ -847,6 +846,7 @@ def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: S
                 own_discount_map.get(tour_id),
                 db=db,
                 date_override=date_override,
+                max_group_size=tour.max_group_size,
             ),
             "optional_activities": [{"id": a.id, "name": a.activity_name, "description": a.description or "", "price": float(a.price_per_person) if a.price_per_person else None, "child_price": float(a.child_price_per_person) if a.child_price_per_person else None, "infant_price": float(a.infant_price_per_person) if a.infant_price_per_person else None, "pricing_mode": a.pricing_mode or "flat", "currency": tour.currency or "USD", "category": a.category or "other", "image": a.image or None} for a in activities],
             "accommodations": [{"id": a.id, "name": a.accommodation_name, "description": a.description or "", "price": float(a.extra_price) if a.extra_price else None, "category": a.category or "room_upgrade", "image": a.image or None} for a in accommodations],

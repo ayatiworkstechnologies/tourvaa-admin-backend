@@ -321,7 +321,9 @@ def _setup_checks(db: Session) -> dict[str, list[tuple[str, bool]]]:
             ("Cloudinary configured", bool((getattr(app_settings, "CLOUDINARY_URL", "") or "").strip())),
         ],
         "security_check_completed": [
-            ("Platform JWT signing key is at least 32 characters", len((app_settings.JWT_SECRET_KEY or "").strip()) >= 32),
+            ("Staff JWT signing key is at least 32 characters", len(app_settings.get_auth_secret("staff").strip()) >= 32),
+            ("Portal JWT signing key is at least 32 characters", len(app_settings.get_auth_secret("portal").strip()) >= 32),
+            ("Staff and portal JWT signing keys are different", app_settings.get_auth_secret("staff") != app_settings.get_auth_secret("portal")),
             ("Settings encryption key set", bool((getattr(app_settings, "SETTINGS_ENCRYPTION_KEY", "") or "").strip())),
             ("Redis configured when running more than one worker", workers <= 1 or bool((getattr(app_settings, "REDIS_URL", "") or "").strip())),
         ],
@@ -594,17 +596,20 @@ def compute_commission_preview(db: Session, sample_price=None) -> dict:
 
 
 def get_security_status(db: Session) -> dict:
-    """Read-only status for the unified JWT key and supporting services."""
+    """Read-only status for the separated staff and portal JWT keys."""
     from app.config import settings as app_settings
     import os
     try:
         workers = int(os.environ.get("WEB_CONCURRENCY", "1") or "1")
     except ValueError:
         workers = 1
-    jwt_secret = (app_settings.JWT_SECRET_KEY or "").strip()
+    staff_jwt_secret = app_settings.get_auth_secret("staff").strip()
+    portal_jwt_secret = app_settings.get_auth_secret("portal").strip()
     return {
         "jwt_secrets": {
-            "platform": "configured (single signing key)" if len(jwt_secret) >= 32 else "missing or too short (minimum 32 characters)",
+            "staff": "configured" if len(staff_jwt_secret) >= 32 else "missing or too short (minimum 32 characters)",
+            "portal": "configured" if len(portal_jwt_secret) >= 32 else "missing or too short (minimum 32 characters)",
+            "separated": staff_jwt_secret != portal_jwt_secret,
         },
         "redis": "configured" if str(getattr(app_settings, "REDIS_URL", "") or "").strip() else ("configured (not required for one worker)" if workers <= 1 else "missing (required for multiple workers)"),
         "cloudinary": "configured" if str(getattr(app_settings, "CLOUDINARY_URL", "") or "").strip() else "not configured",

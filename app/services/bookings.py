@@ -1459,17 +1459,13 @@ def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict |
     }
 
 def _bookable_calendar_capacity(tour: Tour | None, calendar: TourCalendar) -> int:
-    """Effective sellable capacity for a departure.
+    """Return the total sellable capacity configured for a departure.
 
-    Calendar capacity may be higher than a tour's group limit on legacy
-    schedules. The public page and every booking path must treat the lower
-    value as the total sellable capacity for that departure.
+    The tour group limit applies to each reservation, not to the combined
+    capacity of all reservations on this calendar date.
     """
-    capacity = int(calendar.available_seats or 0)
-    group_limit = int(tour.max_group_size or 0) if tour else 0
-    if group_limit:
-        return min(capacity, group_limit) if capacity else group_limit
-    return capacity
+    del tour  # Kept in the signature for existing callers.
+    return int(calendar.available_seats or 0)
 
 
 def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False, pricing_details: dict | None = None):
@@ -1824,18 +1820,20 @@ def calculate_booking_price(db: Session, data: BookingCreate) -> dict:
 
 def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_status: str = "", payment_status: str = "", supplier_acceptance_status: str = "", cancellation_source: str = "", country_id: Optional[int] = None, supplier_id: Optional[int] = None, agent_id: Optional[int] = None, tour_id: Optional[int] = None, start_date: str = "", end_date: str = "", sort_by: str = "newest", actor: Optional[User] = None) -> dict:
     query = db.query(Booking).options(joinedload(Booking.customer))
+    role = _user_role(actor)
     # Gateway checkout needs a booking ID before redirecting to Stripe/PayPal.
     # Until money is received that row is only a provisional checkout record,
-    # not a user-visible booking. Hiding it here keeps abandoned/back-button
-    # checkouts out of customer, supplier, agent and admin booking lists. Paid
-    # and partially-paid bookings remain visible even if their workflow status
-    # has not advanced yet.
-    query = query.filter(
-        or_(
-            Booking.booking_status != "pending_payment",
-            Booking.payment_status.notin_(("unpaid", "pending")),
+    # not an operational booking. Keep it out of customer, supplier, and admin
+    # lists, but retain it in the creating agent's My Bookings list so they can
+    # retry payment or explicitly remove it. Paid and partially-paid bookings
+    # remain visible even if their workflow status has not advanced yet.
+    if role != "agent":
+        query = query.filter(
+            or_(
+                Booking.booking_status != "pending_payment",
+                Booking.payment_status.notin_(("unpaid", "pending", "failed")),
+            )
         )
-    )
     # A customer may discard a provisional unpaid checkout. Keep that audit
     # record out of every portal, just like an abandoned pending-payment row;
     # paid bookings always follow the visible cancellation/refund workflow.
@@ -1845,7 +1843,6 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
             Booking.cancellation_source != "customer_unpaid_removed",
         )
     )
-    role = _user_role(actor)
     if role == "supplier":
         query = query.join(Booking.supplier).filter_by(user_id=actor.id)
         # Keep withdrawals available to Operations for reassignment and any
@@ -1913,7 +1910,7 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
         data["cancellation_eligibility"] = customer_cancellation_eligibility(db, booking)
     if role == "supplier":
         from app.services.cancellations import supplier_cancellation_terms
-        data = _supplier_safe(data, booking)
+        data = _hide_agent_reservation_payment_from_supplier(_supplier_safe(data, booking), booking)
         data["supplier_payment_summary"] = _supplier_payment_summary(db, booking)
         data["supplier_cancellation_terms"] = supplier_cancellation_terms(db, booking)
     else:
