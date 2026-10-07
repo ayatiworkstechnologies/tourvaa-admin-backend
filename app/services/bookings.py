@@ -747,6 +747,20 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         (traveller for traveller in (booking.travellers or []) if traveller.is_primary_contact),
         None,
     )
+    # A booking's lead contact is the selected primary traveller.  Customer
+    # profile fields are only a fallback: an existing profile can be shared,
+    # incomplete, or differ from the person travelling on this reservation.
+    contact_name = (
+        getattr(primary_traveller, "full_name", None)
+        or " ".join(filter(None, [getattr(primary_traveller, "first_name", None), getattr(primary_traveller, "last_name", None)]))
+        or (booking.customer.full_name if booking.customer else None)
+        or None
+    )
+    contact_email = (
+        getattr(primary_traveller, "email", None)
+        or (booking.customer.email if booking.customer else None)
+        or None
+    )
     contact_phone = (
         getattr(primary_traveller, "phone", None)
         or (booking.customer.phone if booking.customer else None)
@@ -759,6 +773,8 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "customer_name": booking.customer.full_name if booking.customer else None,
         "customer_email": booking.customer.email if booking.customer else None,
         "customer_phone": contact_phone,
+        "contact_name": contact_name,
+        "contact_email": contact_email,
         "contact_phone": contact_phone,
         "tour_id": booking.tour_id,
         "tour_slug": booking.tour.slug if booking.tour else None,
