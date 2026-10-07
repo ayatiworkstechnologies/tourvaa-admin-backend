@@ -34,8 +34,17 @@ def _do_email_admins(db: Session, key: str, values: dict, fallback_subject: str,
     from app.models.users import User
     from app.models.roles import Role
     admins = db.query(User).join(Role, User.role_id == Role.id).filter(Role.slug.in_(["super-admin", "admin"])).all()
-    for admin in admins:
-        send_templated_email(db, admin.email, key, values, fallback_subject, fallback_html)
+    recipients = {admin.email.strip().lower() for admin in admins if admin.email}
+    # System Settings may add operational mailboxes that are not user
+    # accounts. BCC is delivered independently so recipient addresses never
+    # appear in another recipient's message headers.
+    from app.models.settings import SmtpSetting
+    setting = db.query(SmtpSetting).first()
+    if setting:
+        for field in ("admin_notification_to", "admin_notification_cc", "admin_notification_bcc"):
+            recipients.update(email.strip().lower() for email in (getattr(setting, field) or "").split(",") if email.strip())
+    for recipient in recipients:
+        send_templated_email(db, recipient, key, values, fallback_subject, fallback_html)
 
 
 def email_admins(db: Session, key: str, values: dict, fallback_subject: str, fallback_html: str, background_tasks: "BackgroundTasks | None" = None):

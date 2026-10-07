@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 AGENT_DOCUMENT_TYPES = {
     "company_registration": {"label": "Business Registration Certificate", "required": True},
-    "iata_accreditation": {"label": "IATA Accreditation", "required": True},
-    "industry_certification": {"label": "Industry Certification", "required": False},
+    "iata_accreditation": {"label": "IATA Accreditation / Travel Licence", "required": True},
+    "industry_certification": {"label": "Industry Certifications", "required": False},
     "other_licences": {"label": "Other Licences", "required": False},
     "supporting_documents": {"label": "Additional Supporting Documents", "required": False},
 }

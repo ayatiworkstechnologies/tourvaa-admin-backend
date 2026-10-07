@@ -89,6 +89,9 @@ class SmtpSettingsUpdate(BaseModel):
     from_name: Optional[str] = None
     from_email: Optional[str] = None
     reply_to: Optional[str] = None
+    admin_notification_to: Optional[str] = None
+    admin_notification_cc: Optional[str] = None
+    admin_notification_bcc: Optional[str] = None
     use_ssl: Optional[bool] = None
     use_starttls: Optional[bool] = None
     timeout_seconds: Optional[int] = None

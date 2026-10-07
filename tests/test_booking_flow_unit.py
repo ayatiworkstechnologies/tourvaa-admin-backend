@@ -14,6 +14,7 @@ from app.services.bookings import (
     _validate_customer_travellers,
     _validate_supplier_lifecycle_transition,
     create_booking,
+    notify_booking_received_after_payment,
 )
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
 from app.routers.payments_gateway import _ensure_booking_payment_access, _validate_payment_currency, _validate_payment_request
@@ -474,6 +475,35 @@ def test_supplier_assignment_email_requires_a_settled_booking_total():
     assert _is_booking_fully_paid(SimpleNamespace(payment_status="paid", final_amount=100, total_cost=100, amount_paid=100)) is True
     assert _is_booking_fully_paid(SimpleNamespace(payment_status="paid", final_amount=100, total_cost=100, amount_paid=0)) is False
     assert _is_booking_fully_paid(SimpleNamespace(payment_status="partially_paid", final_amount=100, total_cost=100, amount_paid=100)) is False
+
+
+def test_booking_received_email_requires_a_deposit_or_full_payment(monkeypatch):
+    from app.services import bookings as booking_service
+    from app.services import notifications as notification_service
+    from app.utils import notification_triggers
+
+    sent = []
+    monkeypatch.setattr(booking_service, "_send_booking_email", lambda *args, **kwargs: sent.append((args, kwargs)))
+    monkeypatch.setattr(notification_service, "notify_admins", lambda *args, **kwargs: None)
+    monkeypatch.setattr(notification_triggers, "email_admins", lambda *args, **kwargs: None)
+    paid_booking = SimpleNamespace(
+        id=101, payment_status="partially_paid", final_amount=100, total_cost=100, amount_paid=25,
+        customer=SimpleNamespace(full_name="Paid Customer", email="paid@example.test", user_id=None),
+        booking_code="TV-101", tour_name="Paid Tour", tour_date="2027-06-01",
+        adults_count=2, currency="USD", agent=None, supplier=None,
+    )
+    unpaid_booking = SimpleNamespace(
+        id=102, payment_status="pending", final_amount=100, total_cost=100, amount_paid=0,
+        customer=SimpleNamespace(full_name="Unpaid Customer", email="unpaid@example.test", user_id=None),
+        agent=None, supplier=None,
+    )
+
+    notify_booking_received_after_payment(SimpleNamespace(), unpaid_booking)
+    notify_booking_received_after_payment(SimpleNamespace(), paid_booking)
+
+    assert len(sent) == 1
+    assert sent[0][0][1] == "booking_confirmation"
+    assert sent[0][0][-1] == "paid@example.test"
 
 
 def test_customer_cannot_attach_an_agent_to_a_booking():

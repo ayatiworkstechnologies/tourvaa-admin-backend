@@ -158,7 +158,7 @@ def _status_after_payment_sync(booking: Booking, payment_status: str) -> str | N
 
 
 def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
-    was_paid = booking.payment_status == "paid"
+    was_funded = booking.payment_status in {"paid", "partially_paid"}
     payments = db.query(Payment).filter(Payment.booking_id == booking.id).all()
     captured = sum(money(p.captured_amount or p.paid_amount or 0) for p in payments if p.payment_status not in {"voided", "failed"})
     refunded = sum(money(p.refunded_amount or 0) for p in payments)
@@ -187,9 +187,9 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
             record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=booking.currency or "USD")
         except Exception:
             logger.warning("Affiliate conversion recording failed for booking %s", booking.id, exc_info=True)
-    if booking.payment_status == "paid" and not was_paid:
-        from app.services.bookings import notify_paid_booking_ready_for_supplier
-        notify_paid_booking_ready_for_supplier(db, booking)
+    if booking.payment_status in {"paid", "partially_paid"} and not was_funded:
+        from app.services.bookings import notify_booking_received_after_payment
+        notify_booking_received_after_payment(db, booking)
 
 
 def _sync_customer_payment_fields(db: Session, customer: Customer) -> None:
@@ -540,4 +540,3 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
 
 def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "", actor: Optional[User] = None) -> dict:
     return get_payments(db, page=page, limit=limit, customer_id=customer_id, payment_status=payment_status, payment_method=payment_method, actor=actor)
-

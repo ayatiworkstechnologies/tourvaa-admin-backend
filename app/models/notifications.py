@@ -35,6 +35,28 @@ class NotificationLog(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class NotificationDelivery(Base):
+    """One email delivery reservation per business event and recipient."""
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_notification_delivery_idempotency"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_type = Column(String(100), nullable=False, index=True)
+    entity_type = Column(String(60), nullable=False, index=True)
+    entity_id = Column(Integer, nullable=False, index=True)
+    recipient_type = Column(String(40), nullable=False)
+    recipient_email = Column(String(180), nullable=False)
+    template_key = Column(String(100), nullable=False)
+    subject = Column(String(255), nullable=True)
+    status = Column(String(30), default="pending", nullable=False, index=True)
+    attempt_count = Column(Integer, default=0, nullable=False)
+    error_message = Column(Text, nullable=True)
+    idempotency_key = Column(String(255), nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class PushSubscription(Base):
     __tablename__ = "push_subscriptions"
     __table_args__ = (UniqueConstraint("endpoint_hash", name="uq_push_endpoint_hash"),)

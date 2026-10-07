@@ -2027,24 +2027,6 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         except Exception:
             logger.warning("Reservation invoice generation/email failed for booking %s", booking.id, exc_info=True)
 
-    # Every email below is scheduled (BackgroundTasks, or a daemon thread
-    # fallback when none was threaded through - see _send_booking_email /
-    # email_admins) rather than sent inline: booking success must never
-    # depend on, or wait on, SMTP.
-    from app.utils.email_templates import booking_confirmation_email
-    login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-    _send_booking_email(
-        db, "booking_confirmation",
-        {"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-         "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
-         "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
-        f"Booking received - {booking.booking_code}",
-        booking_confirmation_email(customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
-        customer.email,
-        background_tasks=background_tasks,
-    )
-
-
     return serialize_booking_for_actor(db, booking, actor)
 
 
@@ -2877,9 +2859,14 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
     return serialize_booking_for_actor(db, booking, actor)
 
 
-def notify_paid_booking_ready_for_supplier(db: Session, booking: Booking) -> None:
-    """Send operational assignment emails only after the booking is fully paid."""
-    if not _is_booking_fully_paid(booking):
+def notify_booking_received_after_payment(db: Session, booking: Booking) -> None:
+    """Notify parties when the first deposit or full payment creates a booking.
+
+    Supplier acceptance, not payment settlement, is the event that confirms a
+    booking.  A deposit therefore creates a pending-review booking and sends
+    the supplier its assignment without falsely confirming the trip.
+    """
+    if booking.payment_status not in {"partially_paid", "paid"}:
         return
     from app.services.notifications import enqueue_notification, notify_admins
     from app.utils.email_templates import new_booking_admin_email, supplier_booking_assigned_email
@@ -2888,24 +2875,45 @@ def notify_paid_booking_ready_for_supplier(db: Session, booking: Booking) -> Non
     customer_name = booking.customer.full_name if booking.customer else "Customer"
     admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
     supplier_name = booking.supplier.supplier_name if booking.supplier else "Unassigned"
-    notify_admins(db, notification_type="paid_booking_ready", title="Paid booking ready for fulfilment", message=f"Booking {booking.booking_code} has been paid and is ready for fulfilment", entity_type="booking", entity_id=booking.id)
+    notify_admins(db, notification_type="new_booking", title="New booking received", message=f"Booking {booking.booking_code} is awaiting supplier review", entity_type="booking", entity_id=booking.id)
     email_admins(
         db, "new_booking_admin",
         {"booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "supplier_name": supplier_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "admin_url": admin_url, "button_text": "View booking", "button_url": admin_url},
-        f"Paid booking ready - {booking.booking_code}",
+        f"New booking received - {booking.booking_code}",
         new_booking_admin_email(booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, supplier_name, booking.adults_count, booking.currency, booking.final_amount, admin_url),
     )
-    if booking.booking_status != "pending_supplier_acceptance" or not (booking.supplier and booking.supplier.user and booking.supplier.user.email):
-        return
-    portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
-    enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New paid booking assigned", message=f"Paid booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
-    _send_booking_email(
-        db, "supplier_booking_assigned",
-        {"supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
-        f"New paid booking assigned - {booking.booking_code}",
-        supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
-        booking.supplier.user.email,
-    )
+    customer = booking.customer
+    from app.utils.email_templates import booking_confirmation_email
+    login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+    if customer and customer.user_id:
+        from app.services.booking_notification_events import BookingNotificationEvent, emit_in_app_once
+        emit_in_app_once(
+            db, event=BookingNotificationEvent.BOOKING_CREATED,
+            booking_id=booking.id, user_id=customer.user_id, recipient_type="customer",
+            title="Booking received",
+            message=f"Booking {booking.booking_code} is pending supplier review",
+        )
+    if customer and customer.email:
+        _send_booking_email(
+            db, "booking_confirmation",
+            {"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
+             "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
+            f"Booking received - {booking.booking_code}",
+            booking_confirmation_email(customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
+            customer.email,
+        )
+    _email_agent_booking_status(db, booking, "pending review", "Your booking has been received and is pending supplier review.")
+    if booking.supplier and booking.supplier.user and booking.supplier.user.email:
+        portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
+        enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New booking assigned", message=f"Booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
+        _send_booking_email(
+            db, "supplier_booking_assigned",
+            {"supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
+            f"New booking assigned - {booking.booking_code}",
+            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
+            booking.supplier.user.email,
+        )
 
 
 def update_booking_travel_date(db: Session, booking_id: int, data: BookingTravelDateUpdate, actor: User, request: Request | None = None) -> dict:

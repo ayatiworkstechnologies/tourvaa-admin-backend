@@ -156,9 +156,9 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "supplier_booking_assigned",
         "name": "Supplier Booking Assigned",
-        "subject": "Paid booking assigned - {{booking_code}}",
+        "subject": "New booking assigned - {{booking_code}}",
         "body": (
-            "A fully paid booking has been assigned to you on Tourvaa and is awaiting your acceptance.\n\n"
+            "A new booking has been assigned to you on Tourvaa and is awaiting your acceptance.\n\n"
             "Booking ID: {{booking_code}}\n"
             "Tour: {{tour_name}}\n"
             "Date: {{tour_date}}\n"
