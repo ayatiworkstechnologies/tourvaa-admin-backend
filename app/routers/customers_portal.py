@@ -249,7 +249,18 @@ def customer_booking_itinerary(booking_id: int, db: Session = Depends(get_db), c
 @router.post("/bookings/{booking_id}/cancel")
 def request_booking_cancellation(booking_id: int, data: CustomerCancellationCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
-    booking = db.query(Booking).filter(Booking.id == booking_id, Booking.customer_id == customer.id).first()
+    # A profile selected by an Agent is not the owner of an Agent booking.
+    # Customer cancellation access follows the same ownership rule as the
+    # customer booking list/detail endpoints.
+    booking = (
+        db.query(Booking)
+        .filter(
+            Booking.id == booking_id,
+            Booking.customer_id == customer.id,
+            Booking.booking_source != "agent",
+        )
+        .first()
+    )
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 

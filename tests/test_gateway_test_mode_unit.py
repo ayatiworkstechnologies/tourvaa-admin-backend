@@ -15,7 +15,7 @@ def test_test_checkout_rejects_live_gateway_before_network(monkeypatch, provider
     monkeypatch.setattr(routes, "_validate_payment_currency", lambda *a: "USD")
     gateway = Mock(secret_key="sk_live_example", base_url="https://api-m.paypal.com")
     monkeypatch.setattr(routes, f"get_{provider}", lambda db: gateway)
-    common = dict(booking_id=1, amount=10, test_only=True, cancel_url="https://example.com/cancel")
+    common = dict(booking_id=1, amount=10, payment_type="full", test_only=True, cancel_url="https://example.com/cancel")
     body = (routes.StripeSessionRequest(**common, success_url="https://example.com/success")
             if provider == "stripe" else routes.PayPalOrderRequest(**common, return_url="https://example.com/success"))
     endpoint = routes.stripe_create_session if provider == "stripe" else routes.paypal_create_order

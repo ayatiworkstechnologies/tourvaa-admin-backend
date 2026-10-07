@@ -179,6 +179,9 @@ class Booking(Base):
     payment_type = Column(String(30), default="full", nullable=False)
     agent_payment_method = Column(String(30), nullable=True)
     agent_reference = Column(String(100), nullable=True)
+    # An unpaid gateway return can be dismissed by the booking agent without
+    # altering the operational booking record for Tourvaa.
+    agent_hidden_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     notes = Column(Text, nullable=True)
     customer_notes = Column(Text, nullable=True)

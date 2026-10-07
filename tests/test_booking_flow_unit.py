@@ -6,7 +6,9 @@ from pydantic import ValidationError
 
 from app.services.bookings import (
     _bookable_calendar_capacity,
+    _booking_email_recipient,
     _booking_seat_count,
+    _ensure_booking_access,
     _is_booking_fully_paid,
     _price_booking,
     _start_supplier_decision,
@@ -19,6 +21,7 @@ from app.services.bookings import (
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
 from app.routers.payments_gateway import _ensure_booking_payment_access, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
+from app.schemas.tours import AccommodationExtraPayload
 from app.schemas.agents import AgentSelfUpdate
 from app.schemas.agents import AgentInvoicingUpdate, AgentUpdate
 from app.schemas.affiliates import AffiliateInvoicingUpdate, AffiliateUpdate
@@ -264,6 +267,27 @@ def test_total_travellers_includes_infants_but_seat_count_does_not():
     assert _booking_seat_count(row) == 3
 
 
+def test_accommodation_addons_use_category_specific_price_types():
+    saved = AccommodationExtraPayload(
+        accommodation_name="Deluxe room",
+        category="room_upgrade",
+        price_type="per_person",
+    )
+    assert saved.price_type == "per_person"
+
+    additional_night = AccommodationExtraPayload(
+        accommodation_name="Extra night",
+        category="additional_night",
+        price_type="per_room",
+    )
+    assert additional_night.price_type == "per_room"
+
+    with pytest.raises(ValidationError):
+        AccommodationExtraPayload(accommodation_name="Per-room suite", category="room_upgrade", price_type="per_room")
+    with pytest.raises(ValidationError):
+        AccommodationExtraPayload(accommodation_name="Airport pickup", category="pickup", price_type="per_person")
+
+
 def test_booking_rejects_more_travellers_than_the_tour_group_limit():
     tour = SimpleNamespace(id=9, status="published", max_group_size=6)
 
@@ -315,6 +339,10 @@ def customer_user(user_id=42):
     return SimpleNamespace(id=user_id, role=SimpleNamespace(slug="customer"))
 
 
+def agent_user(user_id=73):
+    return SimpleNamespace(id=user_id, role=SimpleNamespace(slug="agent-reseller"))
+
+
 def test_gateway_rejects_partial_payment_without_a_configured_deposit():
     # No tour attached (or a tour with no deposit configured) means the
     # booking has no supplier-defined deposit floor, so any amount below
@@ -338,6 +366,18 @@ def test_gateway_rejects_a_deposit_below_the_configured_minimum():
     with pytest.raises(HTTPException) as exc:
         _validate_payment_request(None, row, "100.00", customer_user())
     assert exc.value.status_code == 400
+
+
+def test_gateway_requires_agent_bookings_to_pay_the_full_outstanding_balance():
+    row = payment_booking(
+        booking_source="agent",
+        agent=SimpleNamespace(user_id=73),
+        tour=SimpleNamespace(deposit_type="percentage", deposit_percentage=30, deposit_cutoff_days=None),
+    )
+    with pytest.raises(HTTPException) as exc:
+        _validate_payment_request(None, row, "300.00", agent_user())
+    assert exc.value.status_code == 400
+    assert "paid in full" in exc.value.detail
 
 
 def test_gateway_rejects_overpayment():
@@ -480,12 +520,14 @@ def test_supplier_assignment_email_requires_a_settled_booking_total():
 def test_booking_received_email_requires_a_deposit_or_full_payment(monkeypatch):
     from app.services import bookings as booking_service
     from app.services import notifications as notification_service
+    from app.services import notification_delivery
     from app.utils import notification_triggers
 
     sent = []
     monkeypatch.setattr(booking_service, "_send_booking_email", lambda *args, **kwargs: sent.append((args, kwargs)))
     monkeypatch.setattr(notification_service, "notify_admins", lambda *args, **kwargs: None)
     monkeypatch.setattr(notification_triggers, "email_admins", lambda *args, **kwargs: None)
+    monkeypatch.setattr(notification_delivery, "dispatch_admin_lifecycle_emails", lambda *args, **kwargs: 0)
     paid_booking = SimpleNamespace(
         id=101, payment_status="partially_paid", final_amount=100, total_cost=100, amount_paid=25,
         customer=SimpleNamespace(full_name="Paid Customer", email="paid@example.test", user_id=None),
@@ -504,6 +546,34 @@ def test_booking_received_email_requires_a_deposit_or_full_payment(monkeypatch):
     assert len(sent) == 1
     assert sent[0][0][1] == "booking_confirmation"
     assert sent[0][0][-1] == "paid@example.test"
+
+
+def test_agent_booking_does_not_email_selected_customer_or_lead_traveller():
+    booking_row = SimpleNamespace(
+        booking_source="agent",
+        customer=SimpleNamespace(full_name="Agency Customer", email="customer@example.test"),
+        travellers=[
+            SimpleNamespace(full_name="Other Traveller", first_name="Other", last_name="Traveller", email="other@example.test", is_primary_contact=False),
+            SimpleNamespace(full_name="Lead Traveller", first_name="Lead", last_name="Traveller", email="lead@example.test", is_primary_contact=True),
+        ],
+    )
+
+    assert _booking_email_recipient(booking_row) is None
+
+
+def test_customer_cannot_access_an_agent_owned_booking():
+    booking = SimpleNamespace(
+        booking_source="agent",
+        customer=SimpleNamespace(user_id=41),
+        agent=SimpleNamespace(user_id=77),
+        supplier=None,
+    )
+    customer = SimpleNamespace(id=41, role=SimpleNamespace(slug="customer"), user_roles=[])
+
+    with pytest.raises(HTTPException) as exc:
+        _ensure_booking_access(booking, customer)
+
+    assert exc.value.status_code == 403
 
 
 def test_customer_cannot_attach_an_agent_to_a_booking():

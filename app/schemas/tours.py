@@ -5,6 +5,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 PHYSICAL_RATINGS = {"easy", "moderate", "hard"}
+GUIDE_STYLES = {"", "driver_guide", "dedicated_guide", "driver_only"}
 ITEM_STATUSES = {"active", "inactive"}
 IMAGE_TYPES = {"gallery", "itinerary", "highlight", "banner", "map"}
 CALENDAR_STATUSES = {"available", "unavailable", "sold_out", "blocked"}
@@ -30,6 +31,12 @@ def _reject_ambiguous_commission_mode(commissionable: bool, supplier_cost) -> No
             "supplier_cost if you only want the commissionable flag."
         )
 ADDON_CATEGORIES = {"pickup", "room_upgrade", "dining", "insurance", "extra_activity", "additional_night", "meal", "visa_assistance", "other"}
+ACCOMMODATION_ADDON_CATEGORIES = {"room_upgrade", "additional_night", "extra_activity"}
+ACCOMMODATION_PRICE_TYPES_BY_CATEGORY = {
+    "room_upgrade": {"per_person"},
+    "extra_activity": {"per_person"},
+    "additional_night": {"per_person", "per_room"},
+}
 
 
 # overview
@@ -39,6 +46,7 @@ class TourOverviewPayload(BaseModel):
     end_location: str = Field(default="", max_length=150)
     group_size: str = Field(default="", max_length=100)
     tour_type: str = Field(default="", max_length=100)
+    guide_style: str = Field(default="", max_length=50)
     physical_rating: str = Field(default="easy", max_length=20)
     overview_icon_data: list[dict[str, Any]] | None = None
     why_choose_this_tour: str = Field(default="")
@@ -48,6 +56,14 @@ class TourOverviewPayload(BaseModel):
     transportation_summary: str = Field(default="")
     accommodation_summary: str = Field(default="")
     meal_summary: str = Field(default="")
+
+    @field_validator("guide_style")
+    @classmethod
+    def validate_guide_style(cls, value: str):
+        value = value.strip().lower()
+        if value not in GUIDE_STYLES:
+            raise ValueError(f"guide_style must be one of {GUIDE_STYLES}")
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -70,6 +86,17 @@ class TourOverviewPayload(BaseModel):
         if v not in PHYSICAL_RATINGS:
             raise ValueError(f"physical_rating must be one of {PHYSICAL_RATINGS}")
         return v
+
+
+class TourGroupSizePayload(BaseModel):
+    min_booking_size: int = Field(ge=1)
+    max_group_size: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.min_booking_size > self.max_group_size:
+            raise ValueError("Minimum group size cannot be greater than maximum group size")
+        return self
 
 
 # itinerary
@@ -379,22 +406,20 @@ class AccommodationExtraPayload(BaseModel):
     # See ExtensionPayload.supplier_cost above.
     supplier_cost: Optional[Decimal] = None
 
-    @field_validator("price_type")
-    @classmethod
-    def validate_price_type(cls, v: str):
-        if v not in PRICE_TYPES:
-            raise ValueError(f"price_type must be one of {PRICE_TYPES}")
-        return v
-
     @field_validator("category")
     @classmethod
     def validate_category(cls, v: str):
-        if v not in ADDON_CATEGORIES:
-            raise ValueError(f"category must be one of {ADDON_CATEGORIES}")
+        if v not in ACCOMMODATION_ADDON_CATEGORIES:
+            raise ValueError(f"category must be one of {ACCOMMODATION_ADDON_CATEGORIES}")
         return v
 
     @model_validator(mode="after")
     def validate_commission_mode(self):
+        allowed_price_types = ACCOMMODATION_PRICE_TYPES_BY_CATEGORY.get(self.category, set())
+        if self.price_type not in allowed_price_types:
+            raise ValueError(
+                f"price_type must be one of {sorted(allowed_price_types)} for category={self.category}"
+            )
         _reject_ambiguous_commission_mode(self.commissionable, self.supplier_cost)
         return self
 

@@ -24,31 +24,41 @@ def _payment_code(payment_id: int) -> str:
 def _email_customer_payment_received(db: Session, payment: Payment, amount) -> None:
     booking = payment.booking
     customer = booking.customer if booking else None
-    if not (booking and customer and customer.email):
+    if not booking:
         return
     from app.config import settings
     from app.utils.email_templates import payment_received_email
-    from app.utils.notification_triggers import send_templated_email
-    login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-    send_templated_email(
-        db, customer.email, "payment_received",
-        {"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-         "currency": booking.currency, "amount": amount, "login_url": login_url,
-         "button_text": "View booking", "button_url": login_url},
-        f"Payment received - {booking.booking_code}",
-        payment_received_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
-    )
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    prior_paid = max(money(0), money(booking.amount_paid or 0) - money(amount))
+    event = "deposit_payment_received" if payment.payment_type == "partial" else "balance_payment_received" if prior_paid > 0 else "payment_success"
+    if booking.booking_source != "agent" and customer and customer.email:
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        dispatch_lifecycle_email(
+            db, event=event, entity_type="payment", entity_id=payment.id,
+            recipient_type="customer", recipient_email=customer.email,
+            template_key="payment_received",
+            values={"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+                    "currency": booking.currency, "amount": amount, "login_url": login_url,
+                    "button_text": "View booking", "button_url": login_url},
+            fallback_subject=f"Payment received - {booking.booking_code}",
+            fallback_html=payment_received_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
+            event_version=str(payment.id),
+        )
     # An agent who made the reservation is a booking party too: they need the
     # same payment receipt, while Tourvaa keeps an operational record.
     from app.services.notifications import enqueue_notification, notify_admins
     if booking.agent and booking.agent.user_id:
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="payment_received", title="Payment received", message=f"Payment of {booking.currency} {amount} was received for booking {booking.booking_code}.", entity_type="payment", entity_id=payment.id)
         if booking.agent.user and booking.agent.user.email:
-            send_templated_email(
-                db, booking.agent.user.email, "payment_received",
-                {"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "currency": booking.currency, "amount": amount, "login_url": f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}", "button_text": "View booking", "button_url": f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"},
-                f"Payment received - {booking.booking_code}",
-                payment_received_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"),
+            agent_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
+            dispatch_lifecycle_email(
+                db, event=event, entity_type="payment", entity_id=payment.id,
+                recipient_type="agent", recipient_email=booking.agent.user.email,
+                template_key="payment_received",
+                values={"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "currency": booking.currency, "amount": amount, "login_url": agent_url, "button_text": "View booking", "button_url": agent_url},
+                fallback_subject=f"Payment received - {booking.booking_code}",
+                fallback_html=payment_received_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, agent_url),
+                event_version=str(payment.id),
             )
     notify_admins(db, notification_type="payment_received", title="Payment received", message=f"Payment of {booking.currency} {amount} was received for booking {booking.booking_code}.", entity_type="payment", entity_id=payment.id)
 
@@ -56,32 +66,33 @@ def _email_customer_payment_received(db: Session, payment: Payment, amount) -> N
 def _email_customer_refund_processed(db: Session, payment: Payment, amount) -> None:
     booking = payment.booking
     customer = booking.customer if booking else None
-    if not (booking and customer and customer.email):
+    if not booking:
         return
     from app.config import settings
     from app.utils.email_templates import refund_processed_email
-    from app.utils.notification_triggers import send_templated_email
-    login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-    send_templated_email(
-        db, customer.email, "refund_processed",
-        {"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-         "currency": booking.currency, "amount": amount, "login_url": login_url,
-         "button_text": "View booking", "button_url": login_url},
-        f"Refund processed - {booking.booking_code}",
-        refund_processed_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
-    )
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    if booking.booking_source != "agent" and customer and customer.email:
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        dispatch_lifecycle_email(
+            db, event="refund_completed", entity_type="payment", entity_id=payment.id,
+            recipient_type="customer", recipient_email=customer.email, template_key="refund_processed",
+            values={"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "currency": booking.currency, "amount": amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
+            fallback_subject=f"Refund processed - {booking.booking_code}",
+            fallback_html=refund_processed_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
+            event_version=str(payment.id),
+        )
     # Agent-made reservations need the same final refund confirmation as the
     # traveller. This is deliberately sent only after the gateway/payment
     # record is marked refunded, not when a cancellation is merely requested.
     if booking.agent and booking.agent.user and booking.agent.user.email:
         agent_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
-        send_templated_email(
-            db, booking.agent.user.email, "refund_processed",
-            {"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-             "currency": booking.currency, "amount": amount, "login_url": agent_url,
-             "button_text": "View booking", "button_url": agent_url},
-            f"Refund processed - {booking.booking_code}",
-            refund_processed_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, agent_url),
+        dispatch_lifecycle_email(
+            db, event="refund_completed", entity_type="payment", entity_id=payment.id,
+            recipient_type="agent", recipient_email=booking.agent.user.email, template_key="refund_processed",
+            values={"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "currency": booking.currency, "amount": amount, "login_url": agent_url, "button_text": "View booking", "button_url": agent_url},
+            fallback_subject=f"Refund processed - {booking.booking_code}",
+            fallback_html=refund_processed_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, agent_url),
+            event_version=str(payment.id),
         )
 
 

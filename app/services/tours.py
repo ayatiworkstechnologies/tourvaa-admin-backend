@@ -49,6 +49,7 @@ from app.schemas.tours import (
     ReorderPayload,
     SimilarTourPayload,
     TourOverviewPayload,
+    TourGroupSizePayload,
 )
 from app.models.users import User
 from app.services.tour_versions import mark_repricing_required, maybe_resubmit_for_review
@@ -72,7 +73,7 @@ def _ser_overview(o: TourOverview) -> dict:
         "id": o.id, "tour_id": o.tour_id,
         "duration_text": o.duration_text, "start_location": o.start_location,
         "end_location": o.end_location, "group_size": o.group_size,
-        "tour_type": o.tour_type, "physical_rating": o.physical_rating,
+        "tour_type": o.tour_type, "guide_style": o.guide_style or "", "physical_rating": o.physical_rating,
         "overview_icon_data": o.overview_icon_data,
         "why_choose_this_tour": o.why_choose_this_tour or "", "ideal_for": o.ideal_for or "",
         "best_season": o.best_season or "", "tour_pace": o.tour_pace or "",
@@ -101,6 +102,15 @@ def save_overview(db: Session, tour_id: int, data: TourOverviewPayload, actor: U
     db.commit()
     db.refresh(o)
     return _ser_overview(o)
+
+
+def save_tour_group_size(db: Session, tour_id: int, data: TourGroupSizePayload, actor: User, request: Request | None = None) -> dict:
+    tour = _require_tour(db, tour_id)
+    tour.min_booking_size = data.min_booking_size
+    tour.max_group_size = data.max_group_size
+    log_audit(db, actor=actor, action="save_tour_group_size", entity_type="tour", entity_id=tour_id, request=request)
+    db.commit()
+    return {"min_booking_size": tour.min_booking_size, "max_group_size": tour.max_group_size}
 
 
 # itinerary

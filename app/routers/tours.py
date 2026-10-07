@@ -27,6 +27,7 @@ from app.schemas.tours import (
     ReorderPayload,
     SimilarTourPayload,
     TourOverviewPayload,
+    TourGroupSizePayload,
     UnavailableDatePayload,
 )
 from app.services.tour_availability import get_availability_config, save_availability_config
@@ -89,6 +90,7 @@ from app.services.tours import (
     list_unavailable_dates,
     reorder_itineraries,
     save_overview,
+    save_tour_group_size,
     update_accommodation,
     update_activity,
     update_calendar_entry,
@@ -163,6 +165,12 @@ def save_tour_overview(tour_id: int, data: TourOverviewPayload, request: Request
 def update_tour_overview(tour_id: int, data: TourOverviewPayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
     _assert_supplier_owns_tour(db, tour_id, current_user)
     return {"status": "success", "data": save_overview(db, tour_id, data, current_user, request)}
+
+
+@router.patch("/{tour_id}/group-size")
+def update_tour_group_size(tour_id: int, data: TourGroupSizePayload, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission(EDIT))):
+    _assert_supplier_owns_tour(db, tour_id, current_user)
+    return {"status": "success", "data": save_tour_group_size(db, tour_id, data, current_user, request)}
 
 
 # itinerary

@@ -4,7 +4,7 @@ Serves tour listing and detail for the public website.
 """
 import html as html_escape
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, EmailStr, Field
@@ -37,6 +37,7 @@ from app.models.tours import (
     TourOverview,
     TourPricing,
     TourSimilar,
+    TourAvailabilityConfig,
 )
 from app.services.markup import effective_markup_percentage
 from app.utils.money import apply_markup
@@ -164,6 +165,7 @@ def _ser_overview(o: TourOverview):
         "end_location": o.end_location,
         "group_size": o.group_size,
         "tour_type": o.tour_type,
+        "guide_style": o.guide_style or "",
         "physical_rating": o.physical_rating,
         "why_choose_this_tour": o.why_choose_this_tour,
         "ideal_for": o.ideal_for,
@@ -506,6 +508,10 @@ def public_tours(
     tour_ids = [tour.id for tour in tours]
     departure_map: dict[int, list[TourCalendar]] = {tour_id: [] for tour_id in tour_ids}
     if tour_ids:
+        advance_days_by_tour = {
+            row.tour_id: max(0, row.min_advance_booking_days or 0)
+            for row in db.query(TourAvailabilityConfig).filter(TourAvailabilityConfig.tour_id.in_(tour_ids)).all()
+        }
         upcoming = db.query(TourCalendar).filter(
             TourCalendar.tour_id.in_(tour_ids),
             TourCalendar.status == "available",
@@ -513,6 +519,12 @@ def public_tours(
             TourCalendar.tour_date >= datetime.now(timezone.utc),
         ).order_by(TourCalendar.tour_date.asc()).all()
         for departure in upcoming:
+            # Listing-card dates must match the same advance-booking rule
+            # enforced when the reservation is created. Otherwise country and
+            # search results advertise departures agents/customers cannot book.
+            earliest_bookable = date.today() + timedelta(days=advance_days_by_tour.get(departure.tour_id, 0))
+            if departure.tour_date and departure.tour_date.date() < earliest_bookable:
+                continue
             if len(departure_map[departure.tour_id]) < 3:
                 departure_map[departure.tour_id].append(departure)
     review_stats = get_review_stats(db, tour_ids)

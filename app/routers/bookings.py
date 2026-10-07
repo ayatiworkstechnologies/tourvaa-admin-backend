@@ -31,6 +31,7 @@ from app.services.bookings import (
     create_booking,
     get_booking_detail,
     get_bookings,
+    hide_unpaid_agent_booking,
     get_status_history,
     get_upcoming_bookings,
     supplier_accept_booking,
@@ -63,6 +64,7 @@ def list_bookings(
     booking_status: str = Query(default=""),
     payment_status: str = Query(default=""),
     supplier_acceptance_status: str = Query(default=""),
+    cancellation_source: str = Query(default=""),
     country_id: int = Query(default=0),
     supplier_id: int = Query(default=0),
     agent_id: int = Query(default=0),
@@ -73,7 +75,7 @@ def list_bookings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("bookings.view", "view-bookings")),
 ):
-    result = get_bookings(db, page=params["page"], limit=params["limit"], search=params["search"], customer_id=customer_id or None, booking_status=booking_status, payment_status=payment_status, supplier_acceptance_status=supplier_acceptance_status, country_id=country_id or None, supplier_id=supplier_id or None, agent_id=agent_id or None, tour_id=tour_id or None, start_date=start_date, end_date=end_date, sort_by=sort_by, actor=current_user)
+    result = get_bookings(db, page=params["page"], limit=params["limit"], search=params["search"], customer_id=customer_id or None, booking_status=booking_status, payment_status=payment_status, supplier_acceptance_status=supplier_acceptance_status, cancellation_source=cancellation_source, country_id=country_id or None, supplier_id=supplier_id or None, agent_id=agent_id or None, tour_id=tour_id or None, start_date=start_date, end_date=end_date, sort_by=sort_by, actor=current_user)
     return {"status": "success", **result}
 
 
@@ -131,6 +133,12 @@ def add_booking(data: BookingCreate, request: Request, background_tasks: Backgro
 @router.get("/{booking_id}")
 def booking_detail(booking_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
     return {"status": "success", "data": get_booking_detail(db, booking_id, actor=current_user, request=request)}
+
+
+@router.post("/{booking_id}/hide-from-agent")
+def hide_from_agent_bookings(booking_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.view", "view-bookings"))):
+    hide_unpaid_agent_booking(db, booking_id, current_user, request)
+    return {"status": "success", "message": "Booking removed from My Bookings"}
 
 
 @router.put("/{booking_id}")

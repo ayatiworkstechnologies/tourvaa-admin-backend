@@ -13,7 +13,7 @@ import json
 import logging
 import uuid
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -77,6 +77,10 @@ class StripeSessionRequest(BaseModel):
     success_url: str
     cancel_url: str
     idempotency_key: Optional[str] = None
+    # The checkout choice is recorded explicitly.  Amount remains the source
+    # of truth, but this prevents a deposit selection being later described
+    # as a full payment (or the reverse) in receipts and portal summaries.
+    payment_type: Literal["partial", "full"]
     test_only: bool = False
 
 
@@ -92,6 +96,7 @@ class PayPalOrderRequest(BaseModel):
     return_url: str
     cancel_url: str
     idempotency_key: Optional[str] = None
+    payment_type: Literal["partial", "full"]
     test_only: bool = False
 
 
@@ -216,7 +221,7 @@ def _minimum_deposit_amount(db: Session, booking: Booking) -> Decimal:
     return money(min(Decimal(str(fixed)), full))
 
 
-def _validate_payment_request(db: Session, booking: Booking, amount: Decimal, current_user, already_pending: Decimal = Decimal("0")) -> Decimal:
+def _validate_payment_request(db: Session, booking: Booking, amount: Decimal, current_user, already_pending: Decimal = Decimal("0"), payment_type: str | None = None) -> Decimal:
     _ensure_booking_payment_access(booking, current_user)
     if booking.booking_status in {"cancelled", "declined", "completed", "refunded"}:
         raise HTTPException(status_code=409, detail="This booking is not eligible for payment")
@@ -229,6 +234,11 @@ def _validate_payment_request(db: Session, booking: Booking, amount: Decimal, cu
         raise HTTPException(status_code=409, detail="This booking has no outstanding balance")
     if requested > outstanding:
         raise HTTPException(status_code=400, detail=f"Payment amount cannot exceed the outstanding balance of {outstanding:.2f}")
+    inferred_type = "full" if requested == outstanding else "partial"
+    if payment_type and payment_type != inferred_type:
+        raise HTTPException(status_code=400, detail=f"Payment type must be {inferred_type} for the requested amount")
+    if getattr(booking, "booking_source", None) == "agent" and requested < outstanding:
+        raise HTTPException(status_code=400, detail="Agent bookings must be paid in full through the payment gateway")
     if requested < outstanding:
         minimum = _minimum_deposit_amount(db, booking)
         if minimum >= money(booking.amount_pending or 0):
@@ -277,14 +287,14 @@ def _validate_payment_currency(booking: Booking, requested_currency: str) -> str
     return booking_currency
 
 
-def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gateway: str, gateway_order_id: str, idempotency_key: Optional[str], current_user) -> Payment:
+def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gateway: str, gateway_order_id: str, idempotency_key: Optional[str], current_user, payment_type: str) -> Payment:
     customer_id = booking.customer_id
     p = Payment(
         booking_id=booking.id,
         customer_id=customer_id,
         created_by=current_user.id if current_user else None,
         payment_method="card",
-        payment_type="partial" if money(amount) < money(booking.amount_pending or 0) else "full",
+        payment_type=payment_type,
         gateway=gateway,
         gateway_order_id=gateway_order_id,
         idempotency_key=idempotency_key,
@@ -310,7 +320,7 @@ def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gate
 def stripe_create_session(body: StripeSessionRequest, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     check_rate_limit(request, "payment-create", max_calls=10, window_seconds=60)
     booking = _booking_or_404(db, body.booking_id, for_update=True)
-    amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
+    amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id), payment_type=body.payment_type)
     currency = _validate_payment_currency(booking, body.currency)
     stripe = get_stripe(db)
     if body.test_only and not stripe.secret_key.startswith(("sk_test_", "rk_test_")):
@@ -332,6 +342,7 @@ def stripe_create_session(body: StripeSessionRequest, request: Request, db: Sess
         gateway_order_id=session_data["id"],
         idempotency_key=body.idempotency_key,
         current_user=current_user,
+        payment_type=body.payment_type,
     )
     payment.gateway_payment_id = session_data.get("payment_intent")
     db.commit()
@@ -500,7 +511,7 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
 def paypal_create_order(body: PayPalOrderRequest, request: Request, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     check_rate_limit(request, "payment-create", max_calls=10, window_seconds=60)
     booking = _booking_or_404(db, body.booking_id, for_update=True)
-    amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id))
+    amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id), payment_type=body.payment_type)
     currency = _validate_payment_currency(booking, body.currency)
     paypal = get_paypal(db)
     if getattr(body, "test_only", False) and "sandbox" not in paypal.base_url:
@@ -521,6 +532,7 @@ def paypal_create_order(body: PayPalOrderRequest, request: Request, db: Session 
         gateway_order_id=order["id"],
         idempotency_key=body.idempotency_key,
         current_user=current_user,
+        payment_type=body.payment_type,
     )
 
     approve_link = next((l["href"] for l in order.get("links", []) if l.get("rel") == "approve"), None)

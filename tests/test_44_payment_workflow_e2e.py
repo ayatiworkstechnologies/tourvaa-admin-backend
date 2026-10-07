@@ -81,6 +81,7 @@ def test_stripe_create_session_returns_real_checkout_url(headers, first_tour_id)
     booking = _booking_or_skip(headers, first_tour_id, "full")
     session = requests.post(f"{BASE_URL}/payments/stripe/create-session", json={
         "booking_id": booking["id"], "amount": float(booking["amount_pending"]), "currency": booking.get("currency", "USD"),
+        "payment_type": "full",
         "success_url": "https://example.com/success", "cancel_url": "https://example.com/cancel",
     }, headers=headers, timeout=15)
     assert session.status_code in (200, 201), session.text

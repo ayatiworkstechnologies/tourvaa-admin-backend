@@ -73,6 +73,7 @@ def _serialize_message(msg: Message) -> dict:
         "id": msg.id,
         "conversation_id": msg.conversation_id,
         "sender_role": msg.sender_role,
+        "recipient_role": msg.recipient_role,
         "sender_user_id": msg.sender_user_id,
         "sender_name": msg.sender.name if msg.sender else None,
         "body": None if msg.is_deleted else msg.body,
@@ -402,6 +403,35 @@ def list_booking_conversation_threads_for_admin(db: Session, booking_id: int) ->
         .all()
     )
     return [_serialize_booking_conversation(conversation, with_messages=True) for conversation in conversations]
+
+
+async def send_booking_message_as_admin(db: Session, conversation_id: int, admin_user: User, body: str, recipient_role: str) -> dict:
+    """Reply from Admin to one party in a booking-scoped conversation."""
+    body = (body or "").strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Message body is required")
+    conv = db.query(BookingConversation).filter(BookingConversation.id == conversation_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    recipient_role = (recipient_role or "").strip().lower()
+    if recipient_role not in {"supplier", conv.initiator_role}:
+        raise HTTPException(status_code=422, detail="Reply target must be the supplier or booking initiator")
+    recipient_user_id = conv.supplier_user_id if recipient_role == "supplier" else conv.initiator_user_id
+    msg = BookingMessage(
+        conversation_id=conv.id,
+        sender_user_id=admin_user.id,
+        sender_role="admin",
+        recipient_role=recipient_role,
+        body=body,
+    )
+    db.add(msg)
+    conv.last_message_at = utcnow()
+    conv.last_message_preview = body[:PREVIEW_LENGTH]
+    enqueue_notification(db, user_id=recipient_user_id, notification_type="booking_message_received", title="New message from Tourvaa", message=_notification_preview(body), entity_type="booking_conversation", entity_id=conv.id)
+    db.commit(); db.refresh(msg); db.refresh(conv)
+    serialized = _serialize_booking_message(msg)
+    await ws_manager.notify_new_message({"type": "new_booking_message", "conversation": _serialize_booking_conversation(conv, hide_supplier_identity=recipient_role != "supplier"), "message": serialized}, participant_user_id=recipient_user_id)
+    return serialized
 
 
 def _get_booking_conversation_for_supplier(db: Session, conversation_id: int, supplier_user: User) -> BookingConversation:

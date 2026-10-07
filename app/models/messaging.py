@@ -80,7 +80,10 @@ class BookingMessage(Base):
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(Integer, ForeignKey("booking_conversations.id"), nullable=False, index=True)
     sender_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    sender_role = Column(String(20), nullable=False)  # customer | agent | supplier
+    sender_role = Column(String(20), nullable=False)  # customer | agent | supplier | admin
+    # Admin replies are addressed to one booking party so the Admin console
+    # can keep Supplier and Agent/Customer threads distinct.
+    recipient_role = Column(String(20), nullable=True)  # supplier | customer | agent
     body = Column(Text, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True)

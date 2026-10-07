@@ -351,9 +351,24 @@ def download_invoice_pdf(db: Session, invoice_id: int, actor: User | None = None
 def email_invoice_to_customer(db: Session, invoice_id: int, data: InvoiceEmailRequest, actor: User, request: Request | None = None):
     inv = get_invoice(db, invoice_id, actor)
     booking = inv.booking
-    recipient = data.email or (booking.customer.user.email if booking and booking.customer and booking.customer.user else None)
+    # An agent-created booking is a B2B reservation: its invoice belongs to
+    # the agent, not the lead traveller. Ignore a manually supplied customer
+    # address so this endpoint cannot accidentally disclose it to the party
+    # travelling on the booking.
+    if booking and booking.booking_source == "agent":
+        from app.models.agents import AgentInvoicing
+
+        invoicing = db.query(AgentInvoicing).filter(AgentInvoicing.agent_id == booking.agent_id).first() if booking.agent_id else None
+        recipient = (
+            (invoicing.email if invoicing and invoicing.email else None)
+            or (booking.agent.user.email if booking.agent and booking.agent.user and booking.agent.user.email else None)
+        )
+        if not recipient and booking.agent:
+            recipient = next((contact.email for contact in booking.agent.contacts if contact.is_primary and contact.email), None)
+    else:
+        recipient = data.email or (booking.customer.user.email if booking and booking.customer and booking.customer.user else None)
     if not recipient:
-        raise HTTPException(status_code=400, detail="No recipient email address available")
+        raise HTTPException(status_code=400, detail="No agent invoice email address available" if booking and booking.booking_source == "agent" else "No recipient email address available")
     from app.utils.mailer import try_send_email
     subject = f"Your Invoice {inv.invoice_number} from Tourvaa"
     personal_message = f"<p>{escape(data.message)}</p>" if data.message else ""

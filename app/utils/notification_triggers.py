@@ -30,7 +30,8 @@ def send_templated_email(db: Session, to_email: str | None, key: str, values: di
         logger.warning("Templated email %s to %s failed: %s", key, to_email, exc)
 
 
-def _do_email_admins(db: Session, key: str, values: dict, fallback_subject: str, fallback_html: str) -> None:
+def admin_notification_recipients(db: Session) -> set[str]:
+    """Resolve configured operational admin mailboxes without hardcoding."""
     from app.models.users import User
     from app.models.roles import Role
     admins = db.query(User).join(Role, User.role_id == Role.id).filter(Role.slug.in_(["super-admin", "admin"])).all()
@@ -43,6 +44,11 @@ def _do_email_admins(db: Session, key: str, values: dict, fallback_subject: str,
     if setting:
         for field in ("admin_notification_to", "admin_notification_cc", "admin_notification_bcc"):
             recipients.update(email.strip().lower() for email in (getattr(setting, field) or "").split(",") if email.strip())
+    return recipients
+
+
+def _do_email_admins(db: Session, key: str, values: dict, fallback_subject: str, fallback_html: str) -> None:
+    recipients = admin_notification_recipients(db)
     for recipient in recipients:
         send_templated_email(db, recipient, key, values, fallback_subject, fallback_html)
 

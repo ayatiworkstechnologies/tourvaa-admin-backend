@@ -46,6 +46,10 @@ class SendReplyBody(BaseModel):
     body: str = Field(min_length=1)
 
 
+class SendBookingAdminReplyBody(SendReplyBody):
+    recipient_role: str = Field(pattern="^(supplier|agent|customer)$")
+
+
 @router.get("/conversations")
 def conversations(
     type: str = Query(..., alias="type"),
@@ -74,6 +78,12 @@ def booking_conversations_for_admin(
     unread counts; it is the admin audit view for the booking detail page.
     """
     return {"status": "success", "data": messaging_service.list_booking_conversation_threads_for_admin(db, booking_id)}
+
+
+@router.post("/booking-conversations/{conversation_id}/messages")
+async def booking_conversation_reply_as_admin(conversation_id: int, data: SendBookingAdminReplyBody, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("messages.reply"))):
+    message = await messaging_service.send_booking_message_as_admin(db, conversation_id, current_user, data.body, data.recipient_role)
+    return {"status": "success", "message": "Reply sent", "data": message}
 
 
 @router.get("/conversations/{conversation_id}")
