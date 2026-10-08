@@ -53,11 +53,11 @@ def currency_convert(
 
 @router.get("/context")
 def currency_context(request: Request, country: str = Query(default=""), db: Session = Depends(get_db)):
-    detected_country = (
-        country
-        or request.headers.get("cf-ipcountry", "")
-        or request.headers.get("x-vercel-ip-country", "")
-    ).upper()
+    requested_country = country.strip().upper()
+    cloudflare_country = request.headers.get("cf-ipcountry", "").strip().upper()
+    vercel_country = request.headers.get("x-vercel-ip-country", "").strip().upper()
+    detected_country = requested_country or cloudflare_country or vercel_country
+    country_source = "requested" if requested_country else ("cdn" if cloudflare_country or vercel_country else "unknown")
     if not detected_country:
         forwarded_for = request.headers.get("x-forwarded-for", "")
         client_ip = forwarded_for.split(",")[0].strip() if forwarded_for else (request.client.host if request.client else "")
@@ -67,6 +67,8 @@ def currency_context(request: Request, country: str = Query(default=""), db: Ses
         # the configured default currency below.
         try:
             detected_country = geolocate_ip(client_ip)
+            if detected_country:
+                country_source = "ip"
         except Exception:
             detected_country = ""
     return {
@@ -74,6 +76,9 @@ def currency_context(request: Request, country: str = Query(default=""), db: Ses
         "data": {
             "base_currency": BASE_CURRENCY,
             "country_code": detected_country or None,
+            # This coarse source lets the UI explain the result without ever
+            # exposing the visitor IP address to the browser.
+            "country_source": country_source,
             "currency": currency_for_country(db, detected_country) or settings.DEFAULT_CURRENCY,
         },
     }
