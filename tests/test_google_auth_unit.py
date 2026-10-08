@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.database import get_db
 from app.routers.google_auth import router
+from app.auth.security import decode_auth_token
 
 
 class _NoDbGoogleSetting:
@@ -53,6 +54,9 @@ def test_google_login_redirects_with_configured_oauth_parameters(monkeypatch):
         "prompt": ["consent"],
         "state": [query["state"][0]],
     }
+    state_payload = decode_auth_token(query["state"][0])
+    assert state_payload["auth_domain"] == "normal"
+    assert state_payload["token_type"] == "google_oauth_state"
 
 
 def test_google_login_fails_cleanly_when_not_configured(monkeypatch):

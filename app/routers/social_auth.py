@@ -8,7 +8,7 @@ from fastapi.responses import RedirectResponse
 from jose import JWTError, jwk, jwt
 from sqlalchemy.orm import Session
 
-from app.auth.security import create_token
+from app.auth.security import create_token, decode_auth_token
 from app.config import settings
 from app.database import get_db
 from app.models.settings import ApiSetting
@@ -152,9 +152,12 @@ async def social_auth_callback(provider: str, request: Request, db: Session = De
     if not code or not state:
         return _frontend_redirect(oauth_error=f"{provider}_invalid_callback")
     try:
-        state_payload = jwt.decode(state, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        try:
+            state_payload = decode_auth_token(state)
+        except HTTPException:
+            return _frontend_redirect(oauth_error=f"{provider}_invalid_state")
         if state_payload.get("token_type") != "oauth_state" or state_payload.get("provider") != provider:
-            raise JWTError("Invalid OAuth state")
+            return _frontend_redirect(oauth_error=f"{provider}_invalid_state")
         row, client_id = _provider(db, provider)
         if not row or not row.is_enabled or not client_id or not row.api_secret:
             raise HTTPException(status_code=503, detail=f"{provider.title()} authentication is not configured")

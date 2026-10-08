@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.database import get_db
 from app.routers.social_auth import router
+from app.auth.security import decode_auth_token
 
 
 class _Db:
@@ -63,6 +64,9 @@ def test_facebook_start_uses_signed_state_and_same_origin_callback(monkeypatch):
     assert query["client_id"] == ["facebook-client-id"]
     assert query["redirect_uri"] == ["https://tourvaa.example/api/auth/oauth/facebook/callback"]
     assert query["state"]
+    state_payload = decode_auth_token(query["state"][0])
+    assert state_payload["auth_domain"] == "normal"
+    assert state_payload["token_type"] == "oauth_state"
 
 
 def test_social_callback_rejects_wrong_provider_state(monkeypatch):

@@ -4,10 +4,9 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from app.auth.security import create_token
+from app.auth.security import create_token, decode_auth_token
 from app.config import settings
 from app.database import get_db
 from app.models.customers import Customer
@@ -154,9 +153,12 @@ async def google_callback(
         client_id, client_secret, redirect_uri = _google_oauth_config(db)
         if not client_id or not client_secret or not redirect_uri:
             return _frontend_redirect(oauth_error="google_not_configured")
-        state_payload = jwt.decode(state, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        try:
+            state_payload = decode_auth_token(state)
+        except HTTPException:
+            return _frontend_redirect(oauth_error="google_invalid_state")
         if state_payload.get("token_type") != "google_oauth_state":
-            raise JWTError("Invalid OAuth state")
+            return _frontend_redirect(oauth_error="google_invalid_state")
         identity = await _google_identity(code, client_id, client_secret, redirect_uri)
         user = _find_or_create_google_user(db, identity)
         if user.two_factor_enabled:
@@ -173,8 +175,6 @@ async def google_callback(
         response = _frontend_redirect(destination)
         _set_auth_cookies(response, result, expose_access_token=False)
         return response
-    except JWTError:
-        return _frontend_redirect(oauth_error="google_invalid_state")
     except (HTTPException, httpx.HTTPError) as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else "Google authentication failed"
         return _frontend_redirect(oauth_error=str(detail))
