@@ -9,6 +9,9 @@ from app.utils.money import utcnow
 
 password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# Signing keys are loaded at process startup. Rotating either domain key
+# intentionally invalidates that domain's existing sessions.
+
 
 def hash_password(received: str) -> str:
     """Bcrypt-hash a password. The frontend sends the plaintext password
@@ -35,15 +38,18 @@ ROLE_SLUG_TO_PORTAL = {
     "affiliate": "affiliate",
     "super-admin": "admin",
     "admin": "admin",
+    "sub-admin": "admin",
 }
 
 
 def get_portal_for_role(role_slug: str) -> str:
-    return ROLE_SLUG_TO_PORTAL.get((role_slug or "").lower(), "admin")
+    # Unknown/new roles must never inherit the privileged Admin JWT domain.
+    # Only the explicitly listed back-office roles above receive Admin JWTs.
+    return ROLE_SLUG_TO_PORTAL.get((role_slug or "").lower(), "customer")
 
 
 def get_auth_domain_for_portal(portal: str | None) -> str:
-    return "staff" if portal == "admin" else "portal"
+    return "admin" if portal == "admin" else "normal"
 
 
 def get_auth_domain_for_role(role_slug: str) -> str:
@@ -53,7 +59,7 @@ def get_auth_domain_for_role(role_slug: str) -> str:
 def decode_auth_token(token: str) -> dict:
     """Verify a token against exactly one of the two authentication domains."""
     expired = False
-    for auth_domain in ("staff", "portal"):
+    for auth_domain in ("admin", "normal"):
         try:
             payload = jwt.decode(
                 token,

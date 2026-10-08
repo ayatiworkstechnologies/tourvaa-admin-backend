@@ -21,13 +21,13 @@ class Settings(BaseSettings):
     DATABASE_URL: str
 
     JWT_SECRET_KEY: str
-    STAFF_JWT_SECRET_KEY: str = ""
-    PORTAL_JWT_SECRET_KEY: str = ""
+    ADMIN_JWT_SECRET_KEY: str = ""
+    NORMAL_JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-    # Back-office staff and public portal accounts use separate signing keys.
+    # Admin roles and all normal portal users use separate signing keys.
     REQUIRE_EMAIL_VERIFICATION: bool = False
     EMAIL_VERIFICATION_EXPIRE_MINUTES: int = 1440
     OTP_EXPIRE_MINUTES: int = 10
@@ -135,14 +135,14 @@ class Settings(BaseSettings):
     DEFAULT_LOCALE: str = "en-US"
 
     def get_auth_secret(self, auth_domain: str) -> str:
-        if auth_domain == "staff":
-            return self.STAFF_JWT_SECRET_KEY.strip() or self.JWT_SECRET_KEY
-        if auth_domain == "portal":
-            return self.PORTAL_JWT_SECRET_KEY.strip() or self.JWT_SECRET_KEY
+        if auth_domain == "admin":
+            return self.ADMIN_JWT_SECRET_KEY.strip() or self.JWT_SECRET_KEY
+        if auth_domain == "normal":
+            return self.NORMAL_JWT_SECRET_KEY.strip() or self.JWT_SECRET_KEY
         raise ValueError("Unknown authentication domain")
 
     def get_portal_secret(self, portal: str | None = None) -> str:
-        return self.get_auth_secret("staff" if portal == "admin" else "portal")
+        return self.get_auth_secret("admin" if portal == "admin" else "normal")
 
     model_config = SettingsConfigDict(
         env_file=".env",
