@@ -3,7 +3,6 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
 from app.auth.permissions import require_permission
 from app.services.currency import BASE_CURRENCY, convert_amount, currency_for_country, geolocate_ip, get_usd_rates, rates_for
@@ -71,6 +70,10 @@ def currency_context(request: Request, country: str = Query(default=""), db: Ses
                 country_source = "ip"
         except Exception:
             detected_country = ""
+    # A local display currency is only valid when its country is in the
+    # active public catalogue. Visitors from any other detected country see
+    # USD rather than inheriting an unrelated site-default currency.
+    active_country_currency = currency_for_country(db, detected_country)
     return {
         "status": "success",
         "data": {
@@ -79,7 +82,7 @@ def currency_context(request: Request, country: str = Query(default=""), db: Ses
             # This coarse source lets the UI explain the result without ever
             # exposing the visitor IP address to the browser.
             "country_source": country_source,
-            "currency": currency_for_country(db, detected_country) or settings.DEFAULT_CURRENCY,
+            "currency": active_country_currency or BASE_CURRENCY,
         },
     }
 
