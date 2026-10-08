@@ -913,24 +913,52 @@ def _assert_no_discount_overlap(
     country_id: int | None,
     funded_by: str,
     exclude_discount_id: int | None = None,
+    exact_tour_only: bool = False,
+    creator_user_id: int | None = None,
 ) -> None:
     """Prevent concurrent discounts from the same commercial owner.
 
     Supplier and TourVaa offers remain separate intentional pricing stages:
-    supplier discount -> markup -> TourVaa discount.  Within either stage a
-    tour must have at most one active offer for a given time window, whether
-    it is automatic or a promo code.
+    supplier discount -> markup -> TourVaa discount.  A portal user's
+    duplicate check is further limited to offers originally created by that
+    same user on that exact tour; ``funded_by`` alone is not authorship.
     """
     source = (funded_by or "SUPPLIER").upper()
-    active_discounts = db.query(TourDiscount).filter(TourDiscount.status == "active").all()
+    query = db.query(TourDiscount).filter(TourDiscount.status == "active")
+    # A supplier manages offers for one of their own tours.  Do not reject
+    # that offer because an unrelated supplier's tour/category/country offer
+    # happens to use the same dates.  A tour belongs to one supplier, so the
+    # exact tour ID also establishes the same-supplier boundary.
+    if exact_tour_only:
+        query = query.filter(TourDiscount.tour_id == tour_id)
+    active_discounts = query.all()
     for existing in active_discounts:
         if exclude_discount_id is not None and existing.id == exclude_discount_id:
             continue
+        # Keep the business boundary explicit even when this helper is used
+        # with a test/different query implementation.
+        if exact_tour_only and existing.tour_id != tour_id:
+            continue
+        if exact_tour_only and creator_user_id is not None:
+            first_history = (
+                db.query(TourDiscountHistory)
+                .filter(
+                    TourDiscountHistory.discount_id == existing.id,
+                    TourDiscountHistory.version_number == 1,
+                )
+                .first()
+            )
+            # An offer funded by a particular party is not necessarily
+            # authored by the current portal user. Imported legacy rows
+            # without a first-history author likewise cannot be attributed
+            # to that user, so neither should block this new offer.
+            if not first_history or first_history.changed_by != creator_user_id:
+                continue
         if (existing.funded_by or "SUPPLIER").upper() != source:
             continue
         if not _discount_dates_overlap(start_date, end_date, existing.start_date, existing.end_date):
             continue
-        if _discount_scopes_overlap(
+        if exact_tour_only or _discount_scopes_overlap(
             db,
             scope=scope,
             tour_id=tour_id,
@@ -941,7 +969,10 @@ def _assert_no_discount_overlap(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "This discount overlaps an active discount for the same tour or audience. "
+                    f'This discount overlaps the active discount "{existing.discount_name}" that you created for this tour. '
+                    if exact_tour_only
+                    else "This discount overlaps an active discount for the same tour or audience. "
+                ) + (
                     "Choose a different date range."
                 ),
             )
@@ -1060,6 +1091,8 @@ def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: Use
             category_id=data.category_id,
             country_id=data.country_id,
             funded_by=payload["funded_by"],
+            exact_tour_only=True,
+            creator_user_id=actor.id,
         )
     o = TourDiscount(tour_id=tour_id, **payload)
     db.add(o)
@@ -1088,6 +1121,7 @@ def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPaylo
             raise HTTPException(status_code=409, detail="Discount code already exists")
     original_funded_by = o.funded_by
     if data.status == "active":
+        from app.services.supplier_scope import is_supplier_user
         _assert_no_discount_overlap(
             db,
             start_date=data.start_date,
@@ -1098,6 +1132,8 @@ def update_discount(db: Session, tour_id: int, disc_id: int, data: DiscountPaylo
             country_id=data.country_id,
             funded_by=original_funded_by,
             exclude_discount_id=disc_id,
+            exact_tour_only=True,
+            creator_user_id=actor.id,
         )
     for key, value in data.model_dump().items():
         setattr(o, key, value)
@@ -1135,6 +1171,7 @@ def amend_discount(db: Session, tour_id: int, disc_id: int, data: DiscountAmendm
     if not change_kinds:
         raise HTTPException(status_code=400, detail="Change the discount value or extend the end date")
     if o.status == "active":
+        from app.services.supplier_scope import is_supplier_user
         _assert_no_discount_overlap(
             db,
             start_date=o.start_date,
@@ -1145,6 +1182,8 @@ def amend_discount(db: Session, tour_id: int, disc_id: int, data: DiscountAmendm
             country_id=o.country_id,
             funded_by=o.funded_by,
             exclude_discount_id=disc_id,
+            exact_tour_only=True,
+            creator_user_id=actor.id,
         )
     _record_discount_version(db, o, _amendment_change_type(change_kinds), actor, reason=data.reason)
     log_audit(db, actor=actor, action="amend_discount", entity_type="tour", entity_id=tour_id, request=request)

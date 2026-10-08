@@ -91,7 +91,7 @@ def test_public_departure_slots_show_the_remainder_after_two_places_are_booked()
     assert _public_bookable_slots(departure, max_group_size=6) == 4
 
 
-def test_public_group_rate_rows_stop_at_the_per_booking_group_limit():
+def test_public_group_rate_rows_are_not_truncated_by_vehicle_group_size():
     pricing = [
         SimpleNamespace(passenger_from=1, passenger_to=2, storefront_adult_price=100, adult_price=100, storefront_child_price=80, child_price=80, currency="USD"),
         SimpleNamespace(passenger_from=3, passenger_to=8, storefront_adult_price=90, adult_price=90, storefront_child_price=70, child_price=70, currency="USD"),
@@ -100,4 +100,4 @@ def test_public_group_rate_rows_stop_at_the_per_booking_group_limit():
 
     rows = _public_pricing_rows(pricing, [], max_group_size=6)
 
-    assert [(row["persons_from"], row["persons_to"]) for row in rows] == [(1, 2), (3, 6)]
+    assert [(row["persons_from"], row["persons_to"]) for row in rows] == [(1, 2), (3, 8), (9, 12)]

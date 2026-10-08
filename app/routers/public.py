@@ -323,11 +323,11 @@ def _public_pricing_rows(
             row["original_child_price_per_person"] = round(supplier_child if tourvaa_pct else raw_child, 2)
             row["price_per_person"] = round(max(0.0, supplier_adult * (1 - tourvaa_pct / 100)), 2)
             row["child_price_per_person"] = round(max(0.0, supplier_child * (1 - tourvaa_pct / 100)), 2)
-    if max_group_size:
-        rows = [row for row in rows if row["persons_from"] <= max_group_size]
-        for row in rows:
-            if row["persons_to"] is None or row["persons_to"] > max_group_size:
-                row["persons_to"] = max_group_size
+    # ``max_group_size`` is a vehicle/allocation grouping. Do not hide price
+    # tiers above it: a customer or agent may reserve the departure's full
+    # remaining calendar capacity and operations can allocate multiple
+    # vehicles.
+    del max_group_size
     return rows
 
 

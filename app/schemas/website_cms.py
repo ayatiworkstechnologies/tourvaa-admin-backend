@@ -66,14 +66,17 @@ class FavouriteCountryPayload(BaseModel):
 
 class CountryPagePayload(BaseModel):
     country_id: int
-    hero_title: Optional[str] = None
+    # Keep request validation aligned with the persisted CountryPage columns.
+    # Without these limits, PostgreSQL rejects an otherwise valid request and
+    # the admin UI receives an avoidable 500 response.
+    hero_title: Optional[str] = Field(default=None, max_length=200)
     hero_description: Optional[str] = None
-    hero_image: Optional[str] = None
-    showcase_title: Optional[str] = None
+    hero_image: Optional[str] = Field(default=None, max_length=255)
+    showcase_title: Optional[str] = Field(default=None, max_length=200)
     showcase_description: Optional[str] = None
-    showcase_image: Optional[str] = None
-    seo_title: Optional[str] = None
-    seo_description: Optional[str] = None
+    showcase_image: Optional[str] = Field(default=None, max_length=255)
+    seo_title: Optional[str] = Field(default=None, max_length=200)
+    seo_description: Optional[str] = Field(default=None, max_length=400)
     is_active: bool = True
 
 

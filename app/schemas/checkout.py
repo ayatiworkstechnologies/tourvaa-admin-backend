@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from pydantic import BaseModel
 
 
@@ -26,3 +26,7 @@ class CheckoutConfirm(BaseModel):
     # actually confirm a booking, regardless of what the frontend UI shows.
     agreed_terms: bool = False
     agreed_cancellation_policy: bool = False
+    # The customer choice must cross the booking-creation boundary.  The
+    # gateway amount is then derived server-side from the saved booking,
+    # rather than being reconstructed from browser state after confirmation.
+    payment_type: Literal["partial", "full"] = "full"

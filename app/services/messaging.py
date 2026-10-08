@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.affiliates import Affiliate
 from app.models.agents import Agent
-from app.models.bookings import Booking
+from app.models.bookings import Booking, BookingCommunication
 from app.models.customers import Customer
 from app.models.messaging import BookingConversation, BookingMessage, Conversation, Message
 from app.models.suppliers import Supplier
@@ -308,7 +308,13 @@ def _serialize_booking_message(msg: BookingMessage, *, hide_supplier_identity: b
     }
 
 
-def _serialize_booking_conversation(conv: BookingConversation, *, with_messages: bool = False, hide_supplier_identity: bool = False) -> dict:
+def _serialize_booking_conversation(
+    conv: BookingConversation,
+    *,
+    with_messages: bool = False,
+    hide_supplier_identity: bool = False,
+    viewer_role: str | None = None,
+) -> dict:
     data = {
         "id": conv.id,
         "booking_id": conv.booking_id,
@@ -335,7 +341,19 @@ def _serialize_booking_conversation(conv: BookingConversation, *, with_messages:
         "created_at": conv.created_at,
     }
     if with_messages:
-        data["messages"] = [_serialize_booking_message(m, hide_supplier_identity=hide_supplier_identity) for m in conv.messages]
+        # A BookingConversation is the persistence container for the booking,
+        # not permission to read messages addressed to the other portal. An
+        # Agent/Customer must never receive an Admin-to-Supplier reply, and a
+        # Supplier must never receive an Admin-to-Agent/Customer reply.
+        messages = list(conv.messages)
+        if viewer_role:
+            messages = [
+                message
+                for message in messages
+                if message.sender_role == viewer_role
+                or (message.sender_role == "admin" and message.recipient_role == viewer_role)
+            ]
+        data["messages"] = [_serialize_booking_message(m, hide_supplier_identity=hide_supplier_identity) for m in messages]
     return data
 
 
@@ -386,7 +404,12 @@ def get_booking_conversation_thread_for_initiator(db: Session, booking_id: int, 
     conv.initiator_unread_count = 0
     db.commit()
     db.refresh(conv)
-    return _serialize_booking_conversation(conv, with_messages=True, hide_supplier_identity=True)
+    return _serialize_booking_conversation(
+        conv,
+        with_messages=True,
+        hide_supplier_identity=True,
+        viewer_role=conv.initiator_role,
+    )
 
 
 def list_booking_conversation_threads_for_admin(db: Session, booking_id: int) -> list[dict]:
@@ -445,6 +468,51 @@ def _get_booking_conversation_for_supplier(db: Session, conversation_id: int, su
     return conv
 
 
+def get_or_create_booking_conversation_for_supplier(db: Session, booking_id: int, supplier_user: User) -> BookingConversation:
+    """Return the booking's shared portal-message container for its supplier.
+
+    Supplier booking messages are addressed to Tourvaa Admin, but the existing
+    booking conversation row is also used to keep the Admin audit view grouped
+    by booking and portal party.  Creating the row here lets a supplier start
+    the Admin conversation rather than requiring an agent/customer to write
+    first.
+    """
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if not booking.supplier or booking.supplier.user_id != supplier_user.id:
+        raise HTTPException(status_code=403, detail="This booking is not assigned to you")
+
+    existing = (
+        db.query(BookingConversation)
+        .filter(
+            BookingConversation.booking_id == booking_id,
+            BookingConversation.supplier_user_id == supplier_user.id,
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    if booking.agent and booking.agent.user_id:
+        initiator_role, initiator_user_id = "agent", booking.agent.user_id
+    elif booking.customer and booking.customer.user_id:
+        initiator_role, initiator_user_id = "customer", booking.customer.user_id
+    else:
+        raise HTTPException(status_code=400, detail="This booking has no portal contact for messaging")
+
+    conv = BookingConversation(
+        booking_id=booking_id,
+        initiator_role=initiator_role,
+        initiator_user_id=initiator_user_id,
+        supplier_user_id=supplier_user.id,
+    )
+    db.add(conv)
+    db.commit()
+    db.refresh(conv)
+    return conv
+
+
 def list_booking_conversations_for_supplier(db: Session, supplier_user: User, page: int, limit: int) -> dict:
     query = db.query(BookingConversation).filter(BookingConversation.supplier_user_id == supplier_user.id)
     total = query.count()
@@ -462,7 +530,15 @@ def get_booking_conversation_thread_for_supplier(db: Session, conversation_id: i
     conv.supplier_unread_count = 0
     db.commit()
     db.refresh(conv)
-    return _serialize_booking_conversation(conv, with_messages=True)
+    return _serialize_booking_conversation(conv, with_messages=True, viewer_role="supplier")
+
+
+def get_booking_conversation_thread_for_supplier_booking(db: Session, booking_id: int, supplier_user: User) -> dict:
+    conv = get_or_create_booking_conversation_for_supplier(db, booking_id, supplier_user)
+    conv.supplier_unread_count = 0
+    db.commit()
+    db.refresh(conv)
+    return _serialize_booking_conversation(conv, with_messages=True, viewer_role="supplier")
 
 
 async def send_booking_message_as_initiator(db: Session, booking_id: int, actor: User, body: str) -> dict:
@@ -473,14 +549,26 @@ async def send_booking_message_as_initiator(db: Session, booking_id: int, actor:
     conv = get_or_create_booking_conversation(db, booking_id, actor)
     msg = BookingMessage(conversation_id=conv.id, sender_user_id=actor.id, sender_role=conv.initiator_role, body=body)
     db.add(msg)
+    # The booking-page composer is addressed to Tourvaa Admin.  The admin
+    # booking screen historically read BookingCommunication while the newer
+    # composer wrote BookingMessage, leaving staff with an empty log. Mirror
+    # the portal message into that audit log so the booking record has one
+    # complete, clearly attributed timeline without exposing it to a supplier.
+    db.add(BookingCommunication(
+        booking_id=conv.booking_id,
+        sender_user_id=actor.id,
+        sender_type=conv.initiator_role,
+        message_type="portal_message",
+        subject=f"{conv.initiator_role.capitalize()} message to Tourvaa Admin",
+        message=body,
+        visibility="internal",
+    ))
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
-    conv.supplier_unread_count = (conv.supplier_unread_count or 0) + 1
-    enqueue_notification(
+    notify_admins(
         db,
-        user_id=conv.supplier_user_id,
         notification_type="booking_message_received",
-        title="New booking message",
+        title=f"New {conv.initiator_role} booking message",
         message=_notification_preview(body),
         entity_type="booking_conversation",
         entity_id=conv.id,
@@ -492,7 +580,7 @@ async def send_booking_message_as_initiator(db: Session, booking_id: int, actor:
     serialized = _serialize_booking_message(msg)
     await ws_manager.notify_new_message(
         {"type": "new_booking_message", "conversation": _serialize_booking_conversation(conv), "message": serialized},
-        participant_user_id=conv.supplier_user_id,
+        participant_user_id=actor.id,
     )
     return serialized
 
@@ -507,12 +595,13 @@ async def send_booking_message_as_supplier(db: Session, conversation_id: int, su
     db.add(msg)
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
-    conv.initiator_unread_count = (conv.initiator_unread_count or 0) + 1
-    enqueue_notification(
+    # Supplier booking messages are private Supplier <-> Tourvaa Admin
+    # messages.  Do not route them to the booking's agent/customer merely
+    # because that user anchors the shared booking conversation row.
+    notify_admins(
         db,
-        user_id=conv.initiator_user_id,
         notification_type="booking_message_received",
-        title="New booking message",
+        title="New supplier booking message",
         message=_notification_preview(body),
         entity_type="booking_conversation",
         entity_id=conv.id,
@@ -521,18 +610,14 @@ async def send_booking_message_as_supplier(db: Session, conversation_id: int, su
     db.refresh(msg)
     db.refresh(conv)
 
-    # Two serializations: the HTTP response goes back to the supplier who
-    # just sent this (their own identity, unhidden), but the websocket
-    # broadcast always goes to the initiator (customer/agent), who must
-    # never learn the supplier's real name/identity.
     serialized = _serialize_booking_message(msg)
     await ws_manager.notify_new_message(
         {
             "type": "new_booking_message",
-            "conversation": _serialize_booking_conversation(conv, hide_supplier_identity=True),
-            "message": _serialize_booking_message(msg, hide_supplier_identity=True),
+            "conversation": _serialize_booking_conversation(conv),
+            "message": serialized,
         },
-        participant_user_id=conv.initiator_user_id,
+        participant_user_id=supplier_user.id,
     )
     return serialized
 

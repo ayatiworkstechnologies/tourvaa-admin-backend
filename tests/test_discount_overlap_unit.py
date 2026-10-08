@@ -20,6 +20,9 @@ class _DiscountQuery:
     def all(self):
         return self.rows
 
+    def first(self):
+        return self.rows[0] if self.rows else None
+
 
 class _DiscountDb:
     def __init__(self, rows):
@@ -32,6 +35,8 @@ class _DiscountDb:
 def _discount(**overrides):
     values = {
         "id": 1,
+        "discount_name": "Existing supplier offer",
+        "changed_by": 2,
         "funded_by": "SUPPLIER",
         "status": "active",
         "start_date": datetime(2026, 10, 1, tzinfo=UTC),
@@ -86,3 +91,50 @@ def test_cross_layer_discount_and_non_overlapping_discount_remain_valid():
             country_id=None,
             funded_by=funded_by,
         )
+
+
+def test_supplier_overlap_validation_ignores_other_tours():
+    """A supplier's date validation is only for their current tour."""
+    _assert_no_discount_overlap(
+        _DiscountDb([_discount(tour_id=99, discount_scope="tour")]),
+        start_date=datetime(2026, 10, 15, tzinfo=UTC),
+        end_date=datetime(2026, 10, 20, tzinfo=UTC),
+        scope="tour",
+        tour_id=3,
+        category_id=None,
+        country_id=None,
+        funded_by="SUPPLIER",
+        exact_tour_only=True,
+    )
+
+
+def test_creator_overlap_validation_rejects_same_tour():
+    with pytest.raises(HTTPException, match="overlaps the active discount"):
+        _assert_no_discount_overlap(
+            _DiscountDb([_discount(tour_id=3, discount_scope="tour")]),
+            start_date=datetime(2026, 10, 15, tzinfo=UTC),
+            end_date=datetime(2026, 10, 20, tzinfo=UTC),
+            scope="tour",
+            tour_id=3,
+            category_id=None,
+            country_id=None,
+            funded_by="SUPPLIER",
+            exact_tour_only=True,
+            creator_user_id=2,
+        )
+
+
+def test_supplier_overlap_validation_ignores_admin_created_supplier_funded_discount():
+    """Funding source is not the same thing as the user who created it."""
+    _assert_no_discount_overlap(
+        _DiscountDb([_discount(tour_id=3, discount_scope="tour", changed_by=1)]),
+        start_date=datetime(2026, 10, 15, tzinfo=UTC),
+        end_date=datetime(2026, 10, 20, tzinfo=UTC),
+        scope="tour",
+        tour_id=3,
+        category_id=None,
+        country_id=None,
+        funded_by="SUPPLIER",
+        exact_tour_only=True,
+        creator_user_id=2,
+    )

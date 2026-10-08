@@ -1,4 +1,5 @@
 import secrets
+from datetime import datetime
 from datetime import timedelta
 from typing import Optional
 
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.checkout import CheckoutSession
 from app.schemas.checkout import CheckoutConfirm, CheckoutStart, CheckoutUpdate
-from app.utils.money import as_aware_utc, utcnow
+from app.utils.money import as_aware_utc, money, money_str, utcnow
 from app.models.users import User
 
 SESSION_TTL_HOURS = 24
@@ -187,6 +188,19 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
     adults = int(payload.get("adults") or 1)
     children = int(payload.get("children") or 0)
 
+    if body.payment_type == "partial":
+        travel_date = payload.get("travel_date")
+        try:
+            selected_date = datetime.fromisoformat(str(travel_date)).date()
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Choose a valid travel date before paying a deposit")
+        from app.services.tour_availability import customer_deposit_eligibility
+        deposit = customer_deposit_eligibility(db, s.tour_id, selected_date)
+        if not deposit["eligible"] or not (
+            deposit.get("deposit_percentage") or deposit.get("booking_deposit")
+        ):
+            raise HTTPException(status_code=400, detail="A deposit is no longer available for this departure; full payment is required")
+
     def _addons(raw_list):
         return [BookingAddonPayload(**a) if isinstance(a, dict) else BookingAddonPayload(id=int(a)) for a in (raw_list or [])]
 
@@ -207,6 +221,7 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
         notes=body.notes or payload.get("notes"),
         promo_code=body.promo_code or payload.get("promo_code"),
         booking_source="customer",
+        payment_type=body.payment_type,
         agreed_terms=body.agreed_terms,
         agreed_cancellation_policy=body.agreed_cancellation_policy,
     )
@@ -218,4 +233,19 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
     db.commit()
     db.refresh(s)
 
+    # Calculate the first charge from the persisted booking and the same
+    # backend rule the payment gateway will enforce.  This is deliberately
+    # returned to the browser instead of recalculating a deposit from stale
+    # eligibility state after the booking has been created.
+    selected_payment_amount = money(booking["amount_pending"])
+    if body.payment_type == "partial":
+        from app.models.bookings import Booking
+        from app.routers.payments_gateway import _minimum_deposit_amount
+
+        booking_row = db.query(Booking).filter(Booking.id == booking["id"]).first()
+        selected_payment_amount = _minimum_deposit_amount(db, booking_row) if booking_row else selected_payment_amount
+        if selected_payment_amount >= money(booking["amount_pending"]):
+            raise HTTPException(status_code=400, detail="A deposit is no longer available for this departure; full payment is required")
+
+    booking["selected_payment_amount"] = money_str(selected_payment_amount)
     return {"session": _serialize(s), "booking": booking}

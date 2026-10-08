@@ -1031,6 +1031,21 @@ def _supplier_safe(data: dict, booking: Booking) -> dict:
         data["payment_summary"]["pending"] = None
     if "payments" in data:
         data["payments"] = []
+    # Portal messages from customers and agents are addressed to Tourvaa
+    # Admin. They are mirrored into BookingCommunication for the Admin audit
+    # trail, but that does not make them supplier-visible. Suppliers may see
+    # only their own notes to Admin and Admin messages explicitly addressed
+    # to suppliers.
+    if isinstance(data.get("communications"), list):
+        data["communications"] = [
+            communication
+            for communication in data["communications"]
+            if communication.get("sender_type") == "supplier"
+            or (
+                communication.get("sender_type") == "admin"
+                and communication.get("visibility") in {"supplier", "all"}
+            )
+        ]
     return data
 
 
@@ -1084,8 +1099,11 @@ def _hide_supplier_reassignment_from_external_partner(data: dict, booking: Booki
         return data
     if booking.booking_status != "supplier_reassignment_required" or booking.cancellation_source != "supplier_reassignment":
         return data
-    data["booking_status"] = "confirmed"
-    data["supplier_acceptance_status"] = "accepted"
+    # A supplier's decision is internal until Tourvaa chooses the next
+    # customer-facing outcome. Keep external portals at a neutral request
+    # stage rather than claiming confirmation or exposing the decline.
+    data["booking_status"] = "pending_supplier_acceptance"
+    data["supplier_acceptance_status"] = "pending"
     data["cancellation_reason"] = None
     data["cancellation_source"] = None
     data["cancelled_at"] = None
@@ -1461,8 +1479,9 @@ def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict |
 def _bookable_calendar_capacity(tour: Tour | None, calendar: TourCalendar) -> int:
     """Return the total sellable capacity configured for a departure.
 
-    The tour group limit applies to each reservation, not to the combined
-    capacity of all reservations on this calendar date.
+    ``max_group_size`` describes a vehicle/load grouping, not a customer or
+    agent booking limit. A party may span several vehicles, so the departure
+    calendar's capacity is the only cap for one booking.
     """
     del tour  # Kept in the signature for existing callers.
     return int(calendar.available_seats or 0)
@@ -1490,11 +1509,6 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         raise HTTPException(status_code=404, detail="Tour not found")
     if tour and tour.status != "published":
         raise HTTPException(status_code=400, detail="Tour must be published before booking")
-    if tour and tour.max_group_size and seat_travellers > tour.max_group_size:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This tour allows a maximum of {tour.max_group_size} travellers per booking",
-        )
     if calendar:
         if calendar.tour_id != data.tour_id:
             raise HTTPException(status_code=400, detail="Calendar date does not belong to tour")
@@ -2850,43 +2864,24 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
     _ensure_booking_access(booking, actor)
     if not _start_supplier_decision(booking, "declined"):
         return serialize_booking_for_actor(db, booking, actor)
-    pending_before_decline = money(booking.amount_pending)
     booking.supplier_acceptance_status = "declined"
-    _set_status(db, booking, "declined", actor, "supplier", data.reason or "Supplier declined booking")
-    if booking.calendar:
-        booking.calendar.booked_seats = max(
-            0,
-            (booking.calendar.booked_seats or 0) - _booking_seat_count(booking),
-        )
+    # A supplier decision is an operational exception, not the customer's
+    # final outcome.  Keep the booking and payment intact while it waits for
+    # an administrator to reassign, cancel, or otherwise update it.  The
+    # customer portal maps this internal state to its existing neutral
+    # “Booking Request Received” status, so it never exposes a supplier's
+    # decline or reason before the administrator has acted.
+    # This shared marker is what keeps the supplier's decision and reason in
+    # the Admin workflow while the customer and agent retain a neutral view.
+    booking.cancellation_reason = data.reason or "Supplier declined booking"
+    booking.cancellation_source = "supplier_reassignment"
+    _set_status(db, booking, "supplier_reassignment_required", actor, "supplier_reassignment", booking.cancellation_reason)
 
-    from app.services.notifications import enqueue_notification, notify_admins
-    _settle_cancelled_booking_payments(db, booking, actor, request, "Released after supplier decline")
-    if booking.customer:
-        booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
-        booking.customer.total_amount_pending = max(
-            money(0),
-            money(booking.customer.total_amount_pending or 0) - pending_before_decline,
-        )
+    from app.services.notifications import notify_admins
 
-    notify_admins(db, notification_type="supplier_declined_booking", title="Supplier declined booking", message=f"Supplier declined {booking.booking_code}", entity_type="booking", entity_id=booking.id)
-    if booking.customer and booking.customer.user_id:
-        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_declined", title="Booking declined", message=f"Booking {booking.booking_code} was declined by supplier", entity_type="booking", entity_id=booking.id)
+    notify_admins(db, notification_type="supplier_declined_booking", title="Supplier declined booking", message=f"Supplier declined {booking.booking_code}: {data.reason or 'No reason provided'}", entity_type="booking", entity_id=booking.id)
     log_audit(db, actor=actor, action="supplier_decline_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(booking)
-
-    if booking.customer and booking.customer.email:
-        from app.utils.email_templates import booking_declined_email
-        login_url = f"{settings.FRONTEND_URL}/tours"
-        similar_tours = _similar_tours_for_email(db, booking.tour_id)
-        _send_booking_email(
-            db, "booking_declined",
-            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-             "reason": data.reason or "Declined by supplier", "login_url": login_url,
-             "button_text": "Browse tours", "button_url": login_url},
-            f"Booking declined - {booking.booking_code}",
-            booking_declined_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.reason or "Declined by supplier", login_url, similar_tours),
-            booking.customer.email,
-        )
 
     _email_admins_booking_event(db, "Supplier declined booking", f"Supplier declined booking {booking.booking_code}. Reason: {data.reason or 'Declined by supplier'}", booking)
 
@@ -3375,6 +3370,10 @@ def add_communication(db: Session, booking_id: int, data: BookingCommunicationCr
 
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
+    # Supplier booking messages are operational notes to Tourvaa Admin only.
+    # Never let a crafted supplier request address a customer or agent.
+    if _user_role(actor) == "supplier" and data.visibility != "internal":
+        raise HTTPException(status_code=403, detail="Supplier booking messages can be sent to Tourvaa Admin only")
     recipients = _communication_recipients(booking, data.visibility) if data.visibility != "internal" else []
     if data.visibility != "internal" and not recipients:
         raise HTTPException(status_code=400, detail=f"This booking has no {data.visibility} recipient to contact")
@@ -3414,6 +3413,11 @@ def add_communication_reply(db: Session, communication_id: int, message: str, ac
         raise HTTPException(status_code=404, detail="Communication not found")
     booking = get_booking_by_id(db, row.booking_id)
     _ensure_booking_access(booking, actor)
+    if _user_role(actor) == "supplier" and not (
+        row.sender_type == "supplier"
+        or (row.sender_type == "admin" and row.visibility in {"supplier", "all"})
+    ):
+        raise HTTPException(status_code=403, detail="This message is not available to the supplier")
     reply = MessageReply(communication_id=row.id, sender_user_id=actor.id, sender_type=_user_role(actor), message=message)
     db.add(reply)
     log_audit(db, actor=actor, action="reply_booking_communication", entity_type="booking", entity_id=booking.id, request=request)

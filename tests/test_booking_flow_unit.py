@@ -10,6 +10,7 @@ from app.services.bookings import (
     _booking_seat_count,
     _ensure_booking_access,
     _hide_agent_reservation_payment_from_supplier,
+    _hide_supplier_reassignment_from_external_partner,
     _is_booking_fully_paid,
     _price_booking,
     _start_supplier_decision,
@@ -22,6 +23,7 @@ from app.services.bookings import (
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
 from app.routers.payments_gateway import _ensure_booking_payment_access, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
+from app.schemas.checkout import CheckoutConfirm
 from app.schemas.tours import AccommodationExtraPayload
 from app.schemas.agents import AgentSelfUpdate
 from app.schemas.agents import AgentInvoicingUpdate, AgentUpdate
@@ -81,6 +83,33 @@ def test_supplier_view_masks_agent_reservation_payment_and_enables_decision_stat
     assert result["agent_payment_method"] is None
     assert result["agent_reference"] is None
     assert result["status_history"] == []
+
+
+@pytest.mark.parametrize("role", ["customer", "agent"])
+def test_supplier_decline_reassignment_is_neutral_and_reason_free_for_external_partners(role):
+    row = booking(
+        booking_status="supplier_reassignment_required",
+        supplier_acceptance_status="declined",
+        cancellation_source="supplier_reassignment",
+    )
+    data = {
+        "booking_status": "supplier_reassignment_required",
+        "supplier_acceptance_status": "declined",
+        "cancellation_reason": "No vehicle available",
+        "cancellation_source": "supplier_reassignment",
+        "cancelled_at": "2026-10-08T00:00:00Z",
+        "status_history": [
+            {"change_source": "supplier_reassignment", "new_status": "supplier_reassignment_required"},
+            {"change_source": "admin", "new_status": "pending_supplier_acceptance"},
+        ],
+    }
+
+    result = _hide_supplier_reassignment_from_external_partner(data, row, role)
+
+    assert result["booking_status"] == "pending_supplier_acceptance"
+    assert result["supplier_acceptance_status"] == "pending"
+    assert result["cancellation_reason"] is None
+    assert result["status_history"] == [{"change_source": "admin", "new_status": "pending_supplier_acceptance"}]
 
 
 def test_supplier_self_update_rejects_admin_managed_fields():
@@ -322,34 +351,13 @@ def test_accommodation_addons_use_category_specific_price_types():
         AccommodationExtraPayload(accommodation_name="Airport pickup", category="pickup", price_type="per_person")
 
 
-def test_booking_rejects_more_travellers_than_the_tour_group_limit():
-    tour = SimpleNamespace(id=9, status="published", max_group_size=6)
+def test_booking_capacity_is_not_limited_by_the_vehicle_group_size():
+    """A 6-seat vehicle grouping must not prevent a 20-seat departure
+    booking; operations can allocate multiple vehicles."""
+    tour = SimpleNamespace(max_group_size=6)
+    calendar = SimpleNamespace(available_seats=20, booked_seats=0)
 
-    class TourQuery:
-        def filter(self, *_args):
-            return self
-
-        def first(self):
-            return tour
-
-    class Db:
-        def query(self, _model):
-            return TourQuery()
-
-    data = BookingCreate(
-        tour_id=tour.id,
-        customer_id=1,
-        booking_source="admin",
-        no_of_adults=7,
-        no_of_children=0,
-        no_of_infants=0,
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        _price_booking(Db(), data)
-
-    assert exc.value.status_code == 400
-    assert "maximum of 6 travellers" in exc.value.detail
+    assert _bookable_calendar_capacity(tour, calendar) == 20
 
 
 def test_calendar_remaining_capacity_uses_departure_capacity_not_booking_group_limit():
@@ -385,6 +393,13 @@ def test_gateway_rejects_partial_payment_without_a_configured_deposit():
     with pytest.raises(HTTPException) as exc:
         _validate_payment_request(None, payment_booking(), "300.00", customer_user())
     assert exc.value.status_code == 400
+
+
+def test_checkout_confirmation_accepts_only_supported_customer_payment_choices():
+    assert CheckoutConfirm(payment_type="partial").payment_type == "partial"
+    assert CheckoutConfirm(payment_type="full").payment_type == "full"
+    with pytest.raises(ValidationError):
+        CheckoutConfirm(payment_type="deposit")
 
 
 def test_gateway_accepts_a_deposit_at_or_above_the_configured_minimum():

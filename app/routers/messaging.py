@@ -124,6 +124,11 @@ async def supplier_booking_unread(db: Session = Depends(get_db), current_user: U
     return {"status": "success", "data": {"unread": messaging_service.supplier_booking_unread_count(db, current_user)}}
 
 
+@supplier_booking_router.get("/booking/{booking_id}")
+async def supplier_booking_conversation_for_booking(booking_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return {"status": "success", "data": messaging_service.get_booking_conversation_thread_for_supplier_booking(db, booking_id, current_user)}
+
+
 @supplier_booking_router.get("/{conversation_id}")
 async def supplier_booking_conversation_thread(conversation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return {"status": "success", "data": messaging_service.get_booking_conversation_thread_for_supplier(db, conversation_id, current_user)}
