@@ -73,7 +73,6 @@ def _serialize_message(msg: Message) -> dict:
         "id": msg.id,
         "conversation_id": msg.conversation_id,
         "sender_role": msg.sender_role,
-        "recipient_role": msg.recipient_role,
         "sender_user_id": msg.sender_user_id,
         "sender_name": msg.sender.name if msg.sender else None,
         "body": None if msg.is_deleted else msg.body,

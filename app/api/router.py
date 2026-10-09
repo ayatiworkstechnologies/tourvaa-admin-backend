@@ -34,6 +34,7 @@ from app.routers.email_logs import router as email_logs_router
 from app.routers.external_tours import admin_router as external_tours_admin_router
 from app.routers.external_tours import public_router as external_tours_public_router
 from app.routers.invoices import router as invoices_router
+from app.routers.invoices import supplier_router as supplier_invoices_router
 from app.routers.messaging import booking_router as messaging_booking_router
 from app.routers.messaging import router as messaging_router
 from app.routers.messaging import supplier_booking_router as messaging_supplier_booking_router
@@ -108,6 +109,7 @@ OPERATIONS_ROUTERS = (
     payments_gateway_router,
     payments_router,
     invoices_router,
+    supplier_invoices_router,
     messaging_router,
     messaging_booking_router,
     messaging_supplier_booking_router,

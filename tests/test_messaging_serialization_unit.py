@@ -2,7 +2,26 @@ import asyncio
 from types import SimpleNamespace
 
 from app.services import bookings, messaging
-from app.services.messaging import _serialize_booking_conversation, _serialize_booking_message
+from app.services.messaging import _serialize_booking_conversation, _serialize_booking_message, _serialize_message
+
+
+def test_support_message_serializer_does_not_require_booking_recipient_role():
+    """Admin-support messages are not booking messages and have no recipient role."""
+    message = SimpleNamespace(
+        id=9,
+        conversation_id=17,
+        sender_role="agent",
+        sender_user_id=4,
+        sender=SimpleNamespace(name="Agent Name"),
+        body="Need help",
+        is_deleted=False,
+        created_at=None,
+    )
+
+    serialized = _serialize_message(message)
+
+    assert serialized["sender_name"] == "Agent Name"
+    assert "recipient_role" not in serialized
 
 
 def test_booking_message_serializer_keeps_admin_reply_recipient_role():
