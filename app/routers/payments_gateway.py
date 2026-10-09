@@ -48,6 +48,29 @@ def _require_paypal_amount(amount_container: dict, context: str) -> Decimal:
         raise HTTPException(status_code=400, detail=f"PayPal {context} event has an unparseable amount.value") from error
 
 
+def _require_captured_amount_matches_pending(payment: Payment, captured_amount: Decimal, gateway: str) -> Decimal:
+    """Only settle the exact amount the customer was sent to the gateway for.
+
+    A gateway payment record is created before redirecting the customer. Its
+    ``total_amount`` is the authoritative amount for that checkout attempt
+    (deposit or balance), not the booking's full price.
+    """
+    expected = money(payment.total_amount or 0)
+    captured = money(captured_amount)
+    if expected <= 0 or captured <= 0:
+        raise HTTPException(status_code=400, detail=f"{gateway} capture amount must be greater than zero")
+    if captured != expected:
+        logger.error(
+            "%s capture amount mismatch for payment %s: expected %s, received %s",
+            gateway,
+            getattr(payment, "id", None),
+            expected,
+            captured,
+        )
+        raise HTTPException(status_code=409, detail=f"{gateway} capture amount does not match the pending payment")
+    return captured
+
+
 def _ensure_payment_invoice(db: Session, payment: Payment, actor=None, request: Request | None = None) -> None:
     """Idempotently create (or repair) the PDF invoice for a paid gateway payment."""
     from app.schemas.invoices import InvoiceGenerateRequest
@@ -402,7 +425,9 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
 
         payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).first()
         if payment and payment.payment_status == "pending":
-            captured_amt = money(Decimal(amount_total) / 100)
+            captured_amt = _require_captured_amount_matches_pending(
+                payment, money(Decimal(amount_total) / 100), "Stripe"
+            )
             payment.captured_amount = captured_amt
             payment.paid_amount = captured_amt
             payment.pending_amount = Decimal("0")
@@ -472,7 +497,16 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
         raise HTTPException(status_code=404, detail="Pending Stripe payment not found")
 
     if payment.payment_status != "paid":
-        captured_amt = money(payment.total_amount or booking.amount_pending or booking.final_amount or 0)
+        # The pending payment is the exact deposit/full amount chosen at
+        # checkout. When Stripe returned a session, independently verify its
+        # amount before settling; never substitute the booking balance here.
+        captured_amt = money(payment.total_amount or 0)
+        if session_obj:
+            captured_amt = _require_captured_amount_matches_pending(
+                payment, money(Decimal(session_obj.get("amount_total", 0)) / 100), "Stripe"
+            )
+        else:
+            captured_amt = _require_captured_amount_matches_pending(payment, captured_amt, "Stripe")
         payment.captured_amount = captured_amt
         payment.paid_amount = captured_amt
         payment.pending_amount = Decimal("0")
@@ -569,7 +603,11 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
         units = captured.get("purchase_units", [{}])
         captures = units[0].get("payments", {}).get("captures", [{}])
         capture_obj = captures[0] if captures else {}
-        captured_amt = _require_paypal_amount(capture_obj.get("amount", {}), "capture")
+        captured_amt = _require_captured_amount_matches_pending(
+            payment,
+            _require_paypal_amount(capture_obj.get("amount", {}), "capture"),
+            "PayPal",
+        )
         capture_id = capture_obj.get("id", "")
 
         payment.captured_amount = captured_amt
@@ -639,6 +677,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
         if order_id:
             payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).first()
         if payment and payment.payment_status == "pending":
+            captured_amt = _require_captured_amount_matches_pending(payment, captured_amt, "PayPal")
             payment.captured_amount = captured_amt
             payment.paid_amount = captured_amt
             payment.pending_amount = Decimal("0")

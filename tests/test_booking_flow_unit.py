@@ -21,7 +21,7 @@ from app.services.bookings import (
     notify_booking_received_after_payment,
 )
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
-from app.routers.payments_gateway import _ensure_booking_payment_access, _validate_payment_currency, _validate_payment_request
+from app.routers.payments_gateway import _ensure_booking_payment_access, _require_captured_amount_matches_pending, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
 from app.schemas.checkout import CheckoutConfirm
 from app.schemas.tours import AccommodationExtraPayload
@@ -440,6 +440,16 @@ def test_gateway_requires_the_immutable_booking_currency():
     with pytest.raises(HTTPException) as exc:
         _validate_payment_currency(payment_booking(), "INR")
     assert exc.value.status_code == 400
+
+
+def test_gateway_capture_must_match_the_selected_deposit_amount():
+    """A deposit checkout must never settle the booking's full balance."""
+    pending_payment = SimpleNamespace(id=41, total_amount="268.50")
+
+    assert str(_require_captured_amount_matches_pending(pending_payment, "268.50", "Stripe")) == "268.50"
+    with pytest.raises(HTTPException) as exc:
+        _require_captured_amount_matches_pending(pending_payment, "895.00", "Stripe")
+    assert exc.value.status_code == 409
 
 
 def test_gateway_rejects_payment_from_another_customer():
