@@ -98,14 +98,7 @@ def _booking_amount_column(actor: User | None):
 
 
 def _amount_to_usd(amount, currency: str | None) -> float:
-    """Booking.currency is always the tour/slab's currency, which is forced
-    to USD at save time for any booking tied to a real Tour (see
-    services.cms.save_tour / services.tours._normalize_pricing_to_usd) --
-    but a booking placed without a tour_id (a manual/back-office booking)
-    falls back to the client-supplied data.currency instead, so a report
-    that blends Booking.final_amount across bookings can still mix
-    currencies in that case. Convert every row to USD before summing rather
-    than assume the whole table is single-currency."""
+    """Convert mixed booking currencies to the reporting base before summing."""
     if not amount:
         return 0.0
     from app.services.currency import BASE_CURRENCY, convert_amount, normalize_currency

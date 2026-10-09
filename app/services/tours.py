@@ -449,30 +449,14 @@ _PRICING_CLIENT_FIELDS = ("passenger_from", "passenger_to", "adult_price", "chil
 _PRICING_AUDIT_FIELDS = _PRICING_CLIENT_FIELDS + ("single_supplement", "commission_percentage", "admin_markup_value", "storefront_adult_price", "storefront_child_price")
 
 
-def _normalize_pricing_to_usd(o: TourPricing) -> None:
-    """The currency picker on the pricing-slab form is a convenience for an
-    admin/supplier who thinks in their own currency -- but USD is the
-    platform's single accounting base (app/services/currency.py), and every
-    downstream calculation here (commission split, storefront price,
-    and the public site's display-currency conversion) assumes
-    adult_price/child_price/supplier_price are already USD. Convert once,
-    right after the client fields land on the model and before
-    _apply_pricing_computation derives storefront/supplier_final prices from
-    them, so a slab entered in AED/INR/etc. is never persisted as if that
-    number were USD.
-    """
-    from app.services.currency import BASE_CURRENCY, convert_amount, normalize_currency
+def _apply_tour_currency(db: Session, tour_id: int, o: TourPricing) -> None:
+    """Keep every slab in the parent tour's commercial currency.
 
-    entered = normalize_currency(o.currency, BASE_CURRENCY)
-    if entered == BASE_CURRENCY:
-        o.currency = BASE_CURRENCY
-        return
-    for field in ("adult_price", "child_price", "supplier_price"):
-        value = getattr(o, field, None)
-        if value:
-            converted, _, _ = convert_amount(Decimal(str(value)), entered, BASE_CURRENCY)
-            setattr(o, field, float(converted))
-    o.currency = BASE_CURRENCY
+    Supplier-entered values are already denominated in that operating
+    currency, so changing their numeric value here would corrupt the price.
+    """
+    tour = _require_tour(db, tour_id)
+    o.currency = (tour.currency or "USD").strip().upper()
 
 
 def _actor_role_slug(actor: User) -> str:
@@ -535,7 +519,7 @@ def create_pricing(db: Session, tour_id: int, data: PricingPayload, actor: User,
     if data.status == "active":
         _assert_no_pricing_overlap(db, tour_id, data.passenger_from, data.passenger_to)
     o = TourPricing(tour_id=tour_id, **{key: getattr(data, key) for key in _PRICING_CLIENT_FIELDS})
-    _normalize_pricing_to_usd(o)
+    _apply_tour_currency(db, tour_id, o)
     _apply_pricing_computation(db, tour_id, o, data, actor, is_update=False)
     db.add(o)
     db.flush()
@@ -558,7 +542,7 @@ def update_pricing(db: Session, tour_id: int, rid: int, data: PricingPayload, ac
     before = {field: getattr(o, field, None) for field in _PRICING_AUDIT_FIELDS if hasattr(o, field)}
     for key in _PRICING_CLIENT_FIELDS:
         setattr(o, key, getattr(data, key))
-    _normalize_pricing_to_usd(o)
+    _apply_tour_currency(db, tour_id, o)
     _apply_pricing_computation(db, tour_id, o, data, actor, is_update=True)
     recalculate_price_start(db, tour_id)
     old_values, new_values = _pricing_field_diff(before, o, actor, data.change_reason)

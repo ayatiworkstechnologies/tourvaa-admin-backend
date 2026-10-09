@@ -61,6 +61,7 @@ class ContactMessageRequest(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     email: EmailStr
     phone: str = Field(default="", max_length=30)
+    audience: str = Field(default="public", pattern="^(public|supplier|agent)$")
     enquiry_type: str = Field(default="General enquiry", max_length=50)
     subject: str = Field(min_length=1, max_length=200)
     message: str = Field(min_length=1, max_length=5000)
@@ -85,6 +86,7 @@ def submit_contact_message(request: Request, data: ContactMessageRequest, db: Se
         name=data.name,
         email=str(data.email),
         phone=data.phone or None,
+        audience=data.audience,
         enquiry_type=data.enquiry_type,
         subject=data.subject,
         message=data.message,
@@ -101,6 +103,7 @@ def submit_contact_message(request: Request, data: ContactMessageRequest, db: Se
         f"<p><strong>Name:</strong> {esc(data.name)}</p>"
         f"<p><strong>Email:</strong> {esc(data.email)}</p>"
         f"<p><strong>Phone:</strong> {esc(data.phone) or '-'}</p>"
+        f"<p><strong>Contact audience:</strong> {esc(data.audience.title())}</p>"
         f"<p><strong>Enquiry type:</strong> {esc(data.enquiry_type)}</p>"
         f"<p><strong>Subject:</strong> {esc(data.subject)}</p>"
         f"<p><strong>Message:</strong><br/>{esc(data.message).replace(chr(10), '<br/>')}</p>"

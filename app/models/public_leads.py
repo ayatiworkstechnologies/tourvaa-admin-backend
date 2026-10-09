@@ -20,6 +20,7 @@ class ContactMessage(Base):
     name = Column(String(150), nullable=False)
     email = Column(String(255), nullable=False, index=True)
     phone = Column(String(30), nullable=True)
+    audience = Column(String(20), nullable=False, default="public", index=True)
     enquiry_type = Column(String(50), nullable=False, default="General enquiry")
     subject = Column(String(200), nullable=False)
     message = Column(Text, nullable=False)

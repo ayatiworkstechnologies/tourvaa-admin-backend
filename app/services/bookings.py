@@ -1920,8 +1920,19 @@ def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = Non
     if role in ("admin", "agent"):
         data["agent_payment_summary"] = _agent_payment_summary(db, booking)
     if role == "agent":
+        from app.models.payments import Payment
         from app.services.cancellations import customer_cancellation_eligibility
+
         data["cancellation_eligibility"] = customer_cancellation_eligibility(db, booking)
+        # The dismiss action is intentionally limited to bookings whose
+        # Stripe/PayPal checkout was explicitly abandoned. A newly-created
+        # unpaid booking must not expose the action before the agent returns
+        # from the gateway's cancel URL.
+        data["has_abandoned_gateway_payment"] = db.query(Payment.id).filter(
+            Payment.booking_id == booking.id,
+            Payment.payment_status == "abandoned",
+            Payment.gateway.in_(("stripe", "paypal")),
+        ).first() is not None
     if role == "supplier":
         from app.services.cancellations import supplier_cancellation_terms
         data = _hide_agent_reservation_payment_from_supplier(_supplier_safe(data, booking), booking)

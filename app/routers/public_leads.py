@@ -17,6 +17,7 @@ def _contact_message(row: ContactMessage) -> dict:
         "name": row.name,
         "email": row.email,
         "phone": row.phone,
+        "audience": row.audience or "public",
         "enquiry_type": row.enquiry_type,
         "subject": row.subject,
         "message": row.message,
@@ -36,11 +37,14 @@ def _subscriber(row: NewsletterSubscriber) -> dict:
 
 @router.get("/contact-enquiries")
 def list_contact_enquiries(
+    audience: str = "all",
     params: dict = Depends(pagination_params),
     db: Session = Depends(get_db),
     _=Depends(require_any_permission("settings.view", "view-settings", "messages.view")),
 ):
     query = db.query(ContactMessage)
+    if audience in {"public", "supplier", "agent"}:
+        query = query.filter(ContactMessage.audience == audience)
     if params["search"]:
         search = f'%{params["search"]}%'
         query = query.filter(

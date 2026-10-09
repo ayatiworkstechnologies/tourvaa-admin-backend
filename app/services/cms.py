@@ -424,24 +424,57 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     # Pricing slab (see services.tours.recalculate_price_start) -- never a
     # client-editable marketing field, so any submitted value is ignored.
     payload.pop("price_start_per_person", None)
-    # USD is the platform's single accounting currency (app/services/currency.py) --
-    # TourPricing slabs already normalize to it (services.tours._normalize_pricing_to_usd).
-    # Tour itself carries two real money fields alongside the currency picker
-    # (booking_deposit, service_fee), which were previously being persisted
-    # verbatim in whatever currency the form's picker showed -- e.g. a
-    # supplier entering "500" under AED got 500 stored and later treated as
-    # $500. Convert them here, then force currency to USD, so the picker
-    # stays a pure input convenience and every stored amount is USD.
-    from app.services.currency import BASE_CURRENCY, convert_amount, normalize_currency
+    # A supplier enters every tour amount in the operating currency selected
+    # on their profile. Persist that currency and those amounts verbatim so
+    # deposits, add-ons, discounts and pricing slabs all share one unit.
+    if is_supplier_user(actor):
+        from app.models.suppliers import Supplier
 
-    entered_currency = normalize_currency(payload.get("currency"), BASE_CURRENCY)
-    if entered_currency != BASE_CURRENCY:
-        for field in ("booking_deposit", "service_fee", "offer_price", "infant_price", "single_supplement"):
-            value = payload.get(field)
-            if value:
-                converted, _, _ = convert_amount(Decimal(str(value)), entered_currency, BASE_CURRENCY)
-                payload[field] = float(converted)
-    payload["currency"] = BASE_CURRENCY
+        supplier = db.query(Supplier).filter(Supplier.user_id == actor.id).first()
+        if not supplier or not (supplier.currency or "").strip():
+            raise HTTPException(status_code=400, detail="Set an operating currency in your supplier profile before saving tour pricing.")
+        payload["currency"] = supplier.currency.strip().upper()
+    else:
+        payload["currency"] = (payload.get("currency") or "USD").strip().upper()
+
+    old_currency = (item.currency or "USD").strip().upper() if tour_id else payload["currency"]
+    new_currency = payload["currency"]
+    if tour_id and old_currency != new_currency:
+        from app.models.tours import (
+            TourAccommodationExtra, TourDatePrice, TourDiscount,
+            TourExtension, TourGroupDiscountTier, TourOptionalActivity,
+            TourPricing,
+        )
+        from app.services.currency import convert_amount
+
+        def convert_fields(row, fields):
+            for field in fields:
+                value = getattr(row, field, None)
+                if value is not None:
+                    converted, _, _ = convert_amount(Decimal(str(value)), old_currency, new_currency)
+                    setattr(row, field, float(converted))
+
+        convert_fields(item, ("price_start_per_person", "offer_price", "infant_price", "single_supplement", "service_fee", "booking_deposit"))
+        for row in db.query(TourPricing).filter(TourPricing.tour_id == tour_id).all():
+            convert_fields(row, ("adult_price", "child_price", "supplier_price", "final_price", "supplier_final_adult_price", "supplier_final_child_price", "storefront_adult_price", "storefront_child_price"))
+            if row.admin_markup_type == "fixed":
+                convert_fields(row, ("admin_markup_value",))
+            row.currency = new_currency
+        for row in db.query(TourDatePrice).filter(TourDatePrice.tour_id == tour_id).all():
+            convert_fields(row, ("adult_price", "child_price"))
+        for row in db.query(TourOptionalActivity).filter(TourOptionalActivity.tour_id == tour_id).all():
+            convert_fields(row, ("price_per_person", "child_price_per_person", "infant_price_per_person", "supplier_cost"))
+        for row in db.query(TourAccommodationExtra).filter(TourAccommodationExtra.tour_id == tour_id).all():
+            convert_fields(row, ("extra_price", "supplier_cost"))
+        for row in db.query(TourExtension).filter(TourExtension.tour_id == tour_id).all():
+            convert_fields(row, ("extra_price", "supplier_cost"))
+        for row in db.query(TourDiscount).filter(TourDiscount.tour_id == tour_id).all():
+            convert_fields(row, ("minimum_booking_amount",))
+            if row.discount_type != "percentage":
+                convert_fields(row, ("discount_value",))
+        for row in db.query(TourGroupDiscountTier).filter(TourGroupDiscountTier.tour_id == tour_id).all():
+            if row.discount_type != "percentage":
+                convert_fields(row, ("discount_value",))
 
     # Validate FK IDs exist before attempting insert
     if payload.get("supplier_id"):
