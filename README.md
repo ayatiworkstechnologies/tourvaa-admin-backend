@@ -276,11 +276,11 @@ Calculate-price, assign-supplier, cancel-request, calendar-event get/download, c
 
 1. A new booking starts in `pending_payment`.
 2. Payment authorization creates an active hold. An assigned booking moves to `pending_supplier_acceptance`; an unassigned booking moves to `payment_authorized`.
-3. Supplier acceptance confirms the booking, captures authorized funds, generates the invoice, updates the supplier ledger, and notifies the admin and customer.
+3. Supplier acceptance records `supplier_accepted`, captures authorized funds, generates the invoice, updates the supplier ledger, and notifies Tourvaa. An authorized Tourvaa user performs the separate final transition to `confirmed` and sends the official confirmation.
 4. Supplier decline marks the booking as `declined`, voids active payment holds or refunds captured funds, releases reserved calendar seats, and sends notifications.
 5. Supplier decisions are idempotent and final: retrying the same decision is safe, while reversing an accepted or declined decision returns HTTP `409`.
 
-A paid booking with a pending supplier decision remains `pending_supplier_acceptance`; payment synchronization cannot bypass supplier approval.
+A paid booking with a pending supplier decision remains `pending_supplier_acceptance`; payment synchronization cannot bypass supplier approval or Tourvaa's final confirmation.
 
 ### Payments - `/api/payments`
 
