@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlencode
 from typing import Optional
 
 from fastapi import HTTPException
@@ -6,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.auth.security import create_token
 from app.models.affiliates import Affiliate
 from app.models.agents import Agent
 from app.models.bookings import Booking, BookingCommunication
@@ -42,15 +44,27 @@ def _booking_message_url(*, booking_id: int, recipient_role: str) -> str:
     return f"{settings.FRONTEND_URL.rstrip('/')}/{portal}/bookings/{booking_id}{suffix}"
 
 
-def _booking_message_email(*, sender_label: str, message_url: str) -> str:
+def _mail_reply_url(*, kind: str, user_id: int, conversation_id: int, booking_id: int | None = None) -> str:
+    token = create_token(
+        {"user_id": user_id, "conversation_id": conversation_id, "kind": kind, "booking_id": booking_id},
+        token_type="mail_reply",
+        expires_minutes=7 * 24 * 60,
+    )
+    return f"{settings.FRONTEND_URL.rstrip('/')}/message-reply?{urlencode({'token': token})}"
+
+
+def _booking_message_email(*, sender_label: str, message_url: str, body: str | None = None) -> str:
+    message_html = f'<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #2563eb;background:#f8fafc;white-space:pre-wrap;">{esc(body)}</blockquote>' if body else ""
+    intro = "You can read the update below and reply securely without signing in." if body else "The message is available in your secure Tourvaa portal. Open the conversation to read it and send your reply."
+    expiry = "For security, the reply link expires after 7 days. " if body else ""
     return base_email(
         "New booking message",
         f"You have a new message from {esc(sender_label)}.",
         (
-            "<p style=\"margin:0;\">The message is available in your secure Tourvaa portal. "
-            "Open the conversation to read it and send your reply.</p>"
-            "<p style=\"margin:16px 0 0;\">Replies sent directly to this notification email are not added "
-            "to the booking conversation.</p>"
+            f"<p style=\"margin:0;\">{intro}</p>"
+            f"{message_html}"
+            f"<p style=\"margin:16px 0 0;\">{expiry}"
+            "Replies sent directly to this email are not added to the conversation.</p>"
         ),
         "View message & reply",
         message_url,
@@ -73,16 +87,19 @@ def _support_message_url(*, recipient_role: str, participant_type: str, conversa
     return f"{settings.FRONTEND_URL.rstrip('/')}{portal_path}"
 
 
-def _support_message_email(*, sender_label: str, message_url: str) -> str:
-    """Build a privacy-safe alert; message contents remain in the portal."""
+def _support_message_email(*, sender_label: str, message_url: str, body: str | None = None) -> str:
+    """Build a scoped alert with an expiring, signed reply action."""
+    message_html = f'<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #2563eb;background:#f8fafc;white-space:pre-wrap;">{esc(body)}</blockquote>' if body else ""
+    intro = "You can read the update below and reply securely without signing in." if body else "The message is available in your secure Tourvaa portal. Open the conversation to read it and send your reply."
+    expiry = "For security, the reply link expires after 7 days. " if body else ""
     return base_email(
         "New support message",
         f"You have a new message from {esc(sender_label)}.",
         (
-            "<p style=\"margin:0;\">The message is available in your secure Tourvaa portal. "
-            "Open the conversation to read it and send your reply.</p>"
-            "<p style=\"margin:16px 0 0;\">For privacy, the message content is not included in this email. "
-            "Replies sent directly to this notification email are not added to the conversation.</p>"
+            f"<p style=\"margin:0;\">{intro}</p>"
+            f"{message_html}"
+            f"<p style=\"margin:16px 0 0;\">{expiry}"
+            "Replies sent directly to this email are not added to the conversation.</p>"
         ),
         "View message & reply",
         message_url,
@@ -123,14 +140,13 @@ def _email_support_message_recipient(
     user_id: int,
     *,
     participant_type: str,
+    conversation_id: int,
+    body: str,
 ) -> None:
     """Best-effort portal-user alert for an Admin support reply."""
     try:
         recipient = db.query(User).filter(User.id == user_id).first()
-        message_url = _support_message_url(
-            recipient_role=participant_type,
-            participant_type=participant_type,
-        )
+        message_url = _mail_reply_url(kind="support", user_id=user_id, conversation_id=conversation_id)
         send_templated_email(
             db,
             recipient.email if recipient else None,
@@ -142,7 +158,7 @@ def _email_support_message_recipient(
                 "button_url": message_url,
             },
             "New message from Tourvaa Admin",
-            _support_message_email(sender_label="Tourvaa Admin", message_url=message_url),
+            _support_message_email(sender_label="Tourvaa Admin", message_url=message_url, body=body),
         )
     except Exception as exc:
         logger.warning("Support-message email to user %s failed: %s", user_id, exc)
@@ -155,11 +171,18 @@ def _email_booking_message_recipient(
     sender_label: str,
     booking_id: int,
     recipient_role: str,
+    conversation_id: int,
+    body: str,
 ) -> None:
     """Best-effort alert; mail delivery must never block a portal message."""
     try:
         recipient = db.query(User).filter(User.id == user_id).first()
-        message_url = _booking_message_url(booking_id=booking_id, recipient_role=recipient_role)
+        message_url = _mail_reply_url(
+            kind="booking",
+            user_id=user_id,
+            conversation_id=conversation_id,
+            booking_id=booking_id,
+        )
         send_templated_email(
             db,
             recipient.email if recipient else None,
@@ -170,7 +193,7 @@ def _email_booking_message_recipient(
                 "button_url": message_url,
             },
             "New message from Tourvaa",
-            _booking_message_email(sender_label=sender_label, message_url=message_url),
+            _booking_message_email(sender_label=sender_label, message_url=message_url, body=body),
         )
     except Exception as exc:
         logger.warning("Booking-message email to user %s failed: %s", user_id, exc)
@@ -391,6 +414,8 @@ async def send_message_as_admin(db: Session, conversation_id: int, admin_user: U
         db,
         conv.participant_user_id,
         participant_type=conv.participant_type,
+        conversation_id=conv.id,
+        body=body,
     )
 
     serialized = _serialize_message(msg)
@@ -645,11 +670,47 @@ async def send_booking_message_as_admin(db: Session, conversation_id: int, admin
         sender_label="Tourvaa Admin",
         booking_id=conv.booking_id,
         recipient_role=recipient_role,
+        conversation_id=conv.id,
+        body=body,
     )
     db.commit(); db.refresh(msg); db.refresh(conv)
     serialized = _serialize_booking_message(msg)
     await ws_manager.notify_new_message({"type": "new_booking_message", "conversation": _serialize_booking_conversation(conv, hide_supplier_identity=recipient_role != "supplier"), "message": serialized}, participant_user_id=recipient_user_id)
     return serialized
+
+
+async def send_mail_reply(db: Session, claims: dict, body: str) -> dict:
+    """Send a reply authorized by a short-lived link delivered to one user.
+
+    The signed claims are still checked against current conversation ownership,
+    so forwarding a stale or mismatched URL cannot expose another thread.
+    """
+    user_id = claims.get("user_id")
+    conversation_id = claims.get("conversation_id")
+    user = db.query(User).filter(User.id == user_id, User.is_active == True, User.account_status == "ACTIVE").first()
+    if not user:
+        raise HTTPException(status_code=401, detail="This reply link is no longer valid")
+
+    if claims.get("kind") == "support":
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id,
+            Conversation.participant_user_id == user.id,
+        ).first()
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return await send_message_as_participant(db, user, body)
+
+    if claims.get("kind") == "booking":
+        conversation = db.query(BookingConversation).filter(BookingConversation.id == conversation_id).first()
+        if not conversation or conversation.booking_id != claims.get("booking_id"):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if conversation.supplier_user_id == user.id:
+            return await send_booking_message_as_supplier(db, conversation.id, user, body)
+        if conversation.initiator_user_id == user.id:
+            return await send_booking_message_as_initiator(db, conversation.booking_id, user, body)
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    raise HTTPException(status_code=400, detail="Invalid reply link")
 
 
 def _get_booking_conversation_for_supplier(db: Session, conversation_id: int, supplier_user: User) -> BookingConversation:

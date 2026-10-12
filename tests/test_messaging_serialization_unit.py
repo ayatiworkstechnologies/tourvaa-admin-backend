@@ -14,18 +14,20 @@ from app.services.messaging import (
 )
 
 
-def test_booking_message_email_has_secure_reply_action_without_message_body(monkeypatch):
+def test_booking_message_email_has_secure_no_login_reply_action(monkeypatch):
     monkeypatch.setattr(messaging.settings, "FRONTEND_URL", "https://tourvaa.example/")
 
     customer_url = _booking_message_url(booking_id=43, recipient_role="customer")
     admin_url = _booking_message_url(booking_id=43, recipient_role="admin")
-    html = _booking_message_email(sender_label="Tourvaa Admin", message_url=customer_url)
+    html = _booking_message_email(sender_label="Tourvaa Admin", message_url=customer_url, body="Schedule updated")
 
     assert customer_url == "https://tourvaa.example/customer/bookings/43#booking-messages"
     assert admin_url == "https://tourvaa.example/admin/bookings/43?tab=communications#booking-messages"
     assert "View message &amp; reply" in html
     assert customer_url in html
-    assert "The message is available in your secure Tourvaa portal" in html
+    assert "reply securely without signing in" in html
+    assert "Schedule updated" in html
+    assert "expires after 7 days" in html
 
 
 def test_support_message_email_links_to_the_correct_secure_inbox(monkeypatch):
@@ -34,14 +36,15 @@ def test_support_message_email_links_to_the_correct_secure_inbox(monkeypatch):
     admin_url = _support_message_url(conversation_id=17, recipient_role="admin", participant_type="customer")
     customer_url = _support_message_url(conversation_id=17, recipient_role="customer", participant_type="customer")
     supplier_url = _support_message_url(conversation_id=17, recipient_role="supplier", participant_type="supplier")
-    html = _support_message_email(sender_label="Customer portal", message_url=admin_url)
+    html = _support_message_email(sender_label="Customer portal", message_url=admin_url, body="Please review")
 
     assert admin_url == "https://tourvaa.example/admin/messages?type=customer&conversation=17"
     assert customer_url == "https://tourvaa.example/customer/support"
     assert supplier_url == "https://tourvaa.example/supplier/messages?tab=support"
     assert "View message &amp; reply" in html
     assert "https://tourvaa.example/admin/messages?type=customer&amp;conversation=17" in html
-    assert "message content is not included in this email" in html
+    assert "reply securely without signing in" in html
+    assert "Please review" in html
 
 
 def test_portal_support_message_emails_configured_admins(monkeypatch):
@@ -113,7 +116,7 @@ def test_admin_support_reply_emails_the_portal_user(monkeypatch):
     asyncio.run(messaging.send_message_as_admin(Db(), 17, SimpleNamespace(id=1), "We are reviewing this"))
 
     assert conversation.participant_unread_count == 1
-    assert email_alerts == [{"user_id": 8, "participant_type": "supplier"}]
+    assert email_alerts == [{"user_id": 8, "participant_type": "supplier", "conversation_id": 17, "body": "We are reviewing this"}]
 
 
 def test_support_message_serializer_does_not_require_booking_recipient_role():
@@ -402,4 +405,6 @@ def test_admin_booking_reply_increments_recipient_unread_and_emails_portal_link(
         "sender_label": "Tourvaa Admin",
         "booking_id": 42,
         "recipient_role": "supplier",
+        "conversation_id": 17,
+        "body": "Please review the update",
     }]

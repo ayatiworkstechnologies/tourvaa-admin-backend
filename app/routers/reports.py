@@ -352,6 +352,78 @@ def customer_report(params: dict = Depends(_period_params), db: Session = Depend
     return {"status": "success", "data": [{"customer_id": cid, "customer_name": v["name"], "bookings": v["count"], "amount": _money(v["amount"]), "pending": _money(v["pending"])} for cid, v in agg.items()]}
 
 
+def _audience_rows(db: Session, audience: str, entity_id: int | None, params: dict, actor: User) -> list[dict]:
+    if audience == "supplier":
+        rows = supplier_report(params=params, db=db, current_user=actor)["data"]
+        id_key = "supplier_id"
+    elif audience == "agent":
+        rows = agent_report(params=params, db=db, current_user=actor)["data"]
+        id_key = "agent_id"
+    elif audience == "customer":
+        rows = customer_report(params=params, db=db, current_user=actor)["data"]
+        id_key = "customer_id"
+    else:
+        raise HTTPException(status_code=400, detail="audience must be supplier, agent, or customer")
+    return [row for row in rows if entity_id is None or row[id_key] == entity_id]
+
+
+@router.get("/audience-options")
+def audience_options(
+    audience: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("reports.view", "reports.admin")),
+):
+    _require_admin_report(current_user)
+    if audience == "supplier":
+        rows = db.query(Supplier.id, Supplier.supplier_name).order_by(Supplier.supplier_name.asc()).all()
+    elif audience == "agent":
+        rows = db.query(Agent.id, Agent.agent_name).order_by(Agent.agent_name.asc()).all()
+    elif audience == "customer":
+        rows = db.query(Customer.id, Customer.full_name).order_by(Customer.full_name.asc()).all()
+    else:
+        raise HTTPException(status_code=400, detail="audience must be supplier, agent, or customer")
+    return {"status": "success", "data": [{"id": row[0], "name": row[1] or f"{audience.title()} #{row[0]}"} for row in rows]}
+
+
+@router.get("/audience")
+def audience_report(
+    audience: str = Query(...),
+    entity_id: int | None = Query(default=None, ge=1),
+    params: dict = Depends(_period_params),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("reports.view", "reports.admin")),
+):
+    _require_admin_report(current_user)
+    if params["start"] and params["end"] and params["start"] > params["end"]:
+        raise HTTPException(status_code=400, detail="Start date must be on or before end date")
+    rows = _audience_rows(db, audience, entity_id, params, current_user)
+    return {"status": "success", "data": rows, "meta": {"audience": audience, "entity_id": entity_id, "scope": "selected" if entity_id else "all", "count": len(rows)}}
+
+
+@router.get("/audience-export")
+def audience_report_export(
+    audience: str = Query(...),
+    entity_id: int | None = Query(default=None, ge=1),
+    period: str = Query(default="custom"),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("reports.export", "reports.admin")),
+):
+    _require_admin_report(current_user)
+    params = _period_params(period, start_date, end_date)
+    rows = _audience_rows(db, audience, entity_id, params, current_user)
+    buffer = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    else:
+        buffer.write("No data for the selected filters\n")
+    filename = f"{audience}-report-{start_date or 'all'}-{end_date or 'all'}.csv"
+    return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 ROW_REPORT_LIMIT = 500
 
 

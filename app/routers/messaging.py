@@ -1,10 +1,11 @@
 import logging
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.auth.permissions import ACCESS_COOKIE_NAME, _decode_token, get_current_user, get_user_role_ids, require_any_permission
+from app.auth.security import decode_auth_token
 from app.database import SessionLocal, get_db
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User
@@ -44,6 +45,19 @@ async def delete_own_booking_message(message_id: int, db: Session = Depends(get_
 
 class SendReplyBody(BaseModel):
     body: str = Field(min_length=1)
+
+
+class MailReplyBody(SendReplyBody):
+    token: str = Field(min_length=20)
+
+
+@ticket_router.post("/mail-reply")
+async def mail_reply(data: MailReplyBody, db: Session = Depends(get_db)):
+    claims = decode_auth_token(data.token)
+    if claims.get("token_type") != "mail_reply":
+        raise HTTPException(status_code=401, detail="Invalid reply link")
+    message = await messaging_service.send_mail_reply(db, claims, data.body)
+    return {"status": "success", "message": "Reply sent", "data": message}
 
 
 class SendBookingAdminReplyBody(SendReplyBody):

@@ -12,7 +12,7 @@ UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # already-authenticated session - it can't be used to make the attacker's
 # forged request do anything the victim didn't already have a live session
 # for, so it isn't a meaningful CSRF target.
-EXEMPT_PATHS = {"/api/auth/refresh-token", "/api/auth/refresh"}
+EXEMPT_PATHS = {"/api/auth/refresh-token", "/api/auth/refresh", "/api/messages/mail-reply"}
 
 
 class CsrfMiddleware(BaseHTTPMiddleware):
