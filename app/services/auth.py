@@ -162,7 +162,10 @@ def get_auth_user_payload(db: Session, user: User):
             "agent-reseller": "/agent/dashboard",
             "supplier": "/supplier/dashboard",
             "affiliate": "/affiliate/dashboard",
-        }.get(role_slug, "/admin/dashboard"),
+            "super-admin": "/admin/dashboard",
+            "admin": "/admin/dashboard",
+            "sub-admin": "/admin/dashboard",
+        }.get(role_slug, f"/{role_slug}/dashboard" if role_slug else "/login"),
     }
 
 

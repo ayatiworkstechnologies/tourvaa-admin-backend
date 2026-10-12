@@ -55,6 +55,23 @@ def test_no_push_after_rollback(monkeypatch):
         db.close()
 
 
+def test_generic_entity_notification_keeps_reference_and_safe_action():
+    db = SessionLocal()
+    notification = None
+    try:
+        notification = enqueue_notification(
+            db, user_id=1, notification_type="push_entity_test", title="Payout requested", message="M",
+            entity_type="affiliate_payout", entity_id=987654,
+        )
+        assert notification.metadata_json == {
+            "entity_type": "affiliate_payout", "entity_id": 987654,
+            "action_url": "/admin/affiliates/payouts", "action_label": "View details",
+        }
+    finally:
+        db.rollback()
+        db.close()
+
+
 def test_gone_subscriptions_are_deactivated_others_kept(monkeypatch):
     db = SessionLocal()
     gone = push.save_subscription(db, endpoint="https://push.example.test/gone-" + "x" * 600, p256dh="k", auth="a")

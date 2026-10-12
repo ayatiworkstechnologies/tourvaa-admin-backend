@@ -150,12 +150,10 @@ def retry_notification(db: Session, notification_id: int):
     return serialize_notification(n)
 
 
-def _notification_url(db: Session, user_id: int | None, entity_type: str | None, entity_id: int | None) -> str | None:
-    """Resolve only verified portal routes; never guess a deep link."""
-    if not user_id or not entity_type or not entity_id:
+def _notification_booking_id(db: Session, entity_type: str | None, entity_id: int | None) -> int | None:
+    """Return a booking id only when the notification is genuinely related to one."""
+    if not entity_type or not entity_id:
         return None
-    user = db.query(User).filter(User.id == user_id).first()
-    slug = (user.role.slug if user and user.role else "").lower()
     booking_id = entity_id if entity_type == "booking" else None
     if entity_type == "payment":
         from app.models.payments import Payment
@@ -166,6 +164,16 @@ def _notification_url(db: Session, user_id: int | None, entity_type: str | None,
     elif entity_type == "cancellation_request":
         from app.models.cancellations import CancellationRequest
         booking_id = (db.query(CancellationRequest.booking_id).filter(CancellationRequest.id == entity_id).scalar())
+    return booking_id
+
+
+def _notification_url(db: Session, user_id: int | None, entity_type: str | None, entity_id: int | None) -> str | None:
+    """Resolve only verified portal routes; never guess a deep link."""
+    if not user_id or not entity_type or not entity_id:
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    slug = (user.role.slug if user and user.role else "").lower()
+    booking_id = _notification_booking_id(db, entity_type, entity_id)
     if booking_id:
         if "supplier" in slug:
             return f"/supplier/bookings/{booking_id}"
@@ -175,11 +183,34 @@ def _notification_url(db: Session, user_id: int | None, entity_type: str | None,
             return f"/customer/bookings/{booking_id}"
         if "admin" in slug:
             return f"/admin/bookings/{booking_id}"
+    portal_paths = {
+        "supplier": {"conversation": "/supplier/messages", "supplier_payout": "/supplier/payouts", "payout": "/supplier/payouts", "invoice": "/supplier/invoices"},
+        "agent": {"conversation": "/agent/messages", "agent_payout": "/agent/payouts", "payout": "/agent/payouts", "invoice": "/agent/invoices"},
+        "affiliate": {"affiliate_payout": "/affiliate/payouts", "payout": "/affiliate/payouts"},
+        "customer": {"invoice": "/customer/invoices"},
+    }
+    for role_key, paths in portal_paths.items():
+        if role_key in slug and entity_type in paths:
+            return paths[entity_type]
     if "admin" in slug:
-        admin_paths = {"supplier": "suppliers", "agent": "agents", "affiliate": "affiliates", "tour": "tours", "tour_version": "tours"}
-        if entity_type in admin_paths:
-            return f"/admin/{admin_paths[entity_type]}/{entity_id}"
+        admin_detail_paths = {"supplier": "suppliers", "agent": "agents", "affiliate": "affiliates"}
+        if entity_type in admin_detail_paths:
+            return f"/admin/{admin_detail_paths[entity_type]}/{entity_id}"
+        admin_list_paths = {
+            "tour": "/admin/tours", "tour_version": "/admin/tours", "invoice": "/admin/invoices",
+            "conversation": "/admin/messages", "supplier_payout": "/admin/supplier-payouts",
+            "agent_payout": "/admin/agent-payouts", "affiliate_payout": "/admin/affiliates/payouts",
+            "payout": "/admin/affiliates/payouts",
+        }
+        return admin_list_paths.get(entity_type)
     return None
+
+
+def _notification_action_label(entity_type: str | None, booking_id: int | None, action_url: str | None) -> str | None:
+    """Return a concise browser-action label only for a verified route."""
+    if not action_url:
+        return None
+    return "View booking" if booking_id or entity_type == "booking" else "View details"
 
 
 def enqueue_notification(db: Session, *, user_id: int | None, notification_type: str, title: str, message: str, entity_type: str | None = None, entity_id: int | None = None, channel: str = "in_app", metadata: dict | None = None, event_key: str | None = None, event_version: str = "1"):
@@ -191,7 +222,19 @@ def enqueue_notification(db: Session, *, user_id: int | None, notification_type:
         if existing:
             return existing
     details = dict(metadata or {})
-    details.setdefault("action_url", _notification_url(db, user_id, entity_type, entity_id))
+    booking_id = _notification_booking_id(db, entity_type, entity_id)
+    # Keep an explicit, non-sensitive booking identifier in the in-app row and
+    # web-push payload. This lets every portal show which booking changed while
+    # the URL resolver above remains the only authority for deep links.
+    if booking_id:
+        details.setdefault("booking_id", booking_id)
+    if entity_type:
+        details.setdefault("entity_type", entity_type)
+    if entity_id:
+        details.setdefault("entity_id", entity_id)
+    action_url = _notification_url(db, user_id, entity_type, entity_id)
+    details.setdefault("action_url", action_url)
+    details.setdefault("action_label", _notification_action_label(entity_type, booking_id, action_url))
     n = Notification(user_id=user_id, notification_type=notification_type, title=title, message=message, channel=channel, entity_type=entity_type, entity_id=entity_id, metadata_json=details, event_key=event_key or notification_type, event_version=event_version, idempotency_key=key, status="sent" if channel == "in_app" else "pending", sent_at=utcnow() if channel == "in_app" else None)
     db.add(n)
     db.flush()

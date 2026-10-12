@@ -90,7 +90,7 @@ def delete_subscription(db: Session, endpoint: str, user_id: int | None = None) 
     db.commit()
 
 
-def send_push(sub: PushSubscription, *, title: str, body: str, url: str = "/", icon: str = DEFAULT_ICON, action: str | None = None, phone: str | None = None, wa_msg: str | None = None) -> str:
+def send_push(sub: PushSubscription, *, title: str, body: str, url: str = "/", icon: str = DEFAULT_ICON, action: str | None = None, phone: str | None = None, wa_msg: str | None = None, booking_id: int | None = None, entity_type: str | None = None, entity_id: int | None = None, action_label: str | None = None, notification_id: int | None = None) -> str:
     """Returns "sent", "gone" (subscription expired - safe to delete) or
     "failed" (anything else, incl. missing server config - keep it)."""
     private_key = _vapid_private_key()
@@ -99,6 +99,16 @@ def send_push(sub: PushSubscription, *, title: str, body: str, url: str = "/", i
         return "failed"
 
     payload = {"title": title, "body": body, "url": url, "icon": icon}
+    if booking_id:
+        payload["bookingId"] = booking_id
+    if entity_type:
+        payload["entityType"] = entity_type
+    if entity_id:
+        payload["entityId"] = entity_id
+    if action_label:
+        payload["actionLabel"] = action_label
+    if notification_id:
+        payload["notificationId"] = notification_id
     if action:
         payload["action"] = action
     if phone:
@@ -136,7 +146,7 @@ def _deliver(db: Session, subs: list[PushSubscription], notification_id: int | N
     for sub in list(subs):
         log = PushDeliveryLog(notification_id=notification_id, subscription_id=sub.id, event_key=event_key, recipient_user_id=recipient_user_id or sub.user_id, status="processing", attempt_count=1)
         db.add(log)
-        result = send_push(sub, **message)
+        result = send_push(sub, notification_id=notification_id, **message)
         if result == "sent":
             sent += 1
             log.status = "sent"
@@ -200,7 +210,15 @@ def _push_worker(items: list[tuple[int | None, int, str, str, str]]) -> None:
             subs = subs_by_user.get(user_id)
             if subs:
                 row = notifications.get(notification_id)
-                _deliver(db, subs, notification_id=notification_id, event_key=row.event_key if row else None, recipient_user_id=user_id, title=title, body=body, url=url or _portal_url(roles.get(user_id, "")))
+                metadata = (row.metadata_json or {}) if row else {}
+                _deliver(
+                    db, subs, notification_id=notification_id, event_key=row.event_key if row else None,
+                    recipient_user_id=user_id, title=title, body=body,
+                    url=url or _portal_url(roles.get(user_id, "")),
+                    booking_id=metadata.get("booking_id"),
+                    entity_type=metadata.get("entity_type"), entity_id=metadata.get("entity_id"),
+                    action_label=metadata.get("action_label"),
+                )
     except Exception:
         logger.exception("Background web push failed")
     finally:
@@ -230,7 +248,13 @@ def retry_failed_push_deliveries(db: Session) -> dict:
             skipped += 1
             continue
         metadata = notification.metadata_json or {}
-        result = send_push(sub, title=notification.title, body=notification.message, url=metadata.get("action_url") or "/")
+        result = send_push(
+            sub, title=notification.title, body=notification.message,
+            url=metadata.get("action_url") or "/", booking_id=metadata.get("booking_id"),
+            entity_type=metadata.get("entity_type"), entity_id=metadata.get("entity_id"),
+            action_label=metadata.get("action_label"),
+            notification_id=notification.id,
+        )
         row.attempt_count += 1
         if result == "sent":
             row.status = "sent"

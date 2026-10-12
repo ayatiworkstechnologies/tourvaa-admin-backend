@@ -212,7 +212,9 @@ def _get_role_slug(user: User) -> str:
 
 
 def _get_dashboard_type(role_slug: str) -> str:
-    return ROLE_TO_DASHBOARD_TYPE.get(role_slug, "admin")
+    # Custom roles must never be rendered as an Admin dashboard simply
+    # because their slug is new. They receive a permission-driven portal.
+    return ROLE_TO_DASHBOARD_TYPE.get(role_slug, "portal")
 
 
 def _safe_count(db, model_class, *filters):
@@ -288,6 +290,15 @@ def my_dashboard(
     if role_slug in ROLE_SIDEBAR:
         menus = ROLE_SIDEBAR[role_slug]
         sidebar_menu = menus
+    elif dashboard_type == "portal":
+        # A new role has no hard-coded portal IA. Return only the modules it
+        # has actually been granted, so the frontend can provide a safe,
+        # role-named workspace without borrowing Admin navigation.
+        sidebar_menu = [
+            {"label": permission.module.replace("_", " ").title(), "module": permission.module, "permission": permission.slug}
+            for permission in permissions
+        ]
+        menus = sidebar_menu
     else:
         menus = _build_admin_menus(permissions)
         sidebar_menu = menus

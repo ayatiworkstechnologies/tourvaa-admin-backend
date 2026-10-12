@@ -6,6 +6,7 @@ from app.auth.security import (
     create_token,
     decode_auth_token,
     get_auth_domain_for_role,
+    get_portal_for_role,
 )
 from app.config import settings
 
@@ -36,6 +37,7 @@ def test_customer_supplier_agent_and_affiliate_share_normal_authentication(role)
 
 def test_unknown_role_cannot_fall_back_to_privileged_admin_authentication():
     assert get_auth_domain_for_role("future-portal-role") == "normal"
+    assert get_portal_for_role("future-portal-role") == "portal"
 
 
 def test_token_with_missing_domain_claim_is_rejected(monkeypatch):
