@@ -371,7 +371,7 @@ def create_payment(db: Session, data: PaymentCreate, actor: Optional[User] = Non
     from app.services.notifications import enqueue_notification, notify_admins
     notify_admins(db, notification_type="payment_success", title="Payment recorded", message=f"Payment {payment.payment_code} was recorded", entity_type="payment", entity_id=payment.id)
     if booking.customer and booking.customer.user_id:
-        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="payment_success", title="Payment recorded", message=f"Payment {payment.payment_code} was recorded", entity_type="payment", entity_id=payment.id)
+        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="payment_success", title="Payment recorded", message=f"Payment for booking {booking.booking_code} was recorded", entity_type="payment", entity_id=payment.id)
     db.commit()
     db.refresh(payment)
     _email_customer_payment_received(db, payment, paid)
@@ -435,7 +435,7 @@ def capture_payment(db: Session, payment_id: int, data: PaymentCapture, actor: O
     from app.services.invoices import generate_invoice
     notify_admins(db, notification_type="payment_captured", title="Payment captured", message=f"Payment {payment.payment_code} was captured", entity_type="payment", entity_id=payment.id)
     if payment.booking and payment.booking.customer and payment.booking.customer.user_id:
-        enqueue_notification(db, user_id=payment.booking.customer.user_id, notification_type="payment_captured", title="Payment captured", message=f"Payment {payment.payment_code} was captured", entity_type="payment", entity_id=payment.id)
+        enqueue_notification(db, user_id=payment.booking.customer.user_id, notification_type="payment_captured", title="Payment captured", message=f"Payment for booking {payment.booking.booking_code} was captured", entity_type="payment", entity_id=payment.id)
     log_audit(db, actor=actor, action="capture_payment", entity_type="payment", entity_id=payment.id, request=request)
     db.commit()
     db.refresh(payment)
@@ -608,4 +608,14 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
 
 
 def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "", actor: Optional[User] = None) -> dict:
-    return get_payments(db, page=page, limit=limit, customer_id=customer_id, payment_status=payment_status, payment_method=payment_method, actor=actor)
+    result = get_payments(
+        db, page=page, limit=limit, customer_id=customer_id,
+        payment_status=payment_status, payment_method=payment_method, actor=actor,
+    )
+    # A payment's database/code identifier is an internal finance reference.
+    # Travellers navigate from their booking code, while finance staff retain
+    # the identifiers in the Admin payment screens.
+    for item in result["items"]:
+        item.pop("id", None)
+        item.pop("payment_code", None)
+    return result

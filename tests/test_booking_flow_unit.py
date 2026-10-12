@@ -371,6 +371,7 @@ def payment_booking(**overrides):
         "booking_status": "pending_payment",
         "amount_pending": "1000.00",
         "currency": "USD",
+        "payment_type": "partial",
         "customer": SimpleNamespace(user_id=42),
     }
     values.update(overrides)
@@ -407,6 +408,18 @@ def test_gateway_accepts_a_deposit_at_or_above_the_configured_minimum():
     row = payment_booking(tour=tour)
     amount = _validate_payment_request(None, row, "300.00", customer_user())
     assert str(amount) == "300.00"
+
+
+def test_gateway_rejects_deposit_for_a_booking_created_for_full_payment():
+    """A current tour deposit rule cannot alter a historical full booking."""
+    tour = SimpleNamespace(deposit_type="percentage", deposit_percentage=30, deposit_cutoff_days=None)
+    row = payment_booking(tour=tour, payment_type="full")
+
+    with pytest.raises(HTTPException) as exc:
+        _validate_payment_request(None, row, "300.00", customer_user())
+
+    assert exc.value.status_code == 400
+    assert "created for full payment" in exc.value.detail
 
 
 def test_gateway_rejects_a_deposit_below_the_configured_minimum():

@@ -161,6 +161,20 @@ def _booking_or_404(db: Session, booking_id: int, for_update: bool = False) -> B
     return b
 
 
+def _gateway_return_urls(booking: Booking, provider: str) -> tuple[str, str]:
+    """Build trusted, deployment-aware checkout return URLs server-side."""
+    base = settings.FRONTEND_URL.rstrip("/")
+    if booking.booking_source == "agent":
+        success = f"{base}/agent/bookings/{booking.id}?payment={provider}_success"
+        cancelled = f"{base}/agent/bookings/{booking.id}?payment=cancelled"
+    else:
+        success = f"{base}/customer/payments/success?booking_id={booking.id}&provider={provider}"
+        cancelled = f"{base}/customer/payments/failed?booking_id={booking.id}&provider={provider}"
+    if provider == "stripe":
+        success += "&session_id={CHECKOUT_SESSION_ID}"
+    return success, cancelled
+
+
 def _pending_gateway_payments_total(db: Session, booking_id: int) -> Decimal:
     """Sum of payments already created for this booking whose gateway
     session/order is still pending confirmation - subtracted from the
@@ -263,6 +277,11 @@ def _validate_payment_request(db: Session, booking: Booking, amount: Decimal, cu
     inferred_type = "full" if requested == outstanding else "partial"
     if payment_type and payment_type != inferred_type:
         raise HTTPException(status_code=400, detail=f"Payment type must be {inferred_type} for the requested amount")
+    # The choice made when checkout created the booking is authoritative.
+    # In particular, a later change to the tour's global deposit setting must
+    # not turn an older full-payment booking into a deposit-eligible one.
+    if requested < outstanding and getattr(booking, "payment_type", "full") != "partial":
+        raise HTTPException(status_code=400, detail="This booking was created for full payment and must be paid in full")
     if getattr(booking, "booking_source", None) == "agent" and requested < outstanding:
         raise HTTPException(status_code=400, detail="Agent bookings must be paid in full through the payment gateway")
     if requested < outstanding:
@@ -352,13 +371,14 @@ def stripe_create_session(body: StripeSessionRequest, request: Request, db: Sess
     if body.test_only and not stripe.secret_key.startswith(("sk_test_", "rk_test_")):
         raise HTTPException(status_code=400, detail="Stripe test credentials are required")
     amount_cents = to_minor_units(amount)
+    success_url, cancel_url = _gateway_return_urls(booking, "stripe")
 
     session_data = stripe.create_checkout_session(
         amount_cents=amount_cents,
         currency=currency,
         booking_id=body.booking_id,
-        success_url=body.success_url,
-        cancel_url=body.cancel_url,
+        success_url=success_url,
+        cancel_url=cancel_url,
         customer_email=booking.customer.user.email if booking.customer and booking.customer.user else None,
         idempotency_key=body.idempotency_key,
     )
@@ -556,13 +576,14 @@ def paypal_create_order(body: PayPalOrderRequest, request: Request, db: Session 
     if getattr(body, "test_only", False) and "sandbox" not in paypal.base_url:
         raise HTTPException(status_code=400, detail="PayPal sandbox credentials are required")
     amount_str = f"{amount:.2f}"
+    return_url, cancel_url = _gateway_return_urls(booking, "paypal")
 
     order = paypal.create_order(
         amount=amount_str,
         currency=currency,
         booking_id=body.booking_id,
-        return_url=body.return_url,
-        cancel_url=body.cancel_url,
+        return_url=return_url,
+        cancel_url=cancel_url,
         idempotency_key=body.idempotency_key,
     )
 
