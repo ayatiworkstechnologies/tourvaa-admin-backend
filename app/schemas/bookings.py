@@ -3,7 +3,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator
 import re
 
-BOOKING_STATUSES = {"draft", "pending_payment", "pending_credit_approval", "pending_supplier_assignment", "payment_authorized", "pending_supplier_acceptance", "supplier_reassignment_required", "confirmed", "ready_to_travel", "ongoing", "completed", "cancellation_requested", "cancelled", "declined", "refunded", "upcoming", "postponed"}
+BOOKING_STATUSES = {"draft", "pending_payment", "pending_credit_approval", "pending_supplier_assignment", "payment_authorized", "pending_supplier_acceptance", "supplier_accepted", "supplier_reassignment_required", "confirmed", "ready_to_travel", "ongoing", "completed", "cancellation_requested", "cancelled", "declined", "refunded", "upcoming", "postponed"}
 SUPPLIER_ACCEPTANCE_STATUSES = {"not_assigned", "pending", "accepted", "declined", "expired"}
 PAYMENT_STATUSES = {"unpaid", "pending", "authorized", "partially_paid", "paid", "failed", "bank_transfer_pending", "credit_approval_pending", "refund_pending", "refunded", "partially_refunded", "voided", "partial"}
 PAYMENT_TYPES = {"partial", "full"}

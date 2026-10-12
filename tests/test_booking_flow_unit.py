@@ -225,14 +225,14 @@ def test_paid_booking_waits_for_supplier_acceptance():
     assert _status_after_payment_sync(row, "paid") == "pending_supplier_acceptance"
 
 
-def test_paid_booking_confirms_after_supplier_acceptance():
+def test_paid_booking_with_supplier_acceptance_awaits_tourvaa_confirmation():
     row = booking(supplier_acceptance_status="accepted")
-    assert _status_after_payment_sync(row, "paid") == "confirmed"
+    assert _status_after_payment_sync(row, "paid") == "supplier_accepted"
 
 
-def test_paid_unassigned_booking_can_confirm():
+def test_paid_unassigned_booking_awaits_supplier_assignment():
     row = booking(supplier_id=None, supplier_acceptance_status="not_assigned")
-    assert _status_after_payment_sync(row, "paid") == "confirmed"
+    assert _status_after_payment_sync(row, "paid") == "pending_supplier_assignment"
 
 
 @pytest.mark.parametrize(

@@ -154,12 +154,13 @@ def _email_agent_booking_status(
         return
     from app.utils.email_templates import booking_status_update_email
     portal_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
+    is_final_confirmation = new_status.strip().lower() in {"confirmed", "booking confirmed"}
     _send_booking_email(
         db, "booking_status_update",
         {"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
          "new_status": new_status.replace("_", " ").title(), "reason": reason or "", "login_url": portal_url,
          "button_text": "View booking", "button_url": portal_url},
-        f"Booking update - {booking.booking_code}",
+        f"Your Tourvaa Booking Is Confirmed - {booking.booking_code}" if is_final_confirmation else f"Booking update - {booking.booking_code}",
         booking_status_update_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, new_status, reason or "", portal_url),
         booking.agent.user.email,
         event=event,
@@ -245,15 +246,15 @@ def _booking_status_label(status: str | None, portal: str = "admin") -> str:
     value = (status or "").strip().lower()
     booking_party = portal in {"customer", "agent"}
     labels = {
-        "draft": "Booking Request Received" if booking_party else "Draft",
+        "draft": "Payment Required" if booking_party else "Draft",
         "pending_payment": "Payment Required" if booking_party else "Awaiting Payment",
         "pending_credit_approval": "Credit Approval in Progress" if booking_party else "Credit Approval Pending",
         "bank_transfer_pending": "Bank Transfer Pending" if booking_party else "Awaiting Bank Transfer",
-        "pending_supplier_assignment": "Booking Request Received" if booking_party else "Awaiting Supplier Assignment",
-        "payment_authorized": "Booking Request Received" if booking_party else "Payment Authorized",
-        "pending_supplier_acceptance": "Booking Request Received" if booking_party else ("Awaiting Your Decision" if portal == "supplier" else "Awaiting Supplier Acceptance"),
+        "pending_supplier_assignment": "Awaiting Tourvaa Confirmation" if booking_party else "Awaiting Supplier Assignment",
+        "payment_authorized": "Awaiting Tourvaa Confirmation" if booking_party else "Payment Authorized",
+        "pending_supplier_acceptance": "Awaiting Tourvaa Confirmation" if booking_party else ("Awaiting Your Decision" if portal == "supplier" else "Awaiting Supplier Acceptance"),
         "supplier_reassignment_required": "Supplier Reassignment in Progress" if booking_party else "Supplier Reassignment Required",
-        "supplier_accepted": "Acceptance Recorded" if portal == "supplier" else "Supplier Accepted",
+        "supplier_accepted": "Acceptance Recorded" if portal == "supplier" else ("Awaiting Tourvaa Confirmation" if booking_party else "Supplier Accepted"),
         "confirmed": "Booking Confirmed",
         "ready_to_travel": "Booking Confirmed",
         "upcoming": "Booking Confirmed",
@@ -313,11 +314,12 @@ def _set_status(db: Session, booking: Booking, new_status: str, actor: User | No
 
 BOOKING_STATUS_TRANSITIONS = {
     "draft": {"pending_payment", "pending_credit_approval", "pending_supplier_assignment", "cancelled"},
-    "pending_payment": {"pending_credit_approval", "payment_authorized", "pending_supplier_assignment", "pending_supplier_acceptance", "confirmed", "cancellation_requested", "cancelled", "declined"},
+    "pending_payment": {"pending_credit_approval", "payment_authorized", "pending_supplier_assignment", "pending_supplier_acceptance", "cancellation_requested", "cancelled", "declined"},
     "pending_credit_approval": {"pending_payment", "payment_authorized", "pending_supplier_assignment", "cancellation_requested", "cancelled", "declined"},
     "pending_supplier_assignment": {"pending_payment", "payment_authorized", "pending_supplier_acceptance", "supplier_reassignment_required", "cancellation_requested", "cancelled", "declined"},
-    "payment_authorized": {"pending_supplier_assignment", "pending_supplier_acceptance", "confirmed", "cancellation_requested", "cancelled", "declined"},
-    "pending_supplier_acceptance": {"pending_supplier_assignment", "supplier_reassignment_required", "confirmed", "postponed", "cancellation_requested", "cancelled", "declined"},
+    "payment_authorized": {"pending_supplier_assignment", "pending_supplier_acceptance", "cancellation_requested", "cancelled", "declined"},
+    "pending_supplier_acceptance": {"pending_supplier_assignment", "supplier_accepted", "supplier_reassignment_required", "postponed", "cancellation_requested", "cancelled", "declined"},
+    "supplier_accepted": {"confirmed", "supplier_reassignment_required", "cancellation_requested", "cancelled", "declined"},
     "supplier_reassignment_required": {"pending_supplier_assignment", "pending_supplier_acceptance", "cancellation_requested", "cancelled", "declined"},
     "confirmed": {"ready_to_travel", "ongoing", "completed", "postponed", "supplier_reassignment_required", "cancellation_requested", "cancelled"},
     "ready_to_travel": {"ongoing", "completed", "postponed", "cancellation_requested", "cancelled"},
@@ -2475,11 +2477,14 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
     from app.services.notifications import enqueue_notification
     customer_label = _booking_status_label(data.booking_status, "customer")
     agent_label = _booking_status_label(data.booking_status, "agent")
+    is_final_confirmation = data.booking_status == "confirmed"
+    notification_title = "Your Tourvaa Booking Is Confirmed" if is_final_confirmation else "Booking updated"
+    notification_event = "booking_confirmed" if is_final_confirmation else "booking_status_changed"
     if booking.customer and booking.customer.user_id:
         enqueue_notification(
             db, user_id=booking.customer.user_id, notification_type="booking_status_changed",
-            title="Booking updated", message=f"Booking {booking.booking_code} is now: {customer_label}",
-            entity_type="booking", entity_id=booking.id, event_key="booking_status_changed",
+            title=notification_title, message=f"Booking {booking.booking_code} is now: {customer_label}",
+            entity_type="booking", entity_id=booking.id, event_key=notification_event,
             event_version=event_version,
         )
     if booking.agent and booking.agent.user_id:
@@ -2498,13 +2503,13 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
             {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
              "new_status": customer_label, "reason": data.reason or "", "login_url": login_url,
              "button_text": "View booking", "button_url": login_url},
-            f"Booking update - {booking.booking_code}",
+            f"Your Tourvaa Booking Is Confirmed - {booking.booking_code}" if is_final_confirmation else f"Booking update - {booking.booking_code}",
             booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, customer_label, data.reason or "", login_url),
             booking.customer.email,
-            event="booking_status_changed", entity_id=booking.id, recipient_type="customer", event_version=event_version,
+            event=notification_event, entity_id=booking.id, recipient_type="customer", event_version=event_version,
         )
     _email_agent_booking_status(
-        db, booking, agent_label, data.reason or "", event="booking_status_changed", event_version=event_version,
+        db, booking, agent_label, data.reason or "", event=notification_event, event_version=event_version,
     )
     # Persist reservations before the asynchronous sender sees them.
     db.commit()
@@ -2822,7 +2827,9 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         db.commit(); db.refresh(booking)
         return serialize_booking_for_actor(db, booking, actor)
 
-    _set_status(db, booking, "confirmed", actor, "supplier", data.reason or "Supplier accepted booking")
+    # Supplier acceptance is an operational milestone.  Only Tourvaa can
+    # issue the customer-facing final confirmation.
+    _set_status(db, booking, "supplier_accepted", actor, "supplier", data.reason or "Supplier accepted booking")
 
     from app.services.notifications import enqueue_notification, notify_admins
     from app.models.payments import Payment
@@ -2875,54 +2882,9 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
 
     notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
     if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
-        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_confirmed", title="Booking confirmed", message=f"Booking {booking.booking_code} is confirmed", entity_type="booking", entity_id=booking.id)
+        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="supplier_accepted_booking", title="Supplier acceptance recorded", message=f"Tourvaa is completing confirmation for booking {booking.booking_code}", entity_type="booking", entity_id=booking.id)
     log_audit(db, actor=actor, action="supplier_accept_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(booking)
-
-    # Payment-received emails (if any authorized holds were captured above)
-    # are sent by payments.capture_payment itself, per capture - no separate
-    # aggregate email needed here.
-    recipient = _booking_email_recipient(booking)
-    if recipient:
-        from app.utils.email_templates import booking_confirmed_email
-        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-        _send_booking_email(
-            db, "booking_confirmed",
-            {"name": recipient[0], "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-             "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
-             "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
-            f"Your booking is confirmed - {booking.booking_code}",
-            booking_confirmed_email(recipient[0], booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
-            recipient[1],
-            event="booking_confirmed",
-            entity_id=booking.id,
-            recipient_type="customer",
-        )
-
-    if booking.supplier and booking.supplier.user and booking.supplier.user.email:
-        from app.utils.email_templates import supplier_booking_confirmed_email
-        portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
-        customer_name = booking.customer.full_name if booking.customer else "Customer"
-        _send_booking_email(
-            db, "supplier_booking_confirmed",
-            {"supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
-            f"Booking confirmed - {booking.booking_code}",
-            supplier_booking_confirmed_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
-            booking.supplier.user.email,
-            event="booking_confirmed",
-            entity_id=booking.id,
-            recipient_type="supplier",
-        )
-
-    # The agent is a booking party and must receive the final confirmation,
-    # not an internal supplier-acceptance explanation.
-    _email_agent_booking_status(
-        db,
-        booking,
-        "confirmed",
-        "Your booking is now confirmed.",
-        event="booking_confirmed",
-    )
 
     from app.services.notification_delivery import dispatch_admin_lifecycle_emails
     from app.utils.email_templates import admin_booking_event_email
@@ -2930,11 +2892,11 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
     admin_detail = f"Supplier accepted booking {booking.booking_code}."
     dispatch_admin_lifecycle_emails(
         db,
-        event="booking_confirmed",
+        event="supplier_accepted",
         entity_type="booking",
         entity_id=booking.id,
         template_key="admin_booking_event",
-        values={"event_title": "Supplier accepted booking", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "View booking", "button_url": admin_url},
+        values={"event_title": "Supplier acceptance recorded", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "Review and confirm booking", "button_url": admin_url},
         fallback_subject=f"Supplier accepted booking - {booking.booking_code}",
         fallback_html=admin_booking_event_email("Supplier accepted booking", admin_detail, booking.booking_code, booking.tour_name, admin_url),
     )

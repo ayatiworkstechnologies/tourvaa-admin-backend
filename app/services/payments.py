@@ -206,14 +206,19 @@ def _status_after_payment_sync(booking: Booking, payment_status: str) -> str | N
         "pending_payment",
         "draft",
         "payment_authorized",
+        "pending_credit_approval",
         "pending_supplier_acceptance",
     }:
         return None
     tour = getattr(booking, "tour", None)
     needs_supplier_confirmation = not tour or tour.requires_supplier_confirmation
-    if booking.supplier_id and booking.supplier_acceptance_status != "accepted" and needs_supplier_confirmation:
+    if booking.supplier_acceptance_status == "accepted":
+        return "supplier_accepted"
+    if needs_supplier_confirmation and booking.supplier_id:
         return "pending_supplier_acceptance"
-    return "confirmed"
+    # Settlement never grants final confirmation.  Operations must either
+    # assign a supplier or explicitly issue the Tourvaa confirmation.
+    return "pending_supplier_assignment"
 
 
 def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
