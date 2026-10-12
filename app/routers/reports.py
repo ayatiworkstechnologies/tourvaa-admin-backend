@@ -3,6 +3,7 @@ import io
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -29,6 +30,14 @@ from app.models.reports import ReportSchedule
 from app.models.suppliers import Supplier
 from app.models.users import User
 from pydantic import BaseModel
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 logger = logging.getLogger(__name__)
@@ -364,7 +373,54 @@ def _audience_rows(db: Session, audience: str, entity_id: int | None, params: di
         id_key = "customer_id"
     else:
         raise HTTPException(status_code=400, detail="audience must be supplier, agent, or customer")
-    return [row for row in rows if entity_id is None or row[id_key] == entity_id]
+    rows = [row for row in rows if entity_id is None or row[id_key] == entity_id]
+    ids = [row[id_key] for row in rows]
+    if not ids:
+        return rows
+
+    if audience == "supplier":
+        entities = db.query(Supplier).options(joinedload(Supplier.user)).filter(Supplier.id.in_(ids)).all()
+        details = {
+            row.id: {
+                "code": row.supplier_code,
+                "email": row.user.email if row.user else None,
+                "phone": (row.user.mobile_number or row.user.phone) if row.user else None,
+                "status": row.status,
+                "approval_status": row.approval_status,
+                "joined_at": row.created_at,
+            }
+            for row in entities
+        }
+    elif audience == "agent":
+        entities = db.query(Agent).options(joinedload(Agent.user)).filter(Agent.id.in_(ids)).all()
+        details = {
+            row.id: {
+                "code": row.agent_code,
+                "email": row.user.email if row.user else None,
+                "phone": (row.user.mobile_number or row.user.phone) if row.user else None,
+                "status": row.status,
+                "approval_status": row.approval_status,
+                "joined_at": row.created_at,
+            }
+            for row in entities
+        }
+    else:
+        entities = db.query(Customer).filter(Customer.id.in_(ids)).all()
+        details = {
+            row.id: {
+                "code": row.customer_code,
+                "email": row.email,
+                "phone": f"{row.phone_country_code} {row.phone}".strip(),
+                "status": "blocked" if row.is_blocked else row.status,
+                "approval_status": "verified" if row.email_verified else "unverified",
+                "joined_at": row.created_at,
+            }
+            for row in entities
+        }
+
+    for row in rows:
+        row.update(details.get(row[id_key], {}))
+    return rows
 
 
 @router.get("/audience-options")
@@ -407,21 +463,122 @@ def audience_report_export(
     period: str = Query(default="custom"),
     start_date: str = Query(default=""),
     end_date: str = Query(default=""),
+    format: str = Query(default="xlsx", pattern="^(xlsx|pdf|csv)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("reports.export", "reports.admin")),
 ):
     _require_admin_report(current_user)
     params = _period_params(period, start_date, end_date)
     rows = _audience_rows(db, audience, entity_id, params, current_user)
-    buffer = io.StringIO()
-    if rows:
-        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+    columns = [
+        (f"{audience.title()} ID", f"{audience}_id"), ("Code", "code"),
+        ("Name", f"{audience}_name"), ("Email", "email"), ("Phone", "phone"),
+        ("Status", "status"), ("Approval", "approval_status"), ("Joined", "joined_at"),
+        ("Bookings", "bookings"), ("Booking Value (USD)", "amount"),
+    ]
+    if audience == "agent":
+        columns += [("Commission Earned (USD)", "commission_earned"), ("Commission Paid (USD)", "commission_paid"), ("Commission Outstanding (USD)", "commission_outstanding")]
+    elif audience == "customer":
+        columns += [("Pending (USD)", "pending")]
+
+    total_bookings = sum(int(row.get("bookings") or 0) for row in rows)
+    total_value = sum(Decimal(str(row.get("amount") or 0)) for row in rows)
+    scope = rows[0].get(f"{audience}_name") if entity_id and rows else f"All {audience.title()}s"
+    title = f"Tourvaa {audience.title()} Report"
+    metadata = [
+        ("Scope", scope or f"{audience.title()} #{entity_id}"),
+        ("Period", f"{start_date or 'All time'} to {end_date or 'Present'}"),
+        ("Records", len(rows)), ("Total bookings", total_bookings),
+        ("Total booking value", f"USD {total_value:,.2f}"),
+        ("Generated", utcnow().strftime("%d %b %Y, %H:%M UTC")),
+    ]
+    basename = f"{audience}-report-{start_date or 'all'}-{end_date or 'all'}"
+
+    if format == "csv":
+        text_buffer = io.StringIO()
+        writer = csv.writer(text_buffer)
+        writer.writerow([title])
+        for label, value in metadata:
+            writer.writerow([label, value])
+        writer.writerow([])
+        writer.writerow([label for label, _ in columns])
+        writer.writerows([[row.get(key, "") for _, key in columns] for row in rows])
+        return StreamingResponse(iter([text_buffer.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{basename}.csv"'})
+
+    binary_buffer = io.BytesIO()
+    if format == "xlsx":
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = f"{audience.title()} Report"
+        last_column = get_column_letter(len(columns))
+        sheet.merge_cells(f"A1:{last_column}1")
+        sheet["A1"] = title
+        sheet["A1"].font = Font(size=20, bold=True, color="FFFFFF")
+        sheet["A1"].fill = PatternFill("solid", fgColor="175CD3")
+        sheet["A1"].alignment = Alignment(vertical="center")
+        sheet.row_dimensions[1].height = 34
+        for index, (label, value) in enumerate(metadata, start=3):
+            sheet.cell(index, 1, label).font = Font(bold=True, color="475467")
+            sheet.cell(index, 2, value)
+        header_row = 10
+        for column_index, (label, _) in enumerate(columns, start=1):
+            cell = sheet.cell(header_row, column_index, label)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="344054")
+            cell.alignment = Alignment(wrap_text=True, vertical="center")
+        thin = Side(style="thin", color="E4E7EC")
+        for row_index, row in enumerate(rows, start=header_row + 1):
+            for column_index, (_, key) in enumerate(columns, start=1):
+                value = row.get(key, "")
+                if isinstance(value, datetime):
+                    value = value.strftime("%d %b %Y")
+                cell = sheet.cell(row_index, column_index, value)
+                cell.border = Border(bottom=thin)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                if row_index % 2 == 0:
+                    cell.fill = PatternFill("solid", fgColor="F8FAFC")
+        widths = [14, 16, 25, 30, 18, 14, 16, 16, 12] + [20] * (len(columns) - 9)
+        for index, width in enumerate(widths, start=1):
+            sheet.column_dimensions[get_column_letter(index)].width = width
+        sheet.freeze_panes = f"A{header_row + 1}"
+        sheet.auto_filter.ref = f"A{header_row}:{last_column}{max(header_row, header_row + len(rows))}"
+        sheet.sheet_view.showGridLines = False
+        workbook.save(binary_buffer)
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        extension = "xlsx"
     else:
-        buffer.write("No data for the selected filters\n")
-    filename = f"{audience}-report-{start_date or 'all'}-{end_date or 'all'}.csv"
-    return StreamingResponse(iter([buffer.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle("report-title", parent=styles["Title"], textColor=colors.HexColor("#175CD3"), fontSize=20, leading=24, spaceAfter=8)
+        meta_style = ParagraphStyle("report-meta", parent=styles["Normal"], textColor=colors.HexColor("#475467"), fontSize=8, leading=11)
+        cell_style = ParagraphStyle("report-cell", parent=styles["Normal"], fontSize=6.5, leading=8, textColor=colors.HexColor("#101828"))
+        document = SimpleDocTemplate(binary_buffer, pagesize=landscape(A4), rightMargin=10 * mm, leftMargin=10 * mm, topMargin=10 * mm, bottomMargin=10 * mm)
+        story = [Paragraph(title, title_style)]
+        story.append(Table(
+            [[Paragraph(f"<b>{escape(str(label))}</b><br/>{escape(str(value))}", meta_style) for label, value in metadata]],
+            colWidths=[44 * mm] * 6,
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F2F4F7")),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#D0D5DD")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]),
+        ))
+        story.append(Spacer(1, 6 * mm))
+        table_data = [[Paragraph(f"<b>{escape(label)}</b>", cell_style) for label, _ in columns]]
+        for row in rows:
+            table_data.append([Paragraph(escape(str(row.get(key, "") or "-")), cell_style) for _, key in columns])
+        table = Table(table_data, colWidths=[277 * mm / len(columns)] * len(columns), repeatRows=1)
+        table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#344054")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D0D5DD")), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+        story.append(table)
+        document.build(story)
+        media_type = "application/pdf"
+        extension = "pdf"
+
+    binary_buffer.seek(0)
+    return StreamingResponse(iter([binary_buffer.getvalue()]), media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{basename}.{extension}"'})
 
 
 ROW_REPORT_LIMIT = 500
