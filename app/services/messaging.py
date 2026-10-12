@@ -57,6 +57,97 @@ def _booking_message_email(*, sender_label: str, message_url: str) -> str:
     )
 
 
+def _support_message_url(*, recipient_role: str, participant_type: str, conversation_id: int | None = None) -> str:
+    """Return the authenticated inbox for a support-message recipient."""
+    role = (recipient_role or "").strip().lower()
+    participant = (participant_type or "").strip().lower()
+    if role == "admin":
+        base_url = f"{settings.FRONTEND_URL.rstrip('/')}/admin/messages?type={participant}"
+        return f"{base_url}&conversation={conversation_id}" if conversation_id else base_url
+    portal_path = {
+        "customer": "/customer/support",
+        "agent": "/agent/messages",
+        "supplier": "/supplier/messages?tab=support",
+        "affiliate": "/affiliate/support",
+    }.get(participant, "/")
+    return f"{settings.FRONTEND_URL.rstrip('/')}{portal_path}"
+
+
+def _support_message_email(*, sender_label: str, message_url: str) -> str:
+    """Build a privacy-safe alert; message contents remain in the portal."""
+    return base_email(
+        "New support message",
+        f"You have a new message from {esc(sender_label)}.",
+        (
+            "<p style=\"margin:0;\">The message is available in your secure Tourvaa portal. "
+            "Open the conversation to read it and send your reply.</p>"
+            "<p style=\"margin:16px 0 0;\">For privacy, the message content is not included in this email. "
+            "Replies sent directly to this notification email are not added to the conversation.</p>"
+        ),
+        "View message & reply",
+        message_url,
+    )
+
+
+def _email_support_message_admins(
+    db: Session,
+    *,
+    participant_type: str,
+    conversation_id: int,
+) -> None:
+    """Best-effort admin alert for a portal support message."""
+    try:
+        sender_label = f"{participant_type.capitalize()} portal"
+        message_url = _support_message_url(
+            conversation_id=conversation_id,
+            recipient_role="admin",
+            participant_type=participant_type,
+        )
+        email_admins(
+            db,
+            "support_message_received",
+            {
+                "sender_name": sender_label,
+                "button_text": "View message & reply",
+                "button_url": message_url,
+            },
+            f"New {participant_type} support message",
+            _support_message_email(sender_label=sender_label, message_url=message_url),
+        )
+    except Exception as exc:
+        logger.warning("Support-message email to admins failed: %s", exc)
+
+
+def _email_support_message_recipient(
+    db: Session,
+    user_id: int,
+    *,
+    participant_type: str,
+) -> None:
+    """Best-effort portal-user alert for an Admin support reply."""
+    try:
+        recipient = db.query(User).filter(User.id == user_id).first()
+        message_url = _support_message_url(
+            recipient_role=participant_type,
+            participant_type=participant_type,
+        )
+        send_templated_email(
+            db,
+            recipient.email if recipient else None,
+            "support_message_received",
+            {
+                "name": recipient.name if recipient else None,
+                "sender_name": "Tourvaa Admin",
+                "button_text": "View message & reply",
+                "button_url": message_url,
+            },
+            "New message from Tourvaa Admin",
+            _support_message_email(sender_label="Tourvaa Admin", message_url=message_url),
+        )
+    except Exception as exc:
+        logger.warning("Support-message email to user %s failed: %s", user_id, exc)
+
+
 def _email_booking_message_recipient(
     db: Session,
     user_id: int,
@@ -256,6 +347,11 @@ async def send_message_as_participant(db: Session, user: User, body: str) -> dic
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
+    _email_support_message_admins(
+        db,
+        participant_type=conv.participant_type,
+        conversation_id=conv.id,
+    )
 
     serialized = _serialize_message(msg)
     await ws_manager.notify_new_message(
@@ -291,6 +387,11 @@ async def send_message_as_admin(db: Session, conversation_id: int, admin_user: U
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
+    _email_support_message_recipient(
+        db,
+        conv.participant_user_id,
+        participant_type=conv.participant_type,
+    )
 
     serialized = _serialize_message(msg)
     await ws_manager.notify_new_message(

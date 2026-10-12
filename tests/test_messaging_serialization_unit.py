@@ -5,6 +5,8 @@ from app.services import bookings, messaging
 from app.services.messaging import (
     _booking_message_email,
     _booking_message_url,
+    _support_message_email,
+    _support_message_url,
     _serialize_conversation,
     _serialize_booking_conversation,
     _serialize_booking_message,
@@ -24,6 +26,94 @@ def test_booking_message_email_has_secure_reply_action_without_message_body(monk
     assert "View message &amp; reply" in html
     assert customer_url in html
     assert "The message is available in your secure Tourvaa portal" in html
+
+
+def test_support_message_email_links_to_the_correct_secure_inbox(monkeypatch):
+    monkeypatch.setattr(messaging.settings, "FRONTEND_URL", "https://tourvaa.example/")
+
+    admin_url = _support_message_url(conversation_id=17, recipient_role="admin", participant_type="customer")
+    customer_url = _support_message_url(conversation_id=17, recipient_role="customer", participant_type="customer")
+    supplier_url = _support_message_url(conversation_id=17, recipient_role="supplier", participant_type="supplier")
+    html = _support_message_email(sender_label="Customer portal", message_url=admin_url)
+
+    assert admin_url == "https://tourvaa.example/admin/messages?type=customer&conversation=17"
+    assert customer_url == "https://tourvaa.example/customer/support"
+    assert supplier_url == "https://tourvaa.example/supplier/messages?tab=support"
+    assert "View message &amp; reply" in html
+    assert "https://tourvaa.example/admin/messages?type=customer&amp;conversation=17" in html
+    assert "message content is not included in this email" in html
+
+
+def test_portal_support_message_emails_configured_admins(monkeypatch):
+    conversation = SimpleNamespace(id=17, participant_type="agent", participant_user_id=9, admin_unread_count=0)
+    email_alerts = []
+
+    class Db:
+        def add(self, _row):
+            pass
+
+        def commit(self):
+            pass
+
+        def refresh(self, _row):
+            pass
+
+    async def notify_ws(_event, participant_user_id):
+        assert participant_user_id == 9
+
+    monkeypatch.setattr(messaging, "get_or_create_conversation", lambda *_args: conversation)
+    monkeypatch.setattr(messaging, "_participant_profile", lambda *_args: {"name": "Agent Name"})
+    monkeypatch.setattr(messaging, "notify_admins", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(messaging, "_email_support_message_admins", lambda *args, **kwargs: email_alerts.append(kwargs))
+    monkeypatch.setattr(messaging, "Message", lambda **values: SimpleNamespace(**values, id=31))
+    monkeypatch.setattr(messaging, "_serialize_message", lambda row: {"id": row.id})
+    monkeypatch.setattr(messaging, "_serialize_conversation", lambda *_args: {"id": 17})
+    monkeypatch.setattr(messaging.ws_manager, "notify_new_message", notify_ws)
+
+    asyncio.run(messaging.send_message_as_participant(Db(), SimpleNamespace(id=9), "Please help"))
+
+    assert conversation.admin_unread_count == 1
+    assert email_alerts == [{"participant_type": "agent", "conversation_id": 17}]
+
+
+def test_admin_support_reply_emails_the_portal_user(monkeypatch):
+    conversation = SimpleNamespace(id=17, participant_type="supplier", participant_user_id=8, participant_unread_count=0)
+    email_alerts = []
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def first(self):
+            return conversation
+
+    class Db:
+        def query(self, _model):
+            return Query()
+
+        def add(self, _row):
+            pass
+
+        def commit(self):
+            pass
+
+        def refresh(self, _row):
+            pass
+
+    async def notify_ws(_event, participant_user_id):
+        assert participant_user_id == 8
+
+    monkeypatch.setattr(messaging, "enqueue_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(messaging, "_email_support_message_recipient", lambda *args, **kwargs: email_alerts.append({"user_id": args[1], **kwargs}))
+    monkeypatch.setattr(messaging, "Message", lambda **values: SimpleNamespace(**values, id=32))
+    monkeypatch.setattr(messaging, "_serialize_message", lambda row: {"id": row.id})
+    monkeypatch.setattr(messaging, "_serialize_conversation", lambda *_args: {"id": 17})
+    monkeypatch.setattr(messaging.ws_manager, "notify_new_message", notify_ws)
+
+    asyncio.run(messaging.send_message_as_admin(Db(), 17, SimpleNamespace(id=1), "We are reviewing this"))
+
+    assert conversation.participant_unread_count == 1
+    assert email_alerts == [{"user_id": 8, "participant_type": "supplier"}]
 
 
 def test_support_message_serializer_does_not_require_booking_recipient_role():

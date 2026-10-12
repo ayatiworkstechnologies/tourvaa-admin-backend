@@ -206,6 +206,16 @@ DEFAULT_EMAIL_TEMPLATES = [
         ),
     },
     {
+        "key": "support_message_received",
+        "name": "Support Message Received",
+        "subject": "New message from {{sender_name}}",
+        "body": (
+            "A new support message from {{sender_name}} is waiting in your secure Tourvaa portal.\n\n"
+            "Open the conversation to read it and reply. For privacy, the message content is not included "
+            "in this email. Replies sent directly to this notification email are not added to the conversation."
+        ),
+    },
+    {
         "key": "booking_cancelled_supplier",
         "name": "Booking Cancelled (Supplier)",
         "subject": "Booking cancelled - {{booking_code}}",
