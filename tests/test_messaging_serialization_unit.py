@@ -2,7 +2,28 @@ import asyncio
 from types import SimpleNamespace
 
 from app.services import bookings, messaging
-from app.services.messaging import _serialize_booking_conversation, _serialize_booking_message, _serialize_message
+from app.services.messaging import (
+    _booking_message_email,
+    _booking_message_url,
+    _serialize_conversation,
+    _serialize_booking_conversation,
+    _serialize_booking_message,
+    _serialize_message,
+)
+
+
+def test_booking_message_email_has_secure_reply_action_without_message_body(monkeypatch):
+    monkeypatch.setattr(messaging.settings, "FRONTEND_URL", "https://tourvaa.example/")
+
+    customer_url = _booking_message_url(booking_id=43, recipient_role="customer")
+    admin_url = _booking_message_url(booking_id=43, recipient_role="admin")
+    html = _booking_message_email(sender_label="Tourvaa Admin", message_url=customer_url)
+
+    assert customer_url == "https://tourvaa.example/customer/bookings/43#booking-messages"
+    assert admin_url == "https://tourvaa.example/admin/bookings/43?tab=communications#booking-messages"
+    assert "View message &amp; reply" in html
+    assert customer_url in html
+    assert "The message is available in your secure Tourvaa portal" in html
 
 
 def test_support_message_serializer_does_not_require_booking_recipient_role():
@@ -22,6 +43,29 @@ def test_support_message_serializer_does_not_require_booking_recipient_role():
 
     assert serialized["sender_name"] == "Agent Name"
     assert "recipient_role" not in serialized
+
+
+def test_support_conversation_serializes_both_presence_states(monkeypatch):
+    conversation = SimpleNamespace(
+        id=5,
+        participant_type="affiliate",
+        participant_user_id=12,
+        participant_user=SimpleNamespace(),
+        status="open",
+        last_message_at=None,
+        last_message_preview=None,
+        admin_unread_count=0,
+        participant_unread_count=0,
+        created_at=None,
+    )
+    monkeypatch.setattr(messaging, "_participant_profile", lambda *_args: {"name": "Affiliate", "email": "affiliate@example.com"})
+    monkeypatch.setattr(messaging.ws_manager, "is_user_online", lambda user_id: user_id == 12)
+    monkeypatch.setattr(messaging.ws_manager, "is_admin_online", lambda: False)
+
+    serialized = _serialize_conversation(SimpleNamespace(), conversation)
+
+    assert serialized["participant_online"] is True
+    assert serialized["admin_online"] is False
 
 
 def test_booking_message_serializer_keeps_admin_reply_recipient_role():
@@ -205,3 +249,67 @@ def test_supplier_booking_message_is_delivered_to_admin_not_booking_initiator(mo
     assert notifications[0]["title"] == "New supplier booking message"
     assert websocket_recipients == [8]
     assert conversation.initiator_unread_count == 0
+
+
+def test_admin_booking_reply_increments_recipient_unread_and_emails_portal_link(monkeypatch):
+    conversation = SimpleNamespace(
+        id=17,
+        booking_id=42,
+        initiator_role="agent",
+        initiator_user_id=7,
+        supplier_user_id=8,
+        initiator_unread_count=0,
+        supplier_unread_count=0,
+        booking=SimpleNamespace(booking_code="TVAA-42", tour_name="Test tour"),
+        initiator_user=SimpleNamespace(name="Agent Name"),
+        supplier_user=SimpleNamespace(name="Supplier Name"),
+        status="open",
+        last_message_at=None,
+        last_message_preview=None,
+        created_at=None,
+    )
+    emails = []
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def first(self):
+            return conversation
+
+    class Db:
+        def query(self, _model):
+            return Query()
+
+        def add(self, _row):
+            pass
+
+        def commit(self):
+            pass
+
+        def refresh(self, _row):
+            pass
+
+    async def notify_ws(_event, participant_user_id):
+        assert participant_user_id == 8
+
+    monkeypatch.setattr(messaging, "BookingMessage", lambda **values: SimpleNamespace(**values, id=25, sender=None, is_deleted=False, created_at=None))
+    monkeypatch.setattr(messaging, "enqueue_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(messaging, "_email_booking_message_recipient", lambda *args, **kwargs: emails.append(kwargs))
+    monkeypatch.setattr(messaging.ws_manager, "notify_new_message", notify_ws)
+
+    asyncio.run(messaging.send_booking_message_as_admin(
+        Db(),
+        17,
+        SimpleNamespace(id=1),
+        "Please review the update",
+        "supplier",
+    ))
+
+    assert conversation.supplier_unread_count == 1
+    assert conversation.initiator_unread_count == 0
+    assert emails == [{
+        "sender_label": "Tourvaa Admin",
+        "booking_id": 42,
+        "recipient_role": "supplier",
+    }]

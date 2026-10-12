@@ -158,6 +158,13 @@ def _notification_booking_id(db: Session, entity_type: str | None, entity_id: in
     if entity_type == "payment":
         from app.models.payments import Payment
         booking_id = (db.query(Payment.booking_id).filter(Payment.id == entity_id).scalar())
+    elif entity_type == "booking_conversation":
+        from app.models.messaging import BookingConversation
+        booking_id = (
+            db.query(BookingConversation.booking_id)
+            .filter(BookingConversation.id == entity_id)
+            .scalar()
+        )
     elif entity_type == "invoice":
         from app.models.invoices import Invoice
         booking_id = (db.query(Invoice.booking_id).filter(Invoice.id == entity_id).scalar())

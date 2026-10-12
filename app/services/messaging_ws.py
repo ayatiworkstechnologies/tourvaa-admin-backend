@@ -89,6 +89,9 @@ class MessagingConnectionManager:
     def _presence_key(self, user_id: int) -> str:
         return f"ws:presence:{user_id}:{self._instance_id}"
 
+    def _admin_presence_key(self) -> str:
+        return f"ws:admin-presence:{self._instance_id}"
+
     async def refresh_participant_presence(self, user_id: int):
         redis = await get_redis_async()
         if redis is not None:
@@ -97,11 +100,20 @@ class MessagingConnectionManager:
             except Exception as exc:
                 logger.warning("WS presence refresh failed (%s)", exc)
 
+    async def refresh_admin_presence(self):
+        redis = await get_redis_async()
+        if redis is not None:
+            try:
+                await redis.set(self._admin_presence_key(), "1", ex=PRESENCE_TTL_SECONDS)
+            except Exception as exc:
+                logger.warning("WS admin presence refresh failed (%s)", exc)
+
     async def connect_admin(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
         self._loop = asyncio.get_running_loop()
         self._admin_sockets.add(websocket)
         self._admin_sockets_by_user[user_id].add(websocket)
+        await self.refresh_admin_presence()
 
     async def connect_participant(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
@@ -123,6 +135,18 @@ class MessagingConnectionManager:
                 logger.warning("WS presence lookup failed (%s)", exc)
         return False
 
+    def is_admin_online(self) -> bool:
+        """Whether at least one messaging-enabled admin has a live socket."""
+        if self._admin_sockets:
+            return True
+        redis = get_redis_sync()
+        if redis is not None:
+            try:
+                return next(redis.scan_iter(match="ws:admin-presence:*", count=10), None) is not None
+            except Exception as exc:
+                logger.warning("WS admin presence lookup failed (%s)", exc)
+        return False
+
     def disconnect_admin(self, websocket: WebSocket, user_id: int | None = None):
         self._admin_sockets.discard(websocket)
         for uid in ([user_id] if user_id is not None else list(self._admin_sockets_by_user)):
@@ -131,6 +155,13 @@ class MessagingConnectionManager:
                 sockets.discard(websocket)
                 if not sockets:
                     self._admin_sockets_by_user.pop(uid, None)
+        if not self._admin_sockets:
+            redis = get_redis_sync()
+            if redis is not None:
+                try:
+                    redis.delete(self._admin_presence_key())
+                except Exception as exc:
+                    logger.warning("WS admin presence cleanup failed (%s)", exc)
 
     async def close_user(self, user_id: int):
         """Drop every live socket of this user held by this worker (used by
@@ -183,27 +214,58 @@ class MessagingConnectionManager:
             except Exception as exc:
                 logger.warning("WS pub/sub: presence publish failed (%s)", exc)
 
-    async def _deliver_locally(self, event: dict, participant_user_id: int):
+    async def notify_admin_presence(self, online: bool):
+        """Push aggregate Tourvaa Admin availability to every portal socket."""
+        event = {"type": "admin_presence", "online": online}
+        await self._deliver_locally(
+            event,
+            None,
+            broadcast_participants=True,
+            include_admins=False,
+        )
+        redis = await get_redis_async()
+        if redis is not None:
+            try:
+                await redis.publish(WS_PUBSUB_CHANNEL, json.dumps({
+                    "event": event,
+                    "participant_user_id": None,
+                    "broadcast_participants": True,
+                    "include_admins": False,
+                }))
+            except Exception as exc:
+                logger.warning("WS pub/sub: admin presence publish failed (%s)", exc)
+
+    async def _deliver_locally(
+        self,
+        event: dict,
+        participant_user_id: int | None,
+        *,
+        broadcast_participants: bool = False,
+        include_admins: bool = True,
+    ):
         """Delivers to sockets held by *this* worker only. Called both for a
         message created on this worker and, via start_redis_subscriber, for
         one relayed from another worker/instance."""
-        dead: list[WebSocket] = []
-        for socket in self._admin_sockets:
-            try:
-                await socket.send_json(event)
-            except Exception:
-                dead.append(socket)
-        for socket in dead:
-            self._admin_sockets.discard(socket)
+        if include_admins:
+            dead: list[WebSocket] = []
+            for socket in self._admin_sockets:
+                try:
+                    await socket.send_json(event)
+                except Exception:
+                    dead.append(socket)
+            for socket in dead:
+                self.disconnect_admin(socket)
 
-        dead = []
-        for socket in self._user_sockets.get(participant_user_id, set()):
-            try:
-                await socket.send_json(event)
-            except Exception:
-                dead.append(socket)
-        for socket in dead:
-            self.disconnect_participant(socket, participant_user_id)
+        user_ids = list(self._user_sockets) if broadcast_participants else ([participant_user_id] if participant_user_id is not None else [])
+        for user_id in user_ids:
+            dead = []
+            for socket in self._user_sockets.get(user_id, set()):
+                try:
+                    await socket.send_json(event)
+                except Exception:
+                    dead.append(socket)
+            for socket in dead:
+                self.disconnect_participant(socket, user_id)
 
     async def notify_new_message(self, event: dict, participant_user_id: int):
         await self._deliver_locally(event, participant_user_id)
@@ -238,7 +300,12 @@ async def start_redis_subscriber():
                 if "logout_user_id" in payload:
                     await ws_manager.close_user(int(payload["logout_user_id"]))
                     continue
-                await ws_manager._deliver_locally(payload["event"], payload["participant_user_id"])
+                await ws_manager._deliver_locally(
+                    payload["event"],
+                    payload.get("participant_user_id"),
+                    broadcast_participants=bool(payload.get("broadcast_participants")),
+                    include_admins=payload.get("include_admins", True),
+                )
             except Exception:
                 logger.exception("WS pub/sub: failed to relay message")
     finally:

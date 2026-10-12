@@ -47,11 +47,11 @@ class Message(Base):
 
 
 class BookingConversation(Base):
-    """Direct thread about one booking between whoever booked it (the
-    customer, or the agent who booked on their behalf) and the supplier
-    fulfilling it. Separate from Conversation (which is always "this
-    person <-> admin support") because here neither side is admin, and a
-    thread only makes sense in the context of one specific booking."""
+    """Persistence container for role-isolated, booking-specific Admin chat.
+
+    The initiator and supplier share the booking reference, but serializers
+    expose only their own messages and Admin replies addressed to their role.
+    """
     __tablename__ = "booking_conversations"
     __table_args__ = (UniqueConstraint("booking_id", "initiator_user_id", "supplier_user_id", name="uq_booking_conv_parties"),)
 

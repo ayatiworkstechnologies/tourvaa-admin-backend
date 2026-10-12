@@ -225,13 +225,16 @@ async def messages_socket(websocket: WebSocket):
 
     if is_admin_listener:
         await ws_manager.connect_admin(websocket, user.id)
+        await ws_manager.notify_admin_presence(True)
         try:
             while True:
                 await websocket.receive_text()
+                await ws_manager.refresh_admin_presence()
         except WebSocketDisconnect:
             pass
         finally:
             ws_manager.disconnect_admin(websocket, user.id)
+            await ws_manager.notify_admin_presence(ws_manager.is_admin_online())
         return
 
     if not participant_type:
