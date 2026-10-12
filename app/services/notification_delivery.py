@@ -9,9 +9,11 @@ booking, payment, or cancellation.
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from enum import StrEnum
 
 from fastapi import BackgroundTasks
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.models.notifications import NotificationDelivery
@@ -24,6 +26,17 @@ MAX_EMAIL_DELIVERY_ATTEMPTS = 3
 
 def _event_value(event: str | StrEnum) -> str:
     return str(event.value if isinstance(event, StrEnum) else event)
+
+
+def _json_safe_payload(value):
+    """Convert template data to values accepted by the JSON delivery column.
+
+    Booking and payment models deliberately use Decimal for money.  A durable
+    delivery payload is written before the asynchronous email work begins, so
+    leaving a Decimal inside it would make SQLAlchemy's JSON serializer fail
+    and incorrectly fail the successful payment request.
+    """
+    return jsonable_encoder(value, custom_encoder={Decimal: str})
 
 
 def reserve_delivery(
@@ -158,11 +171,11 @@ def dispatch_lifecycle_email(
     if not row:
         return False
 
-    row.payload_json = {
+    row.payload_json = _json_safe_payload({
         "values": values,
         "fallback_subject": fallback_subject,
         "fallback_html": fallback_html,
-    }
+    })
 
     from app.utils.mailer import dispatch_email_task
 
