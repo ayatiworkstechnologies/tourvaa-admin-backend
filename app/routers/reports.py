@@ -456,6 +456,104 @@ def audience_report(
     return {"status": "success", "data": rows, "meta": {"audience": audience, "entity_id": entity_id, "scope": "selected" if entity_id else "all", "count": len(rows)}}
 
 
+@router.get("/audience-detail")
+def audience_report_detail(
+    audience: str = Query(...),
+    entity_id: int = Query(..., ge=1),
+    params: dict = Depends(_period_params),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("reports.view", "reports.admin")),
+):
+    """Return the booking-level evidence behind one audience report row."""
+    _require_admin_report(current_user)
+    if audience not in {"supplier", "agent", "customer"}:
+        raise HTTPException(status_code=400, detail="audience must be supplier, agent, or customer")
+    if params["start"] and params["end"] and params["start"] > params["end"]:
+        raise HTTPException(status_code=400, detail="Start date must be on or before end date")
+
+    id_column = {
+        "supplier": Booking.supplier_id,
+        "agent": Booking.agent_id,
+        "customer": Booking.customer_id,
+    }[audience]
+    query = (
+        db.query(Booking)
+        .options(joinedload(Booking.customer))
+        .filter(id_column == entity_id)
+        .order_by(Booking.created_at.desc(), Booking.id.desc())
+    )
+    query = _apply_range(query, Booking.created_at, params["start"], params["end"])
+    bookings = query.all()
+
+    identity_rows = _audience_rows(db, audience, entity_id, params, current_user)
+    identity = identity_rows[0] if identity_rows else {f"{audience}_id": entity_id, f"{audience}_name": f"{audience.title()} #{entity_id}"}
+    totals = {
+        "bookings": len(bookings),
+        "travellers": 0,
+        "booking_value": Decimal("0"),
+        "paid": Decimal("0"),
+        "pending": Decimal("0"),
+        "partner_earnings": Decimal("0"),
+        "tourvaa_revenue": Decimal("0"),
+    }
+    status_breakdown: dict[str, int] = {}
+    payment_breakdown: dict[str, int] = {}
+    detail_rows = []
+
+    for booking in bookings:
+        booking_value = _amount_to_usd(booking.final_amount, booking.currency)
+        paid = _amount_to_usd(booking.amount_paid, booking.currency)
+        pending = _amount_to_usd(booking.amount_pending, booking.currency)
+        if audience == "supplier":
+            partner_earnings = _amount_to_usd(booking.supplier_net_payable, booking.currency)
+        elif audience == "agent":
+            partner_earnings = _amount_to_usd(booking.agent_commission_amount, booking.currency)
+        else:
+            partner_earnings = paid
+        tourvaa_revenue = _amount_to_usd(
+            booking.tourvaa_net_revenue if booking.tourvaa_net_revenue is not None else booking.tourvaa_gross_revenue,
+            booking.currency,
+        )
+        travellers = int(booking.total_travellers or (booking.no_of_adults or 0) + (booking.no_of_children or 0) + (booking.no_of_infants or 0))
+
+        totals["travellers"] += travellers
+        totals["booking_value"] += Decimal(str(booking_value))
+        totals["paid"] += Decimal(str(paid))
+        totals["pending"] += Decimal(str(pending))
+        totals["partner_earnings"] += Decimal(str(partner_earnings))
+        totals["tourvaa_revenue"] += Decimal(str(tourvaa_revenue))
+        status_breakdown[booking.booking_status] = status_breakdown.get(booking.booking_status, 0) + 1
+        payment_breakdown[booking.payment_status] = payment_breakdown.get(booking.payment_status, 0) + 1
+        detail_rows.append({
+            "booking_id": booking.id,
+            "booking_code": booking.booking_code or f"Booking #{booking.id}",
+            "booked_at": booking.created_at,
+            "tour_name": booking.tour_name,
+            "travel_date": booking.tour_start_date or booking.tour_date,
+            "customer_name": booking.customer.full_name if booking.customer else None,
+            "travellers": travellers,
+            "booking_status": booking.booking_status,
+            "payment_status": booking.payment_status,
+            "currency": booking.currency,
+            "booking_value": money_str(booking.final_amount),
+            "paid": money_str(booking.amount_paid),
+            "pending": money_str(booking.amount_pending),
+            "partner_earnings": money_str(booking.supplier_net_payable if audience == "supplier" else booking.agent_commission_amount if audience == "agent" else booking.amount_paid),
+            "tourvaa_revenue": money_str(booking.tourvaa_net_revenue if booking.tourvaa_net_revenue is not None else booking.tourvaa_gross_revenue),
+        })
+
+    return {
+        "status": "success",
+        "data": {
+            "identity": identity,
+            "summary": {key: (value if isinstance(value, int) else money_str(value)) for key, value in totals.items()},
+            "status_breakdown": [{"status": key, "count": value} for key, value in sorted(status_breakdown.items())],
+            "payment_breakdown": [{"status": key, "count": value} for key, value in sorted(payment_breakdown.items())],
+            "bookings": detail_rows,
+        },
+    }
+
+
 @router.get("/audience-export")
 def audience_report_export(
     audience: str = Query(...),
