@@ -420,6 +420,7 @@ def dashboard_summary(
     country_id: int | None = Query(default=None),
     supplier_id: int | None = Query(default=None),
     agent_id: int | None = Query(default=None),
+    booking_id: int | None = Query(default=None, ge=1),
     booking_status: str = Query(default=""),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("dashboard.view", "view-dashboard")),
@@ -663,6 +664,8 @@ def dashboard_summary(
         booking_query = booking_query.filter(Booking.agent_id == agent_id)
     if booking_status:
         booking_query = booking_query.filter(Booking.booking_status == booking_status.strip().lower())
+    if booking_id:
+        booking_query = booking_query.filter(Booking.id == booking_id)
 
     total_suppliers = _safe_query_count(supplier_query) if can_suppliers else 0
     pending_suppliers = _safe_query_count(supplier_query.filter(_is_pending_review(Supplier.approval_status))) if can_suppliers else 0
@@ -693,7 +696,7 @@ def dashboard_summary(
     pending_admin_users = _safe_query_count(admin_user_query.filter(_is_pending_review(User.approval_status))) if can_users else 0
 
     payment_query = _with_created_at_filters(db.query(Payment), Payment, start_date, end_date)
-    if country_id or supplier_id or agent_id or booking_status:
+    if country_id or supplier_id or agent_id or booking_status or booking_id:
         payment_query = payment_query.join(Booking, Payment.booking_id == Booking.id)
         if country_id:
             payment_query = payment_query.filter(Booking.country_id == country_id)
@@ -703,6 +706,8 @@ def dashboard_summary(
             payment_query = payment_query.filter(Booking.agent_id == agent_id)
         if booking_status:
             payment_query = payment_query.filter(Booking.booking_status == booking_status.strip().lower())
+        if booking_id:
+            payment_query = payment_query.filter(Booking.id == booking_id)
 
     # Net of refunds - see /dashboard/revenue for the same fix and rationale.
     if can_payments:
@@ -795,6 +800,8 @@ def dashboard_charts(
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     country_id: int | None = Query(default=None),
+    booking_id: int | None = Query(default=None, ge=1),
+    booking_status: str = Query(default=""),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("dashboard.view", "view-dashboard")),
 ):
@@ -819,6 +826,13 @@ def dashboard_charts(
         payment_filters.append(Payment.booking.has(Booking.country_id == country_id))
         supplier_filters.append(Supplier.country_id == country_id)
         agent_filters.append(Agent.country_id == country_id)
+    if booking_id:
+        booking_filters.append(Booking.id == booking_id)
+        payment_filters.append(Payment.booking_id == booking_id)
+    if booking_status:
+        normalized_status = booking_status.strip().lower()
+        booking_filters.append(Booking.booking_status == normalized_status)
+        payment_filters.append(Payment.booking.has(Booking.booking_status == normalized_status))
 
     # Supplier charts
     if role_slug == "supplier":
@@ -1017,6 +1031,11 @@ def _payment_status_chart_for_bookings(db: Session, *booking_filters):
 
 @router.get("/recent-activities")
 def recent_activities(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    country_id: int | None = Query(default=None),
+    booking_id: int | None = Query(default=None, ge=1),
+    booking_status: str = Query(default=""),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("dashboard.view", "view-dashboard")),
 ):
@@ -1126,18 +1145,30 @@ def recent_activities(
         .limit(10)
         .all()
     )
-    recent_bookings = (
-        db.query(Booking).order_by(Booking.created_at.desc()).limit(5).all()
-    )
+    recent_booking_query = _with_created_at_filters(db.query(Booking), Booking, start_date, end_date)
+    if country_id:
+        recent_booking_query = recent_booking_query.filter(Booking.country_id == country_id)
+    if booking_id:
+        recent_booking_query = recent_booking_query.filter(Booking.id == booking_id)
+    if booking_status:
+        recent_booking_query = recent_booking_query.filter(Booking.booking_status == booking_status.strip().lower())
+    recent_bookings = recent_booking_query.order_by(Booking.created_at.desc()).limit(5).all()
     recent_suppliers = (
         db.query(Supplier).order_by(Supplier.created_at.desc()).limit(5).all()
     )
     recent_agents = (
         db.query(Agent).order_by(Agent.created_at.desc()).limit(5).all()
     )
-    recent_payments = (
-        db.query(Payment).order_by(Payment.created_at.desc()).limit(5).all()
-    )
+    recent_payment_query = _with_created_at_filters(db.query(Payment), Payment, start_date, end_date)
+    if country_id or booking_id or booking_status:
+        recent_payment_query = recent_payment_query.join(Booking, Payment.booking_id == Booking.id)
+        if country_id:
+            recent_payment_query = recent_payment_query.filter(Booking.country_id == country_id)
+        if booking_id:
+            recent_payment_query = recent_payment_query.filter(Booking.id == booking_id)
+        if booking_status:
+            recent_payment_query = recent_payment_query.filter(Booking.booking_status == booking_status.strip().lower())
+    recent_payments = recent_payment_query.order_by(Payment.created_at.desc()).limit(5).all()
 
     return {
         "status": "success",

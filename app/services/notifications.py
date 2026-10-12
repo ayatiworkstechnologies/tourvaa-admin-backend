@@ -8,6 +8,18 @@ from app.schemas.notifications import NotificationCreate
 from app.models.users import User
 
 
+# These are immutable lifecycle events.  They are often emitted from a webhook
+# plus a request handler, so a stable key prevents duplicate in-app and browser
+# notifications without suppressing ordinary conversation/status updates.
+IDEMPOTENT_PUSH_EVENTS = {
+    "booking_created", "booking_confirmed", "booking_expired", "booking_completed",
+    "payment_success", "payment_received", "payment_captured", "payment_failed",
+    "payment_refunded", "cancellation_requested", "cancellation_approved",
+    "cancellation_rejected", "refund_processed", "invoice_generated",
+    "supplier_booking_assigned", "tour_approved", "tour_rejected",
+}
+
+
 def _is_admin(actor: "User | None") -> bool:
     if not actor or not actor.role:
         return True
@@ -24,8 +36,19 @@ def serialize_notification(n: Notification) -> dict:
 
 
 def create_notification(db: Session, data: NotificationCreate):
-    n = Notification(user_id=data.user_id, notification_type=data.notification_type, title=data.title, message=data.message, channel=data.channel, entity_type=data.entity_type, entity_id=data.entity_id, metadata_json=data.metadata, status="sent" if data.channel == "in_app" else "pending", sent_at=utcnow() if data.channel == "in_app" else None)
-    db.add(n)
+    # Manual/admin-created in-app notifications follow exactly the same
+    # committed-after-transaction browser-push path as lifecycle events.
+    n = enqueue_notification(
+        db,
+        user_id=data.user_id,
+        notification_type=data.notification_type,
+        title=data.title,
+        message=data.message,
+        channel=data.channel,
+        entity_type=data.entity_type,
+        entity_id=data.entity_id,
+        metadata=data.metadata,
+    )
     db.commit()
     db.refresh(n)
     return serialize_notification(n)
@@ -112,28 +135,79 @@ def retry_notification(db: Session, notification_id: int):
     n.status = "sent"
     n.sent_at = utcnow()
     db.add(NotificationLog(notification_id=n.id, channel=n.channel, status="sent", response="manual retry"))
+    if n.channel == "in_app":
+        from app.services.notifications_push import queue_push
+        queue_push(
+            db,
+            notification_id=n.id,
+            user_id=n.user_id,
+            title=n.title,
+            body=n.message,
+            url=(n.metadata_json or {}).get("action_url") or "/",
+        )
     db.commit()
     db.refresh(n)
     return serialize_notification(n)
 
 
-def enqueue_notification(db: Session, *, user_id: int | None, notification_type: str, title: str, message: str, entity_type: str | None = None, entity_id: int | None = None, channel: str = "in_app", metadata: dict | None = None):
-    n = Notification(user_id=user_id, notification_type=notification_type, title=title, message=message, channel=channel, entity_type=entity_type, entity_id=entity_id, metadata_json=metadata, status="sent" if channel == "in_app" else "pending", sent_at=utcnow() if channel == "in_app" else None)
+def _notification_url(db: Session, user_id: int | None, entity_type: str | None, entity_id: int | None) -> str | None:
+    """Resolve only verified portal routes; never guess a deep link."""
+    if not user_id or not entity_type or not entity_id:
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    slug = (user.role.slug if user and user.role else "").lower()
+    booking_id = entity_id if entity_type == "booking" else None
+    if entity_type == "payment":
+        from app.models.payments import Payment
+        booking_id = (db.query(Payment.booking_id).filter(Payment.id == entity_id).scalar())
+    elif entity_type == "invoice":
+        from app.models.invoices import Invoice
+        booking_id = (db.query(Invoice.booking_id).filter(Invoice.id == entity_id).scalar())
+    elif entity_type == "cancellation_request":
+        from app.models.cancellations import CancellationRequest
+        booking_id = (db.query(CancellationRequest.booking_id).filter(CancellationRequest.id == entity_id).scalar())
+    if booking_id:
+        if "supplier" in slug:
+            return f"/supplier/bookings/{booking_id}"
+        if "agent" in slug or "reseller" in slug:
+            return f"/agent/bookings/{booking_id}"
+        if "customer" in slug:
+            return f"/customer/bookings/{booking_id}"
+        if "admin" in slug:
+            return f"/admin/bookings/{booking_id}"
+    if "admin" in slug:
+        admin_paths = {"supplier": "suppliers", "agent": "agents", "affiliate": "affiliates", "tour": "tours", "tour_version": "tours"}
+        if entity_type in admin_paths:
+            return f"/admin/{admin_paths[entity_type]}/{entity_id}"
+    return None
+
+
+def enqueue_notification(db: Session, *, user_id: int | None, notification_type: str, title: str, message: str, entity_type: str | None = None, entity_id: int | None = None, channel: str = "in_app", metadata: dict | None = None, event_key: str | None = None, event_version: str = "1"):
+    event_key = event_key or (notification_type if notification_type in IDEMPOTENT_PUSH_EVENTS else None)
+    key = None
+    if event_key and user_id and entity_type and entity_id:
+        key = f"{event_key}:{entity_type}:{entity_id}:{user_id}:{event_version}"
+        existing = db.query(Notification).filter(Notification.idempotency_key == key).first()
+        if existing:
+            return existing
+    details = dict(metadata or {})
+    details.setdefault("action_url", _notification_url(db, user_id, entity_type, entity_id))
+    n = Notification(user_id=user_id, notification_type=notification_type, title=title, message=message, channel=channel, entity_type=entity_type, entity_id=entity_id, metadata_json=details, event_key=event_key or notification_type, event_version=event_version, idempotency_key=key, status="sent" if channel == "in_app" else "pending", sent_at=utcnow() if channel == "in_app" else None)
     db.add(n)
     db.flush()
     db.add(NotificationLog(notification_id=n.id, channel=channel, status=n.status, response="queued"))
     if channel == "in_app":
         # Also shown as a browser push, once the caller's transaction commits.
         from app.services.notifications_push import queue_push
-        queue_push(db, user_id=user_id, title=title, body=message)
+        queue_push(db, notification_id=n.id, user_id=user_id, title=title, body=message, url=details.get("action_url") or "/")
     return n
 
 
-def notify_admins(db: Session, *, notification_type: str, title: str, message: str, entity_type: str | None = None, entity_id: int | None = None):
+def notify_admins(db: Session, *, notification_type: str, title: str, message: str, entity_type: str | None = None, entity_id: int | None = None, metadata: dict | None = None, event_key: str | None = None, event_version: str = "1"):
     from app.models.users import User
     from app.models.roles import Role
     rows = db.query(User).join(Role, User.role_id == Role.id).filter(Role.slug.in_(["super-admin", "admin"])).all()
     for user in rows:
-        enqueue_notification(db, user_id=user.id, notification_type=notification_type, title=title, message=message, entity_type=entity_type, entity_id=entity_id)
+        enqueue_notification(db, user_id=user.id, notification_type=notification_type, title=title, message=message, entity_type=entity_type, entity_id=entity_id, metadata=metadata, event_key=event_key, event_version=event_version)
 
 

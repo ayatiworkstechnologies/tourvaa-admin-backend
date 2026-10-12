@@ -13,6 +13,44 @@ from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierP
 from app.schemas.supplier_ledger import SupplierPayoutCreate, SupplierPayoutMarkPaid
 from app.models.suppliers import Supplier
 from app.models.users import User
+from app.config import settings
+
+
+def _email_payout_event(db: Session, payout: SupplierPayout, *, event: str, title: str, detail: str) -> None:
+    """Use the durable lifecycle sender for every supplier-payout state."""
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails, dispatch_lifecycle_email
+
+    supplier = payout.supplier
+    portal_url = f"{settings.FRONTEND_URL}/supplier/payouts"
+    values = {
+        "supplier_name": supplier.supplier_name if supplier else "Supplier",
+        "payout_code": payout.payout_code or payout.id,
+        "amount": payout.total_amount,
+        "currency": payout.currency,
+        "reference_number": payout.reference_number or "Pending",
+        "detail": detail,
+        "portal_url": portal_url,
+    }
+    if supplier and supplier.user and supplier.user.email:
+        dispatch_lifecycle_email(
+            db, event=event, entity_type="supplier_payout", entity_id=payout.id,
+            recipient_type="supplier", recipient_email=supplier.user.email,
+            template_key="supplier_payout_event", values=values,
+            fallback_subject=f"{title} - {payout.payout_code or payout.id}",
+            fallback_html=f"<p>Hi {supplier.supplier_name},</p><p>{detail}</p><p>Payout {payout.payout_code or payout.id}: {payout.currency} {payout.total_amount}</p><p><a href='{portal_url}'>View payouts</a></p>",
+            event_version=str(payout.id),
+        )
+    admin_url = f"{settings.FRONTEND_URL}/admin/supplier-payouts/{payout.id}"
+    dispatch_admin_lifecycle_emails(
+        db, event=event, entity_type="supplier_payout", entity_id=payout.id,
+        template_key="admin_booking_event",
+        values={"event_title": title, "detail": detail, "booking_code": payout.payout_code or payout.id,
+                "tour_name": supplier.supplier_name if supplier else "Supplier payout", "admin_url": admin_url,
+                "button_text": "View payout", "button_url": admin_url},
+        fallback_subject=f"{title} - {payout.payout_code or payout.id}",
+        fallback_html=f"<p>{detail}</p><p><a href='{admin_url}'>View payout</a></p>",
+        event_version=str(payout.id),
+    )
 
 
 def _payout_code(payout_id: int) -> str:
@@ -358,7 +396,9 @@ def create_payout(db: Session, data: SupplierPayoutCreate, actor: User, request=
 
     db.commit()
     db.refresh(payout)
+    _email_payout_event(db, payout, event="supplier_settlement_generated", title="Supplier payout created", detail=f"A payout of {payout.currency} {payout.total_amount} has been created and is awaiting approval.")
     log_audit(db, actor=actor, action="create_supplier_payout", entity_type="supplier_payout", entity_id=payout.id, old_values={}, new_values={"supplier_id": supplier_id, "amount": str(total)}, request=request)
+    db.commit()
     return _serialize_payout(payout)
 
 
@@ -373,7 +413,9 @@ def approve_payout(db: Session, payout_id: int, actor: User, request=None) -> di
     payout.approved_by = actor.id
     db.commit()
     db.refresh(payout)
+    _email_payout_event(db, payout, event="supplier_settlement_due", title="Supplier payout approved", detail=f"Your payout of {payout.currency} {payout.total_amount} has been approved for payment.")
     log_audit(db, actor=actor, action="approve_supplier_payout", entity_type="supplier_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "approved"}, request=request)
+    db.commit()
     return _serialize_payout(payout)
 
 
@@ -416,6 +458,8 @@ def mark_payout_paid(db: Session, payout_id: int, data: SupplierPayoutMarkPaid, 
         enqueue_notification(db, user_id=payout.supplier.user_id, notification_type="payout_completed", title="Payout Processed", message=f"Your payout of {payout.total_amount} {payout.currency} has been processed. Ref: {payout.reference_number or 'N/A'}", entity_type="supplier_payout", entity_id=payout.id)
         db.commit()
 
+    _email_payout_event(db, payout, event="supplier_settlement_paid", title="Supplier payout processed", detail=f"Your payout of {payout.currency} {payout.total_amount} has been processed. Reference: {payout.reference_number or 'N/A'}.")
     log_audit(db, actor=actor, action="mark_payout_paid", entity_type="supplier_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "paid"}, request=request)
+    db.commit()
     return _serialize_payout(payout)
 

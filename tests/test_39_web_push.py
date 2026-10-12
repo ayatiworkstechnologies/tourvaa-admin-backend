@@ -6,7 +6,7 @@ import requests
 
 import app.main  # noqa: F401 - registers every model
 from app.database import SessionLocal
-from app.models.notifications import NotificationLog, PushSubscription
+from app.models.notifications import Notification, NotificationLog, PushDeliveryLog, PushSubscription
 from app.services import notifications_push as push
 from app.services.notifications import enqueue_notification
 from tests.conftest import BASE_URL
@@ -34,7 +34,7 @@ def test_push_is_sent_after_commit(monkeypatch):
         n = enqueue_notification(db, user_id=1, notification_type="push_unit_test", title="T", message="M")
         assert calls == []  # nothing before commit
         db.commit()
-        assert calls == [(1, "T", "M")]
+        assert calls == [(n.id, 1, "T", "M", "/")]
     finally:
         db.query(NotificationLog).filter(NotificationLog.notification_id == n.id).delete()
         db.delete(n)
@@ -55,7 +55,7 @@ def test_no_push_after_rollback(monkeypatch):
         db.close()
 
 
-def test_gone_subscriptions_are_removed_others_kept(monkeypatch):
+def test_gone_subscriptions_are_deactivated_others_kept(monkeypatch):
     db = SessionLocal()
     gone = push.save_subscription(db, endpoint="https://push.example.test/gone-" + "x" * 600, p256dh="k", auth="a")
     alive = push.save_subscription(db, endpoint="https://push.example.test/alive", p256dh="k", auth="a")
@@ -63,9 +63,11 @@ def test_gone_subscriptions_are_removed_others_kept(monkeypatch):
     monkeypatch.setattr(push, "send_push", lambda sub, **_: results[sub.id])
     try:
         assert push._deliver(db, [gone, alive], title="t", body="b") == {"sent": 0, "failed": 2}
-        ids = {s.id for s in db.query(PushSubscription).filter(PushSubscription.id.in_([gone.id, alive.id]))}
-        assert ids == {alive.id}  # only the 404/410 one is deleted
+        statuses = {s.id: s.is_active for s in db.query(PushSubscription).filter(PushSubscription.id.in_([gone.id, alive.id]))}
+        assert statuses == {gone.id: 0, alive.id: 1}
     finally:
+        db.query(PushDeliveryLog).filter(PushDeliveryLog.subscription_id.in_([gone.id, alive.id])).delete(synchronize_session=False)
+        db.query(PushSubscription).filter(PushSubscription.id == gone.id).delete(synchronize_session=False)
         push.delete_subscription(db, "https://push.example.test/alive")
         db.close()
 
@@ -79,6 +81,40 @@ def test_resubscribing_same_browser_updates_not_duplicates():
         assert first.id == second.id and second.p256dh == "k2"
     finally:
         push.delete_subscription(db, endpoint)
+        db.close()
+
+
+def test_failed_delivery_retries_same_audit_row(monkeypatch):
+    db = SessionLocal()
+    endpoint = "https://push.example.test/retry-" + "z" * 600
+    notification = Notification(
+        user_id=1,
+        notification_type="push_retry_test",
+        title="Retry title",
+        message="Retry body",
+        channel="in_app",
+        status="sent",
+        metadata_json={"action_url": "/admin/bookings/1"},
+    )
+    db.add(notification)
+    db.commit()
+    sub = push.save_subscription(db, endpoint=endpoint, p256dh="k", auth="a")
+    try:
+        monkeypatch.setattr(push, "send_push", lambda *_args, **_kwargs: "failed")
+        push._deliver(db, [sub], notification_id=notification.id, recipient_user_id=1, title=notification.title, body=notification.message)
+        row = db.query(PushDeliveryLog).filter(PushDeliveryLog.notification_id == notification.id).one()
+        assert row.status == "failed" and row.attempt_count == 1
+
+        monkeypatch.setattr(push, "send_push", lambda *_args, **_kwargs: "sent")
+        assert push.retry_failed_push_deliveries(db) == {"retried": 1, "sent": 1, "failed": 0, "skipped": 0}
+        db.refresh(row)
+        assert row.status == "sent" and row.attempt_count == 2
+    finally:
+        db.query(PushDeliveryLog).filter(PushDeliveryLog.notification_id == notification.id).delete(synchronize_session=False)
+        push.delete_subscription(db, endpoint)
+        db.query(NotificationLog).filter(NotificationLog.notification_id == notification.id).delete(synchronize_session=False)
+        db.delete(notification)
+        db.commit()
         db.close()
 
 

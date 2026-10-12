@@ -14,6 +14,8 @@ from app.models.suppliers import Supplier
 from app.models.users import User
 from app.services.notifications import enqueue_notification, notify_admins
 from app.services.messaging_ws import ws_manager
+from app.utils.email_templates import base_email, esc
+from app.utils.notification_triggers import email_admins, send_templated_email
 from app.utils.money import utcnow
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,44 @@ def _notification_preview(body: str) -> str:
     """Keep notification and browser-push bodies short and readable."""
     clean = " ".join((body or "").split())
     return clean if len(clean) <= PREVIEW_LENGTH else f"{clean[:PREVIEW_LENGTH - 1].rstrip()}…"
+
+
+def _booking_message_email(*, sender_label: str) -> str:
+    return base_email(
+        "New booking message",
+        f"You have a new message from {esc(sender_label)}.",
+        "<p style=\"margin:0;\">Sign in to Tourvaa to read and reply securely.</p>",
+    )
+
+
+def _email_booking_message_recipient(db: Session, user_id: int, *, sender_label: str) -> None:
+    """Best-effort alert; mail delivery must never block a portal message."""
+    try:
+        recipient = db.query(User).filter(User.id == user_id).first()
+        send_templated_email(
+            db,
+            recipient.email if recipient else None,
+            "booking_message_received",
+            {"sender_name": sender_label},
+            "New message from Tourvaa",
+            _booking_message_email(sender_label=sender_label),
+        )
+    except Exception as exc:
+        logger.warning("Booking-message email to user %s failed: %s", user_id, exc)
+
+
+def _email_booking_message_admins(db: Session, *, sender_label: str, subject: str) -> None:
+    """Best-effort operational alert; the in-app notification remains primary."""
+    try:
+        email_admins(
+            db,
+            "booking_message_received",
+            {"sender_name": sender_label},
+            subject,
+            _booking_message_email(sender_label=sender_label),
+        )
+    except Exception as exc:
+        logger.warning("Booking-message email to admins failed: %s", exc)
 
 
 def participant_type_for_user(user: User) -> Optional[str]:
@@ -454,6 +494,7 @@ async def send_booking_message_as_admin(db: Session, conversation_id: int, admin
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
     enqueue_notification(db, user_id=recipient_user_id, notification_type="booking_message_received", title="New message from Tourvaa", message=_notification_preview(body), entity_type="booking_conversation", entity_id=conv.id)
+    _email_booking_message_recipient(db, recipient_user_id, sender_label="Tourvaa")
     db.commit(); db.refresh(msg); db.refresh(conv)
     serialized = _serialize_booking_message(msg)
     await ws_manager.notify_new_message({"type": "new_booking_message", "conversation": _serialize_booking_conversation(conv, hide_supplier_identity=recipient_role != "supplier"), "message": serialized}, participant_user_id=recipient_user_id)
@@ -572,6 +613,11 @@ async def send_booking_message_as_initiator(db: Session, booking_id: int, actor:
         entity_type="booking_conversation",
         entity_id=conv.id,
     )
+    _email_booking_message_admins(
+        db,
+        sender_label=conv.initiator_role.capitalize(),
+        subject=f"New {conv.initiator_role} booking message",
+    )
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
@@ -605,6 +651,7 @@ async def send_booking_message_as_supplier(db: Session, conversation_id: int, su
         entity_type="booking_conversation",
         entity_id=conv.id,
     )
+    _email_booking_message_admins(db, sender_label="Supplier", subject="New supplier booking message")
     db.commit()
     db.refresh(msg)
     db.refresh(conv)

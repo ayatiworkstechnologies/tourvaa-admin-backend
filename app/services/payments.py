@@ -21,6 +21,27 @@ def _payment_code(payment_id: int) -> str:
     return str(payment_id)
 
 
+def _email_admin_payment_event(db: Session, payment: Payment, title: str, detail: str, event: str) -> None:
+    """Operational mail is separate from the customer/agent receipt."""
+    booking = payment.booking
+    if not booking:
+        return
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+    from app.utils.email_templates import admin_booking_event_email
+    admin_url = f"{settings.FRONTEND_URL}/admin/payments/{payment.id}"
+    dispatch_admin_lifecycle_emails(
+        db, event=event, entity_type="payment", entity_id=payment.id,
+        template_key="admin_booking_event",
+        values={"event_title": title, "detail": detail, "booking_code": booking.booking_code,
+                "tour_name": booking.tour_name, "admin_url": admin_url,
+                "button_text": "View payment", "button_url": admin_url},
+        fallback_subject=f"{title} - {booking.booking_code}",
+        fallback_html=admin_booking_event_email(title, detail, booking.booking_code, booking.tour_name, admin_url),
+        event_version=str(payment.id),
+    )
+
+
 def _email_customer_payment_received(db: Session, payment: Payment, amount) -> None:
     booking = payment.booking
     customer = booking.customer if booking else None
@@ -61,6 +82,33 @@ def _email_customer_payment_received(db: Session, payment: Payment, amount) -> N
                 event_version=str(payment.id),
             )
     notify_admins(db, notification_type="payment_received", title="Payment received", message=f"Payment of {booking.currency} {amount} was received for booking {booking.booking_code}.", entity_type="payment", entity_id=payment.id)
+    _email_admin_payment_event(db, payment, "Payment received", f"Payment of {booking.currency} {amount} was received for booking {booking.booking_code}.", event)
+
+
+def notify_payment_failed(db: Session, payment: Payment, reason: str) -> None:
+    """Notify only after the gateway has authoritatively marked a payment failed."""
+    booking = payment.booking
+    if not booking:
+        return
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    values = {"booking_code": booking.booking_code, "tour_name": booking.tour_name,
+              "reason": reason or "Please retry your payment.", "login_url": ""}
+    if booking.booking_source != "agent" and booking.customer and booking.customer.email:
+        url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        dispatch_lifecycle_email(db, event="payment_failed", entity_type="payment", entity_id=payment.id,
+            recipient_type="customer", recipient_email=booking.customer.email, template_key="payment_failed",
+            values={**values, "name": booking.customer.full_name, "login_url": url},
+            fallback_subject=f"Payment failed - {booking.booking_code}",
+            fallback_html=f"<p>We could not complete payment for {booking.booking_code}. {reason}</p><p><a href='{url}'>Retry payment</a></p>", event_version=str(payment.id))
+    if booking.agent and booking.agent.user and booking.agent.user.email:
+        url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
+        dispatch_lifecycle_email(db, event="payment_failed", entity_type="payment", entity_id=payment.id,
+            recipient_type="agent", recipient_email=booking.agent.user.email, template_key="payment_failed",
+            values={**values, "name": booking.agent.agent_name, "login_url": url},
+            fallback_subject=f"Payment failed - {booking.booking_code}",
+            fallback_html=f"<p>We could not complete payment for {booking.booking_code}. {reason}</p><p><a href='{url}'>View booking</a></p>", event_version=str(payment.id))
+    _email_admin_payment_event(db, payment, "Payment failure", f"Payment {payment.payment_code or payment.id} failed for booking {booking.booking_code}. Reason: {reason}", "payment_failed")
 
 
 def _email_customer_refund_processed(db: Session, payment: Payment, amount) -> None:
@@ -525,6 +573,11 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
             entity_type="payment",
             entity_id=payment.id,
         )
+        _email_admin_payment_event(
+            db, payment, "Refund failed",
+            f"Gateway refund of {money_str(amount)} for {payment.payment_code} failed: {error.detail}",
+            "refund_failed",
+        )
         db.commit()
         raise
 
@@ -544,6 +597,11 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
     db.commit()
     db.refresh(payment)
     _email_customer_refund_processed(db, payment, amount)
+    _email_admin_payment_event(
+        db, payment, "Refund completed",
+        f"Refund of {money_str(amount)} was processed for payment {payment.payment_code}.",
+        "refund_completed",
+    )
     result = serialize_payment(payment, detail=True)
     result["gateway_refund_id"] = gateway_refund_id
     return result

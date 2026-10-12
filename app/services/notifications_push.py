@@ -17,7 +17,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.notifications import PushSubscription
+from app.models.notifications import Notification, PushDeliveryLog, PushSubscription
+from app.utils.money import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ _GONE_STATUSES = {404, 410}
 
 DEFAULT_ICON = "/favicon.ico"
 PUSH_TTL_SECONDS = 24 * 60 * 60
+MAX_PUSH_DELIVERY_ATTEMPTS = 3
 
 
 def _vapid_private_key() -> str | None:
@@ -49,10 +51,14 @@ def endpoint_hash(endpoint: str) -> str:
     return hashlib.sha256(endpoint.encode()).hexdigest()
 
 
-def save_subscription(db: Session, *, endpoint: str, p256dh: str, auth: str, user_id: int | None = None) -> PushSubscription:
+def save_subscription(db: Session, *, endpoint: str, p256dh: str, auth: str, user_id: int | None = None, platform: str | None = None, device_type: str | None = None) -> PushSubscription:
     def _update(existing: PushSubscription) -> PushSubscription:
         existing.p256dh = p256dh
         existing.auth = auth
+        existing.platform = platform or existing.platform
+        existing.device_type = device_type or existing.device_type
+        existing.is_active = 1
+        existing.last_used_at = utcnow()
         if user_id:
             existing.user_id = user_id
         db.commit()
@@ -64,7 +70,7 @@ def save_subscription(db: Session, *, endpoint: str, p256dh: str, auth: str, use
     if existing:
         return _update(existing)
 
-    sub = PushSubscription(endpoint=endpoint, endpoint_hash=digest, p256dh=p256dh, auth=auth, user_id=user_id)
+    sub = PushSubscription(endpoint=endpoint, endpoint_hash=digest, p256dh=p256dh, auth=auth, user_id=user_id, platform=platform, device_type=device_type, is_active=1, last_used_at=utcnow())
     db.add(sub)
     try:
         db.commit()
@@ -125,23 +131,31 @@ def send_push(sub: PushSubscription, *, title: str, body: str, url: str = "/", i
         return "failed"
 
 
-def _deliver(db: Session, subs: list[PushSubscription], **message) -> dict:
+def _deliver(db: Session, subs: list[PushSubscription], notification_id: int | None = None, event_key: str | None = None, recipient_user_id: int | None = None, **message) -> dict:
     sent = failed = 0
     for sub in list(subs):
+        log = PushDeliveryLog(notification_id=notification_id, subscription_id=sub.id, event_key=event_key, recipient_user_id=recipient_user_id or sub.user_id, status="processing", attempt_count=1)
+        db.add(log)
         result = send_push(sub, **message)
         if result == "sent":
             sent += 1
+            log.status = "sent"
+            log.sent_at = utcnow()
+            sub.last_used_at = utcnow()
         else:
             failed += 1
+            log.status = "invalid_token" if result == "gone" else "failed"
+            log.failed_at = utcnow()
+            log.error_message = "Subscription expired" if result == "gone" else "Web push delivery failed"
             if result == "gone":
-                db.delete(sub)
+                sub.is_active = 0
                 subs.remove(sub)  # don't reuse it for this user's next push
     db.commit()
     return {"sent": sent, "failed": failed}
 
 
 def broadcast_push(db: Session, *, title: str, body: str, url: str = "/", icon: str = DEFAULT_ICON, user_ids: list[int] | None = None) -> dict:
-    query = db.query(PushSubscription)
+    query = db.query(PushSubscription).filter(PushSubscription.is_active == 1)
     if user_ids:
         query = query.filter(PushSubscription.user_id.in_(user_ids))
     return _deliver(db, query.all(), title=title, body=body, url=url, icon=icon)
@@ -162,33 +176,81 @@ def _portal_url(role_slug: str) -> str:
     return "/admin/notifications"
 
 
-def queue_push(db: Session, *, user_id: int | None, title: str, body: str) -> None:
+def queue_push(db: Session, *, notification_id: int | None, user_id: int | None, title: str, body: str, url: str = "/") -> None:
     """Called by enqueue_notification(); sent after the transaction commits."""
     if user_id and is_configured():
-        db.info.setdefault(_PENDING_KEY, []).append((user_id, title, body))
+        db.info.setdefault(_PENDING_KEY, []).append((notification_id, user_id, title, body, url))
 
 
-def _push_worker(items: list[tuple[int, str, str]]) -> None:
+def _push_worker(items: list[tuple[int | None, int, str, str, str]]) -> None:
     from app.database import SessionLocal
     from app.models.users import User
 
     db = SessionLocal()
     try:
-        user_ids = {user_id for user_id, _, _ in items}
+        user_ids = {user_id for _, user_id, _, _, _ in items}
         subs_by_user: dict[int, list[PushSubscription]] = {}
-        for sub in db.query(PushSubscription).filter(PushSubscription.user_id.in_(user_ids)):
+        for sub in db.query(PushSubscription).filter(PushSubscription.user_id.in_(user_ids), PushSubscription.is_active == 1):
             subs_by_user.setdefault(sub.user_id, []).append(sub)
         if not subs_by_user:
             return
         roles = {u.id: (u.role.slug if u.role else "") for u in db.query(User).filter(User.id.in_(subs_by_user))}
-        for user_id, title, body in items:
+        notifications = {n.id: n for n in db.query(Notification).filter(Notification.id.in_([notification_id for notification_id, *_ in items if notification_id])).all()}
+        for notification_id, user_id, title, body, url in items:
             subs = subs_by_user.get(user_id)
             if subs:
-                _deliver(db, subs, title=title, body=body, url=_portal_url(roles.get(user_id, "")))
+                row = notifications.get(notification_id)
+                _deliver(db, subs, notification_id=notification_id, event_key=row.event_key if row else None, recipient_user_id=user_id, title=title, body=body, url=url or _portal_url(roles.get(user_id, "")))
     except Exception:
         logger.exception("Background web push failed")
     finally:
         db.close()
+
+
+def retry_failed_push_deliveries(db: Session) -> dict:
+    """Retry transient browser-push failures using the original notification.
+
+    A delivery row is updated in place: this preserves a real per-device audit
+    trail and gives a finite attempt count even when workers restart.
+    """
+    rows = (
+        db.query(PushDeliveryLog)
+        .filter(PushDeliveryLog.status == "failed", PushDeliveryLog.attempt_count < MAX_PUSH_DELIVERY_ATTEMPTS)
+        .order_by(PushDeliveryLog.id.asc())
+        .limit(100)
+        .all()
+    )
+    sent = failed = skipped = 0
+    for row in rows:
+        sub = db.query(PushSubscription).filter(PushSubscription.id == row.subscription_id).first()
+        notification = db.query(Notification).filter(Notification.id == row.notification_id).first()
+        if not sub or not sub.is_active or not notification:
+            row.status = "skipped"
+            row.error_message = "Subscription or notification is no longer available"
+            skipped += 1
+            continue
+        metadata = notification.metadata_json or {}
+        result = send_push(sub, title=notification.title, body=notification.message, url=metadata.get("action_url") or "/")
+        row.attempt_count += 1
+        if result == "sent":
+            row.status = "sent"
+            row.error_message = None
+            row.sent_at = utcnow()
+            sub.last_used_at = utcnow()
+            sent += 1
+        elif result == "gone":
+            row.status = "invalid_token"
+            row.error_message = "Subscription expired"
+            row.failed_at = utcnow()
+            sub.is_active = 0
+            failed += 1
+        else:
+            row.status = "failed"
+            row.error_message = "Web push delivery failed"
+            row.failed_at = utcnow()
+            failed += 1
+    db.commit()
+    return {"retried": len(rows), "sent": sent, "failed": failed, "skipped": skipped}
 
 
 @event.listens_for(Session, "after_commit")

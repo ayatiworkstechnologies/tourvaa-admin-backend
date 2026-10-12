@@ -400,7 +400,13 @@ def complete_registration(db: Session, token: str, password: str):
         new_values={"account_status": "ACTIVE"},
     )
     if supplier:
-        from app.utils.notification_triggers import notify_supplier_approval_pending
+        from app.utils.notification_triggers import notify_supplier_approval_pending, notify_supplier_registered
+        notify_supplier_registered(
+            db,
+            supplier_id=supplier.id,
+            supplier_name=supplier.supplier_name,
+            user_id=user.id,
+        )
         notify_supplier_approval_pending(
             db,
             supplier_id=supplier.id,

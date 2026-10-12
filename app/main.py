@@ -427,6 +427,8 @@ BALANCE_DUE_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
 # Booking reminders use durable communication markers and may be checked
 # hourly; this avoids duplicate sends after an application restart.
 BOOKING_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
+EMAIL_RETRY_SWEEP_INTERVAL_SECONDS = 15 * 60
+PUSH_RETRY_SWEEP_INTERVAL_SECONDS = 15 * 60
 
 
 async def _booking_reminder_loop():
@@ -445,6 +447,42 @@ async def _booking_reminder_loop():
                 db.close()
         except Exception:
             logger.exception("Booking reminder sweep failed")
+
+
+async def _email_retry_loop():
+    from app.services.notification_delivery import retry_failed_lifecycle_emails
+    from app.utils.distributed_lock import acquire_sweep_lock
+
+    while True:
+        await asyncio.sleep(EMAIL_RETRY_SWEEP_INTERVAL_SECONDS)
+        try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "lifecycle_email_retry", EMAIL_RETRY_SWEEP_INTERVAL_SECONDS - 60):
+                continue
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(retry_failed_lifecycle_emails, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Lifecycle email retry sweep failed")
+
+
+async def _push_retry_loop():
+    from app.services.notifications_push import retry_failed_push_deliveries
+    from app.utils.distributed_lock import acquire_sweep_lock
+
+    while True:
+        await asyncio.sleep(PUSH_RETRY_SWEEP_INTERVAL_SECONDS)
+        try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "push_delivery_retry", PUSH_RETRY_SWEEP_INTERVAL_SECONDS - 60):
+                continue
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(retry_failed_push_deliveries, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Push delivery retry sweep failed")
 
 
 async def _balance_due_reminder_loop():
@@ -567,6 +605,8 @@ async def start_background_jobs():
         _background_tasks.append(asyncio.create_task(_report_schedule_loop()))
         _background_tasks.append(asyncio.create_task(_balance_due_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_booking_reminder_loop()))
+        _background_tasks.append(asyncio.create_task(_email_retry_loop()))
+        _background_tasks.append(asyncio.create_task(_push_retry_loop()))
         _background_tasks.append(asyncio.create_task(_tour_availability_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_wishlist_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_chat_retention_loop()))

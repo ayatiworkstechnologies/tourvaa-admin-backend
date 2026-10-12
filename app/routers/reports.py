@@ -718,10 +718,31 @@ def cancellation_refund_report(
 # profile via get_actor_supplier, never platform-wide.
 # ---------------------------------------------------------------------------
 
+def _supplier_report_booking_query(db: Session, supplier_id: int, *, period: str, start_date: str, end_date: str, booking_status: str = "", payment_status: str = ""):
+    """Base query for supplier self-service reports.
+
+    The supplier id is always resolved server-side.  Period filters use the
+    booking creation date, making weekly/monthly/quarterly totals consistent
+    with the individual booking rows and CSV exports.
+    """
+    if period not in PERIODS:
+        raise HTTPException(status_code=400, detail=f"period must be one of {sorted(PERIODS)}")
+    start, end = _period_range(period, start_date, end_date)
+    query = _apply_range(
+        db.query(Booking).filter(Booking.supplier_id == supplier_id),
+        Booking.created_at, start, end,
+    )
+    if booking_status:
+        query = query.filter(Booking.booking_status == booking_status.strip().lower())
+    if payment_status:
+        query = query.filter(Booking.payment_status == payment_status.strip().lower())
+    return query
+
 @router.get("/my-bookings")
 def my_bookings_report(
     booking_status: str = Query(default=""),
     payment_status: str = Query(default=""),
+    period: str = Query(default="all", description="day|week|month|quarter|half_year|year|custom|all"),
     start_date: str = Query(default=""),
     end_date: str = Query(default=""),
     db: Session = Depends(get_db),
@@ -729,15 +750,10 @@ def my_bookings_report(
 ):
     from app.services.supplier_scope import get_actor_supplier
     supplier = get_actor_supplier(db, current_user)
-    query = db.query(Booking).filter(Booking.supplier_id == supplier.id).options(joinedload(Booking.customer), joinedload(Booking.agent))
-    if booking_status:
-        query = query.filter(Booking.booking_status == booking_status.strip().lower())
-    if payment_status:
-        query = query.filter(Booking.payment_status == payment_status.strip().lower())
-    if start_date:
-        query = query.filter(Booking.created_at >= _parse_date(start_date))
-    if end_date:
-        query = query.filter(Booking.created_at <= _parse_date(end_date, end_of_day=True))
+    query = _supplier_report_booking_query(
+        db, supplier.id, period=period, start_date=start_date, end_date=end_date,
+        booking_status=booking_status, payment_status=payment_status,
+    ).options(joinedload(Booking.customer), joinedload(Booking.agent))
     rows = query.order_by(Booking.created_at.desc()).limit(ROW_REPORT_LIMIT).all()
 
     data = []
@@ -760,6 +776,51 @@ def my_bookings_report(
             "special_requests": b.customer_notes,
         })
     return {"status": "success", "data": data}
+
+
+@router.get("/my-bookings-summary")
+def my_bookings_summary(
+    booking_status: str = Query(default=""),
+    payment_status: str = Query(default=""),
+    period: str = Query(default="all", description="day|week|month|quarter|half_year|year|custom|all"),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("reports.view", "reports.supplier")),
+):
+    """Supplier-only totals and status breakdown for the selected period."""
+    from app.services.supplier_scope import get_actor_supplier
+    supplier = get_actor_supplier(db, current_user)
+    query = _supplier_report_booking_query(
+        db, supplier.id, period=period, start_date=start_date, end_date=end_date,
+        booking_status=booking_status, payment_status=payment_status,
+    )
+    total = query.with_entities(func.count(Booking.id)).scalar() or 0
+    confirmed = query.filter(Booking.booking_status.in_(["confirmed", "ready_to_travel", "upcoming"])).with_entities(func.count(Booking.id)).scalar() or 0
+    completed = query.filter(Booking.booking_status == "completed").with_entities(func.count(Booking.id)).scalar() or 0
+    pending = query.filter(Booking.booking_status.in_(["pending_supplier_acceptance", "pending_payment", "pending_supplier_assignment"])).with_entities(func.count(Booking.id)).scalar() or 0
+    cancelled = query.filter(Booking.booking_status.in_(["cancelled", "declined", "refunded"])).with_entities(func.count(Booking.id)).scalar() or 0
+
+    amount_column = func.coalesce(Booking.supplier_gross_amount, Booking.final_amount)
+    amounts = [
+        {"currency": currency or "USD", "booking_value": _money(amount), "bookings": count}
+        for currency, count, amount in query.with_entities(
+            Booking.currency, func.count(Booking.id), func.coalesce(func.sum(amount_column), 0),
+        ).group_by(Booking.currency).all()
+    ]
+    status_breakdown = [
+        {"status": status or "unknown", "count": count}
+        for status, count in query.with_entities(Booking.booking_status, func.count(Booking.id)).group_by(Booking.booking_status).all()
+    ]
+    return {"status": "success", "data": {
+        "total_bookings": total,
+        "confirmed_bookings": confirmed,
+        "completed_bookings": completed,
+        "pending_bookings": pending,
+        "cancelled_bookings": cancelled,
+        "amounts_by_currency": amounts,
+        "status_breakdown": status_breakdown,
+    }}
 
 
 @router.get("/my-earnings")
@@ -843,14 +904,24 @@ REPORT_FETCHERS = {
     "suppliers": lambda db, params, actor: supplier_report(params, db, actor)["data"],
     "agents": lambda db, params, actor: agent_report(params, db, actor)["data"],
     "customers": lambda db, params, actor: customer_report(params, db, actor)["data"],
-    "booking-report": lambda db, params, actor: booking_detail_report(params, "", "", None, None, db, actor)["data"],
-    "sales-revenue-report": lambda db, params, actor: sales_revenue_report(params, "day", db, actor)["data"]["time_series"],
-    "payment-report": lambda db, params, actor: payment_detail_report(params, "", "", db, actor)["data"],
+    "booking-report": lambda db, params, actor: booking_detail_report(
+        params, params.get("booking_status", ""), params.get("payment_status", ""),
+        None, params.get("supplier_id") or None, db, actor,
+    )["data"],
+    "sales-revenue-report": lambda db, params, actor: sales_revenue_report(
+        params, params.get("granularity", "day"), db, actor,
+    )["data"]["time_series"],
+    "payment-report": lambda db, params, actor: payment_detail_report(
+        params, params.get("payment_status", ""), params.get("gateway", ""), db, actor,
+    )["data"],
     "supplier-report": lambda db, params, actor: supplier_detail_report(params, db, actor)["data"],
     "supplier-payout-report": lambda db, params, actor: supplier_payout_report("", None, db, actor)["data"],
     "tour-performance-report": lambda db, params, actor: tour_performance_report(None, None, None, db, actor)["data"],
     "cancellation-refund-report": lambda db, params, actor: cancellation_refund_report(params, None, db, actor)["data"],
-    "my-bookings": lambda db, params, actor: my_bookings_report("", "", "", "", db, actor)["data"],
+    "my-bookings": lambda db, params, actor: my_bookings_report(
+        params.get("booking_status", ""), params.get("payment_status", ""), params.get("period", "all"),
+        params.get("start_date", ""), params.get("end_date", ""), db, actor,
+    )["data"],
     "my-earnings": lambda db, params, actor: my_earnings_report(db, actor)["data"]["by_currency"],
     "my-travellers": lambda db, params, actor: my_travellers_report(db, actor)["data"],
 }
@@ -886,6 +957,11 @@ def exports(
     period: str = Query(default="all"),
     start_date: str = Query(default=""),
     end_date: str = Query(default=""),
+    booking_status: str = Query(default=""),
+    payment_status: str = Query(default=""),
+    gateway: str = Query(default=""),
+    supplier_id: int | None = Query(default=None),
+    granularity: str = Query(default="day"),
     request: Request = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("reports.export")),
@@ -896,6 +972,18 @@ def exports(
         raise HTTPException(status_code=400, detail="Only CSV export is currently supported")
 
     params = _period_params(period, start_date, end_date)
+    # Detail-report filters are retained for an export so the download always
+    # matches the table an administrator is viewing.
+    params.update({
+        "period": period,
+        "start_date": start_date,
+        "end_date": end_date,
+        "booking_status": booking_status,
+        "payment_status": payment_status,
+        "gateway": gateway,
+        "supplier_id": supplier_id,
+        "granularity": granularity,
+    })
     rows = REPORT_FETCHERS[report](db, params, current_user)
 
     buffer = io.StringIO()

@@ -83,6 +83,14 @@ def _user_email(db: Session, user_id: int | None) -> str | None:
 
 def notify_supplier_registered(db: Session, *, supplier_id: int, supplier_name: str, user_id: int | None = None):
     notify_admins(db, notification_type="supplier_registered", title="New Supplier Registered", message=f"Supplier '{supplier_name}' has registered and is awaiting approval.", entity_type="supplier", entity_id=supplier_id)
+    from app.utils.email_templates import supplier_registered_email
+    email_admins(
+        db,
+        "supplier_registered",
+        {"supplier_name": supplier_name},
+        "New supplier registration awaiting review",
+        supplier_registered_email(supplier_name),
+    )
     db.flush()
 
 

@@ -549,6 +549,14 @@ def supplier_submitted_verification_email(supplier_name: str):
     )
 
 
+def supplier_registered_email(supplier_name: str):
+    return base_email(
+        "New supplier registration",
+        "Hi team,",
+        f"Supplier <strong>{esc(supplier_name)}</strong> has registered and is awaiting email verification and profile submission.",
+    )
+
+
 # agent lifecycle
 def agent_submitted_verification_email(agent_name: str):
     return base_email(

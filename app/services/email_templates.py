@@ -183,6 +183,16 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Review the booking details and prepare for the tour.\n\nView booking: {{portal_url}}"
         ),
     },
+    {
+        "key": "supplier_payout_event",
+        "name": "Supplier Payout Update",
+        "subject": "Payout update - {{payout_code}}",
+        "body": (
+            "Hi {{supplier_name}},\n\n{{detail}}\n\n"
+            "Payout: {{payout_code}}\nAmount: {{currency}} {{amount}}\n"
+            "Reference: {{reference_number}}\n\nView your payouts: {{portal_url}}"
+        ),
+    },
 
     {
         "key": "admin_booking_event",
@@ -327,6 +337,30 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Amount paid: {{currency}} {{amount}}\n\n"
             "You can view your invoice in the customer portal.\n\nView booking: {{login_url}}"
         ),
+    },
+    {
+        "key": "payment_failed",
+        "name": "Payment Failed",
+        "subject": "Payment needs attention - {{booking_code}}",
+        "body": "Hi {{name}}, we could not complete your payment for {{booking_code}} ({{tour_name}}). {{reason}} You can safely retry from your booking: {{login_url}}",
+    },
+    {
+        "key": "invoice_generated",
+        "name": "Invoice Generated",
+        "subject": "Invoice available - {{invoice_number}}",
+        "body": "Hi {{name}}, invoice {{invoice_number}} for booking {{booking_code}} is available. Total: {{currency}} {{total}}. View your booking: {{login_url}}",
+    },
+    {
+        "key": "tour_submitted",
+        "name": "Tour Submitted for Review",
+        "subject": "Tour submitted for review - {{tour_name}}",
+        "body": "Your tour {{tour_name}} (version {{version}}) has been submitted to Tourvaa for review. {{login_url}}",
+    },
+    {
+        "key": "tour_reviewed",
+        "name": "Tour Review Decision",
+        "subject": "Tour review update - {{tour_name}}",
+        "body": "Your tour {{tour_name}} (version {{version}}) was {{decision}}. {{reason}} {{login_url}}",
     },
 ]
 

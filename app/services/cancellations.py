@@ -179,22 +179,23 @@ def _prior_status_before_cancellation_request(db: Session, booking_id: int) -> s
     return row.old_status if row and row.old_status else "confirmed"
 
 
-def _notify_agent_cancellation_update(db: Session, booking: Booking, status: str, reason: str) -> None:
+def _notify_agent_cancellation_update(db: Session, booking: Booking, status: str, reason: str, *, event: str, request_id: int) -> None:
     """Mirror cancellation lifecycle emails to the booking's Agent, if any."""
     if not (booking.agent and booking.agent.user and booking.agent.user.email):
         return
     from app.utils.email_templates import booking_status_update_email
-    from app.utils.notification_triggers import send_templated_email
+    from app.services.notification_delivery import dispatch_lifecycle_email
 
     login_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
     title = status.replace("_", " ").title()
-    send_templated_email(
-        db, booking.agent.user.email, "booking_status_update",
-        {"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+    dispatch_lifecycle_email(
+        db, event=event, entity_type="cancellation_request", entity_id=request_id,
+        recipient_type="agent", recipient_email=booking.agent.user.email, template_key="booking_status_update",
+        values={"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
          "new_status": title, "reason": reason or "", "login_url": login_url,
          "button_text": "View booking", "button_url": login_url},
-        f"Booking update - {booking.booking_code}",
-        booking_status_update_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, title, reason or "", login_url),
+        fallback_subject=f"Booking update - {booking.booking_code}",
+        fallback_html=booking_status_update_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, title, reason or "", login_url),
     )
 
 
@@ -255,31 +256,36 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
 
     if booking.customer and booking.customer.email:
         from app.utils.email_templates import cancellation_requested_email
-        from app.utils.notification_triggers import send_templated_email
+        from app.services.notification_delivery import dispatch_lifecycle_email
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-        send_templated_email(
-            db, booking.customer.email, "cancellation_requested",
-            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+        dispatch_lifecycle_email(
+            db, event="cancellation_requested", entity_type="cancellation_request", entity_id=req.id,
+            recipient_type="customer", recipient_email=booking.customer.email, template_key="cancellation_requested",
+            values={"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
              "refund_amount": refund_amount, "currency": req.currency, "login_url": login_url,
              "button_text": "View booking", "button_url": login_url},
-            f"Cancellation request received - {booking.booking_code}",
-            cancellation_requested_email(booking.customer.full_name, booking.booking_code, booking.tour_name, refund_amount, req.currency, login_url),
+            fallback_subject=f"Cancellation request received - {booking.booking_code}",
+            fallback_html=cancellation_requested_email(booking.customer.full_name, booking.booking_code, booking.tour_name, refund_amount, req.currency, login_url),
         )
-    _notify_agent_cancellation_update(db, booking, "cancellation requested", data.reason or "Cancellation request received")
+    _notify_agent_cancellation_update(db, booking, "cancellation requested", data.reason or "Cancellation request received", event="cancellation_requested", request_id=req.id)
 
     from app.utils.email_templates import admin_booking_event_email
-    from app.utils.notification_triggers import email_admins
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
     admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
     admin_detail = f"Customer requested cancellation for booking {booking.booking_code}. Estimated refund: {refund_amount} {req.currency}."
-    email_admins(
-        db, "admin_booking_event",
-        {"event_title": "Cancellation requested", "detail": admin_detail, "booking_code": booking.booking_code,
+    dispatch_admin_lifecycle_emails(
+        db, event="cancellation_requested", entity_type="cancellation_request", entity_id=req.id,
+        template_key="admin_booking_event",
+        values={"event_title": "Cancellation requested", "detail": admin_detail, "booking_code": booking.booking_code,
          "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "View booking", "button_url": admin_url},
-        f"Cancellation requested - {booking.booking_code}",
-        admin_booking_event_email("Cancellation requested", admin_detail, booking.booking_code, booking.tour_name, admin_url),
+        fallback_subject=f"Cancellation requested - {booking.booking_code}",
+        fallback_html=admin_booking_event_email("Cancellation requested", admin_detail, booking.booking_code, booking.tour_name, admin_url),
     )
 
     log_audit(db, actor=actor, action="create_cancellation_request", entity_type="cancellation_request", entity_id=req.id, new_values={"booking_id": data.booking_id, "refund_percentage": str(refund_pct)}, request=request)
+    # The lifecycle reservations were intentionally made after the business
+    # commit; persist them (and the audit row) before returning.
+    db.commit()
     return _serialize_request(req)
 
 
@@ -379,19 +385,21 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
 
     if booking.customer and booking.customer.email:
         from app.utils.email_templates import cancellation_approved_email
-        from app.utils.notification_triggers import send_templated_email
+        from app.services.notification_delivery import dispatch_lifecycle_email
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-        send_templated_email(
-            db, booking.customer.email, "cancellation_approved",
-            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+        dispatch_lifecycle_email(
+            db, event="cancellation_approved", entity_type="cancellation_request", entity_id=req.id,
+            recipient_type="customer", recipient_email=booking.customer.email, template_key="cancellation_approved",
+            values={"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
              "refund_amount": req.refund_amount, "currency": req.currency, "login_url": login_url,
              "button_text": "View booking", "button_url": login_url},
-            f"Cancellation approved - {booking.booking_code}",
-            cancellation_approved_email(booking.customer.full_name, booking.booking_code, booking.tour_name, req.refund_amount, req.currency, login_url),
+            fallback_subject=f"Cancellation approved - {booking.booking_code}",
+            fallback_html=cancellation_approved_email(booking.customer.full_name, booking.booking_code, booking.tour_name, req.refund_amount, req.currency, login_url),
         )
-    _notify_agent_cancellation_update(db, booking, "cancellation approved", f"Refund: {req.refund_amount} {req.currency}")
+    _notify_agent_cancellation_update(db, booking, "cancellation approved", f"Refund: {req.refund_amount} {req.currency}", event="cancellation_approved", request_id=req.id)
 
     log_audit(db, actor=actor, action="approve_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": req.status, "refund_amount": str(req.refund_amount)}, request=request)
+    db.commit()
     return _serialize_request(req)
 
 
@@ -466,19 +474,21 @@ def reject_request(db: Session, request_id: int, data: CancellationReject, actor
 
     if booking.customer and booking.customer.email:
         from app.utils.email_templates import cancellation_rejected_email
-        from app.utils.notification_triggers import send_templated_email
+        from app.services.notification_delivery import dispatch_lifecycle_email
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-        send_templated_email(
-            db, booking.customer.email, "cancellation_rejected",
-            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+        dispatch_lifecycle_email(
+            db, event="cancellation_rejected", entity_type="cancellation_request", entity_id=req.id,
+            recipient_type="customer", recipient_email=booking.customer.email, template_key="cancellation_rejected",
+            values={"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
              "reason": data.admin_notes or "", "login_url": login_url,
              "button_text": "View booking", "button_url": login_url},
-            f"Cancellation request rejected - {booking.booking_code}",
-            cancellation_rejected_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.admin_notes or "", login_url),
+            fallback_subject=f"Cancellation request rejected - {booking.booking_code}",
+            fallback_html=cancellation_rejected_email(booking.customer.full_name, booking.booking_code, booking.tour_name, data.admin_notes or "", login_url),
         )
-    _notify_agent_cancellation_update(db, booking, "cancellation rejected", data.admin_notes or "Cancellation request rejected")
+    _notify_agent_cancellation_update(db, booking, "cancellation rejected", data.admin_notes or "Cancellation request rejected", event="cancellation_rejected", request_id=req.id)
 
     log_audit(db, actor=actor, action="reject_cancellation", entity_type="cancellation_request", entity_id=request_id, old_values={"status": "pending"}, new_values={"status": "rejected"}, request=request)
+    db.commit()
     return _serialize_request(req)
 
 

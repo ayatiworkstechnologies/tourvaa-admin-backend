@@ -7,7 +7,7 @@ from html import escape
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.config import get_private_docs_root
+from app.config import get_private_docs_root, settings
 from app.services.audit import log_audit
 from app.models.bookings import Booking
 from app.utils.money import money, money_str, utcnow
@@ -308,6 +308,41 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="invoice_generated", title="Invoice generated", message=f"Invoice {inv.invoice_number} is ready", entity_type="invoice", entity_id=inv.id)
     if booking.agent and booking.agent.user_id:
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="invoice_generated", title="Reservation invoice ready", message=f"Invoice {inv.invoice_number} for booking {booking.booking_code or booking.id} is ready", entity_type="invoice", entity_id=inv.id)
+    # An invoice is a financial document: keep its recipient scoped to the
+    # booking owner (agent for agent reservations, customer otherwise).
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails, dispatch_lifecycle_email
+    recipient_name = None
+    recipient_email = None
+    recipient_type = None
+    recipient_url = None
+    if booking.booking_source == "agent" and booking.agent and booking.agent.user:
+        recipient_name, recipient_email, recipient_type = booking.agent.agent_name, booking.agent.user.email, "agent"
+        recipient_url = f"{settings.FRONTEND_URL}/agent/invoices"
+    elif booking.customer:
+        recipient_name, recipient_email, recipient_type = booking.customer.full_name, booking.customer.email, "customer"
+        recipient_url = f"{settings.FRONTEND_URL}/customer/invoices"
+    invoice_values = {"name": recipient_name or "Traveller", "invoice_number": inv.invoice_number,
+                      "booking_code": booking.booking_code or booking.id, "currency": inv.currency,
+                      "total": money_str(inv.total_amount), "login_url": recipient_url or ""}
+    dispatch_lifecycle_email(
+        db, event="invoice_generated", entity_type="invoice", entity_id=inv.id,
+        recipient_type=recipient_type or "booking_owner", recipient_email=recipient_email,
+        template_key="invoice_generated", values=invoice_values,
+        fallback_subject=f"Invoice available - {inv.invoice_number}",
+        fallback_html=f"<p>Invoice {inv.invoice_number} is available for booking {booking.booking_code or booking.id}.</p><p><a href='{recipient_url or ''}'>View invoice</a></p>",
+        event_version=str(inv.id),
+    )
+    admin_url = f"{settings.FRONTEND_URL}/admin/invoices/{inv.id}"
+    dispatch_admin_lifecycle_emails(
+        db, event="invoice_generated", entity_type="invoice", entity_id=inv.id,
+        template_key="admin_booking_event",
+        values={"event_title": "Invoice generated", "detail": f"Invoice {inv.invoice_number} was generated for booking {booking.booking_code or booking.id}.",
+                "booking_code": booking.booking_code or booking.id, "tour_name": booking.tour_name,
+                "admin_url": admin_url, "button_text": "View invoice", "button_url": admin_url},
+        fallback_subject=f"Invoice generated - {inv.invoice_number}",
+        fallback_html=f"<p>Invoice {inv.invoice_number} was generated.</p><p><a href='{admin_url}'>View invoice</a></p>",
+        event_version=str(inv.id),
+    )
     log_audit(db, actor=actor, action="generate_invoice", entity_type="invoice", entity_id=inv.id, request=request)
     db.commit()
     db.refresh(inv)

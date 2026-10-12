@@ -17,6 +17,8 @@ class PushSubscribeBody(BaseModel):
     endpoint: str
     p256dh: str
     auth: str
+    platform: str | None = None
+    device_type: str | None = None
 
 
 class PushBroadcastBody(BaseModel):
@@ -84,7 +86,7 @@ def push_public_key():
 @router.post("/push/subscribe")
 def push_subscribe(body: PushSubscribeBody, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     user_id = current_user.id if current_user else None
-    save_subscription(db, endpoint=body.endpoint, p256dh=body.p256dh, auth=body.auth, user_id=user_id)
+    save_subscription(db, endpoint=body.endpoint, p256dh=body.p256dh, auth=body.auth, user_id=user_id, platform=body.platform, device_type=body.device_type)
     return {"status": "success"}
 
 

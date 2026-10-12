@@ -19,6 +19,9 @@ class Notification(Base):
     entity_id = Column(Integer, nullable=True, index=True)
     notification_id = Column(String(100), nullable=True, index=True)
     metadata_json = Column(JSON, nullable=True)
+    event_key = Column(String(100), nullable=True, index=True)
+    event_version = Column(String(100), nullable=True)
+    idempotency_key = Column(String(255), nullable=True, unique=True)
     sent_at = Column(DateTime(timezone=True), nullable=True)
     read_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -48,6 +51,9 @@ class NotificationDelivery(Base):
     recipient_email = Column(String(180), nullable=False)
     template_key = Column(String(100), nullable=False)
     subject = Column(String(255), nullable=True)
+    # The rendered-template inputs and fallback copy are retained so a failed
+    # lifecycle message can be retried safely after a transient SMTP outage.
+    payload_json = Column(JSON, nullable=True)
     status = Column(String(30), default="pending", nullable=False, index=True)
     attempt_count = Column(Integer, default=0, nullable=False)
     error_message = Column(Text, nullable=True)
@@ -69,4 +75,27 @@ class PushSubscription(Base):
     endpoint_hash = Column(String(64), nullable=False)
     p256dh = Column(String(256), nullable=False)
     auth = Column(String(255), nullable=False)
+    platform = Column(String(20), nullable=True)
+    device_type = Column(String(30), nullable=True)
+    is_active = Column(Integer, default=1, nullable=False, index=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PushDeliveryLog(Base):
+    __tablename__ = "push_delivery_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notification_id = Column(Integer, ForeignKey("notifications.id", ondelete="SET NULL"), nullable=True, index=True)
+    subscription_id = Column(Integer, ForeignKey("push_subscriptions.id", ondelete="SET NULL"), nullable=True, index=True)
+    event_key = Column(String(100), nullable=True, index=True)
+    recipient_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    provider = Column(String(30), default="web_push", nullable=False)
+    status = Column(String(30), default="pending", nullable=False, index=True)
+    attempt_count = Column(Integer, default=0, nullable=False)
+    error_message = Column(Text, nullable=True)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -125,7 +125,10 @@ class PayPalOrderRequest(BaseModel):
 
 class PayPalCaptureRequest(BaseModel):
     order_id: str
-    payment_id: int
+    # The browser normally preserves this in session storage.  It is optional
+    # because a provider return can resume in a fresh browser context; the
+    # order ID is already unique and ownership is checked after lookup.
+    payment_id: Optional[int] = None
 
 
 class PendingPaymentAbandonRequest(BaseModel):
@@ -446,6 +449,8 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
             payment.payment_status = "failed"
             payment.failure_reason = obj.get("last_payment_error", {}).get("message", "Payment failed") if event_type == "payment_intent.payment_failed" else "Session expired"
             db.commit()
+            from app.services.payments import notify_payment_failed
+            notify_payment_failed(db, payment, payment.failure_reason or "Payment failed")
 
     elif event_type == "charge.refunded":
         charge = event["data"]["object"]
@@ -583,11 +588,13 @@ def paypal_create_order(body: PayPalOrderRequest, request: Request, db: Session 
 
 @router.post("/paypal/capture")
 def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    payment = db.query(Payment).filter(
-        Payment.id == body.payment_id,
+    query = db.query(Payment).filter(
         Payment.gateway == "paypal",
         Payment.gateway_order_id == body.order_id,
-    ).with_for_update().first()
+    )
+    if body.payment_id is not None:
+        query = query.filter(Payment.id == body.payment_id)
+    payment = query.with_for_update().first()
     if not payment:
         raise HTTPException(status_code=404, detail="PayPal payment record not found")
     _ensure_booking_payment_access(payment.booking, current_user)

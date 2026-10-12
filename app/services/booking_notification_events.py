@@ -12,6 +12,15 @@ from app.services.notifications import enqueue_notification
 
 
 class BookingNotificationEvent(StrEnum):
+    CUSTOMER_REGISTERED = "customer_registered"
+    SUPPLIER_REGISTERED = "supplier_registered"
+    AGENT_REGISTERED = "agent_registered"
+    TOUR_SUBMITTED = "tour_submitted"
+    TOUR_APPROVED = "tour_approved"
+    TOUR_REJECTED = "tour_rejected"
+    TOUR_RESUBMITTED = "tour_resubmitted"
+    TOUR_UPDATED = "tour_updated"
+    TOUR_DEACTIVATED = "tour_deactivated"
     BOOKING_CREATED = "booking_created"
     BOOKING_CREATION_FAILED = "booking_creation_failed"
     BOOKING_CONFIRMED = "booking_confirmed"
@@ -27,6 +36,7 @@ class BookingNotificationEvent(StrEnum):
     CANCELLATION_REQUESTED_AGENT = "cancellation_requested_agent"
     CANCELLATION_REQUESTED_SUPPLIER = "cancellation_requested_supplier"
     CANCELLATION_APPROVED = "cancellation_approved"
+    CANCELLATION_REJECTED = "cancellation_rejected"
     BOOKING_CANCELLED_BY_TOURVAA = "booking_cancelled_by_tourvaa"
     REFUND_INITIATED = "refund_initiated"
     REFUND_COMPLETED = "refund_completed"
@@ -37,7 +47,6 @@ class BookingNotificationEvent(StrEnum):
     TOUR_COMPLETED = "tour_completed"
     REVIEW_REQUEST = "review_request"
     MODIFICATION_REJECTED = "modification_rejected"
-    CANCELLATION_REJECTED = "cancellation_rejected"
     REFUND_REQUESTED = "refund_requested"
     REFUND_APPROVED = "refund_approved"
     REFUND_FAILED = "refund_failed"
@@ -50,6 +59,9 @@ class BookingNotificationEvent(StrEnum):
     AGENT_COMMISSION_PAID = "agent_commission_paid"
     SUPPLIER_SETTLEMENT_DUE = "supplier_settlement_due"
     SUPPLIER_SETTLEMENT_COMPLETED = "supplier_settlement_completed"
+    SUPPLIER_SETTLEMENT_GENERATED = "supplier_settlement_generated"
+    SUPPLIER_SETTLEMENT_PAID = "supplier_settlement_paid"
+    SUPPLIER_SETTLEMENT_FAILED = "supplier_settlement_failed"
     SUPPLIER_ACCOUNT_APPROVED = "supplier_account_approved"
     SUPPLIER_ACCOUNT_REJECTED = "supplier_account_rejected"
     AGENT_ACCOUNT_APPROVED = "agent_account_approved"
@@ -60,6 +72,11 @@ class BookingNotificationEvent(StrEnum):
     AGENT_DOCUMENTS_SUBMITTED = "agent_documents_submitted"
     AGENT_DOCUMENTS_APPROVED = "agent_documents_approved"
     AGENT_DOCUMENTS_REJECTED = "agent_documents_rejected"
+    AGENT_COMMISSION_APPROVED = "agent_commission_approved"
+    AGENT_COMMISSION_FAILED = "agent_commission_failed"
+    SUPPORT_REQUEST_CREATED = "support_request_created"
+    SUPPORT_REQUEST_UPDATED = "support_request_updated"
+    SUPPORT_REQUEST_RESOLVED = "support_request_resolved"
 
 
 def emit_in_app_once(

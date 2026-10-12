@@ -19,6 +19,8 @@ from app.utils.money import utcnow
 
 logger = logging.getLogger(__name__)
 
+MAX_EMAIL_DELIVERY_ATTEMPTS = 3
+
 
 def _event_value(event: str | StrEnum) -> str:
     return str(event.value if isinstance(event, StrEnum) else event)
@@ -77,7 +79,7 @@ def _deliver(
 ) -> None:
     """Send one reserved email and record the result without raising."""
     row = db.query(NotificationDelivery).filter(NotificationDelivery.id == delivery_id).first()
-    if not row or row.status == "sent":
+    if not row or row.status == "sent" or (row.attempt_count or 0) >= MAX_EMAIL_DELIVERY_ATTEMPTS:
         return
     row.status = "processing"
     row.attempt_count = (row.attempt_count or 0) + 1
@@ -90,7 +92,7 @@ def _deliver(
             db, row.template_key, values, fallback_subject, fallback_html
         )
         row.subject = subject
-        send_email(
+        result = send_email(
             row.recipient_email,
             subject,
             html,
@@ -98,6 +100,8 @@ def _deliver(
             entity_type=row.entity_type,
             entity_id=row.entity_id,
         )
+        if not result.ok:
+            raise RuntimeError(result.error or "SMTP delivery failed")
         row.status = "sent"
         row.error_message = None
         row.sent_at = utcnow()
@@ -154,6 +158,12 @@ def dispatch_lifecycle_email(
     if not row:
         return False
 
+    row.payload_json = {
+        "values": values,
+        "fallback_subject": fallback_subject,
+        "fallback_html": fallback_html,
+    }
+
     from app.utils.mailer import dispatch_email_task
 
     dispatch_email_task(
@@ -166,6 +176,36 @@ def dispatch_lifecycle_email(
         fallback_html,
     )
     return True
+
+
+def retry_failed_lifecycle_emails(db: Session) -> int:
+    """Retry failed lifecycle emails up to the finite delivery limit.
+
+    This is deliberately best-effort: a delivery failure is recorded and never
+    changes a booking, payment, cancellation, or payout state.
+    """
+    rows = (
+        db.query(NotificationDelivery)
+        .filter(
+            NotificationDelivery.status == "failed",
+            NotificationDelivery.attempt_count < MAX_EMAIL_DELIVERY_ATTEMPTS,
+        )
+        .order_by(NotificationDelivery.updated_at.asc())
+        .limit(100)
+        .all()
+    )
+    retried = 0
+    for row in rows:
+        payload = row.payload_json or {}
+        subject = payload.get("fallback_subject")
+        html = payload.get("fallback_html")
+        if not subject or not html:
+            row.status = "failed"
+            row.error_message = "Retry unavailable: lifecycle payload was not retained."
+            continue
+        _deliver(db, row.id, payload.get("values") or {}, subject, html)
+        retried += 1
+    return retried
 
 
 def dispatch_admin_lifecycle_emails(
