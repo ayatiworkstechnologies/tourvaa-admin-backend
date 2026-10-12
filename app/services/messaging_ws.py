@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 TICKET_TTL_SECONDS = 30
 WS_PUBSUB_CHANNEL = "ws:messages"
+PRESENCE_TTL_SECONDS = 75
 
 
 class _TicketStore:
@@ -83,6 +84,18 @@ class MessagingConnectionManager:
         self._admin_sockets_by_user: dict[int, set[WebSocket]] = defaultdict(set)
         self._user_sockets: dict[int, set[WebSocket]] = defaultdict(set)
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._instance_id = secrets.token_hex(8)
+
+    def _presence_key(self, user_id: int) -> str:
+        return f"ws:presence:{user_id}:{self._instance_id}"
+
+    async def refresh_participant_presence(self, user_id: int):
+        redis = await get_redis_async()
+        if redis is not None:
+            try:
+                await redis.set(self._presence_key(user_id), "1", ex=PRESENCE_TTL_SECONDS)
+            except Exception as exc:
+                logger.warning("WS presence refresh failed (%s)", exc)
 
     async def connect_admin(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
@@ -94,6 +107,21 @@ class MessagingConnectionManager:
         await websocket.accept()
         self._loop = asyncio.get_running_loop()
         self._user_sockets[user_id].add(websocket)
+        await self.refresh_participant_presence(user_id)
+
+    def is_user_online(self, user_id: int | None) -> bool:
+        """Whether this API worker currently has a live participant socket."""
+        if not user_id:
+            return False
+        if self._user_sockets.get(user_id):
+            return True
+        redis = get_redis_sync()
+        if redis is not None:
+            try:
+                return next(redis.scan_iter(match=f"ws:presence:{user_id}:*", count=10), None) is not None
+            except Exception as exc:
+                logger.warning("WS presence lookup failed (%s)", exc)
+        return False
 
     def disconnect_admin(self, websocket: WebSocket, user_id: int | None = None):
         self._admin_sockets.discard(websocket)
@@ -137,6 +165,23 @@ class MessagingConnectionManager:
             sockets.discard(websocket)
             if not sockets:
                 self._user_sockets.pop(user_id, None)
+                redis = get_redis_sync()
+                if redis is not None:
+                    try:
+                        redis.delete(self._presence_key(user_id))
+                    except Exception as exc:
+                        logger.warning("WS presence cleanup failed (%s)", exc)
+
+    async def notify_presence(self, user_id: int, online: bool):
+        """Push participant presence to every connected admin console."""
+        event = {"type": "participant_presence", "user_id": user_id, "online": online}
+        await self._deliver_locally(event, user_id)
+        redis = await get_redis_async()
+        if redis is not None:
+            try:
+                await redis.publish(WS_PUBSUB_CHANNEL, json.dumps({"event": event, "participant_user_id": user_id}))
+            except Exception as exc:
+                logger.warning("WS pub/sub: presence publish failed (%s)", exc)
 
     async def _deliver_locally(self, event: dict, participant_user_id: int):
         """Delivers to sockets held by *this* worker only. Called both for a

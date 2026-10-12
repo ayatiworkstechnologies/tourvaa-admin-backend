@@ -239,10 +239,13 @@ async def messages_socket(websocket: WebSocket):
         return
 
     await ws_manager.connect_participant(websocket, user.id)
+    await ws_manager.notify_presence(user.id, True)
     try:
         while True:
             await websocket.receive_text()
+            await ws_manager.refresh_participant_presence(user.id)
     except WebSocketDisconnect:
         pass
     finally:
         ws_manager.disconnect_participant(websocket, user.id)
+        await ws_manager.notify_presence(user.id, ws_manager.is_user_online(user.id))

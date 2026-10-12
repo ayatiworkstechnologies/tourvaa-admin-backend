@@ -362,7 +362,9 @@ def _serialize_booking_conversation(
         "initiator_role": conv.initiator_role,
         "initiator_user_id": conv.initiator_user_id,
         "initiator_name": conv.initiator_user.name if conv.initiator_user else None,
+        "initiator_online": ws_manager.is_user_online(conv.initiator_user_id),
         "supplier_user_id": conv.supplier_user_id,
+        "supplier_online": ws_manager.is_user_online(conv.supplier_user_id),
         # Presented to the customer/agent as a generic Tourvaa support
         # channel, never the actual supplier's identity - see
         # get_booking_conversation_thread_for_initiator and
