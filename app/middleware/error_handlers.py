@@ -26,7 +26,7 @@ def register_error_handlers(app: FastAPI) -> None:
         field = ".".join(str(p) for p in first.get("loc", [])[1:]) if first.get("loc") else "unknown"
         message = f"{field}: {first.get('msg', 'Validation error')}" if field and field != "unknown" else first.get("msg", "Validation error")
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content=jsonable_encoder({"status": "error", "message": message, "detail": errors}),
         )
 
