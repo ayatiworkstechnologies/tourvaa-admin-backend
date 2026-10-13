@@ -9,6 +9,7 @@ import logging
 from app.database import SessionLocal, engine
 from app.config import get_storage_root, settings
 from app.middleware.cors import setup_cors
+from app.middleware.api_cache import ApiNoStoreMiddleware
 from app.middleware.csrf import CsrfMiddleware
 from app.middleware.error_handlers import register_error_handlers
 
@@ -636,6 +637,7 @@ async def _lifespan(_app: FastAPI):
 app.router.lifespan_context = _lifespan
 
 setup_cors(app)
+app.add_middleware(ApiNoStoreMiddleware)
 app.add_middleware(CsrfMiddleware)
 
 storage_root = get_storage_root()
