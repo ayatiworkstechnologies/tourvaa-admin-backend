@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -1276,6 +1277,71 @@ REPORT_LABELS = {
     "my-travellers": "Traveller Report",
 }
 
+# The consolidated workbook intentionally contains the reports available on
+# the admin Reports screen. Partner-only reports remain scoped to their own
+# portals and must not be bundled into an administrator export.
+ADMIN_WORKBOOK_REPORTS = (
+    "summary", "bookings", "payments", "pending-payments", "overdue-payments",
+    "country-wise", "cancellations", "suppliers", "agents", "customers",
+    "booking-report", "sales-revenue-report", "payment-report", "supplier-report",
+    "supplier-payout-report", "tour-performance-report", "cancellation-refund-report",
+)
+
+
+def _spreadsheet_value(value):
+    """Return a stable, cell-safe representation for heterogeneous report rows."""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo else value
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, default=str, ensure_ascii=False)
+    return value
+
+
+def _all_reports_workbook(db: Session, params: dict, actor: User) -> io.BytesIO:
+    """Build one worksheet per admin report so no visible report is omitted."""
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    header_fill = PatternFill("solid", fgColor="344054")
+    thin = Side(style="thin", color="E4E7EC")
+
+    for report_key in ADMIN_WORKBOOK_REPORTS:
+        rows = REPORT_FETCHERS[report_key](db, params, actor)
+        columns = list(dict.fromkeys(key for row in rows for key in row.keys()))
+        sheet = workbook.create_sheet(title=REPORT_LABELS[report_key][:31])
+        sheet.sheet_view.showGridLines = False
+        sheet["A1"] = REPORT_LABELS[report_key]
+        sheet["A1"].font = Font(size=15, bold=True, color="FFFFFF")
+        sheet["A1"].fill = PatternFill("solid", fgColor="175CD3")
+
+        if not columns:
+            sheet["A3"] = "No data for the selected period"
+            sheet.column_dimensions["A"].width = 36
+            continue
+
+        for column_index, column in enumerate(columns, start=1):
+            cell = sheet.cell(3, column_index, column.replace("_", " ").title())
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = header_fill
+            cell.alignment = Alignment(wrap_text=True, vertical="center")
+            sheet.column_dimensions[get_column_letter(column_index)].width = min(max(len(column) + 4, 14), 32)
+
+        for row_index, row in enumerate(rows, start=4):
+            for column_index, column in enumerate(columns, start=1):
+                cell = sheet.cell(row_index, column_index, _spreadsheet_value(row.get(column)))
+                cell.border = Border(bottom=thin)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                if row_index % 2 == 0:
+                    cell.fill = PatternFill("solid", fgColor="F8FAFC")
+        sheet.freeze_panes = "A4"
+        sheet.auto_filter.ref = f"A3:{get_column_letter(len(columns))}{max(3, len(rows) + 3)}"
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    return buffer
+
 
 @router.get("/exports")
 def exports(
@@ -1293,9 +1359,13 @@ def exports(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_any_permission("reports.export")),
 ):
-    if report not in REPORT_FETCHERS:
+    if report == "all":
+        _require_admin_report(current_user)
+        if format.lower() != "xlsx":
+            raise HTTPException(status_code=400, detail="The complete report export is available as XLSX only")
+    elif report not in REPORT_FETCHERS:
         raise HTTPException(status_code=400, detail=f"Unknown report '{report}'. Valid options: {sorted(REPORT_FETCHERS)}")
-    if format.lower() not in {"csv"}:
+    if report != "all" and format.lower() not in {"csv"}:
         raise HTTPException(status_code=400, detail="Only CSV export is currently supported")
 
     params = _period_params(period, start_date, end_date)
@@ -1311,6 +1381,20 @@ def exports(
         "supplier_id": supplier_id,
         "granularity": granularity,
     })
+    if report == "all":
+        workbook = _all_reports_workbook(db, params, current_user)
+        label = f"Complete Reports ({period})"
+        log_audit(
+            db, actor=current_user, action="export_report", entity_type="report", entity_id=0,
+            new_values={"label": label, "format": "XLSX", "report": report, "period": period}, request=request,
+        )
+        db.commit()
+        return StreamingResponse(
+            iter([workbook.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="all-reports-{period}.xlsx"'},
+        )
+
     rows = REPORT_FETCHERS[report](db, params, current_user)
 
     buffer = io.StringIO()
