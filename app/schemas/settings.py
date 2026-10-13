@@ -50,6 +50,15 @@ class PaymentSettingsUpdate(BaseModel):
     paypal_secret: Optional[str] = None
     paypal_secret_placeholder: Optional[str] = None
     paypal_webhook_id: Optional[str] = None
+    paypal_mode: Optional[str] = None
+    paypal_sandbox_client_id: Optional[str] = None
+    paypal_sandbox_client_id_placeholder: Optional[str] = None
+    paypal_sandbox_secret: Optional[str] = None
+    paypal_sandbox_secret_placeholder: Optional[str] = None
+    paypal_live_client_id: Optional[str] = None
+    paypal_live_client_id_placeholder: Optional[str] = None
+    paypal_live_secret: Optional[str] = None
+    paypal_live_secret_placeholder: Optional[str] = None
     payment_surcharge_percentage: Optional[str] = None
     default_payment_mode: Optional[str] = None
 

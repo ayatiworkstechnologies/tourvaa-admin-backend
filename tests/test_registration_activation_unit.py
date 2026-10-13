@@ -77,6 +77,7 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     monkeypatch.setattr(auth, "_registration_token_user", lambda _db, _token: user)
     monkeypatch.setattr(auth, "hash_password", lambda _password: "hashed-password")
     monkeypatch.setattr(auth, "UserStatusHistory", lambda **values: SimpleNamespace(**values))
+    monkeypatch.setattr(notification_triggers, "notify_supplier_registered", lambda *_args, **_values: None)
     monkeypatch.setattr(notification_triggers, "notify_supplier_approval_pending", lambda *_args, **_values: None)
     monkeypatch.setattr(notification_triggers, "notify_agent_registered", lambda *_args, **_values: None)
     from app.services import notifications as notifications_service

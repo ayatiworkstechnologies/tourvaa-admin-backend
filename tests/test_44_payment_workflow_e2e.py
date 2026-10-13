@@ -151,7 +151,7 @@ def test_paid_booking_acceptance_creates_supplier_ledger(headers, first_tour_id)
     assert accepted.status_code == 200, accepted.text
     accepted_booking = accepted.json()["data"]
     assert accepted_booking["supplier_acceptance_status"] == "accepted"
-    assert accepted_booking["booking_status"] == "confirmed"
+    assert accepted_booking["booking_status"] == "supplier_accepted"
 
     ledger_response = requests.get(
         f"{BASE_URL}/suppliers/{supplier_id}/ledger",

@@ -14,20 +14,20 @@ from app.services.messaging import (
 )
 
 
-def test_booking_message_email_has_secure_no_login_reply_action(monkeypatch):
+def test_booking_message_email_uses_authenticated_chat_without_message_body(monkeypatch):
     monkeypatch.setattr(messaging.settings, "FRONTEND_URL", "https://tourvaa.example/")
 
     customer_url = _booking_message_url(booking_id=43, recipient_role="customer")
     admin_url = _booking_message_url(booking_id=43, recipient_role="admin")
-    html = _booking_message_email(sender_label="Tourvaa Admin", message_url=customer_url, body="Schedule updated")
+    html = _booking_message_email(sender_label="Tourvaa Admin", message_url=customer_url)
 
     assert customer_url == "https://tourvaa.example/customer/bookings/43#booking-messages"
     assert admin_url == "https://tourvaa.example/admin/bookings/43?tab=communications#booking-messages"
-    assert "View message &amp; reply" in html
+    assert "Open booking chat" in html
     assert customer_url in html
-    assert "reply securely without signing in" in html
-    assert "Schedule updated" in html
-    assert "expires after 7 days" in html
+    assert "secure booking chat" in html
+    assert "Schedule updated" not in html
+    assert "without signing in" not in html
 
 
 def test_support_message_email_links_to_the_correct_secure_inbox(monkeypatch):
@@ -344,7 +344,7 @@ def test_supplier_booking_message_is_delivered_to_admin_not_booking_initiator(mo
     assert conversation.initiator_unread_count == 0
 
 
-def test_admin_booking_reply_increments_recipient_unread_and_emails_portal_link(monkeypatch):
+def test_admin_booking_reply_increments_recipient_unread_and_emails_chat_notification(monkeypatch):
     conversation = SimpleNamespace(
         id=17,
         booking_id=42,
@@ -406,5 +406,5 @@ def test_admin_booking_reply_increments_recipient_unread_and_emails_portal_link(
         "booking_id": 42,
         "recipient_role": "supplier",
         "conversation_id": 17,
-        "body": "Please review the update",
+        "message_id": 25,
     }]

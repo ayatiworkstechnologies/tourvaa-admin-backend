@@ -276,6 +276,19 @@ class MessagingConnectionManager:
             except Exception as exc:
                 logger.warning("WS pub/sub: publish failed (%s) - other workers won't see this message", exc)
 
+    async def notify_typing(self, event: dict, participant_user_id: int | None, *, deliver_to_participant: bool) -> None:
+        """Relay an ephemeral typing state without persisting message text."""
+        await self._deliver_locally(event, participant_user_id if deliver_to_participant else None)
+        redis = await get_redis_async()
+        if redis is not None:
+            try:
+                await redis.publish(WS_PUBSUB_CHANNEL, json.dumps({
+                    "event": event,
+                    "participant_user_id": participant_user_id if deliver_to_participant else None,
+                }))
+            except Exception as exc:
+                logger.warning("WS pub/sub: typing publish failed (%s)", exc)
+
 
 ws_manager = MessagingConnectionManager()
 

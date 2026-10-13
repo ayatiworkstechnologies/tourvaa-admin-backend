@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.services.bookings import (
     _bookable_calendar_capacity,
+    _booking_status_label,
     _booking_email_recipient,
     _booking_seat_count,
     _ensure_booking_access,
@@ -56,6 +57,17 @@ def booking(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["pending_supplier_assignment", "payment_authorized", "pending_supplier_acceptance", "supplier_accepted"],
+)
+def test_customer_and_agent_confirmation_pending_labels_match_the_status_standard(status):
+    expected = "Booking Successful — Awaiting Tourvaa Confirmation"
+
+    assert _booking_status_label(status, "customer") == expected
+    assert _booking_status_label(status, "agent") == expected
 
 
 def test_supplier_view_masks_agent_reservation_payment_and_enables_decision_state():

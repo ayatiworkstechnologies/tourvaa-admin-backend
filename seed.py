@@ -85,16 +85,23 @@ def seed_payment_gateways() -> None:
             _print("    -- Stripe vars not set, skipping")
 
         if paypal_id and paypal_secret:
-            mode = os.environ.get("PAYPAL_MODE", "sandbox")
+            from app.services.payments_gateway import normalize_paypal_mode
+
+            mode = normalize_paypal_mode(os.environ.get("PAYPAL_MODE", "sandbox"))
             setting = db.query(PaymentSetting).filter(PaymentSetting.provider_name == "paypal").first()
             if not setting:
                 setting = PaymentSetting(provider_name="paypal")
                 db.add(setting)
             setting.public_key = paypal_id
             setting.secret_key = encrypt_secret(paypal_secret)
-            setting.webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID")
+            # A developer commonly seeds local credentials before configuring
+            # webhooks. Do not erase an existing Dashboard webhook ID merely
+            # because the optional environment variable is blank.
+            webhook_id = (os.environ.get("PAYPAL_WEBHOOK_ID") or "").strip()
+            if webhook_id:
+                setting.webhook_id = webhook_id
             setting.is_enabled = True
-            setting.mode = "test" if mode == "sandbox" else mode
+            setting.mode = mode
             _print("    OK  PayPal keys saved (secret encrypted)")
         else:
             _print("    -- PayPal vars not set, skipping")

@@ -17,7 +17,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def send_templated_email(db: Session, to_email: str | None, key: str, values: dict, fallback_subject: str, fallback_html: str):
+def send_templated_email(
+    db: Session,
+    to_email: str | None,
+    key: str,
+    values: dict,
+    fallback_subject: str,
+    fallback_html: str,
+    *,
+    entity_type: str = "email",
+    entity_id: int | None = None,
+):
     """Render an admin-editable DB email template (falling back to hardcoded HTML) and send it."""
     if not to_email:
         return
@@ -25,7 +35,14 @@ def send_templated_email(db: Session, to_email: str | None, key: str, values: di
     from app.utils.mailer import try_send_email
     try:
         subject, html = render_database_email(db, key, values, fallback_subject, fallback_html)
-        try_send_email(to_email, subject, html, template_key=key)
+        try_send_email(
+            to_email,
+            subject,
+            html,
+            template_key=key,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
     except Exception as exc:
         logger.warning("Templated email %s to %s failed: %s", key, to_email, exc)
 
@@ -47,13 +64,35 @@ def admin_notification_recipients(db: Session) -> set[str]:
     return recipients
 
 
-def _do_email_admins(db: Session, key: str, values: dict, fallback_subject: str, fallback_html: str) -> None:
+def _do_email_admins(
+    db: Session,
+    key: str,
+    values: dict,
+    fallback_subject: str,
+    fallback_html: str,
+    *,
+    entity_type: str = "email",
+    entity_id: int | None = None,
+) -> None:
     recipients = admin_notification_recipients(db)
     for recipient in recipients:
-        send_templated_email(db, recipient, key, values, fallback_subject, fallback_html)
+        send_templated_email(
+            db, recipient, key, values, fallback_subject, fallback_html,
+            entity_type=entity_type, entity_id=entity_id,
+        )
 
 
-def email_admins(db: Session, key: str, values: dict, fallback_subject: str, fallback_html: str, background_tasks: "BackgroundTasks | None" = None):
+def email_admins(
+    db: Session,
+    key: str,
+    values: dict,
+    fallback_subject: str,
+    fallback_html: str,
+    background_tasks: "BackgroundTasks | None" = None,
+    *,
+    entity_type: str = "email",
+    entity_id: int | None = None,
+):
     """Render a DB email template and send it to every super-admin/admin user.
 
     Runs inline by default, unchanged for existing (low-traffic) callers.
@@ -62,10 +101,16 @@ def email_admins(db: Session, key: str, values: dict, fallback_subject: str, fal
     - see app.utils.mailer.dispatch_email_task.
     """
     if background_tasks is None:
-        _do_email_admins(db, key, values, fallback_subject, fallback_html)
+        _do_email_admins(
+            db, key, values, fallback_subject, fallback_html,
+            entity_type=entity_type, entity_id=entity_id,
+        )
         return
     from app.utils.mailer import dispatch_email_task
-    dispatch_email_task(background_tasks, db, _do_email_admins, key, values, fallback_subject, fallback_html)
+    dispatch_email_task(
+        background_tasks, db, _do_email_admins, key, values, fallback_subject, fallback_html,
+        entity_type=entity_type, entity_id=entity_id,
+    )
 
 
 def _user_email(db: Session, user_id: int | None) -> str | None:

@@ -5,7 +5,7 @@ from app.services.audit import log_audit
 from app.models.settings import ApiSetting, AppSetting, PaymentSetting, SmtpSetting
 from app.models.users import User
 
-_PAYMENT_SECRET_FIELDS = {"secret_key"}
+_PAYMENT_SECRET_FIELDS = {"secret_key", "sandbox_secret", "live_secret"}
 _API_SECRET_FIELDS = {"api_key", "api_secret"}
 _SMTP_SECRET_FIELDS = {"password"}
 
@@ -760,13 +760,37 @@ def test_payment_connection(
             except Exception as exc:
                 error = f"Could not reach Stripe: {exc}"
     else:  # paypal
-        client_id = setting.public_key if setting else ""
-        client_secret = decrypt_secret(setting.secret_key) if setting and setting.secret_key else ""
+        mode = None
+        if setting:
+            from app.services.payments_gateway import normalize_paypal_mode
+            try:
+                mode = normalize_paypal_mode(getattr(setting, "mode", "sandbox"))
+            except ValueError:
+                mode = None
+        client_id = (getattr(setting, f"{mode}_client_id", None) if setting and mode else None) or (setting.public_key if setting else "")
+        encrypted_secret = (getattr(setting, f"{mode}_secret", None) if setting and mode else None) or (setting.secret_key if setting else "")
+        client_secret = decrypt_secret(encrypted_secret) if encrypted_secret else ""
         if not client_id or not client_secret:
             error = "Not configured"
         else:
-            provider_mode = (getattr(setting, "mode", "sandbox") or "sandbox")
-            mode = "live" if provider_mode == "live" else "sandbox"
+            try:
+                if not mode:
+                    raise ValueError("PayPal mode must be sandbox or live")
+            except ValueError as exc:
+                error = str(exc)
+                mode = None
+                result = {
+                    "provider": provider,
+                    "connected": False,
+                    "mode": mode,
+                    "error": error,
+                    "checked_at": checked_at.isoformat(),
+                }
+                setting.last_test_status = "failed"
+                setting.last_test_at = checked_at
+                setting.last_test_error = error
+                db.commit()
+                return result
             base_url = "https://api-m.paypal.com" if mode == "live" else "https://api-m.sandbox.paypal.com"
             try:
                 credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
@@ -1161,6 +1185,8 @@ def get_payment_settings_payload(db: Session):
 
     stripe_secret = decrypt_secret(stripe.secret_key if stripe else "")
     paypal_secret = decrypt_secret(paypal.secret_key if paypal else "")
+    sandbox_secret = decrypt_secret(getattr(paypal, "sandbox_secret", "") or "")
+    live_secret = decrypt_secret(getattr(paypal, "live_secret", "") or "")
     return {
         "stripe_enabled": stripe.is_enabled if stripe else False,
         "stripe_public_key": stripe.public_key if stripe else "",
@@ -1172,6 +1198,15 @@ def get_payment_settings_payload(db: Session):
         "paypal_secret": mask_secret(paypal_secret),
         "paypal_secret_placeholder": mask_secret(paypal_secret),
         "paypal_webhook_id": paypal.webhook_id if paypal else "",
+        "paypal_mode": paypal.mode if paypal else "sandbox",
+        "paypal_sandbox_client_id": getattr(paypal, "sandbox_client_id", None) or (paypal.public_key if paypal and paypal.mode != "live" else ""),
+        "paypal_sandbox_client_id_placeholder": getattr(paypal, "sandbox_client_id", None) or (paypal.public_key if paypal and paypal.mode != "live" else ""),
+        "paypal_sandbox_secret": mask_secret(sandbox_secret or (paypal_secret if paypal and paypal.mode != "live" else "")),
+        "paypal_sandbox_secret_placeholder": mask_secret(sandbox_secret or (paypal_secret if paypal and paypal.mode != "live" else "")),
+        "paypal_live_client_id": getattr(paypal, "live_client_id", None) or (paypal.public_key if paypal and paypal.mode == "live" else ""),
+        "paypal_live_client_id_placeholder": getattr(paypal, "live_client_id", None) or (paypal.public_key if paypal and paypal.mode == "live" else ""),
+        "paypal_live_secret": mask_secret(live_secret or (paypal_secret if paypal and paypal.mode == "live" else "")),
+        "paypal_live_secret_placeholder": mask_secret(live_secret or (paypal_secret if paypal and paypal.mode == "live" else "")),
         "payment_surcharge_percentage": surcharge,
         "default_payment_mode": stripe.mode if stripe else (paypal.mode if paypal else "test"),
         "stripe_last_test_status": stripe.last_test_status if stripe else None,
@@ -1213,6 +1248,16 @@ def update_payment_settings_payload(
         paypal_values["secret_key"] = values["paypal_secret_placeholder"]
     if values.get("paypal_webhook_id") is not None:
         paypal_values["webhook_id"] = values["paypal_webhook_id"]
+    if values.get("paypal_mode") is not None:
+        from app.services.payments_gateway import normalize_paypal_mode
+        paypal_values["mode"] = normalize_paypal_mode(values["paypal_mode"])
+    for field in ("sandbox_client_id", "sandbox_secret", "live_client_id", "live_secret"):
+        value = values.get(f"paypal_{field}")
+        placeholder = values.get(f"paypal_{field}_placeholder")
+        if value is not None:
+            paypal_values[field] = value
+        elif placeholder is not None:
+            paypal_values[field] = placeholder
 
     if values.get("payment_surcharge_percentage") is not None:
         surcharge = values["payment_surcharge_percentage"]
@@ -1220,7 +1265,8 @@ def update_payment_settings_payload(
         paypal_values["surcharge_percentage"] = surcharge
     if values.get("default_payment_mode") is not None:
         stripe_values["mode"] = values["default_payment_mode"]
-        paypal_values["mode"] = values["default_payment_mode"]
+        from app.services.payments_gateway import normalize_paypal_mode
+        paypal_values["mode"] = normalize_paypal_mode(values["default_payment_mode"])
 
     if stripe_values:
         update_payment_setting(db, "stripe", stripe_values, actor=actor, request=request)

@@ -4,13 +4,13 @@ from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.config import settings
 from app.auth.security import create_token
 from app.models.affiliates import Affiliate
 from app.models.agents import Agent
-from app.models.bookings import Booking, BookingCommunication
+from app.models.bookings import Booking, BookingCommunication, EmailLog
 from app.models.customers import Customer
 from app.models.messaging import BookingConversation, BookingMessage, Conversation, Message
 from app.models.suppliers import Supplier
@@ -53,20 +53,21 @@ def _mail_reply_url(*, kind: str, user_id: int, conversation_id: int, booking_id
     return f"{settings.FRONTEND_URL.rstrip('/')}/message-reply?{urlencode({'token': token})}"
 
 
-def _booking_message_email(*, sender_label: str, message_url: str, body: str | None = None) -> str:
-    message_html = f'<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #2563eb;background:#f8fafc;white-space:pre-wrap;">{esc(body)}</blockquote>' if body else ""
-    intro = "You can read the update below and reply securely without signing in." if body else "The message is available in your secure Tourvaa portal. Open the conversation to read it and send your reply."
-    expiry = "For security, the reply link expires after 7 days. " if body else ""
+def _booking_message_email(*, sender_label: str, message_url: str) -> str:
+    """Content-free booking-chat alert.
+
+    The portal is the source of truth for both the message and replies.  This
+    prevents sensitive booking text being copied into mailboxes and avoids the
+    separate signed-reply experience falling out of sync with the chat.
+    """
     return base_email(
         "New booking message",
         f"You have a new message from {esc(sender_label)}.",
         (
-            f"<p style=\"margin:0;\">{intro}</p>"
-            f"{message_html}"
-            f"<p style=\"margin:16px 0 0;\">{expiry}"
-            "Replies sent directly to this email are not added to the conversation.</p>"
+            "<p style=\"margin:0;\">Open the secure booking chat to read the message and reply. "
+            "For privacy, booking details are not included in email notifications.</p>"
         ),
-        "View message & reply",
+        "Open booking chat",
         message_url,
     )
 
@@ -172,34 +173,31 @@ def _email_booking_message_recipient(
     booking_id: int,
     recipient_role: str,
     conversation_id: int,
-    body: str,
+    message_id: int,
 ) -> None:
     """Best-effort alert; mail delivery must never block a portal message."""
     try:
         recipient = db.query(User).filter(User.id == user_id).first()
-        message_url = _mail_reply_url(
-            kind="booking",
-            user_id=user_id,
-            conversation_id=conversation_id,
-            booking_id=booking_id,
-        )
+        message_url = _booking_message_url(booking_id=booking_id, recipient_role=recipient_role)
         send_templated_email(
             db,
             recipient.email if recipient else None,
             "booking_message_received",
             {
                 "sender_name": sender_label,
-                "button_text": "View message & reply",
+                "button_text": "Open booking chat",
                 "button_url": message_url,
             },
             "New message from Tourvaa",
-            _booking_message_email(sender_label=sender_label, message_url=message_url, body=body),
+            _booking_message_email(sender_label=sender_label, message_url=message_url),
+            entity_type="booking_message",
+            entity_id=message_id,
         )
     except Exception as exc:
         logger.warning("Booking-message email to user %s failed: %s", user_id, exc)
 
 
-def _email_booking_message_admins(db: Session, *, sender_label: str, subject: str, booking_id: int) -> None:
+def _email_booking_message_admins(db: Session, *, sender_label: str, subject: str, booking_id: int, message_id: int) -> None:
     """Best-effort operational alert; the in-app notification remains primary."""
     try:
         message_url = _booking_message_url(booking_id=booking_id, recipient_role="admin")
@@ -208,11 +206,13 @@ def _email_booking_message_admins(db: Session, *, sender_label: str, subject: st
             "booking_message_received",
             {
                 "sender_name": sender_label,
-                "button_text": "View message & reply",
+                "button_text": "Open booking chat",
                 "button_url": message_url,
             },
             subject,
             _booking_message_email(sender_label=sender_label, message_url=message_url),
+            entity_type="booking_message",
+            entity_id=message_id,
         )
     except Exception as exc:
         logger.warning("Booking-message email to admins failed: %s", exc)
@@ -267,6 +267,8 @@ def _serialize_message(msg: Message) -> dict:
         "sender_name": msg.sender.name if msg.sender else None,
         "body": None if msg.is_deleted else msg.body,
         "is_deleted": msg.is_deleted,
+        "delivered_at": getattr(msg, "delivered_at", None),
+        "read_at": getattr(msg, "read_at", None),
         "created_at": msg.created_at,
     }
 
@@ -334,6 +336,7 @@ def get_conversation_thread_admin(db: Session, conversation_id: int) -> dict:
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     conv.admin_unread_count = 0
+    _mark_messages_read(message for message in conv.messages if message.sender_role != "admin")
     db.commit()
     db.refresh(conv)
     return _serialize_conversation(db, conv, with_messages=True)
@@ -342,6 +345,7 @@ def get_conversation_thread_admin(db: Session, conversation_id: int) -> dict:
 def get_own_conversation_thread(db: Session, user: User) -> dict:
     conv = get_or_create_conversation(db, user)
     conv.participant_unread_count = 0
+    _mark_messages_read(message for message in conv.messages if message.sender_role == "admin")
     db.commit()
     db.refresh(conv)
     return _serialize_conversation(db, conv, with_messages=True)
@@ -353,7 +357,7 @@ async def send_message_as_participant(db: Session, user: User, body: str) -> dic
         raise HTTPException(status_code=400, detail="Message body is required")
 
     conv = get_or_create_conversation(db, user)
-    msg = Message(conversation_id=conv.id, sender_user_id=user.id, sender_role=conv.participant_type, body=body)
+    msg = Message(conversation_id=conv.id, sender_user_id=user.id, sender_role=conv.participant_type, body=body, delivered_at=utcnow())
     db.add(msg)
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
@@ -393,7 +397,7 @@ async def send_message_as_admin(db: Session, conversation_id: int, admin_user: U
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    msg = Message(conversation_id=conv.id, sender_user_id=admin_user.id, sender_role="admin", body=body)
+    msg = Message(conversation_id=conv.id, sender_user_id=admin_user.id, sender_role="admin", body=body, delivered_at=utcnow())
     db.add(msg)
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
@@ -465,7 +469,10 @@ async def delete_booking_message(db: Session, message_id: int, actor: User) -> d
         db.refresh(msg)
 
     conv = msg.conversation
-    serialized = _serialize_booking_message(msg)
+    serialized = _serialize_booking_message(
+        msg,
+        email_delivery=_booking_message_email_deliveries(db, [msg]).get(msg.id),
+    )
     other_party_user_id = conv.supplier_user_id if actor.id == conv.initiator_user_id else conv.initiator_user_id
     await ws_manager.notify_new_message(
         {"type": "booking_message_deleted", "conversation_id": conv.id, "message": serialized},
@@ -486,9 +493,22 @@ def admin_unread_summary(db: Session) -> dict:
     return summary
 
 
+def _mark_messages_read(messages) -> None:
+    """Mark unread messages as seen by the opposite side of a two-party chat."""
+    now = utcnow()
+    for message in messages:
+        if not getattr(message, "is_deleted", False) and getattr(message, "read_at", None) is None:
+            message.read_at = now
+
+
 # --- Booking-scoped direct messaging: customer/agent <-> supplier ---------
 
-def _serialize_booking_message(msg: BookingMessage, *, hide_supplier_identity: bool = False) -> dict:
+def _serialize_booking_message(
+    msg: BookingMessage,
+    *,
+    hide_supplier_identity: bool = False,
+    email_delivery: dict | None = None,
+) -> dict:
     is_supplier_message = msg.sender_role == "supplier"
     return {
         "id": msg.id,
@@ -506,8 +526,51 @@ def _serialize_booking_message(msg: BookingMessage, *, hide_supplier_identity: b
         "recipient_role": msg.recipient_role,
         "body": None if msg.is_deleted else msg.body,
         "is_deleted": msg.is_deleted,
+        "delivered_at": getattr(msg, "delivered_at", None),
+        "read_at": getattr(msg, "read_at", None),
         "created_at": msg.created_at,
+        # Metadata only: no recipient address, subject, or message content is
+        # exposed in the conversation.
+        "email_delivery": email_delivery,
     }
+
+
+def _booking_message_email_deliveries(db: Session | None, messages: list[BookingMessage]) -> dict[int, dict]:
+    """Return a compact, privacy-safe mail status for each chat message."""
+    message_ids = [message.id for message in messages if message.id is not None]
+    if not message_ids or db is None:
+        return {}
+    try:
+        rows = (
+            db.query(EmailLog.entity_id, EmailLog.status)
+            .filter(EmailLog.entity_type == "booking_message", EmailLog.entity_id.in_(message_ids))
+            .all()
+        )
+    except Exception:
+        # Delivery status is supplementary; never prevent a chat message from
+        # being returned if the log table is temporarily unavailable.
+        return {}
+    grouped: dict[int, list[str]] = {}
+    for message_id, status in rows:
+        grouped.setdefault(message_id, []).append(status)
+    return {
+        message_id: {
+            "status": "failed" if any(status == "failed" for status in statuses) else "sent" if any(status == "sent" for status in statuses) else "sending",
+            "recipient_count": len(statuses),
+        }
+        for message_id, statuses in grouped.items()
+    }
+
+
+def _flush_message(db: Session) -> None:
+    """Allocate a message ID before its delivery log is created.
+
+    The callable check keeps the small, database-free serializer tests simple;
+    all real SQLAlchemy sessions provide ``flush``.
+    """
+    flush = getattr(db, "flush", None)
+    if callable(flush):
+        flush()
 
 
 def _serialize_booking_conversation(
@@ -558,7 +621,19 @@ def _serialize_booking_conversation(
                 if message.sender_role == viewer_role
                 or (message.sender_role == "admin" and message.recipient_role == viewer_role)
             ]
-        data["messages"] = [_serialize_booking_message(m, hide_supplier_identity=hide_supplier_identity) for m in messages]
+        try:
+            session = object_session(messages[0]) if messages else None
+        except Exception:
+            session = None
+        deliveries = _booking_message_email_deliveries(session, messages)
+        data["messages"] = [
+            _serialize_booking_message(
+                message,
+                hide_supplier_identity=hide_supplier_identity,
+                email_delivery=deliveries.get(message.id),
+            )
+            for message in messages
+        ]
     return data
 
 
@@ -607,6 +682,10 @@ def get_or_create_booking_conversation(db: Session, booking_id: int, actor: User
 def get_booking_conversation_thread_for_initiator(db: Session, booking_id: int, actor: User) -> dict:
     conv = get_or_create_booking_conversation(db, booking_id, actor)
     conv.initiator_unread_count = 0
+    _mark_messages_read(
+        message for message in conv.messages
+        if message.sender_role == "admin" and message.recipient_role == conv.initiator_role
+    )
     db.commit()
     db.refresh(conv)
     return _serialize_booking_conversation(
@@ -634,6 +713,9 @@ def list_booking_conversation_threads_for_admin(db: Session, booking_id: int) ->
         .order_by(BookingConversation.created_at.asc(), BookingConversation.id.asc())
         .all()
     )
+    for conversation in conversations:
+        _mark_messages_read(message for message in conversation.messages if message.sender_role != "admin")
+    db.commit()
     return [_serialize_booking_conversation(conversation, with_messages=True) for conversation in conversations]
 
 
@@ -655,8 +737,10 @@ async def send_booking_message_as_admin(db: Session, conversation_id: int, admin
         sender_role="admin",
         recipient_role=recipient_role,
         body=body,
+        delivered_at=utcnow(),
     )
     db.add(msg)
+    _flush_message(db)
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
     if recipient_role == "supplier":
@@ -671,10 +755,13 @@ async def send_booking_message_as_admin(db: Session, conversation_id: int, admin
         booking_id=conv.booking_id,
         recipient_role=recipient_role,
         conversation_id=conv.id,
-        body=body,
+        message_id=msg.id,
     )
     db.commit(); db.refresh(msg); db.refresh(conv)
-    serialized = _serialize_booking_message(msg)
+    serialized = _serialize_booking_message(
+        msg,
+        email_delivery=_booking_message_email_deliveries(db, [msg]).get(msg.id),
+    )
     await ws_manager.notify_new_message({"type": "new_booking_message", "conversation": _serialize_booking_conversation(conv, hide_supplier_identity=recipient_role != "supplier"), "message": serialized}, participant_user_id=recipient_user_id)
     return serialized
 
@@ -780,6 +867,10 @@ def list_booking_conversations_for_supplier(db: Session, supplier_user: User, pa
 def get_booking_conversation_thread_for_supplier(db: Session, conversation_id: int, supplier_user: User) -> dict:
     conv = _get_booking_conversation_for_supplier(db, conversation_id, supplier_user)
     conv.supplier_unread_count = 0
+    _mark_messages_read(
+        message for message in conv.messages
+        if message.sender_role == "admin" and message.recipient_role == "supplier"
+    )
     db.commit()
     db.refresh(conv)
     return _serialize_booking_conversation(conv, with_messages=True, viewer_role="supplier")
@@ -788,6 +879,10 @@ def get_booking_conversation_thread_for_supplier(db: Session, conversation_id: i
 def get_booking_conversation_thread_for_supplier_booking(db: Session, booking_id: int, supplier_user: User) -> dict:
     conv = get_or_create_booking_conversation_for_supplier(db, booking_id, supplier_user)
     conv.supplier_unread_count = 0
+    _mark_messages_read(
+        message for message in conv.messages
+        if message.sender_role == "admin" and message.recipient_role == "supplier"
+    )
     db.commit()
     db.refresh(conv)
     return _serialize_booking_conversation(conv, with_messages=True, viewer_role="supplier")
@@ -799,8 +894,9 @@ async def send_booking_message_as_initiator(db: Session, booking_id: int, actor:
         raise HTTPException(status_code=400, detail="Message body is required")
 
     conv = get_or_create_booking_conversation(db, booking_id, actor)
-    msg = BookingMessage(conversation_id=conv.id, sender_user_id=actor.id, sender_role=conv.initiator_role, body=body)
+    msg = BookingMessage(conversation_id=conv.id, sender_user_id=actor.id, sender_role=conv.initiator_role, body=body, delivered_at=utcnow())
     db.add(msg)
+    _flush_message(db)
     # The booking-page composer is addressed to Tourvaa Admin.  The admin
     # booking screen historically read BookingCommunication while the newer
     # composer wrote BookingMessage, leaving staff with an empty log. Mirror
@@ -830,12 +926,16 @@ async def send_booking_message_as_initiator(db: Session, booking_id: int, actor:
         sender_label=conv.initiator_role.capitalize(),
         subject=f"New {conv.initiator_role} booking message",
         booking_id=conv.booking_id,
+        message_id=msg.id,
     )
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
 
-    serialized = _serialize_booking_message(msg)
+    serialized = _serialize_booking_message(
+        msg,
+        email_delivery=_booking_message_email_deliveries(db, [msg]).get(msg.id),
+    )
     await ws_manager.notify_new_message(
         {"type": "new_booking_message", "conversation": _serialize_booking_conversation(conv), "message": serialized},
         participant_user_id=actor.id,
@@ -849,8 +949,9 @@ async def send_booking_message_as_supplier(db: Session, conversation_id: int, su
         raise HTTPException(status_code=400, detail="Message body is required")
 
     conv = _get_booking_conversation_for_supplier(db, conversation_id, supplier_user)
-    msg = BookingMessage(conversation_id=conv.id, sender_user_id=supplier_user.id, sender_role="supplier", body=body)
+    msg = BookingMessage(conversation_id=conv.id, sender_user_id=supplier_user.id, sender_role="supplier", body=body, delivered_at=utcnow())
     db.add(msg)
+    _flush_message(db)
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
     # Supplier booking messages are private Supplier <-> Tourvaa Admin
@@ -869,12 +970,16 @@ async def send_booking_message_as_supplier(db: Session, conversation_id: int, su
         sender_label="Supplier",
         subject="New supplier booking message",
         booking_id=conv.booking_id,
+        message_id=msg.id,
     )
     db.commit()
     db.refresh(msg)
     db.refresh(conv)
 
-    serialized = _serialize_booking_message(msg)
+    serialized = _serialize_booking_message(
+        msg,
+        email_delivery=_booking_message_email_deliveries(db, [msg]).get(msg.id),
+    )
     await ws_manager.notify_new_message(
         {
             "type": "new_booking_message",

@@ -40,6 +40,10 @@ class Message(Base):
     body = Column(Text, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
+    # Persisted delivery/read state is intentionally minimal: each support
+    # conversation has one portal participant and the Tourvaa admin team.
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     conversation = relationship("Conversation", back_populates="messages")
@@ -87,6 +91,8 @@ class BookingMessage(Base):
     body = Column(Text, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     conversation = relationship("BookingConversation", back_populates="messages")

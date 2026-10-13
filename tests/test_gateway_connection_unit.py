@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.services import settings
+from app.services.payments_gateway import PayPalGateway, normalize_paypal_mode
 
 
 def _db_with(payment_setting):
@@ -69,3 +70,24 @@ def test_unknown_payment_provider_is_rejected_without_network():
         settings.test_payment_connection(Mock(), "unknown")
 
     assert error.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("configured", "normalized", "base_url"),
+    [
+        ("sandbox", "sandbox", "https://api-m.sandbox.paypal.com"),
+        ("TEST", "sandbox", "https://api-m.sandbox.paypal.com"),
+        ("LIVE", "live", "https://api-m.paypal.com"),
+    ],
+)
+def test_paypal_mode_is_normalized_before_selecting_an_api_host(configured, normalized, base_url):
+    gateway = PayPalGateway("client", "secret", configured)
+
+    assert normalize_paypal_mode(configured) == normalized
+    assert gateway.mode == normalized
+    assert gateway.base_url == base_url
+
+
+def test_paypal_mode_rejects_an_unknown_value():
+    with pytest.raises(ValueError, match="sandbox.*live"):
+        normalize_paypal_mode("production")

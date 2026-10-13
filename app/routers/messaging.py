@@ -1,3 +1,4 @@
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -9,6 +10,7 @@ from app.auth.security import decode_auth_token
 from app.database import SessionLocal, get_db
 from app.models.permissions import Permission, RolePermission
 from app.models.users import User
+from app.models.messaging import BookingConversation, Conversation
 from app.services import messaging as messaging_service
 from app.services.messaging_ws import ticket_store, ws_manager
 
@@ -237,12 +239,68 @@ async def messages_socket(websocket: WebSocket):
     participant_type = messaging_service.participant_type_for_user(user)
     is_admin_listener = _has_messages_permission(user)
 
+    async def relay_typing(raw: str) -> None:
+        """Validate transient typing events against the same conversation
+        ownership rules used by the REST APIs before broadcasting them."""
+        try:
+            data = json.loads(raw)
+            if data.get("type") != "typing":
+                return
+            scope = data.get("scope")
+            conversation_id = int(data.get("conversation_id"))
+            is_typing = bool(data.get("is_typing"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+
+        db = SessionLocal()
+        try:
+            if scope == "support":
+                conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+                if not conversation or (not is_admin_listener and conversation.participant_user_id != user.id):
+                    return
+                sender_role = "admin" if is_admin_listener else conversation.participant_type
+                await ws_manager.notify_typing(
+                    {"type": "typing", "scope": scope, "conversation_id": conversation.id, "sender_role": sender_role, "is_typing": is_typing},
+                    conversation.participant_user_id,
+                    deliver_to_participant=is_admin_listener,
+                )
+                return
+
+            if scope != "booking":
+                return
+            conversation = db.query(BookingConversation).filter(BookingConversation.id == conversation_id).first()
+            if not conversation:
+                return
+            if is_admin_listener:
+                recipient_role = str(data.get("recipient_role") or "")
+                if recipient_role not in {"supplier", conversation.initiator_role}:
+                    return
+                participant_user_id = conversation.supplier_user_id if recipient_role == "supplier" else conversation.initiator_user_id
+                event = {"type": "typing", "scope": scope, "conversation_id": conversation.id, "sender_role": "admin", "recipient_role": recipient_role, "is_typing": is_typing}
+                await ws_manager.notify_typing(event, participant_user_id, deliver_to_participant=True)
+                return
+            if user.id == conversation.supplier_user_id:
+                sender_role, recipient_role = "supplier", "supplier"
+            elif user.id == conversation.initiator_user_id:
+                sender_role, recipient_role = conversation.initiator_role, conversation.initiator_role
+            else:
+                return
+            await ws_manager.notify_typing(
+                {"type": "typing", "scope": scope, "conversation_id": conversation.id, "sender_role": sender_role, "recipient_role": recipient_role, "is_typing": is_typing},
+                None,
+                deliver_to_participant=False,
+            )
+        finally:
+            db.close()
+
     if is_admin_listener:
         await ws_manager.connect_admin(websocket, user.id)
         await ws_manager.notify_admin_presence(True)
         try:
             while True:
-                await websocket.receive_text()
+                raw = await websocket.receive_text()
+                if raw != "ping":
+                    await relay_typing(raw)
                 await ws_manager.refresh_admin_presence()
         except WebSocketDisconnect:
             pass
@@ -259,7 +317,9 @@ async def messages_socket(websocket: WebSocket):
     await ws_manager.notify_presence(user.id, True)
     try:
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            if raw != "ping":
+                await relay_typing(raw)
             await ws_manager.refresh_participant_presence(user.id)
     except WebSocketDisconnect:
         pass

@@ -25,6 +25,12 @@ class PaymentSetting(Base):
     public_key = Column(Text, nullable=True)
     secret_key = Column(Text, nullable=True)
     webhook_id = Column(String(150), nullable=True)
+    # PayPal keeps isolated Sandbox and Live applications. The legacy
+    # public_key/secret_key pair remains for backwards compatibility.
+    sandbox_client_id = Column(Text, nullable=True)
+    sandbox_secret = Column(Text, nullable=True)
+    live_client_id = Column(Text, nullable=True)
+    live_secret = Column(Text, nullable=True)
     surcharge_percentage = Column(String(20), default="0", nullable=False)
     mode = Column(String(20), default="test", nullable=False)
     last_test_status = Column(String(20), nullable=True)

@@ -14,6 +14,21 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+
+def normalize_paypal_mode(mode: str | None) -> str:
+    """Return PayPal's two supported environment names.
+
+    Older local seed data used ``test``. It is equivalent to PayPal sandbox,
+    but normalizing it prevents a case-sensitive ``LIVE``/``Sandbox`` value
+    from silently selecting the wrong API host.
+    """
+    value = (mode or "sandbox").strip().lower()
+    if value in {"sandbox", "test"}:
+        return "sandbox"
+    if value == "live":
+        return "live"
+    raise ValueError("PayPal mode must be 'sandbox' or 'live'")
+
 # helpers to load gateway credentials
 
 
@@ -128,7 +143,8 @@ class PayPalGateway:
     def __init__(self, client_id: str, client_secret: str, mode: str = "sandbox"):
         self.client_id = client_id
         self.client_secret = client_secret
-        self.base_url = "https://api-m.paypal.com" if mode == "live" else "https://api-m.sandbox.paypal.com"
+        self.mode = normalize_paypal_mode(mode)
+        self.base_url = "https://api-m.paypal.com" if self.mode == "live" else "https://api-m.sandbox.paypal.com"
         self._access_token: Optional[str] = None
         self._token_expiry: float = 0
 
@@ -257,7 +273,15 @@ def get_stripe(db: Session) -> StripeGateway:
 def get_paypal(db: Session) -> PayPalGateway:
     from app.utils.crypto import decrypt_secret
     setting = _load_setting(db, "paypal")
-    if not setting or not setting.public_key or not setting.secret_key:
+    if not setting:
         raise HTTPException(status_code=400, detail="PayPal is not configured or not enabled")
-    mode = getattr(setting, "mode", "sandbox") or "sandbox"
-    return PayPalGateway(client_id=setting.public_key, client_secret=decrypt_secret(setting.secret_key), mode=mode)
+    try:
+        mode = normalize_paypal_mode(getattr(setting, "mode", "sandbox"))
+    except ValueError as error:
+        logger.error("PayPal setting has an invalid mode: %s", getattr(setting, "mode", None))
+        raise HTTPException(status_code=500, detail="PayPal mode must be sandbox or live") from error
+    client_id = getattr(setting, f"{mode}_client_id", None) or setting.public_key
+    encrypted_secret = getattr(setting, f"{mode}_secret", None) or setting.secret_key
+    if not client_id or not encrypted_secret:
+        raise HTTPException(status_code=400, detail=f"PayPal {mode} credentials are not configured")
+    return PayPalGateway(client_id=client_id, client_secret=decrypt_secret(encrypted_secret), mode=mode)
