@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AdminModuleResponse(BaseModel):
@@ -9,5 +9,4 @@ class AdminModuleResponse(BaseModel):
     is_active: bool
     is_system: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

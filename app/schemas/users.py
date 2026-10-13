@@ -1,6 +1,6 @@
 ﻿import re
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from app.schemas.auth import validate_strong_password
 from typing import Optional
 from datetime import datetime
@@ -138,6 +138,5 @@ class UserResponse(BaseModel):
     approval_status: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
