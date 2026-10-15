@@ -34,7 +34,7 @@ def authorize(data: PaymentAuthorize, request: Request, db: Session = Depends(ge
 
 @router.get("/customer/{customer_id}")
 def customer_payment_list(customer_id: int, params: dict = Depends(pagination_params), payment_status: str = Query(default=""), payment_method: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.view", "view-payments"))):
-    return {"status": "success", **get_customer_payments(db, customer_id=customer_id, page=params["page"], limit=params["limit"], payment_status=payment_status, payment_method=payment_method, actor=current_user)}
+    return {"status": "success", **get_customer_payments(db, customer_id=customer_id, page=params["page"], limit=params["limit"], payment_status=payment_status, payment_method=payment_method, actor=current_user, hide_identifiers=False)}
 
 
 @router.get("/{payment_id}")

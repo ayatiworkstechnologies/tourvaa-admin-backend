@@ -66,8 +66,18 @@ def _mask_bank_identifier(value: str | None) -> str:
 
 def serialize_agent(item: Agent, *, mask_bank_details: bool = False):
     data = serialize_common_review(item, "agent_name", "agent_code")
+    # Company logo, address and initial sign-up contact live on the linked
+    # account. Staff need them when reviewing the full agency registration.
+    account = item.user
     data.update({
         "agent_type": item.agent_type,
+        "business_logo": account.profile_image if account else "",
+        "business_address": account.address if account else "",
+        "registration_contact": {
+            "full_name": account.name,
+            "email": account.email,
+            "phone": account.phone or account.mobile_number or "",
+        } if account else None,
         "discount_type": item.discount_type,
         "discount_value": item.discount_value,
         "commission_request_type": item.commission_request_type,

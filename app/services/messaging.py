@@ -897,20 +897,9 @@ async def send_booking_message_as_initiator(db: Session, booking_id: int, actor:
     msg = BookingMessage(conversation_id=conv.id, sender_user_id=actor.id, sender_role=conv.initiator_role, body=body, delivered_at=utcnow())
     db.add(msg)
     _flush_message(db)
-    # The booking-page composer is addressed to Tourvaa Admin.  The admin
-    # booking screen historically read BookingCommunication while the newer
-    # composer wrote BookingMessage, leaving staff with an empty log. Mirror
-    # the portal message into that audit log so the booking record has one
-    # complete, clearly attributed timeline without exposing it to a supplier.
-    db.add(BookingCommunication(
-        booking_id=conv.booking_id,
-        sender_user_id=actor.id,
-        sender_type=conv.initiator_role,
-        message_type="portal_message",
-        subject=f"{conv.initiator_role.capitalize()} message to Tourvaa Admin",
-        message=body,
-        visibility="internal",
-    ))
+    # Portal messages belong only to BookingConversation / BookingMessage.
+    # Do not mirror them into BookingCommunication: that legacy log is now
+    # reserved for Internal Communications in the Admin booking workspace.
     conv.last_message_at = utcnow()
     conv.last_message_preview = body[:PREVIEW_LENGTH]
     notify_admins(

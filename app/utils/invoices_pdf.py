@@ -14,7 +14,7 @@ try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import cm
     from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image as RLImage
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_RIGHT, TA_CENTER
 
@@ -89,19 +89,39 @@ def _money(inv: dict, value) -> str:
 
 
 def _reportlab_pdf(path: Path, data: dict) -> None:
+    inv = data
+    primary_hex = str(inv.get("invoice_primary_color") or "#07566A")
+    header_hex = str(inv.get("invoice_header_color") or "#0B263D")
+    accent_hex = str(inv.get("invoice_accent_color") or "#159C96")
+    try:
+        brand_color = colors.HexColor(primary_hex)
+    except Exception:
+        brand_color = colors.HexColor("#07566A")
+    try:
+        brand_dark_color = colors.HexColor(header_hex)
+    except Exception:
+        brand_dark_color = colors.HexColor("#0B263D")
+    try:
+        accent_color = colors.HexColor(accent_hex)
+    except Exception:
+        accent_color = colors.HexColor("#159C96")
+
+    panel_color = colors.HexColor("#F2FAFC")
+    row_alt_color = colors.HexColor("#F8FCFD")
+    line_color = colors.HexColor("#E2E8F0")
+
     doc = SimpleDocTemplate(str(path), pagesize=A4, rightMargin=1.8 * cm, leftMargin=1.8 * cm, topMargin=1.6 * cm, bottomMargin=1.6 * cm)
     styles = getSampleStyleSheet()
-    brand_style = ParagraphStyle("brand", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=22, textColor=BRAND_DARK, leading=26)
+    brand_style = ParagraphStyle("brand", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=22, textColor=brand_dark_color, leading=26)
     tagline_style = ParagraphStyle("tagline", parent=styles["Normal"], fontSize=8.5, textColor=MUTED, leading=11)
     invoice_title_style = ParagraphStyle("invtitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=16, textColor=INK, alignment=TA_RIGHT, leading=19)
     invoice_meta_style = ParagraphStyle("invmeta", parent=styles["Normal"], fontSize=9.5, textColor=MUTED, alignment=TA_RIGHT, leading=13)
-    section_label_style = ParagraphStyle("seclabel", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=8.5, textColor=BRAND, leading=11)
+    section_label_style = ParagraphStyle("seclabel", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=8.5, textColor=brand_color, leading=11)
     body_style = ParagraphStyle("body", parent=styles["Normal"], fontSize=9.5, textColor=INK, leading=14)
     body_bold_style = ParagraphStyle("bodyb", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=9.5, textColor=INK, leading=14)
     center_style = ParagraphStyle("center", parent=styles["Normal"], fontSize=8.5, textColor=MUTED, alignment=TA_CENTER, leading=12)
     item_desc_style = ParagraphStyle("itemdesc", parent=styles["Normal"], fontSize=9, textColor=INK, leading=12)
 
-    inv = data
     is_paid = float(inv.get("amount_due") or 0) <= 0
     status_bg, status_fg = (PAID_BG, PAID_FG) if is_paid else (DUE_BG, DUE_FG)
     status_label = "PAID" if is_paid else inv["status"].upper()
@@ -109,11 +129,55 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     story = []
 
     # ---- Header: brand block (left) + invoice title block (right) ----
-    header_left = [
-        Paragraph(escape(str(inv.get("invoice_brand_name") or "Tourvaa")).upper(), brand_style),
-        Spacer(1, 0.1 * cm),
-        Paragraph(escape(str(inv.get("invoice_brand_tagline") or "Curated journeys, effortlessly booked.")), tagline_style),
-    ]
+    logo_url = inv.get("invoice_logo_url")
+    header_layout = inv.get("invoice_header_layout") or "both"
+    logo_flowable = None
+
+    if logo_url and header_layout in ("logo", "both"):
+        try:
+            import io
+            import urllib.request
+            from PIL import Image as PILImage
+
+            img_bytes = None
+            if str(logo_url).startswith("http://") or str(logo_url).startswith("https://"):
+                req = urllib.request.Request(str(logo_url), headers={"User-Agent": "Tourvaa-Invoice-Generator/1.0"})
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    img_bytes = resp.read()
+            elif Path(str(logo_url)).is_file():
+                img_bytes = Path(str(logo_url)).read_bytes()
+
+            if img_bytes:
+                pil_img = PILImage.open(io.BytesIO(img_bytes))
+                w, h = pil_img.size
+                if w > 0 and h > 0:
+                    max_h = 1.3 * cm
+                    max_w = 4.8 * cm
+                    scale = min(max_w / w, max_h / h)
+                    logo_flowable = RLImage(io.BytesIO(img_bytes), width=w * scale, height=h * scale)
+        except Exception as img_err:
+            logger.warning("Could not load invoice logo from %s: %s", logo_url, img_err)
+
+    header_left = []
+    if logo_flowable:
+        if header_layout == "both":
+            brand_p = Paragraph(escape(str(inv.get("invoice_brand_name") or "Tourvaa")).upper(), brand_style)
+            logo_table = Table([[logo_flowable, brand_p]], colWidths=[None, None])
+            logo_table.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (0, 0), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]))
+            header_left.append(logo_table)
+        else:
+            header_left.append(logo_flowable)
+    else:
+        header_left.append(Paragraph(escape(str(inv.get("invoice_brand_name") or "Tourvaa")).upper(), brand_style))
+
+    header_left.append(Spacer(1, 0.1 * cm))
+    header_left.append(Paragraph(escape(str(inv.get("invoice_brand_tagline") or "Curated journeys, effortlessly booked.")), tagline_style))
     header_right = [
         Paragraph("INVOICE", invoice_title_style),
         Spacer(1, 0.15 * cm),
@@ -128,7 +192,7 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     ]))
     story.append(header_table)
     story.append(Spacer(1, 0.35 * cm))
-    story.append(HRFlowable(width="100%", thickness=1.4, color=BRAND))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=brand_color))
     story.append(Spacer(1, 0.5 * cm))
 
     # ---- Status badge + booking code row ----
@@ -172,14 +236,14 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     ]
     panels = Table([[billed_to, trip_details]], colWidths=[8.6 * cm, 8.6 * cm])
     panels.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), PANEL),
+        ("BACKGROUND", (0, 0), (-1, -1), panel_color),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (0, 0), 12),
         ("LEFTPADDING", (1, 0), (1, 0), 16),
         ("RIGHTPADDING", (0, 0), (-1, -1), 12),
         ("TOPPADDING", (0, 0), (-1, -1), 10),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-        ("LINEBEFORE", (1, 0), (1, 0), 0.75, LINE),
+        ("LINEBEFORE", (1, 0), (1, 0), 0.75, line_color),
     ]))
     story.append(panels)
     story.append(Spacer(1, 0.6 * cm))
@@ -207,11 +271,11 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
 
     items_table = Table(table_data, colWidths=[0.8 * cm, 7.2 * cm, 1.4 * cm, 2.8 * cm, 2.4 * cm, 2.6 * cm], repeatRows=1)
     items_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), BRAND_DARK),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ROW_ALT]),
+        ("BACKGROUND", (0, 0), (-1, 0), brand_dark_color),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, row_alt_color]),
         ("LINEBELOW", (0, 0), (-1, 0), 0, colors.white),
-        ("LINEBELOW", (0, 1), (-1, -2), 0.5, LINE),
-        ("LINEBELOW", (0, -1), (-1, -1), 0.5, LINE),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.5, line_color),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.5, line_color),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ("TOPPADDING", (0, 0), (-1, -1), 7),
         ("LEFTPADDING", (0, 0), (0, -1), 10),
@@ -244,10 +308,10 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         # Total row emphasis
-        ("BACKGROUND", (0, 2), (-1, 2), PANEL),
+        ("BACKGROUND", (0, 2), (-1, 2), panel_color),
         ("FONTNAME", (0, 2), (-1, 2), "Helvetica-Bold"),
         ("FONTSIZE", (0, 2), (-1, 2), 11),
-        ("TEXTCOLOR", (0, 2), (-1, 2), BRAND_DARK),
+        ("TEXTCOLOR", (0, 2), (-1, 2), brand_dark_color),
         ("TOPPADDING", (0, 2), (-1, 2), 7),
         ("BOTTOMPADDING", (0, 2), (-1, 2), 7),
         ("LEFTPADDING", (0, 2), (0, 2), 8),
@@ -256,9 +320,9 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
         ("TEXTCOLOR", (0, 4), (-1, 4), (DUE_FG if not is_paid else INK)),
         ("FONTNAME", (0, 4), (-1, 4), "Helvetica-Bold"),
         # Rules
-        ("LINEABOVE", (0, 2), (-1, 2), 0.75, BRAND),
-        ("LINEBELOW", (0, 2), (-1, 2), 0.75, BRAND),
-        ("LINEBELOW", (0, -1), (-1, -1), 0.75, LINE),
+        ("LINEABOVE", (0, 2), (-1, 2), 0.75, brand_color),
+        ("LINEBELOW", (0, 2), (-1, 2), 0.75, brand_color),
+        ("LINEBELOW", (0, -1), (-1, -1), 0.75, line_color),
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
     ]))
     totals_wrapper = Table([["", totals_table]], colWidths=[7.8 * cm, 9.4 * cm])
@@ -271,7 +335,7 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
     story.append(Spacer(1, 1 * cm))
 
     # ---- Footer ----
-    story.append(HRFlowable(width="100%", thickness=0.5, color=LINE))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=line_color))
     story.append(Spacer(1, 0.3 * cm))
     story.append(Paragraph(escape(str(inv.get("invoice_footer_thanks") or "Thank you for booking with Tourvaa.")), center_style))
     support_email = escape(str(data.get("support_email") or "support@tourvaa.com"))

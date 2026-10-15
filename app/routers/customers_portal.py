@@ -340,7 +340,11 @@ def remove_unpaid_booking(booking_id: int, request: Request, db: Session = Depen
 @router.post("/bookings/{booking_id}/pay")
 def record_customer_manual_payment(booking_id: int, data: CustomerManualPaymentRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
-    booking = db.query(Booking).filter(Booking.id == booking_id, Booking.customer_id == customer.id).first()
+    booking = db.query(Booking).filter(
+        Booking.id == booking_id,
+        Booking.customer_id == customer.id,
+        Booking.booking_source != "agent",
+    ).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
     if money(booking.amount_pending) <= 0:
@@ -353,13 +357,13 @@ def record_customer_manual_payment(booking_id: int, data: CustomerManualPaymentR
 @router.get("/payments")
 def customer_payments(params: dict = Depends(pagination_params), payment_status: str = Query(default=""), payment_method: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
-    return {"status": "success", **get_customer_payments(db, customer.id, page=params["page"], limit=params["limit"], payment_status=payment_status, payment_method=payment_method)}
+    return {"status": "success", **get_customer_payments(db, customer.id, page=params["page"], limit=params["limit"], payment_status=payment_status, payment_method=payment_method, actor=current_user)}
 
 
 @router.get("/invoices")
 def customer_invoices(params: dict = Depends(pagination_params), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
-    return {"status": "success", **list_invoices(db, page=params["page"], limit=params["limit"], customer_id=customer.id)}
+    return {"status": "success", **list_invoices(db, page=params["page"], limit=params["limit"], customer_id=customer.id, actor=current_user)}
 
 
 @router.get("/invoices/{invoice_id}/download")

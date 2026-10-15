@@ -55,11 +55,16 @@ def serialize_customer(customer: Customer, db: Session | None = None):
         "id": customer.id,
         "user_id": customer.user_id,
         "customer_code": customer.customer_code or _customer_code(customer.id),
+        "customer_type": customer.customer_type,
+        "agent_id": customer.agent_id,
         "first_name": customer.first_name,
         "last_name": customer.last_name,
         "full_name": customer.full_name,
         "email": customer.email,
         "phone": customer.phone,
+        "phone_country_code": customer.phone_country_code,
+        "date_of_birth": customer.date_of_birth,
+        "gender": customer.gender,
         "country_id": customer.country_id,
         "city_id": customer.city_id,
         "address_line_1": customer.address_line_1,
@@ -75,6 +80,8 @@ def serialize_customer(customer: Customer, db: Session | None = None):
         "city_name": city_name,
         "pincode": customer.pincode,
         "status": customer.status,
+        "email_verified": customer.email_verified,
+        "phone_verified": customer.phone_verified,
         "is_blocked": customer.is_blocked,
         "blocked_reason": customer.blocked_reason,
         "blocked_at": customer.blocked_at,
@@ -244,18 +251,36 @@ def get_customer_detail(db: Session, customer_id: int, actor: User | None = None
         from app.services.payments import serialize_payment
         from sqlalchemy import func as sqlfunc
 
+        all_bookings = db.query(BookingModel).filter(BookingModel.customer_id == customer_id).all()
+        if all_bookings:
+            live_total = len(all_bookings)
+            live_completed = sum(1 for b in all_bookings if b.booking_status == "completed")
+            live_cancelled = sum(1 for b in all_bookings if b.booking_status in ("cancelled", "declined"))
+            live_upcoming = sum(1 for b in all_bookings if b.booking_status in ("confirmed", "pending_supplier_acceptance", "payment_authorized"))
+            live_paid = sum(float(b.amount_paid or 0) for b in all_bookings)
+            live_pending = sum(float(b.amount_pending or 0) for b in all_bookings if b.booking_status not in ("cancelled", "declined"))
+
+            data["total_bookings"] = live_total
+            data["completed_tours"] = live_completed
+            data["cancelled_tours"] = live_cancelled
+            data["upcoming_tours"] = live_upcoming
+            data["amount_paid"] = live_paid
+            data["amount_pending"] = live_pending
+            data["total_amount_paid"] = live_paid
+            data["total_amount_pending"] = live_pending
+
         recent_bookings = (
             db.query(BookingModel)
             .filter(BookingModel.customer_id == customer_id)
             .order_by(BookingModel.id.desc())
-            .limit(3)
+            .limit(10)
             .all()
         )
         recent_payments = (
             db.query(PaymentModel)
             .filter(PaymentModel.customer_id == customer_id)
             .order_by(PaymentModel.id.desc())
-            .limit(3)
+            .limit(10)
             .all()
         )
         serialized_bookings = [serialize_booking(db, b) for b in recent_bookings]
@@ -594,6 +619,7 @@ def get_customer_payment_history(
     limit: int = 100,
     payment_status: str = "",
     payment_method: str = "",
+    actor: User | None = None,
 ):
     from app.services.payments import get_customer_payments
     return get_customer_payments(
@@ -603,6 +629,8 @@ def get_customer_payment_history(
         limit=limit,
         payment_status=payment_status,
         payment_method=payment_method,
+        actor=actor,
+        hide_identifiers=False,
     )
 
 

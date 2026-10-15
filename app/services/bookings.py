@@ -293,6 +293,15 @@ def _ensure_booking_access(booking: Booking, actor: User | None) -> None:
     raise HTTPException(status_code=403, detail="Booking access denied")
 
 
+def _belongs_to_customer_portal(booking: Booking) -> bool:
+    """Whether a booking is owned by the selected Customer portal account.
+
+    Agent reservations retain a Customer relation solely for traveller and
+    operational records. They are never customer-portal bookings.
+    """
+    return booking.booking_source != "agent"
+
+
 def _history(db: Session, booking: Booking, old_status: str | None, new_status: str, actor: User | None, source: str, reason: str | None = None, metadata: dict | None = None):
     db.add(BookingStatusHistory(
         booking_id=booking.id,
@@ -1113,7 +1122,11 @@ def serialize_booking_for_actor(db: Session, booking: Booking, actor: Optional[U
     role = _user_role(actor)
     data = serialize_booking(db, booking, detail=detail, hide_supplier_identity=role in ("customer", "agent"))
     if role == "supplier":
-        return _hide_agent_reservation_payment_from_supplier(_supplier_safe(data, booking), booking)
+        data = _hide_agent_reservation_payment_from_supplier(_supplier_safe(data, booking), booking)
+        # The supplier booking list must use its own settlement lifecycle
+        # (pending/paid/etc.), never the customer's checkout payment status.
+        data["supplier_payment_summary"] = _supplier_payment_summary(db, booking)
+        return data
     return _hide_supplier_reassignment_from_external_partner(data, booking, role)
 
 
@@ -1956,7 +1969,15 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
         .all()
     }
     if booking_status:
-        query = query.filter(Booking.booking_status == booking_status.strip().lower())
+        # Portal filters can map one friendly status (for example, "Booking
+        # Request Received") to several internal workflow states. Keep the
+        # existing single-value query contract and accept a comma-separated
+        # list for those grouped portal filters.
+        requested_statuses = [value.strip().lower() for value in booking_status.split(",") if value.strip()]
+        if len(requested_statuses) == 1:
+            query = query.filter(Booking.booking_status == requested_statuses[0])
+        elif requested_statuses:
+            query = query.filter(Booking.booking_status.in_(requested_statuses))
     query = query.order_by(Booking.id.asc() if sort_by == "oldest" else Booking.id.desc())
     total = query.count()
     items = [serialize_booking_for_actor(db, b, actor, detail=False) for b in query.offset((page - 1) * limit).limit(limit).all()]
@@ -2082,14 +2103,17 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
             raise HTTPException(status_code=403, detail="Customers cannot create or attach agent bookings")
     if data.booking_source == "customer" and not data.customer_id:
         raise HTTPException(status_code=400, detail="customer_id is required for customer bookings")
-    customer = db.query(Customer).filter(Customer.id == data.customer_id).first()
-    if not customer:
+    customer = db.query(Customer).filter(Customer.id == data.customer_id).first() if data.customer_id else None
+    if data.booking_source == "customer" and not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     if data.booking_source == "customer" and actor and _user_role(actor) == "customer" and customer.user_id != actor.id:
         raise HTTPException(status_code=403, detail="Customer booking access denied")
     if actor and _user_role(actor) == "agent":
         from app.services.agent_scope import ensure_agent_customer_access
-        ensure_agent_customer_access(db, data.customer_id, actor)
+        if data.customer_id:
+            # Legacy Agent bookings may still be linked to an existing CRM
+            # contact. New bookings keep lead travellers only in the manifest.
+            ensure_agent_customer_access(db, data.customer_id, actor)
         agent = db.query(Agent).filter(Agent.user_id == actor.id).first()
         if not agent:
             raise HTTPException(status_code=403, detail="Agent profile not found")
@@ -2209,12 +2233,13 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     for row, qty, unit, total in extensions:
         db.add(BookingExtension(booking_id=booking.id, tour_extension_id=row.id, extension_tour_id=row.extension_tour_id, extension_name_snapshot=row.extension_title, quantity=qty, unit_price=unit, total_price=total))
     _history(db, booking, None, booking.booking_status, actor, _user_role(actor), "Booking created")
-    customer.total_bookings = (customer.total_bookings or 0) + 1
-    customer.upcoming_bookings = (customer.upcoming_bookings or 0) + 1
-    customer.total_amount_pending = money(customer.total_amount_pending or 0) + customer_selling_price
+    if _belongs_to_customer_portal(booking):
+        customer.total_bookings = (customer.total_bookings or 0) + 1
+        customer.upcoming_bookings = (customer.upcoming_bookings or 0) + 1
+        customer.total_amount_pending = money(customer.total_amount_pending or 0) + customer_selling_price
     log_audit(db, actor=actor, action="create_booking", entity_type="booking", entity_id=booking.id, new_values=serialize_booking(db, booking), request=request)
     from app.services.notifications import enqueue_notification
-    if customer.user_id:
+    if _belongs_to_customer_portal(booking) and customer.user_id:
         enqueue_notification(db, user_id=customer.user_id, notification_type="booking_created", title="Booking created", message=f"Your booking {booking.booking_code} was created", entity_type="booking", entity_id=booking.id)
 
     _apply_commission_snapshot(db, booking, pricing_details)
@@ -2480,7 +2505,7 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
     is_final_confirmation = data.booking_status == "confirmed"
     notification_title = "Your Tourvaa Booking Is Confirmed" if is_final_confirmation else "Booking updated"
     notification_event = "booking_confirmed" if is_final_confirmation else "booking_status_changed"
-    if booking.customer and booking.customer.user_id:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.user_id:
         enqueue_notification(
             db, user_id=booking.customer.user_id, notification_type="booking_status_changed",
             title=notification_title, message=f"Booking {booking.booking_code} is now: {customer_label}",
@@ -2495,18 +2520,43 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
             event_version=event_version,
         )
 
-    if booking.customer and booking.customer.email:
-        from app.utils.email_templates import booking_status_update_email
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        if is_final_confirmation:
+            from app.utils.email_templates import booking_confirmed_email
+            _send_booking_email(
+                db, "booking_confirmed",
+                {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+                 "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
+                 "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
+                f"Your booking is confirmed - {booking.booking_code}",
+                booking_confirmed_email(booking.customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
+                booking.customer.email,
+                event=notification_event, entity_id=booking.id, recipient_type="customer", event_version=event_version,
+            )
+        else:
+            from app.utils.email_templates import booking_status_update_email
+            _send_booking_email(
+                db, "booking_status_update",
+                {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+                 "new_status": customer_label, "reason": data.reason or "", "login_url": login_url,
+                 "button_text": "View booking", "button_url": login_url},
+                f"Booking update - {booking.booking_code}",
+                booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, customer_label, data.reason or "", login_url),
+                booking.customer.email,
+                event=notification_event, entity_id=booking.id, recipient_type="customer", event_version=event_version,
+            )
+    if is_final_confirmation and booking.supplier and booking.supplier.user and booking.supplier.user.email:
+        from app.utils.email_templates import supplier_booking_confirmed_email
+        portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
+        customer_name = booking.customer.full_name if booking.customer else "Customer"
         _send_booking_email(
-            db, "booking_status_update",
-            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-             "new_status": customer_label, "reason": data.reason or "", "login_url": login_url,
-             "button_text": "View booking", "button_url": login_url},
-            f"Your Tourvaa Booking Is Confirmed - {booking.booking_code}" if is_final_confirmation else f"Booking update - {booking.booking_code}",
-            booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, customer_label, data.reason or "", login_url),
-            booking.customer.email,
-            event=notification_event, entity_id=booking.id, recipient_type="customer", event_version=event_version,
+            db, "supplier_booking_confirmed",
+            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
+            f"Booking confirmed - {booking.booking_code}",
+            supplier_booking_confirmed_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
+            booking.supplier.user.email,
+            event=notification_event, entity_id=booking.id, recipient_type="supplier", event_version=event_version,
         )
     _email_agent_booking_status(
         db, booking, agent_label, data.reason or "", event=notification_event, event_version=event_version,
@@ -2570,7 +2620,7 @@ def _cancel_booking_core(
         reverse_agent_ledger_entry(db, booking.id)
     except Exception:
         logger.warning("Agent ledger reversal failed for booking %s", booking.id, exc_info=True)
-    if booking.customer:
+    if _belongs_to_customer_portal(booking) and booking.customer:
         booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
         booking.customer.total_amount_pending = max(
             money(0),
@@ -2595,7 +2645,7 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
         settle_reason=data.reason or "Cancelled by admin",
     )
 
-    if booking.customer and booking.customer.email:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         from app.utils.email_templates import booking_cancelled_email
         login_url = f"{settings.FRONTEND_URL}/customer/bookings"
         _send_booking_email(
@@ -2675,10 +2725,10 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
         booking.cancelled_at = utcnow()
         if booking.calendar:
             booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
-        if booking.customer:
+        if _belongs_to_customer_portal(booking) and booking.customer:
             booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
             booking.customer.total_amount_pending = max(money(0), money(booking.customer.total_amount_pending or 0) - money(booking.amount_pending))
-        if booking.customer and booking.customer.user_id:
+        if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.user_id:
             from app.services.notifications import enqueue_notification
             enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_expired", title="Booking hold expired", message=f"Your booking {booking.booking_code} was automatically cancelled because payment wasn't completed in time.", entity_type="booking", entity_id=booking.id)
         if booking.agent and booking.agent.user_id:
@@ -2738,7 +2788,7 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
         from app.utils.email_templates import booking_status_update_email
         for booking in expired_bookings:
             reason = "Payment was not completed before the booking hold expired."
-            if booking.customer and booking.customer.email:
+            if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
                 customer_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
                 _send_booking_email(
                     db, "booking_status_update",
@@ -2777,7 +2827,7 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
         portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
         _send_booking_email(
             db, "supplier_booking_assigned",
-            {"supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code,
+            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code,
              "tour_name": booking.tour_name, "tour_date": booking.tour_date or "",
              "customer_name": customer_name, "adults": booking.adults_count,
              "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url,
@@ -2882,10 +2932,54 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
 
     notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
     if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
-        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="supplier_accepted_booking", title="Supplier acceptance recorded", message=f"Tourvaa is completing confirmation for booking {booking.booking_code}", entity_type="booking", entity_id=booking.id)
+        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_confirmed", title="Booking confirmed", message=f"Booking {booking.booking_code} is confirmed", entity_type="booking", entity_id=booking.id)
     log_audit(db, actor=actor, action="supplier_accept_booking", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(booking)
 
+    # 1. Booking Party Notification (Customer / Agent): Booking is Confirmed
+    recipient = _booking_email_recipient(booking)
+    if recipient:
+        from app.utils.email_templates import booking_confirmed_email
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+        _send_booking_email(
+            db, "booking_confirmed",
+            {"name": recipient[0], "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+             "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
+             "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
+            f"Your booking is confirmed - {booking.booking_code}",
+            booking_confirmed_email(recipient[0], booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
+            recipient[1],
+            event="booking_confirmed",
+            entity_id=booking.id,
+            recipient_type="customer",
+        )
+
+    # 2. Supplier Notification: Confirmation / Record
+    if booking.supplier and booking.supplier.user and booking.supplier.user.email:
+        from app.utils.email_templates import supplier_booking_confirmed_email
+        portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
+        customer_name = booking.customer.full_name if booking.customer else "Customer"
+        _send_booking_email(
+            db, "supplier_booking_confirmed",
+            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
+            f"Booking confirmed - {booking.booking_code}",
+            supplier_booking_confirmed_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
+            booking.supplier.user.email,
+            event="booking_confirmed",
+            entity_id=booking.id,
+            recipient_type="supplier",
+        )
+
+    # 3. Agent Notification
+    _email_agent_booking_status(
+        db,
+        booking,
+        "confirmed",
+        "Great news! Your Tourvaa booking is now confirmed.",
+        event="booking_confirmed",
+    )
+
+    # 4. Tourvaa Admin: Booking Confirmed by Supplier
     from app.services.notification_delivery import dispatch_admin_lifecycle_emails
     from app.utils.email_templates import admin_booking_event_email
     admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
@@ -2896,9 +2990,9 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         entity_type="booking",
         entity_id=booking.id,
         template_key="admin_booking_event",
-        values={"event_title": "Supplier acceptance recorded", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "Review and confirm booking", "button_url": admin_url},
-        fallback_subject=f"Supplier accepted booking - {booking.booking_code}",
-        fallback_html=admin_booking_event_email("Supplier accepted booking", admin_detail, booking.booking_code, booking.tour_name, admin_url),
+        values={"event_title": "Booking Confirmed by Supplier", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "Review and confirm booking", "button_url": admin_url},
+        fallback_subject=f"Booking Confirmed by Supplier - {booking.booking_code}",
+        fallback_html=admin_booking_event_email("Booking Confirmed by Supplier", admin_detail, booking.booking_code, booking.tour_name, admin_url),
     )
 
     return serialize_booking_for_actor(db, booking, actor)
@@ -2963,13 +3057,13 @@ def supplier_start_booking(db: Session, booking_id: int, reason: str | None, act
     _set_status(db, booking, "ongoing", actor, "supplier", transition_reason)
     log_audit(db, actor=actor, action="supplier_start_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
     notify_admins(db, notification_type="booking_ongoing", title="Tour started", message=f"Supplier started {booking.booking_code}", entity_type="booking", entity_id=booking.id)
-    if booking.customer and booking.customer.user_id:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_ongoing", title="Your tour has started", message=f"Tour {booking.booking_code} is now ongoing", entity_type="booking", entity_id=booking.id)
     if booking.agent and booking.agent.user_id:
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_ongoing", title="Tour started", message=f"Booking {booking.booking_code} is now ongoing", entity_type="booking", entity_id=booking.id)
     db.commit(); db.refresh(booking)
 
-    if booking.customer and booking.customer.email:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         _send_booking_email(
             db, "booking_status_update",
@@ -2996,15 +3090,15 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
     _set_status(db, booking, "completed", actor, "supplier", reason or "Tour completed by supplier")
     log_audit(db, actor=actor, action="supplier_complete_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
     notify_admins(db, notification_type="booking_completed", title="Tour completed", message=f"Supplier marked {booking.booking_code} as completed", entity_type="booking", entity_id=booking.id)
-    if booking.customer and booking.customer.user_id:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_completed", title="Tour completed", message=f"Your tour {booking.booking_code} has been completed", entity_type="booking", entity_id=booking.id)
     if booking.agent and booking.agent.user_id:
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_completed", title="Tour completed", message=f"Booking {booking.booking_code} has been completed", entity_type="booking", entity_id=booking.id)
-    if booking.customer:
+    if _belongs_to_customer_portal(booking) and booking.customer:
         booking.customer.completed_bookings = (booking.customer.completed_bookings or 0) + 1
         booking.customer.upcoming_bookings = max(0, (booking.customer.upcoming_bookings or 0) - 1)
     db.commit(); db.refresh(booking)
-    if booking.customer and booking.customer.email:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         _send_booking_email(
             db, "booking_status_update",
@@ -3017,7 +3111,7 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
         )
     _email_agent_booking_status(db, booking, "completed", reason or "Tour completed")
     _email_admins_booking_event(db, "Tour completed", f"Supplier marked booking {booking.booking_code} as completed.", booking)
-    if booking.customer and booking.customer.email:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         from app.utils.email_templates import review_request_email
         review_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         _send_booking_email(
@@ -3050,7 +3144,7 @@ def check_booking_reminders(db: Session) -> list[int]:
         tour_date = as_aware_utc(booking.tour_start_date).date()
         days_until = (tour_date - today).days
         marker = "booking_reminder_7d" if days_until == 7 else "booking_reminder_24h" if days_until == 1 else None
-        if not marker or not booking.customer:
+        if not marker or not _belongs_to_customer_portal(booking) or not booking.customer:
             continue
         already_sent = db.query(BookingCommunication.id).filter(
             BookingCommunication.booking_id == booking.id,
@@ -3189,7 +3283,7 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
         enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New booking assigned", message=f"Booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
         _send_booking_email(
             db, "supplier_booking_assigned",
-            {"supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
+            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
             f"New booking assigned - {booking.booking_code}",
             supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
             booking.supplier.user.email,
@@ -3249,13 +3343,13 @@ def update_booking_travel_date(db: Session, booking_id: int, data: BookingTravel
         old_values=old_values, new_values={"tour_date": booking.tour_date, "tour_calendar_id": booking.tour_calendar_id, "reason": data.reason}, request=request,
     )
     from app.services.notifications import enqueue_notification
-    if booking.customer and booking.customer.user_id:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_rescheduled", title="Travel date updated", message=f"Your booking {booking.booking_code} travel date has been updated to {booking.tour_date}.", entity_type="booking", entity_id=booking.id)
     if booking.agent and booking.agent.user_id:
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_rescheduled", title="Travel date updated", message=f"Booking {booking.booking_code} travel date has been updated to {booking.tour_date}.", entity_type="booking", entity_id=booking.id)
     db.commit(); db.refresh(booking)
     from app.utils.email_templates import booking_status_update_email
-    if booking.customer and booking.customer.email:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         _send_booking_email(
             db, "booking_status_update",
@@ -3345,12 +3439,12 @@ def supplier_postpone_booking(
     _set_status(db, booking, "postponed", actor, "supplier", reason)
     log_audit(db, actor=actor, action="supplier_postpone_booking", entity_type="booking", entity_id=booking.id, old_values=old_values, request=request)
     notify_admins(db, notification_type="booking_postponed", title="Booking postponed", message=f"Supplier postponed {booking.booking_code}: {reason}", entity_type="booking", entity_id=booking.id)
-    if booking.customer and booking.customer.user_id:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_postponed", title="Booking postponed", message=f"Your booking {booking.booking_code} has been postponed. Reason: {reason}", entity_type="booking", entity_id=booking.id)
     if booking.agent and booking.agent.user_id:
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_postponed", title="Booking postponed", message=f"Booking {booking.booking_code} has been postponed by supplier", entity_type="booking", entity_id=booking.id)
     db.commit(); db.refresh(booking)
-    if booking.customer and booking.customer.email:
+    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         date_info = f" New date: {booking.tour_date}." if new_tour_date or new_tour_calendar_id else ""
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         _send_booking_email(
@@ -3382,7 +3476,7 @@ def supplier_notify_parties(db: Session, booking_id: int, message: str, notify_c
     log_audit(db, actor=actor, action="supplier_notify_parties", entity_type="booking", entity_id=booking.id, request=request)
     db.commit(); db.refresh(row)
     notified = []
-    if notify_customer and booking.customer and booking.customer.email:
+    if notify_customer and _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         _send_booking_email(
             db, "booking_status_update",
@@ -3416,7 +3510,7 @@ def get_upcoming_bookings(db: Session, actor: User | None = None) -> dict:
 def _communication_recipients(booking: Booking, visibility: str) -> list[tuple[str, str]]:
     """(label, email) pairs a booking communication should be emailed to, per its visibility."""
     recipients: list[tuple[str, str]] = []
-    if visibility in ("customer", "all") and booking.customer and booking.customer.email:
+    if visibility in ("customer", "all") and _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
         recipients.append(("customer", booking.customer.email))
     if visibility in ("supplier", "all") and booking.supplier and booking.supplier.user and booking.supplier.user.email:
         recipients.append(("supplier", booking.supplier.user.email))

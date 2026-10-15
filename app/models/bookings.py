@@ -10,7 +10,7 @@ class Booking(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     booking_code = Column(String(30), unique=True, nullable=True, index=True)
-    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
     tour_id = Column(Integer, ForeignKey("tours.id"), nullable=True, index=True)
     tour_calendar_id = Column(Integer, ForeignKey("tour_calendar.id"), nullable=True, index=True)
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True, index=True)

@@ -303,6 +303,7 @@ def customer_payment_history(
         limit=params["limit"],
         payment_status=payment_status,
         payment_method=payment_method,
+        actor=current_user,
     )
     return {"status": "success", **paginated}
 

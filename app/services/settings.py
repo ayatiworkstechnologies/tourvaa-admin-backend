@@ -101,6 +101,11 @@ DEFAULT_SETTINGS = [
     # financial values, and statutory tax fields remain server-controlled.
     {"key": "invoice_brand_name", "label": "Invoice Brand Name", "value": "Tourvaa", "group": "invoice_pdf", "is_public": False},
     {"key": "invoice_brand_tagline", "label": "Invoice Brand Tagline", "value": "Curated journeys, effortlessly booked.", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_logo_url", "label": "Invoice Logo URL", "value": "", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_header_layout", "label": "Invoice Header Layout (brand_name, logo, both)", "value": "both", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_primary_color", "label": "Invoice Primary Brand Color", "value": "#07566A", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_header_color", "label": "Invoice Header / Table Bar Color", "value": "#0B263D", "group": "invoice_pdf", "is_public": False},
+    {"key": "invoice_accent_color", "label": "Invoice Accent Color", "value": "#159C96", "group": "invoice_pdf", "is_public": False},
     {"key": "invoice_column_description", "label": "Invoice Description Column", "value": "Description", "group": "invoice_pdf", "is_public": False},
     {"key": "invoice_column_quantity", "label": "Invoice Quantity Column", "value": "Qty", "group": "invoice_pdf", "is_public": False},
     {"key": "invoice_column_unit_price", "label": "Invoice Unit Price Column", "value": "Unit Price", "group": "invoice_pdf", "is_public": False},

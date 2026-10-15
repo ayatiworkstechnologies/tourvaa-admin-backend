@@ -180,9 +180,11 @@ def test_booking_message_serializer_keeps_admin_reply_recipient_role():
     assert serialized["body"] == "Reply for the supplier column"
 
 
-def test_customer_or_agent_booking_message_is_logged_for_admin(monkeypatch):
-    """The booking composer is an admin-support channel, so its message
-    must enter the booking communication timeline with a clear sender."""
+def test_customer_or_agent_booking_message_stays_in_portal_conversation(monkeypatch):
+    """Portal messages are shown in the Admin portal-message columns only.
+
+    They must not be duplicated into the legacy internal communication log.
+    """
     conversation = SimpleNamespace(
         id=17,
         booking_id=42,
@@ -219,15 +221,11 @@ def test_customer_or_agent_booking_message_is_logged_for_admin(monkeypatch):
     monkeypatch.setattr(messaging, "notify_admins", lambda _db, **payload: notifications.append(payload))
     monkeypatch.setattr(messaging.ws_manager, "notify_new_message", notify_ws)
     monkeypatch.setattr(messaging, "BookingMessage", lambda **values: SimpleNamespace(**values, id=23, sender=None, recipient_role=None, is_deleted=False, created_at=None))
-    monkeypatch.setattr(messaging, "BookingCommunication", lambda **values: SimpleNamespace(**values))
-
     asyncio.run(messaging.send_booking_message_as_initiator(Db(), 42, SimpleNamespace(id=9), "Is the tour confirmed?"))
 
-    timeline_row = next(row for row in added if getattr(row, "message_type", None) == "portal_message")
-    assert timeline_row.booking_id == 42
-    assert timeline_row.sender_type == "agent"
-    assert timeline_row.message_type == "portal_message"
-    assert timeline_row.visibility == "internal"
+    assert len(added) == 1
+    assert getattr(added[0], "conversation_id", None) == 17
+    assert not any(getattr(row, "message_type", None) == "portal_message" for row in added)
     assert notifications[0]["title"] == "New agent booking message"
 
 

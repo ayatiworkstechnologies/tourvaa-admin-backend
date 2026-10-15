@@ -1,4 +1,4 @@
-﻿from math import ceil
+from math import ceil
 
 from datetime import timedelta, timezone
 from decimal import Decimal
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import get_private_docs_root, settings
 from app.services.audit import log_audit
 from app.models.bookings import Booking
+from app.models.customers import Customer
 from app.utils.money import money, money_str, utcnow
 from app.models.invoices import Invoice, InvoiceItem
 from app.schemas.invoices import InvoiceEmailRequest, InvoiceGenerateRequest
@@ -140,6 +141,11 @@ def _invoice_template_copy(inv: Invoice) -> dict[str, str]:
     defaults = {
         "invoice_brand_name": "Tourvaa",
         "invoice_brand_tagline": "Curated journeys, effortlessly booked.",
+        "invoice_logo_url": "",
+        "invoice_header_layout": "both",
+        "invoice_primary_color": "#07566A",
+        "invoice_header_color": "#0B263D",
+        "invoice_accent_color": "#159C96",
         "invoice_footer_thanks": "Thank you for booking with Tourvaa.",
         "invoice_footer_legal": "This is a system-generated invoice and does not require a signature.",
         "invoice_column_description": "Description", "invoice_column_quantity": "Qty", "invoice_column_unit_price": "Unit Price", "invoice_column_tax": "Tax", "invoice_column_total": "Total", "invoice_label_amount_due": "Amount Due",
@@ -150,9 +156,13 @@ def _invoice_template_copy(inv: Invoice) -> dict[str, str]:
         session = None
     if session is None:
         return defaults
-    rows = session.query(AppSetting).filter(AppSetting.key.in_(defaults)).all()
+    keys_to_query = list(defaults.keys()) + ["logo"]
+    rows = session.query(AppSetting).filter(AppSetting.key.in_(keys_to_query)).all()
     values = {row.key: (row.value or "").strip() for row in rows}
-    return {key: values.get(key) or default for key, default in defaults.items()}
+    result = {key: values.get(key) or default for key, default in defaults.items()}
+    if not result.get("invoice_logo_url") and values.get("logo"):
+        result["invoice_logo_url"] = values["logo"]
+    return result
 
 
 def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | None, items: list[dict]) -> dict:
@@ -213,7 +223,13 @@ def _ensure_invoice_access(inv: Invoice, actor: User | None) -> None:
     role = _user_role(actor)
     if role == "admin":
         return
-    if role == "customer" and inv.customer and inv.customer.user_id == actor.id:
+    if (
+        role == "customer"
+        and inv.booking
+        and inv.booking.booking_source != "agent"
+        and inv.customer
+        and inv.customer.user_id == actor.id
+    ):
         return
     booking = inv.booking
     if role == "supplier" and booking and booking.supplier and booking.supplier.user_id == actor.id:
@@ -231,7 +247,8 @@ def list_invoices(db: Session, page: int = 1, limit: int = 20, booking_id: int |
     elif role == "agent":
         query = query.join(Invoice.booking).join(Booking.agent).filter_by(user_id=actor.id)
     elif role == "customer":
-        query = query.join(Invoice.customer).filter_by(user_id=actor.id)
+        query = query.join(Invoice.customer).join(Invoice.booking).filter(Customer.user_id == actor.id)
+        query = query.filter(Booking.booking_source != "agent")
     if booking_id: query = query.filter(Invoice.booking_id == booking_id)
     if customer_id: query = query.filter(Invoice.customer_id == customer_id)
     query = query.order_by(Invoice.id.desc())
@@ -304,7 +321,7 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
     inv.pdf_path = f"/private-docs/invoices/{inv.invoice_number}.pdf"
     from app.services.notifications import enqueue_notification, notify_admins
     notify_admins(db, notification_type="invoice_generated", title="Invoice generated", message=f"Invoice {inv.invoice_number} was generated", entity_type="invoice", entity_id=inv.id)
-    if booking.customer and booking.customer.user_id:
+    if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="invoice_generated", title="Invoice generated", message=f"Invoice {inv.invoice_number} is ready", entity_type="invoice", entity_id=inv.id)
     if booking.agent and booking.agent.user_id:
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="invoice_generated", title="Reservation invoice ready", message=f"Invoice {inv.invoice_number} for booking {booking.booking_code or booking.id} is ready", entity_type="invoice", entity_id=inv.id)
@@ -520,12 +537,12 @@ def check_balance_due_reminders(db: Session) -> list[int]:
                 f"has an outstanding balance of <b>{inv.currency} {money_str(inv.amount_due)}</b>, "
                 f"due <b>{due_str}</b>.</p>"
             )
-            if inv.customer and inv.customer.email:
+            if inv.booking and inv.booking.booking_source != "agent" and inv.customer and inv.customer.email:
                 try_send_email(
                     inv.customer.email, subject, body,
                     template_key="balance_due_reminder", entity_type="invoice", entity_id=inv.id,
                 )
-            if inv.customer and inv.customer.user_id:
+            if inv.booking and inv.booking.booking_source != "agent" and inv.customer and inv.customer.user_id:
                 enqueue_notification(
                     db, user_id=inv.customer.user_id, notification_type="balance_due_reminder",
                     title="Payment reminder",

@@ -340,7 +340,7 @@ def booking_confirmation_email(name: str, booking_code: str, tour_name: str, tou
         (
             f"Thank you for booking with Tourvaa! {status_badge('Pending confirmation', 'warning')}<br /><br />"
             f"{summary}<br />"
-            "We will notify you as soon as your booking is confirmed by the supplier."
+            "We will notify you as soon as your booking is confirmed."
         ),
         "View booking",
         login_url,

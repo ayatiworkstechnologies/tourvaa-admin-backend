@@ -183,6 +183,11 @@ def serialize_supplier(item: Supplier, *, mask_bank_details: bool = False):
             "commission_percentage": str(item.commission_percentage) if item.commission_percentage is not None else None,
             "onboarding_completed_at": item.onboarding_completed_at,
             "commission_accepted_at": item.commission_accepted_at,
+            # A supplier's uploaded company logo is stored on its linked
+            # account. Include it in the staff-only detail payload so the
+            # registration review is not missing an item visible in the
+            # supplier's Company Details form.
+            "business_logo": account.profile_image if account else "",
             "business_address": account.address if account else "",
             "registration_contact": registration_contact,
             "contacts": relationship_list(item.contacts, _contact),

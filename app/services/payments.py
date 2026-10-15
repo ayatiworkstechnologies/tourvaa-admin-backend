@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from math import ceil
 from typing import Optional
 
@@ -178,7 +178,7 @@ def serialize_payment(payment: Payment, detail: bool = False) -> dict:
         "refunded_amount": money_str(payment.refunded_amount),
         "payment_status": payment.payment_status,
         "transaction_id": payment.transaction_id,
-        "payment_date": payment.payment_date,
+        "payment_date": payment.payment_date or payment.created_at,
         "notes": payment.notes,
         "failure_reason": payment.failure_reason,
         "created_at": payment.created_at,
@@ -295,7 +295,12 @@ def _ensure_payment_access(payment: Payment, actor: User | None) -> None:
     role = _user_role(actor)
     if role == "admin" or actor is None:
         return
-    if role == "customer" and payment.customer and payment.customer.user_id == actor.id:
+    if (
+        role == "customer"
+        and (not payment.booking or payment.booking.booking_source != "agent")
+        and payment.customer
+        and payment.customer.user_id == actor.id
+    ):
         return
     booking = payment.booking
     if role == "supplier" and booking and booking.supplier and booking.supplier.user_id == actor.id:
@@ -313,7 +318,8 @@ def get_payments(db: Session, page: int = 1, limit: int = 20, search: str = "", 
     elif role == "agent":
         query = query.join(Payment.booking).join(Booking.agent).filter_by(user_id=actor.id)
     elif role == "customer":
-        query = query.join(Payment.customer).filter_by(user_id=actor.id)
+        query = query.join(Payment.customer).join(Payment.booking).filter(Customer.user_id == actor.id)
+        query = query.filter(Booking.booking_source != "agent")
     if search:
         pattern = f"%{search.strip().lower()}%"
         query = query.outerjoin(Booking, Booking.id == Payment.booking_id).outerjoin(Customer, Customer.id == Payment.customer_id).filter(
@@ -375,7 +381,7 @@ def create_payment(db: Session, data: PaymentCreate, actor: Optional[User] = Non
     log_audit(db, actor=actor, action="create_payment", entity_type="payment", entity_id=payment.id, new_values=serialize_payment(payment), request=request)
     from app.services.notifications import enqueue_notification, notify_admins
     notify_admins(db, notification_type="payment_success", title="Payment recorded", message=f"Payment {payment.payment_code} was recorded", entity_type="payment", entity_id=payment.id)
-    if booking.customer and booking.customer.user_id:
+    if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="payment_success", title="Payment recorded", message=f"Payment for booking {booking.booking_code} was recorded", entity_type="payment", entity_id=payment.id)
     db.commit()
     db.refresh(payment)
@@ -439,7 +445,7 @@ def capture_payment(db: Session, payment_id: int, data: PaymentCapture, actor: O
     from app.schemas.invoices import InvoiceGenerateRequest
     from app.services.invoices import generate_invoice
     notify_admins(db, notification_type="payment_captured", title="Payment captured", message=f"Payment {payment.payment_code} was captured", entity_type="payment", entity_id=payment.id)
-    if payment.booking and payment.booking.customer and payment.booking.customer.user_id:
+    if payment.booking and payment.booking.booking_source != "agent" and payment.booking.customer and payment.booking.customer.user_id:
         enqueue_notification(db, user_id=payment.booking.customer.user_id, notification_type="payment_captured", title="Payment captured", message=f"Payment for booking {payment.booking.booking_code} was captured", entity_type="payment", entity_id=payment.id)
     log_audit(db, actor=actor, action="capture_payment", entity_type="payment", entity_id=payment.id, request=request)
     db.commit()
@@ -596,7 +602,7 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
         _sync_booking_payment_fields(db, payment.booking)
     from app.services.notifications import enqueue_notification, notify_admins
     notify_admins(db, notification_type="payment_refunded", title="Payment refunded", message=f"Refund processed for {payment.payment_code}", entity_type="payment", entity_id=payment.id)
-    if payment.booking and payment.booking.customer and payment.booking.customer.user_id:
+    if payment.booking and payment.booking.booking_source != "agent" and payment.booking.customer and payment.booking.customer.user_id:
         enqueue_notification(db, user_id=payment.booking.customer.user_id, notification_type="payment_refunded", title="Payment refunded", message=f"Refund processed for {payment.payment_code}", entity_type="payment", entity_id=payment.id)
     log_audit(db, actor=actor, action="process_refund", entity_type="payment", entity_id=payment.id, new_values={"gateway_refund_id": gateway_refund_id}, request=request)
     db.commit()
@@ -612,15 +618,26 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
     return result
 
 
-def get_customer_payments(db: Session, customer_id: int, page: int = 1, limit: int = 20, payment_status: str = "", payment_method: str = "", actor: Optional[User] = None) -> dict:
+def get_customer_payments(
+    db: Session,
+    customer_id: int,
+    page: int = 1,
+    limit: int = 20,
+    payment_status: str = "",
+    payment_method: str = "",
+    actor: Optional[User] = None,
+    hide_identifiers: Optional[bool] = None,
+) -> dict:
     result = get_payments(
         db, page=page, limit=limit, customer_id=customer_id,
         payment_status=payment_status, payment_method=payment_method, actor=actor,
     )
     # A payment's database/code identifier is an internal finance reference.
-    # Travellers navigate from their booking code, while finance staff retain
-    # the identifiers in the Admin payment screens.
-    for item in result["items"]:
-        item.pop("id", None)
-        item.pop("payment_code", None)
+    # Travellers in public/portal contexts navigate from booking codes, while
+    # administrative staff retain the identifiers in the Admin screens.
+    should_hide = hide_identifiers if hide_identifiers is not None else (actor is None)
+    if should_hide:
+        for item in result["items"]:
+            item.pop("id", None)
+            item.pop("payment_code", None)
     return result

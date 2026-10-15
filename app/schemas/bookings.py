@@ -74,7 +74,9 @@ class BookingAddonPayload(BaseModel):
 
 
 class BookingCreate(BaseModel):
-    customer_id: int
+    # Customer identity is required only for self-service customer bookings.
+    # Agent bookings use BookingTraveller records as their lead/traveller data.
+    customer_id: Optional[int] = None
     tour_id: Optional[int] = None
     tour_calendar_id: Optional[int] = None
     supplier_id: Optional[int] = None

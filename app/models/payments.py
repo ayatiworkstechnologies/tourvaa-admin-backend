@@ -11,7 +11,7 @@ class Payment(Base):
     id = Column(Integer, primary_key=True, index=True)
     payment_code = Column(String(30), unique=True, nullable=True, index=True)
     booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
-    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
 
     payment_method = Column(String(30), default="card", nullable=False)

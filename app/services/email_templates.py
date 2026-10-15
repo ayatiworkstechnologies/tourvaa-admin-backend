@@ -104,7 +104,7 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Date: {{tour_date}}\n"
             "Adults: {{adults}}\n"
             "Total: {{currency}} {{total}}\n\n"
-            "We will notify you as soon as your booking is confirmed by the supplier.\n\n"
+            "We will notify you as soon as your booking is confirmed.\n\n"
             "View your booking: {{login_url}}"
         ),
     },
@@ -389,6 +389,11 @@ def seed_email_templates(db: Session):
             corrected_copy = "Great news! Your Tourvaa booking is now confirmed."
             if legacy_copy in template.body:
                 template.body = template.body.replace(legacy_copy, corrected_copy)
+        elif template.key == "booking_confirmation" and template.body:
+            legacy_confirm_copy = "We will notify you as soon as your booking is confirmed by the supplier."
+            corrected_confirm_copy = "We will notify you as soon as your booking is confirmed."
+            if legacy_confirm_copy in template.body:
+                template.body = template.body.replace(legacy_confirm_copy, corrected_confirm_copy)
 
     db.commit()
 

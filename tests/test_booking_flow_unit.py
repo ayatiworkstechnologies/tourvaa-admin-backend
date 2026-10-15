@@ -514,6 +514,16 @@ def test_customer_cannot_read_another_customers_payment():
     assert exc.value.status_code == 403
 
 
+def test_customer_cannot_read_an_agent_booking_payment():
+    payment = SimpleNamespace(
+        customer=SimpleNamespace(user_id=42),
+        booking=SimpleNamespace(booking_source="agent"),
+    )
+    with pytest.raises(HTTPException) as exc:
+        _ensure_payment_access(payment, customer_user())
+    assert exc.value.status_code == 403
+
+
 def test_customer_can_read_own_payment():
     payment = SimpleNamespace(
         customer=SimpleNamespace(user_id=42),
