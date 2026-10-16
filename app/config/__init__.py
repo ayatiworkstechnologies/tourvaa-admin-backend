@@ -52,7 +52,9 @@ class Settings(BaseSettings):
 
     SUPER_ADMIN_NAME: str = "Super Admin"
     SUPER_ADMIN_EMAIL: str = "admin@tourvaa.com"
-    SUPER_ADMIN_PASSWORD: str = "Admin@123"
+    # Local/bootstrap seed default only. Production rejects these unchanged
+    # defaults, so deployments must provide distinct environment credentials.
+    SUPER_ADMIN_PASSWORD: str = "Tourvaa@2026!"
     SUPER_ADMIN_RESET_PASSWORD_ON_STARTUP: bool = False
 
     # Bootstrap logins for the two day-to-day back-office roles.
@@ -60,12 +62,12 @@ class Settings(BaseSettings):
     # distinct credentials and rotate each account independently.
     ADMIN_NAME: str = "Admin"
     ADMIN_EMAIL: str = "admin.user@tourvaa.com"
-    ADMIN_PASSWORD: str = "AdminUser@123"
+    ADMIN_PASSWORD: str = "Tourvaa@2026!"
     ADMIN_RESET_PASSWORD_ON_STARTUP: bool = False
 
     SUB_ADMIN_NAME: str = "Sub Admin"
     SUB_ADMIN_EMAIL: str = "subadmin@tourvaa.com"
-    SUB_ADMIN_PASSWORD: str = "SubAdmin@123"
+    SUB_ADMIN_PASSWORD: str = "Tourvaa@2026!"
     SUB_ADMIN_RESET_PASSWORD_ON_STARTUP: bool = False
 
     SMTP_HOST: str | None = None
