@@ -55,7 +55,7 @@ class StripeGateway:
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
-    def create_checkout_session(self, *, amount_cents: int, currency: str, booking_id: int, success_url: str, cancel_url: str, customer_email: Optional[str] = None, idempotency_key: Optional[str] = None) -> dict:
+    def create_checkout_session(self, *, amount_cents: int, currency: str, booking_id: int, success_url: str, cancel_url: str, customer_email: Optional[str] = None, idempotency_key: Optional[str] = None, hold_funds: bool = True) -> dict:
         payload = {
             "mode": "payment",
             "payment_method_types[]": "card",
@@ -67,6 +67,10 @@ class StripeGateway:
             "cancel_url": cancel_url,
             "metadata[booking_id]": booking_id,
         }
+        # Do not charge the card at Checkout.  A manual-capture PaymentIntent
+        # leaves the payment in requires_capture after customer approval.
+        if hold_funds:
+            payload["payment_intent_data[capture_method]"] = "manual"
         if customer_email:
             payload["customer_email"] = customer_email
 
@@ -84,6 +88,32 @@ class StripeGateway:
         resp = http_requests.get(f"{self.base_url}/checkout/sessions/{session_id}", headers=self._headers(), timeout=15)
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail="Failed to retrieve Stripe session")
+        return resp.json()
+
+    def retrieve_payment_intent(self, payment_intent_id: str) -> dict:
+        resp = http_requests.get(f"{self.base_url}/payment_intents/{payment_intent_id}", headers=self._headers(), timeout=15)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to retrieve Stripe payment intent")
+        return resp.json()
+
+    def capture_payment_intent(self, payment_intent_id: str, amount_cents: int, idempotency_key: Optional[str] = None) -> dict:
+        headers = self._headers()
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        resp = http_requests.post(f"{self.base_url}/payment_intents/{payment_intent_id}/capture", data={"amount_to_capture": amount_cents}, headers=headers, timeout=15)
+        if resp.status_code not in (200, 201):
+            logger.error("Stripe capture_payment_intent error: %s", resp.text)
+            raise HTTPException(status_code=502, detail=f"Stripe capture error: {resp.json().get('error', {}).get('message', 'Unknown error')}")
+        return resp.json()
+
+    def cancel_payment_intent(self, payment_intent_id: str, idempotency_key: Optional[str] = None) -> dict:
+        headers = self._headers()
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        resp = http_requests.post(f"{self.base_url}/payment_intents/{payment_intent_id}/cancel", data={}, headers=headers, timeout=15)
+        if resp.status_code not in (200, 201):
+            logger.error("Stripe cancel_payment_intent error: %s", resp.text)
+            raise HTTPException(status_code=502, detail=f"Stripe authorization release error: {resp.json().get('error', {}).get('message', 'Unknown error')}")
         return resp.json()
 
     def create_refund(self, payment_intent_id: str, amount_cents: int, reason: str = "requested_by_customer", idempotency_key: Optional[str] = None) -> dict:
@@ -171,9 +201,9 @@ class PayPalGateway:
             h["PayPal-Request-Id"] = idempotency_key
         return h
 
-    def create_order(self, *, amount: str, currency: str, booking_id: int, return_url: str, cancel_url: str, idempotency_key: Optional[str] = None) -> dict:
+    def create_order(self, *, amount: str, currency: str, booking_id: int, return_url: str, cancel_url: str, idempotency_key: Optional[str] = None, hold_funds: bool = True) -> dict:
         payload = {
-            "intent": "CAPTURE",
+            "intent": "AUTHORIZE" if hold_funds else "CAPTURE",
             "purchase_units": [{"reference_id": str(booking_id), "amount": {"currency_code": currency.upper(), "value": amount}, "description": f"Booking #{booking_id}"}],
             "application_context": {"return_url": return_url, "cancel_url": cancel_url, "brand_name": "Tourvaa", "user_action": "PAY_NOW"},
         }
@@ -181,6 +211,28 @@ class PayPalGateway:
         if resp.status_code not in (200, 201):
             logger.error("PayPal create_order error: %s", resp.text)
             raise HTTPException(status_code=502, detail=f"PayPal error: {resp.json().get('message', 'Unknown')}")
+        return resp.json()
+
+    def authorize_order(self, order_id: str, idempotency_key: Optional[str] = None) -> dict:
+        resp = http_requests.post(f"{self.base_url}/v2/checkout/orders/{order_id}/authorize", json={}, headers=self._headers(idempotency_key), timeout=15)
+        if resp.status_code not in (200, 201):
+            logger.error("PayPal authorize_order error: %s", resp.text)
+            raise HTTPException(status_code=502, detail=f"PayPal authorization error: {resp.json().get('message', 'Unknown')}")
+        return resp.json()
+
+    def capture_authorization(self, authorization_id: str, amount: str, currency: str, idempotency_key: Optional[str] = None) -> dict:
+        payload = {"amount": {"value": amount, "currency_code": currency.upper()}, "final_capture": True}
+        resp = http_requests.post(f"{self.base_url}/v2/payments/authorizations/{authorization_id}/capture", json=payload, headers=self._headers(idempotency_key), timeout=15)
+        if resp.status_code not in (200, 201):
+            logger.error("PayPal capture_authorization error: %s", resp.text)
+            raise HTTPException(status_code=502, detail=f"PayPal capture error: {resp.json().get('message', 'Unknown')}")
+        return resp.json()
+
+    def void_authorization(self, authorization_id: str, idempotency_key: Optional[str] = None) -> dict:
+        resp = http_requests.post(f"{self.base_url}/v2/payments/authorizations/{authorization_id}/void", json={}, headers=self._headers(idempotency_key), timeout=15)
+        if resp.status_code not in (200, 201):
+            logger.error("PayPal void_authorization error: %s", resp.text)
+            raise HTTPException(status_code=502, detail=f"PayPal authorization release error: {resp.json().get('message', 'Unknown')}")
         return resp.json()
 
     def capture_order(self, order_id: str, idempotency_key: Optional[str] = None) -> dict:

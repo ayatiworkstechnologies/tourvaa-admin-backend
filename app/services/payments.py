@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 from math import ceil
 from typing import Optional
 
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.services.audit import log_audit
 from app.models.bookings import Booking
 from app.models.customers import Customer
-from app.utils.money import money, money_str, to_minor_units, utcnow
+from app.utils.money import as_aware_utc, money, money_str, to_minor_units, utcnow
 from app.models.payments import Payment, PaymentHold, PaymentTransaction
 from app.schemas.payments import PaymentAuthorize, PaymentCapture, PaymentCreate, PaymentStatusUpdate, PaymentUpdate, PaymentVoid, RefundRequest
 from app.models.users import User
@@ -419,6 +420,92 @@ def authorize_payment(db: Session, data: PaymentAuthorize, actor: Optional[User]
     db.commit()
     db.refresh(payment)
     return serialize_payment(payment, detail=True)
+
+
+def record_gateway_authorization(db: Session, payment: Payment, *, gateway_reference: str, expires_at=None, actor: Optional[User] = None) -> Payment:
+    """Record a provider-confirmed authorization without treating it as a charge.
+
+    The gateway response remains the source of truth.  This is intentionally
+    separate from ``capture_payment`` so a successful checkout never changes
+    the booking to paid before the supplier has accepted it.
+    """
+    if payment.payment_status == "authorized":
+        return payment
+    if payment.payment_status != "pending":
+        raise HTTPException(status_code=409, detail="Payment is no longer awaiting authorization")
+    amount = money(payment.total_amount)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Authorization amount must be greater than zero")
+    payment.authorized_amount = amount
+    payment.pending_amount = amount
+    payment.payment_status = "authorized"
+    payment.gateway_payment_id = gateway_reference
+    hold = db.query(PaymentHold).filter(PaymentHold.payment_id == payment.id, PaymentHold.status == "active").first()
+    if not hold:
+        # Tourvaa's operational window is four days. This is shorter than
+        # Stripe's normal online-card window and PayPal's 29-day validity,
+        # so the customer is never left with an open hold while a supplier
+        # decision is unresolved.
+        hold = PaymentHold(payment_id=payment.id, booking_id=payment.booking_id, hold_amount=amount, status="active")
+        db.add(hold)
+    policy_expiry = utcnow() + timedelta(days=4)
+    hold.expires_at = min(as_aware_utc(expires_at), policy_expiry) if expires_at else policy_expiry
+    _transaction(db, payment, "authorize", amount, actor, gateway_reference=gateway_reference)
+    if payment.booking:
+        payment.booking.payment_status = "authorized"
+        if payment.booking.booking_status == "pending_payment":
+            payment.booking.booking_status = "pending_supplier_acceptance" if payment.booking.supplier_id else "payment_authorized"
+    db.commit()
+    db.refresh(payment)
+    return payment
+
+
+def capture_gateway_authorized_payment(db: Session, payment: Payment, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
+    """Capture a verified Stripe/PayPal authorization after supplier acceptance."""
+    if payment.payment_status != "authorized":
+        return serialize_payment(payment, detail=True)
+    amount = money(payment.authorized_amount) - money(payment.captured_amount)
+    if amount <= 0:
+        return serialize_payment(payment, detail=True)
+    if payment.gateway == "stripe":
+        from app.services.payments_gateway import get_stripe
+        get_stripe(db).capture_payment_intent(payment.gateway_payment_id, to_minor_units(amount), f"capture:{payment.id}")
+    elif payment.gateway == "paypal":
+        from app.services.payments_gateway import get_paypal
+        currency = (payment.booking.currency if payment.booking else None) or "USD"
+        get_paypal(db).capture_authorization(payment.gateway_payment_id, str(amount), currency, f"capture:{payment.id}")
+    return capture_payment(db, payment.id, PaymentCapture(amount=amount, transaction_id=payment.gateway_payment_id, notes="Captured after supplier acceptance"), actor=actor, request=request)
+
+
+def release_gateway_authorized_payment(db: Session, payment: Payment, reason: str, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
+    """Release an uncaptured hold at the provider, then update local state."""
+    if payment.payment_status != "authorized":
+        return serialize_payment(payment, detail=True)
+    if payment.gateway == "stripe":
+        from app.services.payments_gateway import get_stripe
+        get_stripe(db).cancel_payment_intent(payment.gateway_payment_id, f"void:{payment.id}")
+    elif payment.gateway == "paypal":
+        from app.services.payments_gateway import get_paypal
+        get_paypal(db).void_authorization(payment.gateway_payment_id, f"void:{payment.id}")
+    return void_payment(db, payment.id, PaymentVoid(reason=reason), actor=actor, request=request)
+
+
+def release_expired_gateway_holds(db: Session) -> list[int]:
+    """Release four-day holds; called by the durable hourly scheduler."""
+    expired = []
+    for hold in db.query(PaymentHold).filter(PaymentHold.status == "active", PaymentHold.expires_at.isnot(None)).all():
+        if as_aware_utc(hold.expires_at) > utcnow():
+            continue
+        payment = db.query(Payment).filter(Payment.id == hold.payment_id).first()
+        if not payment or payment.payment_status != "authorized":
+            continue
+        try:
+            release_gateway_authorized_payment(db, payment, "Authorization expired before supplier acceptance")
+            expired.append(payment.id)
+        except Exception:
+            logger.exception("Could not release expired gateway hold for payment %s", payment.id)
+            db.rollback()
+    return expired
 
 
 def capture_payment(db: Session, payment_id: int, data: PaymentCapture, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:

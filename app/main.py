@@ -430,6 +430,7 @@ BALANCE_DUE_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
 BOOKING_REMINDER_SWEEP_INTERVAL_SECONDS = 60 * 60
 EMAIL_RETRY_SWEEP_INTERVAL_SECONDS = 15 * 60
 PUSH_RETRY_SWEEP_INTERVAL_SECONDS = 15 * 60
+PAYMENT_HOLD_SWEEP_INTERVAL_SECONDS = 60 * 60
 
 
 async def _booking_reminder_loop():
@@ -484,6 +485,25 @@ async def _push_retry_loop():
                 db.close()
         except Exception:
             logger.exception("Push delivery retry sweep failed")
+
+
+async def _payment_hold_loop():
+    """Release authorizations that reached Tourvaa's four-day decision window."""
+    from app.services.payments import release_expired_gateway_holds
+    from app.utils.distributed_lock import acquire_sweep_lock
+
+    while True:
+        await asyncio.sleep(PAYMENT_HOLD_SWEEP_INTERVAL_SECONDS)
+        try:
+            if not await asyncio.to_thread(acquire_sweep_lock, "payment_hold_release", PAYMENT_HOLD_SWEEP_INTERVAL_SECONDS - 60):
+                continue
+            db = SessionLocal()
+            try:
+                await asyncio.to_thread(release_expired_gateway_holds, db)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception("Payment-hold release sweep failed")
 
 
 async def _balance_due_reminder_loop():
@@ -608,6 +628,7 @@ async def start_background_jobs():
         _background_tasks.append(asyncio.create_task(_booking_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_email_retry_loop()))
         _background_tasks.append(asyncio.create_task(_push_retry_loop()))
+        _background_tasks.append(asyncio.create_task(_payment_hold_loop()))
         _background_tasks.append(asyncio.create_task(_tour_availability_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_wishlist_reminder_loop()))
         _background_tasks.append(asyncio.create_task(_chat_retention_loop()))

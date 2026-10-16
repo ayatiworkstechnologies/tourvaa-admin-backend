@@ -276,6 +276,41 @@ class MessagingConnectionManager:
             except Exception as exc:
                 logger.warning("WS pub/sub: publish failed (%s) - other workers won't see this message", exc)
 
+    async def _deliver_notification_locally(self, user_id: int, event: dict) -> None:
+        """Deliver an event only to the intended user's portal/admin sockets."""
+        sockets = set(self._user_sockets.get(user_id, set())) | set(self._admin_sockets_by_user.get(user_id, set()))
+        for socket in sockets:
+            try:
+                await socket.send_json(event)
+            except Exception:
+                self.disconnect_participant(socket, user_id)
+                self.disconnect_admin(socket, user_id)
+
+    async def notify_notification(self, user_id: int, notification_id: int) -> None:
+        event = {"type": "new_notification", "notification_id": notification_id}
+        await self._deliver_notification_locally(user_id, event)
+        redis = await get_redis_async()
+        if redis is not None:
+            try:
+                await redis.publish(WS_PUBSUB_CHANNEL, json.dumps({"notification_user_id": user_id, "event": event}))
+            except Exception as exc:
+                logger.warning("WS pub/sub: notification publish failed (%s)", exc)
+
+    def request_notification(self, user_id: int | None, notification_id: int) -> None:
+        """Thread-safe notification delivery for synchronous service code."""
+        if not user_id:
+            return
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(self.notify_notification(user_id, notification_id), loop)
+            return
+        redis = get_redis_sync()
+        if redis is not None:
+            try:
+                redis.publish(WS_PUBSUB_CHANNEL, json.dumps({"notification_user_id": user_id, "event": {"type": "new_notification", "notification_id": notification_id}}))
+            except Exception as exc:
+                logger.warning("WS pub/sub: notification publish failed (%s)", exc)
+
     async def notify_typing(self, event: dict, participant_user_id: int | None, *, deliver_to_participant: bool) -> None:
         """Relay an ephemeral typing state without persisting message text."""
         await self._deliver_locally(event, participant_user_id if deliver_to_participant else None)
@@ -312,6 +347,9 @@ async def start_redis_subscriber():
                 payload = json.loads(message["data"])
                 if "logout_user_id" in payload:
                     await ws_manager.close_user(int(payload["logout_user_id"]))
+                    continue
+                if "notification_user_id" in payload:
+                    await ws_manager._deliver_notification_locally(int(payload["notification_user_id"]), payload["event"])
                     continue
                 await ws_manager._deliver_locally(
                     payload["event"],

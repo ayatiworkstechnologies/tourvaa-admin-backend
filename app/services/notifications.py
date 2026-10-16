@@ -247,6 +247,10 @@ def enqueue_notification(db: Session, *, user_id: int | None, notification_type:
     db.flush()
     db.add(NotificationLog(notification_id=n.id, channel=channel, status=n.status, response="queued"))
     if channel == "in_app":
+        # The persisted row remains the source of truth; the socket carries
+        # only its id and prompts the signed-in recipient to refresh.
+        from app.services.messaging_ws import ws_manager
+        ws_manager.request_notification(user_id, n.id)
         # Also shown as a browser push, once the caller's transaction commits.
         from app.services.notifications_push import queue_push
         queue_push(db, notification_id=n.id, user_id=user_id, title=title, body=message, url=details.get("action_url") or "/")

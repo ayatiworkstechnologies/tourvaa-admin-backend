@@ -12,6 +12,7 @@ Gateway-specific payment routes:
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal, Optional
 
@@ -29,7 +30,7 @@ from app.utils.ratelimit import check_rate_limit
 from app.services.payments_gateway import get_paypal, get_stripe
 from app.services.settings import get_default_deposit_cutoff_days, get_default_deposit_percentage
 from app.models.payments import Payment, PaymentTransaction
-from app.services.payments import _payment_code, _sync_booking_payment_fields
+from app.services.payments import _payment_code, _sync_booking_payment_fields, record_gateway_authorization
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/payments", tags=["Payment Gateways"])
@@ -444,22 +445,15 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
         session_obj = event["data"]["object"]
         order_id = session_obj.get("id")
         payment_intent = session_obj.get("payment_intent")
-        amount_total = session_obj.get("amount_total", 0)
-
         payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).first()
         if payment and payment.payment_status == "pending":
-            captured_amt = _require_captured_amount_matches_pending(
-                payment, money(Decimal(amount_total) / 100), "Stripe"
-            )
-            payment.captured_amount = captured_amt
-            payment.paid_amount = captured_amt
-            payment.pending_amount = Decimal("0")
-            payment.payment_status = "paid"
-            payment.gateway_payment_id = payment_intent
-            db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=event_id or payment_intent, metadata_json={"event": event_type}))
-            _sync_booking_payment_fields(db, payment.booking)
-            db.commit()
-            _ensure_payment_invoice(db, payment, request=request)
+            # Development can accept an unsigned webhook, where ``stripe_gw``
+            # was not created in the signature-verification branch.
+            intent = get_stripe(db).retrieve_payment_intent(payment_intent)
+            if intent.get("status") == "requires_capture":
+                capture_before = intent.get("charges", {}).get("data", [{}])[0].get("payment_method_details", {}).get("card", {}).get("capture_before")
+                expires_at = datetime.fromtimestamp(capture_before, tz=timezone.utc) if capture_before else None
+                record_gateway_authorization(db, payment, gateway_reference=payment_intent, expires_at=expires_at)
 
     elif event_type in ("payment_intent.payment_failed", "checkout.session.expired"):
         obj = event["data"]["object"]
@@ -502,8 +496,8 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
     if body.session_id:
         stripe = get_stripe(db)
         session_obj = stripe.retrieve_session(body.session_id)
-        if session_obj.get("payment_status") != "paid" and session_obj.get("status") != "complete":
-            raise HTTPException(status_code=400, detail="Stripe session is not paid yet")
+        if session_obj.get("status") != "complete":
+            raise HTTPException(status_code=400, detail="Stripe session is not complete yet")
         payment = db.query(Payment).filter(
             Payment.gateway == "stripe",
             Payment.gateway_order_id == body.session_id,
@@ -521,48 +515,21 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
     if not payment:
         raise HTTPException(status_code=404, detail="Pending Stripe payment not found")
 
-    if payment.payment_status != "paid":
-        # The pending payment is the exact deposit/full amount chosen at
-        # checkout. When Stripe returned a session, independently verify its
-        # amount before settling; never substitute the booking balance here.
-        captured_amt = money(payment.total_amount or 0)
-        if session_obj:
-            captured_amt = _require_captured_amount_matches_pending(
-                payment, money(Decimal(session_obj.get("amount_total", 0)) / 100), "Stripe"
-            )
-        else:
-            captured_amt = _require_captured_amount_matches_pending(payment, captured_amt, "Stripe")
-        payment.captured_amount = captured_amt
-        payment.paid_amount = captured_amt
-        payment.pending_amount = Decimal("0")
-        payment.payment_status = "paid"
-        if session_obj:
-            payment.gateway_payment_id = session_obj.get("payment_intent") or payment.gateway_payment_id
-        ref = body.session_id or f"STRIPE-RETURN-{payment.id}"
-        existing_txn = db.query(PaymentTransaction).filter(
-            PaymentTransaction.payment_id == payment.id,
-            PaymentTransaction.gateway_reference == ref,
-        ).first()
-        if not existing_txn:
-            db.add(PaymentTransaction(
-                payment_id=payment.id,
-                booking_id=payment.booking_id,
-                transaction_type="capture",
-                amount=captured_amt,
-                status="success",
-                gateway_reference=ref,
-                metadata_json={"source": "stripe_return", "verified": bool(body.session_id)},
-                created_by=current_user.id if current_user else None,
-            ))
-        _sync_booking_payment_fields(db, payment.booking)
-        db.commit()
-        db.refresh(payment)
-
-    _ensure_payment_invoice(db, payment, actor=current_user)
+    if payment.payment_status == "pending":
+        if not session_obj:
+            raise HTTPException(status_code=400, detail="Stripe session_id is required")
+        _require_captured_amount_matches_pending(payment, money(Decimal(session_obj.get("amount_total", 0)) / 100), "Stripe")
+        intent_id = session_obj.get("payment_intent")
+        intent = stripe.retrieve_payment_intent(intent_id)
+        if intent.get("status") != "requires_capture":
+            raise HTTPException(status_code=400, detail="Stripe payment is not authorized for capture")
+        capture_before = intent.get("charges", {}).get("data", [{}])[0].get("payment_method_details", {}).get("card", {}).get("capture_before")
+        expires_at = datetime.fromtimestamp(capture_before, tz=timezone.utc) if capture_before else None
+        record_gateway_authorization(db, payment, gateway_reference=intent_id, expires_at=expires_at, actor=current_user)
 
     return {
         "status": "success",
-        "message": "Stripe payment confirmed",
+        "message": "Stripe payment authorized; it will be captured only after supplier acceptance",
         "data": {"payment_id": payment.id, "booking_id": booking.id, "payment_status": payment.payment_status},
     }
 
@@ -622,34 +589,29 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
     if payment.payment_status == "paid":
         _ensure_payment_invoice(db, payment, actor=current_user)
         return {"status": "success", "message": "PayPal payment was already captured", "data": {"paypal_status": "COMPLETED", "payment_id": payment.id}}
+    if payment.payment_status == "authorized":
+        return {"status": "success", "message": "PayPal payment is already authorized", "data": {"paypal_status": "COMPLETED", "payment_id": payment.id}}
 
     paypal = get_paypal(db)
-    captured = paypal.capture_order(order_id=body.order_id)
+    captured = paypal.authorize_order(order_id=body.order_id, idempotency_key=f"authorize:{payment.id}")
 
     status = captured.get("status", "")
     if status == "COMPLETED":
         units = captured.get("purchase_units", [{}])
-        captures = units[0].get("payments", {}).get("captures", [{}])
-        capture_obj = captures[0] if captures else {}
-        captured_amt = _require_captured_amount_matches_pending(
+        authorizations = units[0].get("payments", {}).get("authorizations", [{}])
+        authorization = authorizations[0] if authorizations else {}
+        authorized_amt = _require_captured_amount_matches_pending(
             payment,
-            _require_paypal_amount(capture_obj.get("amount", {}), "capture"),
+            _require_paypal_amount(authorization.get("amount", {}), "authorization"),
             "PayPal",
         )
-        capture_id = capture_obj.get("id", "")
+        if authorized_amt != money(payment.total_amount):
+            raise HTTPException(status_code=409, detail="PayPal authorization amount does not match the pending payment")
+        expiration = authorization.get("expiration_time")
+        expires_at = datetime.fromisoformat(expiration.replace("Z", "+00:00")) if expiration else None
+        record_gateway_authorization(db, payment, gateway_reference=authorization.get("id", ""), expires_at=expires_at, actor=current_user)
 
-        payment.captured_amount = captured_amt
-        payment.paid_amount = captured_amt
-        payment.pending_amount = Decimal("0")
-        payment.payment_status = "paid"
-        payment.gateway_payment_id = capture_id
-        db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=capture_id, metadata_json={"paypal_order_id": body.order_id}))
-        _sync_booking_payment_fields(db, payment.booking)
-        db.commit()
-        db.refresh(payment)
-        _ensure_payment_invoice(db, payment, actor=current_user)
-
-    return {"status": "success", "message": f"PayPal capture status: {status}", "data": {"paypal_status": status, "payment_id": payment.id}}
+    return {"status": "success", "message": f"PayPal authorization status: {status}; capture follows supplier acceptance", "data": {"paypal_status": status, "payment_id": payment.id}}
 
 
 @router.post("/paypal/webhook")

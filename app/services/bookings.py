@@ -2884,7 +2884,7 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
     from app.services.notifications import enqueue_notification, notify_admins
     from app.models.payments import Payment
     from app.schemas.payments import PaymentCapture
-    from app.services.payments import capture_payment
+    from app.services.payments import capture_gateway_authorized_payment, capture_payment
     from app.schemas.invoices import InvoiceGenerateRequest
     from app.services.invoices import generate_invoice
 
@@ -2892,7 +2892,10 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
     for payment in authorized_payments:
         amount = money(payment.authorized_amount) - money(payment.captured_amount)
         if amount > 0:
-            capture_payment(db, payment.id, PaymentCapture(amount=amount, notes="Captured after supplier acceptance"), actor=actor, request=request)
+            if payment.gateway in {"stripe", "paypal"}:
+                capture_gateway_authorized_payment(db, payment, actor=actor, request=request)
+            else:
+                capture_payment(db, payment.id, PaymentCapture(amount=amount, notes="Captured after supplier acceptance"), actor=actor, request=request)
             try:
                 generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id, payment_id=payment.id), actor, request)
             except Exception as error:
@@ -3031,6 +3034,15 @@ def supplier_decline_booking(db: Session, booking_id: int, data: SupplierDecisio
     booking.cancellation_reason = data.reason or "Supplier declined booking"
     booking.cancellation_source = "supplier_reassignment"
     _set_status(db, booking, "supplier_reassignment_required", actor, "supplier_reassignment", booking.cancellation_reason)
+
+    # A declined booking must not retain a customer's card/PayPal hold while
+    # Operations looks for another supplier.  A new assignment requires a
+    # fresh authorization so the later capture is always explicit and valid.
+    from app.models.payments import Payment
+    from app.services.payments import release_gateway_authorized_payment
+    for payment in db.query(Payment).filter(Payment.booking_id == booking.id, Payment.payment_status == "authorized").all():
+        if payment.gateway in {"stripe", "paypal"}:
+            release_gateway_authorized_payment(db, payment, "Supplier declined booking", actor=actor, request=request)
 
     from app.services.notifications import notify_admins
 

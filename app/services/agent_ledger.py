@@ -26,6 +26,7 @@ def _serialize_ledger(row: AgentLedger) -> dict:
         "agent_name": row.agent.agent_name if row.agent else None,
         "booking_id": row.booking_id,
         "booking_code": row.booking.booking_code if row.booking else None,
+        "tour_name": row.booking.tour_name if row.booking else None,
         "gross_amount": str(row.gross_amount),
         "commission_amount": str(row.commission_amount),
         "commission_percentage": str(row.commission_percentage),

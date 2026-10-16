@@ -396,7 +396,15 @@ def download_invoice_pdf(db: Session, invoice_id: int, actor: User | None = None
         raise HTTPException(status_code=404, detail="PDF not yet generated for this invoice")
     fs_path = resolve_private_docs_path(inv.pdf_path, "/private-docs/")
     if not fs_path or not fs_path.exists():
-        raise HTTPException(status_code=404, detail="PDF file not found on server - please regenerate")
+        # PDF files are derived, private artifacts; the invoice and its line
+        # items in the database are the source of truth.  A container rebuild
+        # or an old host cleanup must not leave a valid invoice permanently
+        # downloadable only after an administrator manually repairs it.
+        logger.warning("Invoice PDF is missing; regenerating invoice_id=%s", invoice_id)
+        regenerated = regenerate_invoice_pdf(db, invoice_id, actor)
+        fs_path = resolve_private_docs_path(regenerated.pdf_path, "/private-docs/")
+        if not fs_path or not fs_path.exists():
+            raise HTTPException(status_code=404, detail="PDF file could not be regenerated on server")
     return str(fs_path), f"{inv.invoice_number}.pdf"
 
 

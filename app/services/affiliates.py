@@ -129,12 +129,17 @@ def accept_affiliate_commission(db: Session, affiliate_id: int, actor: User, req
     if an admin already gave this affiliate a deliberate non-zero rate via
     update_affiliate before they ever logged in."""
     from decimal import Decimal
-    from app.services.settings import get_affiliate_default_commission
+    from app.services.settings import get_affiliate_commission_max, get_affiliate_default_commission
     item = get_affiliate(db, affiliate_id)
     if item.commission_accepted_at is None:
         item.commission_accepted_at = utcnow()
         if Decimal(str(item.commission_percentage or 0)) == 0:
-            item.commission_percentage = get_affiliate_default_commission(db)
+            # Settings can be changed independently.  Do not assign a newly
+            # accepting affiliate a default that exceeds the current cap.
+            item.commission_percentage = min(
+                get_affiliate_default_commission(db),
+                get_affiliate_commission_max(db),
+            )
         log_audit(db, actor=actor, action="accept_affiliate_commission", entity_type="affiliate", entity_id=item.id, request=request)
         db.commit()
         db.refresh(item)
@@ -142,6 +147,12 @@ def accept_affiliate_commission(db: Session, affiliate_id: int, actor: User, req
 
 
 def create_affiliate(db: Session, data: AffiliateCreate, actor: User, request: Request | None = None):
+    if data.commission_percentage is not None:
+        from app.services.settings import get_affiliate_commission_max
+        from decimal import Decimal
+        maximum = get_affiliate_commission_max(db)
+        if Decimal(str(data.commission_percentage)) > maximum:
+            raise HTTPException(status_code=400, detail=f"Affiliate commission cannot exceed the platform maximum of {maximum}%")
     affiliate_data = data.model_dump(exclude={"password"})
     email = str(data.email).strip().lower()
     linked_user = db.query(User).filter(User.email == email).first()
