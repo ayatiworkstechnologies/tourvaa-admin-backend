@@ -3,13 +3,13 @@
 One command seeds everything needed to stand up the platform:
 
     python seed.py                     RBAC + all countries/states/cities
-                                       + payment gateways (if configured)
+                                       + tour catalog + payment gateways (if configured)
 
     python seed.py --reset             wipe every table first (destructive)
     python seed.py --no-cities         skip the large cities download
     python seed.py --countries IN AE   limit geo to specific ISO-2 codes
     python seed.py --launch-markets    limit geo to Tourvaa's original 10
-    python seed.py --skip-geo          RBAC + payment gateways only
+    python seed.py --skip-geo          RBAC + tour catalog + payment gateways
     python seed.py --demo-tours        also seed the sample dev tours
 
 Geo reference data comes from GeoNames (geonames.org) - free, public
@@ -155,14 +155,16 @@ def main() -> None:
         geo_scope = "ALL countries"
 
     from app.config import settings
+    from sqlalchemy.engine import make_url
 
     _print()
     _print(LINE)
     _print("  Tourvaa - Seed Runner")
     _print(LINE)
-    _print(f"  Database : {settings.DATABASE_URL}")
+    _print(f"  Database : {make_url(settings.DATABASE_URL).render_as_string(hide_password=True)}")
     _print(f"  Reset    : {'YES - all data will be wiped' if args.reset else 'No'}")
     _print("  RBAC     : Yes")
+    _print("  Catalog  : Tour categories and subcategories")
     _print(f"  Geo      : {'No' if args.skip_geo else geo_scope}")
     if not args.skip_geo:
         _print(f"  Cities   : {'No' if args.no_cities else 'Yes'}")
@@ -195,6 +197,12 @@ def main() -> None:
         raise
     finally:
         db.close()
+
+    from scripts.seed_tour_catalog import run as run_tour_catalog_seed
+
+    _print(f"\n  Step {step}  Seeding tour categories and subcategories")
+    step += 1
+    run_tour_catalog_seed()
 
     if not args.skip_geo:
         _print(f"\n  Step {step}  Seeding geo data (countries / states / cities)")

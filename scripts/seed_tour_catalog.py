@@ -1,7 +1,7 @@
 """Seed the default tour categories and subcategories.
 
-Safe to run repeatedly: records are matched by slug and existing content is
-updated, never deleted. Run from the backend root with:
+Safe to run repeatedly: records are matched by slug. Existing records and
+their admin-managed content are preserved. Run from the backend root with:
     python -m scripts.seed_tour_catalog
 """
 
@@ -14,14 +14,26 @@ from app.models.cms import TourCategory, TourSubcategory
 
 
 CATALOG = {
-    "Adventure Tours": ["Hiking & Trekking", "Wildlife Safaris", "Water Adventures", "Outdoor Activities"],
+    "Adventure Tours": ["Hiking & Trekking", "Wildlife Safaris", "Water Adventures", "Outdoor Activities", "Mountaineering", "Camping", "River Rafting", "Paragliding", "Desert Adventures", "Cycling Tours"],
     "Luxury Tours": ["Luxury Escapes", "Private Tours", "Luxury Cruises", "Premium Experiences"],
-    "Cultural Tours": ["Heritage & History", "Arts & Traditions", "Food & Culinary", "Local Experiences"],
+    "Cultural Tours": ["Heritage & History", "Arts & Traditions", "Food & Culinary", "Local Experiences", "Village & Rural Experiences", "Festivals & Fairs", "Handicrafts & Textiles", "Tribal Culture"],
     "Family Tours": ["Family Holidays", "Educational Trips", "Theme Parks", "Family Activities"],
     "Beach & Island Tours": ["Island Hopping", "Beach Holidays", "Snorkelling & Diving", "Water Sports"],
     "City Breaks": ["City Sightseeing", "Shopping Tours", "Nightlife & Entertainment", "Architecture & Museums"],
-    "Wellness Tours": ["Spa & Relaxation", "Yoga Retreats", "Health & Fitness", "Mindfulness Retreats"],
+    "Wellness Tours": ["Spa & Relaxation", "Yoga Retreats", "Health & Fitness", "Mindfulness Retreats", "Ayurveda Retreats", "Meditation Retreats", "Naturopathy Retreats"],
     "Romantic Tours": ["Honeymoon Packages", "Couples Getaways", "Anniversary Trips", "Romantic Experiences"],
+    "Pilgrimage & Spiritual Tours": ["Temple Tours", "Char Dham Yatra", "Jyotirlinga Tours", "Buddhist Pilgrimage", "Sikh Pilgrimage", "Jain Pilgrimage", "Church Pilgrimage", "Sufi & Islamic Heritage", "Sacred Rivers & Ghats", "Ashrams & Spiritual Retreats"],
+    "Wildlife & Nature Tours": ["National Parks", "Tiger Safaris", "Birdwatching", "Elephant Safaris", "Forest & Jungle Tours", "Nature & Eco Tours"],
+    "Heritage & Historical Tours": ["UNESCO World Heritage Sites", "Forts & Palaces", "Ancient Monuments", "Royal Heritage", "Colonial Heritage", "Archaeological Sites"],
+    "Hill Station & Mountain Tours": ["Himalayan Getaways", "Hill Station Holidays", "Scenic Mountain Drives", "Snow Holidays", "Tea Plantation Stays"],
+    "Desert Tours": ["Desert Safaris", "Camel Safaris", "Desert Camping", "Desert Villages & Culture"],
+    "Backwater & Houseboat Tours": ["Kerala Backwaters", "Houseboat Stays", "Lake Cruises", "Village Waterways"],
+    "Food & Culinary Tours": ["Street Food Tours", "Regional Cuisine", "Cooking Classes", "Spice Plantation Tours", "Tea & Coffee Experiences"],
+    "Festival & Event Tours": ["Diwali Experiences", "Holi Experiences", "Onam Experiences", "Durga Puja Experiences", "Pushkar Fair", "Cultural Festivals"],
+    "Cruise & River Tours": ["River Cruises", "Coastal Cruises", "Sunset Cruises", "Luxury Cruises"],
+    "Rail & Road Trips": ["Heritage Rail Journeys", "Luxury Train Journeys", "Scenic Road Trips", "Motorcycle Tours"],
+    "Group Tours": ["Small Group Tours", "Senior Tours", "Women Only Tours", "Student Group Tours"],
+    "Seasonal Tours": ["Summer Holidays", "Monsoon Getaways", "Winter Holidays", "Spring Holidays"],
 }
 
 
@@ -41,9 +53,6 @@ def run() -> None:
                 category = TourCategory(category_name=category_name, slug=category_slug, status="active")
                 db.add(category)
                 db.flush()
-            else:
-                category.category_name = category_name
-                category.status = "active"
             category_count += 1
 
             for name in subcategory_names:
@@ -56,10 +65,6 @@ def run() -> None:
                         slug=slug,
                         status="active",
                     ))
-                else:
-                    item.category_id = category.id
-                    item.subcategory_name = name
-                    item.status = "active"
                 subcategory_count += 1
         db.commit()
         print(f"Seeded {category_count} tour categories and {subcategory_count} subcategories.")
