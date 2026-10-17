@@ -715,19 +715,22 @@ def gateways_status(db: Session = Depends(get_db), current_user=Depends(get_curr
     paypal_test = False
     try:
         s = _load_setting(db, "stripe")
-        stripe_ok = bool(s and s.secret_key)
-        if stripe_ok:
+        if s and s.secret_key:
             from app.utils.crypto import decrypt_secret
-            stripe_test = decrypt_secret(s.secret_key).startswith(("sk_test_", "rk_test_"))
+            stripe_secret = decrypt_secret(s.secret_key)
+            stripe_test = stripe_secret.startswith(("sk_test_", "rk_test_"))
+            stripe_ok = stripe_test or stripe_secret.startswith(("sk_live_", "rk_live_"))
     except Exception:
-        pass
+        stripe_ok = False
+        stripe_test = False
     try:
         p = _load_setting(db, "paypal")
         paypal_ok = bool(p and p.public_key and p.secret_key)
         from app.services.payments_gateway import normalize_paypal_mode
         paypal_test = paypal_ok and normalize_paypal_mode(getattr(p, "mode", "sandbox")) == "sandbox"
     except Exception:
-        pass
+        paypal_ok = False
+        paypal_test = False
     return {
         "status": "success",
         "data": {
