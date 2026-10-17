@@ -3,7 +3,7 @@ import io
 import pytest
 import requests
 from tests.conftest import BASE_URL, skip_if_readonly
-from app.utils.media import detect_image_type
+from app.utils.media import detect_image_type, detect_video_type
 
 
 PROFILE_IMAGE_URL = f"{BASE_URL}/uploads/profile-image"
@@ -25,6 +25,16 @@ def test_non_avif_iso_media_is_not_accepted_as_avif():
     )
     assert detect_image_type(heic_bytes) is None
 
+
+
+def test_mp4_compatible_brand_is_detected():
+    assert detect_video_type(b"\x00\x00\x00\x18ftypdash\x00\x00\x00\x00iso6mp41") == "mp4"
+    assert detect_video_type(b"\x00\x00\x00\x18ftypxxxx\x00\x00\x00\x00isommp42") == "mp4"
+
+
+def test_video_detection_rejects_images_and_invalid_boxes():
+    assert detect_video_type(b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00avifisom") is None
+    assert detect_video_type(b"\x00\x00\x00\x40ftypisom\x00\x00\x00\x00") is None
 
 def test_upload_profile_image_endpoint_exists(headers):
     # POST without file should give 422 (missing field), not 404

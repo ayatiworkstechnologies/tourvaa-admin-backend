@@ -346,7 +346,7 @@ async def upload_vehicle_file(
     v = db.query(SupplierVehicle).filter(SupplierVehicle.id == vehicle_id, SupplierVehicle.supplier_id == supplier.id).first()
     if not v:
         raise HTTPException(status_code=404, detail="Vehicle not found")
-    path = await _save_vehicle_file(file, "vehicle-docs", allow_pdf=True)
+    path = await _save_vehicle_file(file, f"suppliers/{supplier.id}/vehicles/{vehicle_id}/documents", allow_pdf=True)
     if not path:
         # _save_vehicle_file returns "" for an empty/unsupported/spoofed file;
         # without this guard the stored certificate would be silently wiped.
@@ -383,7 +383,7 @@ async def upload_vehicle_photos(
     initial_count = len(existing)
     rejected_files: list[str] = []
     for f in files:
-        path = await _save_vehicle_file(f, "vehicle-photos", allow_pdf=False)
+        path = await _save_vehicle_file(f, f"suppliers/{supplier.id}/vehicles/{vehicle_id}/photos", allow_pdf=False)
         if path:
             existing.append(path)
         else:
@@ -627,7 +627,7 @@ async def upload_supplier_document(
     from app.services.suppliers import _document
 
     filename = sanitize_filename(file.filename, extension)
-    uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/supplier-documents", is_private=True, content_type=file.content_type)
+    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/suppliers/{supplier_id}/documents", is_private=True, content_type=file.content_type)
     relative_path = f"cloudinary:{uploaded['resource_type']}:{uploaded['public_id']}"
 
     existing_doc = db.query(SupplierDocument).filter(

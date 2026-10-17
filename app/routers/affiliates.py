@@ -267,7 +267,7 @@ async def upload_affiliate_document(
     from app.services.affiliates import _document
 
     filename = sanitize_filename(file.filename, extension)
-    uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/affiliate-documents", is_private=True, content_type=file.content_type)
+    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/affiliates/{affiliate_id}/documents", is_private=True, content_type=file.content_type)
     relative_path = f"cloudinary:{uploaded['resource_type']}:{uploaded['public_id']}"
 
     existing_doc = db.query(AffiliateDocument).filter(

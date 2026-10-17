@@ -57,12 +57,16 @@ def detect_image_type(content: bytes) -> str | None:
 
 def detect_video_type(content: bytes) -> str | None:
     """Return the supported video type identified from its file signature."""
-    # MP4/MOV/M4V all use the same ISO Base Media File Format 'ftyp' box as
-    # AVIF (see detect_image_type) - the brand inside tells them apart.
-    if len(content) >= 12 and content[4:8] == b"ftyp":
-        brand = content[8:12]
-        if brand in {b"isom", b"iso2", b"mp41", b"mp42", b"avc1", b"M4V ", b"qt  "}:
-            return "mp4"
+    # Inspect the major and compatible brands in the declared ftyp box.
+    # Encoders often use a different major brand while declaring MP4
+    # compatibility in a later entry.
+    if len(content) >= 16 and content[4:8] == b"ftyp":
+        box_size = int.from_bytes(content[:4], "big")
+        if 16 <= box_size <= len(content) and box_size % 4 == 0:
+            brands = {content[8:12]} | {content[i:i + 4] for i in range(16, box_size, 4)}
+            mp4_brands = {b"isom", b"iso2", b"iso3", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"M4V ", b"dash", b"MSNV", b"3gp4", b"3gp5", b"3gp6"}
+            if not brands.intersection({b"avif", b"avis", b"heic", b"heix", b"mif1"}) and brands.intersection(mp4_brands):
+                return "mp4"
 
     # WebM/Matroska container: EBML magic bytes.
     if content.startswith(b"\x1a\x45\xdf\xa3"):

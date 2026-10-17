@@ -50,7 +50,7 @@ async def upload_profile_image(
 
     extension = ALLOWED_IMAGE_TYPES[detected_type]
     filename = sanitize_filename(file.filename, extension)
-    uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/profile-images", content_type=file.content_type)
+    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/profiles/{current_user.id}/images", content_type=file.content_type)
 
     return {
         "status": "success",
@@ -111,7 +111,8 @@ async def upload_admin_asset(
         raise HTTPException(status_code=400, detail="Invalid PDF file")
 
     filename = sanitize_filename(file.filename, extension)
-    uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/admin-assets", content_type=file.content_type)
+    asset_folder = "videos" if is_video else "documents" if extension == "pdf" else "images"
+    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/admin-assets/{asset_folder}", content_type=file.content_type)
 
     return {
         "status": "success",

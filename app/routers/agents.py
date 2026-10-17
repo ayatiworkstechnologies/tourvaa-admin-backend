@@ -286,7 +286,7 @@ async def upload_agent_document(
     from app.services.agents import _document
 
     filename = sanitize_filename(file.filename, extension)
-    uploaded = upload_to_cloudinary(content, filename, folder="tourvaa/agent-documents", is_private=True, content_type=file.content_type)
+    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/agents/{agent_id}/documents", is_private=True, content_type=file.content_type)
     relative_path = f"cloudinary:{uploaded['resource_type']}:{uploaded['public_id']}"
 
     existing_doc = db.query(AgentDocument).filter(
