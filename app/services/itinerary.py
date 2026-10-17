@@ -30,7 +30,7 @@ def download_itinerary_pdf(db: Session, booking_id: int, actor: User) -> tuple[s
 
     days = (
         db.query(TourItinerary)
-        .filter(TourItinerary.tour_id == booking.tour_id)
+        .filter(TourItinerary.tour_id == booking.tour_id, TourItinerary.status == "active")
         .order_by(TourItinerary.day_number.asc())
         .all()
     )

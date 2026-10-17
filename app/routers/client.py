@@ -103,7 +103,7 @@ def public_tour_overview(tour_id: int, db: Session = Depends(get_db)):
 @router.get("/tours/{tour_id}/itineraries")
 def public_tour_itineraries(tour_id: int, db: Session = Depends(get_db)):
     _ensure_published(db, tour_id)
-    return {"status": "success", "data": list_itineraries(db, tour_id)}
+    return {"status": "success", "data": list_itineraries(db, tour_id, active_only=True)}
 
 @router.get("/tours/{tour_id}/inclusions")
 def public_tour_inclusions(tour_id: int, db: Session = Depends(get_db)):

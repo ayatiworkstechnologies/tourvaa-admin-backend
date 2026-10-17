@@ -45,3 +45,25 @@ def test_create_defaults_order_and_image_alt(monkeypatch):
 def test_explicit_null_and_images_are_updated():
     fields = tours._itinerary_fields(ItineraryPayload(day_number=1, accommodation=None, images=[]), exclude_unset=True)
     assert fields == {"day_number": 1, "accommodation": "", "images": "[]"}
+
+
+def test_public_list_filters_inactive_days(monkeypatch):
+    class Query:
+        def __init__(self):
+            self.conditions = []
+
+        def filter(self, condition):
+            self.conditions.append(condition)
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def all(self):
+            return []
+
+    query = Query()
+    db = SimpleNamespace(query=lambda model: query)
+    monkeypatch.setattr(tours, "_require_tour", lambda *args: None)
+    assert tours.list_itineraries(db, 1, active_only=True) == []
+    assert any("tour_itineraries.status" in str(condition) and condition.right.value == "active" for condition in query.conditions)

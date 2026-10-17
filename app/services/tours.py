@@ -136,9 +136,12 @@ def _ser_itinerary(i: TourItinerary) -> dict:
     }
 
 
-def list_itineraries(db: Session, tour_id: int) -> list[dict]:
+def list_itineraries(db: Session, tour_id: int, *, active_only: bool = False) -> list[dict]:
     _require_tour(db, tour_id)
-    return [_ser_itinerary(i) for i in db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id).order_by(TourItinerary.display_order, TourItinerary.day_number).all()]
+    query = db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id)
+    if active_only:
+        query = query.filter(TourItinerary.status == "active")
+    return [_ser_itinerary(i) for i in query.order_by(TourItinerary.day_number, TourItinerary.id).all()]
 
 
 def _itinerary_fields(data: ItineraryPayload, *, exclude_unset: bool = False) -> dict:

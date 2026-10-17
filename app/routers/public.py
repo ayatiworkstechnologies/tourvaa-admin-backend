@@ -724,7 +724,7 @@ def public_tour_detail(tour_id: str, travel_date: str = Query(default=""), db: S
         )
 
     overview = db.query(TourOverview).filter(TourOverview.tour_id == tour_id).first()
-    itineraries = db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id).order_by(TourItinerary.day_number.asc()).all()
+    itineraries = db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id, TourItinerary.status == "active").order_by(TourItinerary.day_number.asc()).all()
     highlights = db.query(TourHighlight).filter(TourHighlight.tour_id == tour_id, TourHighlight.status == "active").all()
     inclusions = db.query(TourInclusion).filter(TourInclusion.tour_id == tour_id, TourInclusion.status == "active").all()
     exclusions = db.query(TourExclusion).filter(TourExclusion.tour_id == tour_id, TourExclusion.status == "active").all()
