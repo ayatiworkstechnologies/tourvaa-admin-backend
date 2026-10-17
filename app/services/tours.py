@@ -141,15 +141,21 @@ def list_itineraries(db: Session, tour_id: int) -> list[dict]:
     return [_ser_itinerary(i) for i in db.query(TourItinerary).filter(TourItinerary.tour_id == tour_id).order_by(TourItinerary.display_order, TourItinerary.day_number).all()]
 
 
-def _itinerary_fields(data: ItineraryPayload) -> dict:
-    payload = data.model_dump()
-    payload["images"] = json.dumps(payload.get("images") or [])
+def _itinerary_fields(data: ItineraryPayload, *, exclude_unset: bool = False) -> dict:
+    payload = data.model_dump(exclude_unset=exclude_unset)
+    if "images" in payload:
+        payload["images"] = json.dumps(payload["images"] or [])
     return payload
 
 
 def create_itinerary(db: Session, tour_id: int, data: ItineraryPayload, actor: User, request: Request | None = None) -> dict:
     _require_tour(db, tour_id)
-    o = TourItinerary(tour_id=tour_id, **_itinerary_fields(data))
+    fields = _itinerary_fields(data)
+    if "display_order" not in data.model_fields_set:
+        fields["display_order"] = data.day_number
+    if fields["image"] and not fields["image_alt_text"].strip():
+        fields["image_alt_text"] = " - ".join(filter(None, (data.day_title.strip(), data.location_name.strip())))[:180]
+    o = TourItinerary(tour_id=tour_id, **fields)
     db.add(o)
     log_audit(db, actor=actor, action="create_itinerary", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
@@ -160,7 +166,10 @@ def create_itinerary(db: Session, tour_id: int, data: ItineraryPayload, actor: U
 
 def update_itinerary(db: Session, tour_id: int, itinerary_id: int, data: ItineraryPayload, actor: User, request: Request | None = None) -> dict:
     o = _child_or_404(db, TourItinerary, itinerary_id, tour_id, "Itinerary")
-    for key, value in _itinerary_fields(data).items():
+    fields = _itinerary_fields(data, exclude_unset=True)
+    if fields.get("image") and not (fields.get("image_alt_text", o.image_alt_text) or "").strip():
+        fields["image_alt_text"] = " - ".join(filter(None, ((fields.get("day_title", o.day_title) or "").strip(), (fields.get("location_name", o.location_name) or "").strip())))[:180]
+    for key, value in fields.items():
         setattr(o, key, value)
     log_audit(db, actor=actor, action="update_itinerary", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)

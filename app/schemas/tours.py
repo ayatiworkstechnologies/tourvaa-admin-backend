@@ -150,7 +150,7 @@ class ItineraryPayload(BaseModel):
                 "travel_distance", "travel_duration", "transport_type",
                 "meals_included", "important_notes",
             ):
-                if data.get(key) is None:
+                if key in data and data[key] is None:
                     data[key] = ""
         return data
 
