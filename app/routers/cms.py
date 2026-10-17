@@ -45,6 +45,24 @@ def add_country(data: CountryPayload, request: Request, db: Session = Depends(ge
     return {"status": "success", "data": save_country(db, data, current_user, request)}
 
 
+@router.patch("/countries/bulk-disable")
+def bulk_disable_countries(request: Request, search: str = Query(default="", max_length=120), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("countries.disable", "countries.edit"))):
+    from sqlalchemy import or_
+    from app.services.audit import log_audit
+
+    query = db.query(Country).filter(Country.status == "active")
+    if search.strip():
+        pattern = f"%{search.strip()}%"
+        query = query.filter(or_(Country.country_name.ilike(pattern), Country.country_code.ilike(pattern)))
+    countries = query.all()
+    for country in countries:
+        old = _country(country)
+        country.status = "inactive"
+        log_audit(db, actor=current_user, action="update_country_status", entity_type="country", entity_id=country.id, old_values=old, new_values=_country(country), request=request)
+    db.commit()
+    return {"status": "success", "updated": len(countries)}
+
+
 @router.get("/countries/{country_id}")
 def country_detail(country_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.utils.operations import get_or_404
