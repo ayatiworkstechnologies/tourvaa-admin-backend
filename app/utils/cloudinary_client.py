@@ -37,13 +37,10 @@ def _resource_type_for(content_type: str | None, filename: str) -> str:
     """Cloudinary needs the right resource_type both to upload and to later
     build a delivery URL. Only true raster images go as "image" - PDFs go as
     "raw" too, even though Cloudinary *can* upload a PDF as "image" (for
-    page-thumbnail rendering). Most Cloudinary accounts have public delivery
-    of PDF/ZIP under the "image" type disabled by default (a security
-    setting, following a past PDF-delivery vulnerability), which would make
-    every uploaded PDF 401 on fetch unless that's manually re-enabled in the
-    dashboard. "raw" delivery isn't subject to that restriction and is a
-    better semantic fit anyway - we just need to store/serve the file, not
-    render it.
+    page-thumbnail rendering). "raw" is the appropriate fit for files we
+    store and serve as-is. Some Cloudinary product environments still
+    restrict direct PDF delivery, which is why public tour brochures use a
+    signed attachment download route.
     """
     lowered = (filename or "").lower()
     if (content_type or "").startswith("image/"):
