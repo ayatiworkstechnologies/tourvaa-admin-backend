@@ -65,6 +65,15 @@ def serialize_customer(customer: Customer, db: Session | None = None):
         "phone_country_code": customer.phone_country_code,
         "date_of_birth": customer.date_of_birth,
         "gender": customer.gender,
+        "nationality": customer.nationality,
+        "passport_number": customer.passport_number,
+        "passport_expiry": customer.passport_expiry,
+        "frequent_flyer": customer.frequent_flyer,
+        "preferred_airline": customer.preferred_airline,
+        "emergency_name": customer.emergency_name,
+        "emergency_relation": customer.emergency_relation,
+        "emergency_phone": customer.emergency_phone,
+        "emergency_email": customer.emergency_email,
         "country_id": customer.country_id,
         "city_id": customer.city_id,
         "address_line_1": customer.address_line_1,
@@ -411,6 +420,9 @@ def update_customer(
             raise HTTPException(status_code=400, detail="Customer email already exists")
         customer.email = email
 
+    if data.emergency_email is not None:
+        customer.emergency_email = str(data.emergency_email).strip().lower()
+
     if data.full_name is not None and (data.first_name is None or data.last_name is None):
         first_name, last_name = _split_name(data.full_name)
         if data.first_name is None:
@@ -432,6 +444,14 @@ def update_customer(
         "state",
         "city",
         "pincode",
+        "nationality",
+        "passport_number",
+        "passport_expiry",
+        "frequent_flyer",
+        "preferred_airline",
+        "emergency_name",
+        "emergency_relation",
+        "emergency_phone",
     ]:
         value = getattr(data, field)
         if value is not None:

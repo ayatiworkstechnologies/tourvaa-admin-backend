@@ -104,6 +104,15 @@ class CustomerUpdate(BaseModel):
     state: Optional[str] = Field(default=None, max_length=100)
     city: Optional[str] = Field(default=None, max_length=100)
     pincode: Optional[str] = Field(default=None, max_length=20)
+    nationality: Optional[str] = Field(default=None, max_length=100)
+    passport_number: Optional[str] = Field(default=None, max_length=100)
+    passport_expiry: Optional[str] = Field(default=None, max_length=40)
+    frequent_flyer: Optional[str] = Field(default=None, max_length=100)
+    preferred_airline: Optional[str] = Field(default=None, max_length=100)
+    emergency_name: Optional[str] = Field(default=None, max_length=150)
+    emergency_relation: Optional[str] = Field(default=None, max_length=100)
+    emergency_phone: Optional[str] = Field(default=None, max_length=30)
+    emergency_email: Optional[EmailStr] = None
 
     @field_validator(
         "first_name",
@@ -119,6 +128,14 @@ class CustomerUpdate(BaseModel):
         "state",
         "city",
         "pincode",
+        "nationality",
+        "passport_number",
+        "passport_expiry",
+        "frequent_flyer",
+        "preferred_airline",
+        "emergency_name",
+        "emergency_relation",
+        "emergency_phone",
     )
     @classmethod
     def trim_optional_text(cls, value: Optional[str]):
@@ -132,6 +149,11 @@ class CustomerUpdate(BaseModel):
         if value is None:
             return value
         return str(value).strip().lower()
+
+    @field_validator("emergency_phone")
+    @classmethod
+    def validate_emergency_phone(cls, value: Optional[str]):
+        return normalize_e164_phone(value)
 
     @field_validator("phone")
     @classmethod
@@ -223,6 +245,15 @@ class CustomerProfileUpdate(BaseModel):
     profile_image: Optional[str] = Field(default=None, max_length=255)
     gender: Optional[str] = Field(default=None, max_length=30)
     date_of_birth: Optional[str] = None
+    nationality: Optional[str] = Field(default=None, max_length=100)
+    passport_number: Optional[str] = Field(default=None, max_length=100)
+    passport_expiry: Optional[str] = Field(default=None, max_length=40)
+    frequent_flyer: Optional[str] = Field(default=None, max_length=100)
+    preferred_airline: Optional[str] = Field(default=None, max_length=100)
+    emergency_name: Optional[str] = Field(default=None, max_length=150)
+    emergency_relation: Optional[str] = Field(default=None, max_length=100)
+    emergency_phone: Optional[str] = Field(default=None, max_length=30)
+    emergency_email: Optional[EmailStr] = None
 
     @field_validator(
         "first_name",
@@ -241,6 +272,14 @@ class CustomerProfileUpdate(BaseModel):
         "profile_image",
         "gender",
         "date_of_birth",
+        "nationality",
+        "passport_number",
+        "passport_expiry",
+        "frequent_flyer",
+        "preferred_airline",
+        "emergency_name",
+        "emergency_relation",
+        "emergency_phone",
     )
     @classmethod
     def trim_profile_text(cls, value: Optional[str]):
