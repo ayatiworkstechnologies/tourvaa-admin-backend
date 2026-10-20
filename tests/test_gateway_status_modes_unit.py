@@ -26,3 +26,26 @@ def test_unreadable_key_does_not_enable_gateway(monkeypatch):
     data = gateways_status(db=None, current_user=None)["data"]
     assert data["stripe"] is False
     assert data["stripe_test"] is False
+
+
+@pytest.mark.parametrize(("mode", "test_mode"), [("live", False), ("sandbox", True)])
+def test_gateway_status_uses_mode_specific_paypal_credentials(monkeypatch, mode, test_mode):
+    def configured_gateway(_db, provider):
+        if provider != "paypal":
+            return None
+        return SimpleNamespace(
+            mode=mode,
+            public_key=None,
+            secret_key=None,
+            live_client_id="live-client-id",
+            live_secret="encrypted-live-secret",
+            sandbox_client_id="sandbox-client-id",
+            sandbox_secret="encrypted-sandbox-secret",
+        )
+
+    monkeypatch.setattr("app.services.payments_gateway._load_setting", configured_gateway)
+
+    data = gateways_status(db=None, current_user=None)["data"]
+
+    assert data["paypal"] is True
+    assert data["paypal_test"] is test_mode

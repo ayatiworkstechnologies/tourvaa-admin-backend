@@ -725,9 +725,16 @@ def gateways_status(db: Session = Depends(get_db), current_user=Depends(get_curr
         stripe_test = False
     try:
         p = _load_setting(db, "paypal")
-        paypal_ok = bool(p and p.public_key and p.secret_key)
         from app.services.payments_gateway import normalize_paypal_mode
-        paypal_test = paypal_ok and normalize_paypal_mode(getattr(p, "mode", "sandbox")) == "sandbox"
+        mode = normalize_paypal_mode(getattr(p, "mode", "sandbox")) if p else "sandbox"
+        # PayPal stores separate Sandbox and Live applications.  The legacy
+        # public_key/secret_key pair remains only for older installations, so
+        # checking it alone falsely reports a fully configured Live gateway as
+        # unavailable to checkout.
+        client_id = (getattr(p, f"{mode}_client_id", None) or p.public_key) if p else None
+        secret = (getattr(p, f"{mode}_secret", None) or p.secret_key) if p else None
+        paypal_ok = bool(p and client_id and secret)
+        paypal_test = paypal_ok and mode == "sandbox"
     except Exception:
         paypal_ok = False
         paypal_test = False

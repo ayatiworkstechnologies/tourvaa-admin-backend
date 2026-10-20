@@ -813,6 +813,14 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         (traveller for traveller in (booking.travellers or []) if traveller.is_primary_contact),
         None,
     )
+    active_authorized_amount = sum(
+        (
+            max(money(0), money(payment.authorized_amount) - money(payment.captured_amount))
+            for payment in (booking.payments or [])
+            if payment.payment_status == "authorized"
+        ),
+        money(0),
+    )
     # A booking's lead contact is the selected primary traveller.  Customer
     # profile fields are only a fallback: an existing profile can be shared,
     # incomplete, or differ from the person travelling on this reservation.
@@ -896,6 +904,7 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "customer_selling_price": money_str(booking.customer_selling_price),
         "amount_paid": money_str(booking.amount_paid),
         "amount_pending": money_str(booking.amount_pending),
+        "authorized_amount": money_str(active_authorized_amount),
         "balance_due_date": _balance_due_date(db, booking),
         "payment_due_date": booking.payment_due_date,
         "booking_status": booking.booking_status,
@@ -1035,7 +1044,7 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
     return data
 
 
-_SUPPLIER_HIDDEN_MONEY_FIELDS = ("amount_paid", "amount_pending", "agent_markup", "tax_amount", "surcharge_amount", "service_fee_amount", "gateway_fee_amount")
+_SUPPLIER_HIDDEN_MONEY_FIELDS = ("amount_paid", "amount_pending", "authorized_amount", "agent_markup", "tax_amount", "surcharge_amount", "service_fee_amount", "gateway_fee_amount")
 
 
 def supplier_booking_value(booking: Booking):
