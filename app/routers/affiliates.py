@@ -21,11 +21,13 @@ from app.services.affiliates import (
     list_affiliates,
     reject_affiliate,
     review_affiliate_document,
+    request_affiliate_bank_edit,
     serialize_affiliate,
     submit_affiliate_verification,
     suspend_affiliate,
     update_affiliate,
     update_affiliate_api_link,
+    unlock_affiliate_bank_edit,
 )
 from app.auth.permissions import get_current_user, get_user_role_ids, expand_permission_slugs, require_any_permission
 from app.utils.pagination import pagination_params
@@ -65,6 +67,14 @@ def edit_my_affiliate(data: AffiliateSelfUpdate, request: Request, db: Session =
     # belt-and-braces pattern as routers.suppliers.edit_my_supplier.
     safe_update = AffiliateUpdate(**data.model_dump(exclude_unset=True))
     return {"status": "success", "message": "Affiliate updated successfully", "data": update_affiliate(db, affiliate.id, safe_update, current_user, request)}
+
+
+@router.post("/me/bank-details/edit-request")
+def request_my_bank_detail_edit(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    affiliate = db.query(Affiliate).filter(Affiliate.user_id == current_user.id).first()
+    if not affiliate:
+        raise HTTPException(status_code=404, detail="Affiliate profile not found")
+    return {"status": "success", "message": "Bank-detail edit request submitted for admin approval", "data": request_affiliate_bank_edit(db, affiliate, current_user, request)}
 
 
 @router.get("/document-requirements")
@@ -326,6 +336,11 @@ def review_document(
 @router.patch("/{affiliate_id}/approve")
 def approve(affiliate_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.approve"))):
     return {"status": "success", "message": "Affiliate approved successfully", "data": approve_affiliate(db, affiliate_id, current_user, request)}
+
+
+@router.post("/{affiliate_id}/bank-details/unlock")
+def unlock_bank_detail_edit(affiliate_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.approve"))):
+    return {"status": "success", "message": "Bank details unlocked for one update", "data": unlock_affiliate_bank_edit(db, affiliate_id, current_user, request)}
 
 
 @router.patch("/{affiliate_id}/reject")

@@ -81,6 +81,9 @@ class AffiliateInvoicing(Base):
     billing_city = Column(String(100), default="", nullable=False)
     billing_state = Column(String(100), default="", nullable=False)
     billing_postal_code = Column(String(30), default="", nullable=False)
+    bank_edit_requested_at = Column(DateTime(timezone=True), nullable=True)
+    bank_edit_unlocked_at = Column(DateTime(timezone=True), nullable=True)
+    bank_edit_unlocked_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

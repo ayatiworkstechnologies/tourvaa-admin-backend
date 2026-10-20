@@ -224,6 +224,8 @@ def serialize_supplier(item: Supplier, *, mask_bank_details: bool = False):
                     getattr(item.invoicing, key, None)
                     for key in ("preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban", "bank_country_id")
                 ),
+                "bank_edit_request_pending": bool(item.invoicing.bank_edit_requested_at),
+                "bank_edit_unlocked": bool(item.invoicing.bank_edit_unlocked_at),
                 "tax_number": item.invoicing.tax_number,
                 "billing_address": item.invoicing.billing_address,
                 "billing_city": item.invoicing.billing_city,
@@ -375,7 +377,7 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
     bank_fields = {"preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban", "bank_country_id"}
     existing_invoicing = getattr(item, "invoicing", None)
     if actor.id == item.user_id and existing_invoicing and invoicing_data and any(key in bank_fields for key in invoicing_data):
-        if any(getattr(existing_invoicing, key, None) for key in bank_fields):
+        if any(getattr(existing_invoicing, key, None) for key in bank_fields) and not existing_invoicing.bank_edit_unlocked_at:
             raise HTTPException(status_code=400, detail="Bank details are locked after saving. Contact Tourvaa support to request a change.")
 
     if "commission_percentage" in update_data and update_data["commission_percentage"] is not None:
@@ -431,11 +433,36 @@ def update_supplier(db: Session, supplier_id: int, data: SupplierUpdate, actor: 
             db.add(item.invoicing)
         for k, v in invoicing_data.items():
             setattr(item.invoicing, k, v)
+        if actor.id == item.user_id and any(key in bank_fields for key in invoicing_data):
+            item.invoicing.bank_edit_unlocked_at = None
                 
     log_audit(db, actor=actor, action="update_supplier", entity_type="supplier", entity_id=item.id, old_values=old, new_values=serialize_supplier(item), request=request)
     db.commit()
     db.refresh(item)
     return serialize_supplier(item, mask_bank_details=actor.id == item.user_id)
+
+
+def request_supplier_bank_edit(db: Session, supplier: Supplier, actor: User, request: Request | None = None):
+    if not supplier.invoicing or not any(getattr(supplier.invoicing, key, None) for key in ("account_number", "iban", "swift_code")):
+        raise HTTPException(status_code=400, detail="Save bank details before requesting an edit")
+    if supplier.invoicing.bank_edit_unlocked_at:
+        return serialize_supplier(supplier, mask_bank_details=True)
+    supplier.invoicing.bank_edit_requested_at = utcnow()
+    log_audit(db, actor=actor, action="request_supplier_bank_edit", entity_type="supplier", entity_id=supplier.id, request=request)
+    db.commit(); db.refresh(supplier)
+    return serialize_supplier(supplier, mask_bank_details=True)
+
+
+def unlock_supplier_bank_edit(db: Session, supplier_id: int, actor: User, request: Request | None = None):
+    item = get_supplier(db, supplier_id)
+    if not item.invoicing or not item.invoicing.bank_edit_requested_at:
+        raise HTTPException(status_code=409, detail="No pending bank-detail edit request")
+    item.invoicing.bank_edit_unlocked_at = utcnow()
+    item.invoicing.bank_edit_unlocked_by = actor.id
+    item.invoicing.bank_edit_requested_at = None
+    log_audit(db, actor=actor, action="unlock_supplier_bank_edit", entity_type="supplier", entity_id=item.id, request=request)
+    db.commit(); db.refresh(item)
+    return serialize_supplier(item)
 
 
 def complete_supplier_onboarding(db: Session, supplier_id: int, actor: User, request: Request | None = None):

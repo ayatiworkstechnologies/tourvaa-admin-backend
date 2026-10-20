@@ -37,10 +37,12 @@ from app.services.suppliers import (
     review_supplier_document,
     review_supplier_vehicle,
     serialize_supplier,
+    request_supplier_bank_edit,
     submit_supplier_verification,
     submit_supplier_verification_for,
     set_supplier_account_status,
     update_supplier,
+    unlock_supplier_bank_edit,
 )
 from app.models.users import User
 
@@ -146,6 +148,15 @@ def edit_my_supplier(data: SupplierSelfUpdate, request: Request, db: Session = D
         raise HTTPException(status_code=404, detail="Supplier profile not found")
     safe_update = SupplierUpdate(**data.model_dump(exclude_unset=True))
     return {"status": "success", "message": "Supplier updated successfully", "data": update_supplier(db, supplier.id, safe_update, current_user, request)}
+
+
+@router.post("/me/bank-details/edit-request")
+def request_my_bank_detail_edit(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models.suppliers import Supplier
+    supplier = db.query(Supplier).filter(Supplier.user_id == current_user.id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+    return {"status": "success", "message": "Bank-detail edit request submitted for admin approval", "data": request_supplier_bank_edit(db, supplier, current_user, request)}
 
 
 @router.get("/me/commission-calculator")
@@ -725,6 +736,11 @@ def bulk_reject(data: BulkRejectRequest, request: Request, db: Session = Depends
 @router.post("/{supplier_id}/accept")
 def approve(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
     return {"status": "success", "message": "Supplier approved successfully", "data": approve_supplier(db, supplier_id, current_user, request)}
+
+
+@router.post("/{supplier_id}/bank-details/unlock")
+def unlock_bank_detail_edit(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
+    return {"status": "success", "message": "Bank details unlocked for one update", "data": unlock_supplier_bank_edit(db, supplier_id, current_user, request)}
 
 
 @router.post("/{supplier_id}/reject")

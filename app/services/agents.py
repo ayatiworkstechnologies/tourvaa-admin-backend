@@ -119,6 +119,8 @@ def serialize_agent(item: Agent, *, mask_bank_details: bool = False):
             "iban": _mask_bank_identifier(item.invoicing.iban) if mask_bank_details else item.invoicing.iban,
             "country_id": item.invoicing.country_id,
             "bank_details_locked": any(getattr(item.invoicing, field, None) for field in ("preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban")),
+            "bank_edit_request_pending": bool(item.invoicing.bank_edit_requested_at),
+            "bank_edit_unlocked": bool(item.invoicing.bank_edit_unlocked_at),
             "tax_number": item.invoicing.tax_number,
             "billing_address": item.invoicing.billing_address,
             "billing_city": item.invoicing.billing_city,
@@ -364,7 +366,7 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
     existing_invoicing = getattr(item, "invoicing", None)
     if actor.id == item.user_id and existing_invoicing and invoicing_data:
         bank_is_locked = any(getattr(existing_invoicing, key, None) for key in bank_fields)
-        if bank_is_locked:
+        if bank_is_locked and not existing_invoicing.bank_edit_unlocked_at:
             changed_bank_fields = []
             for key in bank_fields.intersection(invoicing_data):
                 submitted = invoicing_data[key]
@@ -413,11 +415,36 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
         for key, value in invoicing_data.items():
             if value is not None:
                 setattr(item.invoicing, key, value)
+        if actor.id == item.user_id and any(key in bank_fields for key in invoicing_data):
+            item.invoicing.bank_edit_unlocked_at = None
 
     log_audit(db, actor=actor, action="update_agent", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)
     return serialize_agent(item, mask_bank_details=actor.id == item.user_id)
+
+
+def request_agent_bank_edit(db: Session, agent: Agent, actor: User, request: Request | None = None):
+    if not agent.invoicing or not any(getattr(agent.invoicing, key, None) for key in ("account_number", "iban", "swift_code")):
+        raise HTTPException(status_code=400, detail="Save bank details before requesting an edit")
+    if agent.invoicing.bank_edit_unlocked_at:
+        return serialize_agent(agent, mask_bank_details=True)
+    agent.invoicing.bank_edit_requested_at = utcnow()
+    log_audit(db, actor=actor, action="request_agent_bank_edit", entity_type="agent", entity_id=agent.id, request=request)
+    db.commit(); db.refresh(agent)
+    return serialize_agent(agent, mask_bank_details=True)
+
+
+def unlock_agent_bank_edit(db: Session, agent_id: int, actor: User, request: Request | None = None):
+    item = get_agent(db, agent_id)
+    if not item.invoicing or not item.invoicing.bank_edit_requested_at:
+        raise HTTPException(status_code=409, detail="No pending bank-detail edit request")
+    item.invoicing.bank_edit_unlocked_at = utcnow()
+    item.invoicing.bank_edit_unlocked_by = actor.id
+    item.invoicing.bank_edit_requested_at = None
+    log_audit(db, actor=actor, action="unlock_agent_bank_edit", entity_type="agent", entity_id=item.id, request=request)
+    db.commit(); db.refresh(item)
+    return serialize_agent(item)
 
 
 def approve_agent(db: Session, agent_id: int, actor: User, request: Request | None = None):

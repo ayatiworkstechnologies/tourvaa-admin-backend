@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models.agents import Agent
 from pydantic import BaseModel
 from app.schemas.agents import AgentCreate, AgentDiscountRequest, AgentDocumentReviewRequest, AgentSelfUpdate, AgentUpdate
-from app.services.agents import AGENT_DOCUMENT_TYPES, accept_agent_commission, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, get_agent_activity, list_agents, partial_approve_agent, reject_agent, reject_agent_commission_request, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, update_agent, update_agent_discount
+from app.services.agents import AGENT_DOCUMENT_TYPES, accept_agent_commission, approve_agent, bulk_approve_agents, bulk_reject_agents, create_agent, export_agents_directory, get_agent, get_agent_activity, list_agents, partial_approve_agent, reject_agent, reject_agent_commission_request, request_agent_bank_edit, request_agent_commission, review_agent_document, serialize_agent, submit_agent_verification, unlock_agent_bank_edit, update_agent, update_agent_discount
 from app.schemas.auth import UnifiedRegisterSchema, VerifyEmailSchema
 from app.services.auth import register_unified_user, verify_email
 from app.auth.permissions import get_current_user, require_any_permission, get_user_role_ids, expand_permission_slugs, _is_agent
@@ -146,6 +146,14 @@ def edit_my_agent(data: AgentSelfUpdate, request: Request, db: Session = Depends
         raise HTTPException(status_code=404, detail="Agent profile not found")
     safe_update = AgentUpdate(**data.model_dump(exclude_unset=True))
     return {"status": "success", "message": "Agent updated successfully", "data": update_agent(db, agent.id, safe_update, current_user, request)}
+
+
+@router.post("/me/bank-details/edit-request")
+def request_my_bank_detail_edit(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    agent = db.query(Agent).filter(Agent.user_id == current_user.id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent profile not found")
+    return {"status": "success", "message": "Bank-detail edit request submitted for admin approval", "data": request_agent_bank_edit(db, agent, current_user, request)}
 
 
 @router.post("/me/commission-request")
@@ -373,6 +381,11 @@ def bulk_reject(data: BulkRejectAgentsRequest, request: Request, db: Session = D
 @router.patch("/{agent_id}/approve")
 def approve(agent_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.approve"))):
     return {"status": "success", "message": "Agent approved successfully", "data": approve_agent(db, agent_id, current_user, request)}
+
+
+@router.post("/{agent_id}/bank-details/unlock")
+def unlock_bank_detail_edit(agent_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.approve"))):
+    return {"status": "success", "message": "Bank details unlocked for one update", "data": unlock_agent_bank_edit(db, agent_id, current_user, request)}
 
 
 @router.post("/{agent_id}/reject")
