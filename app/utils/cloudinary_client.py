@@ -1,4 +1,5 @@
 from functools import lru_cache
+from time import time
 from urllib.parse import urlparse
 
 import cloudinary
@@ -114,6 +115,30 @@ def get_private_file_url(public_id: str, resource_type: str = "image") -> str:
     )
     if not url:
         raise HTTPException(status_code=502, detail="Could not build a signed Cloudinary URL")
+    return url
+
+
+def get_signed_download_url(public_id: str, *, resource_type: str = "raw", extension: str = "pdf") -> str:
+    """Create a short-lived attachment URL for a public document.
+
+    Cloudinary can block direct PDF delivery at the product-environment level.
+    Public tour brochures are intentionally downloadable, so the public API
+    uses this server-side signature instead of exposing a raw, blocked URL.
+    """
+    _configure()
+    try:
+        url = cloudinary.utils.private_download_url(
+            public_id,
+            extension,
+            resource_type=resource_type,
+            type="upload",
+            attachment=True,
+            expires_at=int(time()) + 300,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=502, detail="Could not prepare the document download") from error
+    if not url:
+        raise HTTPException(status_code=502, detail="Could not prepare the document download")
     return url
 
 

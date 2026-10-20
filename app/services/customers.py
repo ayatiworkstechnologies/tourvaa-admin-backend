@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from app.utils.money import utcnow
 from math import ceil
@@ -423,6 +423,12 @@ def update_customer(
     if data.emergency_email is not None:
         customer.emergency_email = str(data.emergency_email).strip().lower()
 
+    if data.date_of_birth is not None:
+        try:
+            customer.date_of_birth = datetime.fromisoformat(data.date_of_birth.replace("Z", "+00:00")) if data.date_of_birth else None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid date of birth") from exc
+
     if data.full_name is not None and (data.first_name is None or data.last_name is None):
         first_name, last_name = _split_name(data.full_name)
         if data.first_name is None:
@@ -452,6 +458,7 @@ def update_customer(
         "emergency_name",
         "emergency_relation",
         "emergency_phone",
+        "gender",
     ]:
         value = getattr(data, field)
         if value is not None:

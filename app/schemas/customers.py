@@ -113,6 +113,8 @@ class CustomerUpdate(BaseModel):
     emergency_relation: Optional[str] = Field(default=None, max_length=100)
     emergency_phone: Optional[str] = Field(default=None, max_length=30)
     emergency_email: Optional[EmailStr] = None
+    gender: Optional[str] = Field(default=None, max_length=30)
+    date_of_birth: Optional[str] = None
 
     @field_validator(
         "first_name",
@@ -136,6 +138,8 @@ class CustomerUpdate(BaseModel):
         "emergency_name",
         "emergency_relation",
         "emergency_phone",
+        "gender",
+        "date_of_birth",
     )
     @classmethod
     def trim_optional_text(cls, value: Optional[str]):

@@ -4,9 +4,12 @@ Serves tour listing and detail for the public website.
 """
 import html as html_escape
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -689,6 +692,56 @@ def public_tour_detail_by_slug(country_slug: str, tour_slug: str, travel_date: s
             detail={"message": "Tour not found for this country", "canonical_path": f"/tours/{expected_country}/{tour.slug}"},
         )
     return public_tour_detail(tour.slug, travel_date, db)
+
+
+def _public_brochure_download_url(source: str) -> str:
+    """Resolve an admin-provided public brochure without signing arbitrary URLs."""
+    value = source.strip()
+    parsed = urlparse(value)
+
+    # Legacy local-storage brochures are already delivered by our application.
+    if value.startswith("/storage/"):
+        return value
+
+    if parsed.scheme not in {"http", "https"} or parsed.hostname != "res.cloudinary.com":
+        raise HTTPException(status_code=404, detail="Brochure is unavailable")
+
+    parts = [part for part in parsed.path.split("/") if part]
+    # Cloudinary delivery URLs include the cloud name as the first path
+    # segment: /<cloud-name>/raw/upload/...
+    if len(parts) >= 3 and parts[1] == "raw" and parts[2] == "upload":
+        parts = parts[1:]
+    if len(parts) < 4 or parts[0] != "raw" or parts[1] != "upload":
+        raise HTTPException(status_code=404, detail="Brochure is unavailable")
+
+    delivery_parts = parts[2:]
+    if delivery_parts and re.fullmatch(r"v\d+", delivery_parts[0]):
+        delivery_parts = delivery_parts[1:]
+    public_id = "/".join(delivery_parts)
+    if not (
+        public_id.startswith("tourvaa/admin-assets/documents/")
+        and public_id.lower().endswith(".pdf")
+    ):
+        raise HTTPException(status_code=404, detail="Brochure is unavailable")
+
+    from app.utils.cloudinary_client import get_signed_download_url
+
+    return get_signed_download_url(public_id)
+
+
+@router.get("/tours/{tour_id}/brochure")
+def public_tour_brochure_download(tour_id: str, db: Session = Depends(get_db)):
+    """Download a published tour's brochure as an attachment, never a preview."""
+    lookup = Tour.id == int(tour_id) if tour_id.isdigit() else Tour.slug == tour_id
+    tour = db.query(Tour).filter(lookup, Tour.status == "published").first()
+    if not tour or not tour.brochure_pdf:
+        raise HTTPException(status_code=404, detail="Brochure is unavailable")
+
+    return RedirectResponse(
+        _public_brochure_download_url(tour.brochure_pdf),
+        status_code=307,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/tours/{tour_id}")
