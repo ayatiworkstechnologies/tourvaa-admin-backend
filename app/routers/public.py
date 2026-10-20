@@ -8,8 +8,9 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -731,16 +732,31 @@ def _public_brochure_download_url(source: str) -> str:
 
 @router.get("/tours/{tour_id}/brochure")
 def public_tour_brochure_download(tour_id: str, db: Session = Depends(get_db)):
-    """Download a published tour's brochure as an attachment, never a preview."""
+    """Download a published tour's brochure as a PDF attachment, never JSON."""
     lookup = Tour.id == int(tour_id) if tour_id.isdigit() else Tour.slug == tour_id
     tour = db.query(Tour).filter(lookup, Tour.status == "published").first()
     if not tour or not tour.brochure_pdf:
         raise HTTPException(status_code=404, detail="Brochure is unavailable")
 
-    return RedirectResponse(
-        _public_brochure_download_url(tour.brochure_pdf),
-        status_code=307,
-        headers={"Cache-Control": "no-store"},
+    try:
+        response = httpx.get(_public_brochure_download_url(tour.brochure_pdf), timeout=30.0)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Brochure download is temporarily unavailable") from exc
+
+    if not response.content or "pdf" not in response.headers.get("content-type", "").lower():
+        raise HTTPException(status_code=502, detail="Brochure download did not return a PDF")
+
+    filename_base = re.sub(r"[^A-Za-z0-9._-]+", "-", (tour.slug or f"tour-{tour.id}")).strip("-.")
+    filename = f"{filename_base or f'tour-{tour.id}'}-brochure.pdf"
+    return StreamingResponse(
+        iter([response.content]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(response.content)),
+            "Cache-Control": "no-store",
+        },
     )
 
 
