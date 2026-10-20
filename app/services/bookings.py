@@ -3151,20 +3151,26 @@ def supplier_start_booking(db: Session, booking_id: int, reason: str | None, act
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_ongoing", title="Tour started", message=f"Booking {booking.booking_code} is now ongoing", entity_type="booking", entity_id=booking.id)
     db.commit(); db.refresh(booking)
 
-    if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
-        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-        _send_booking_email(
-            db, "booking_status_update",
-            {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-             "new_status": "Ongoing", "reason": transition_reason, "login_url": login_url,
-             "button_text": "View booking", "button_url": login_url},
-            f"Tour started - {booking.booking_code}",
-            booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, "ongoing", transition_reason, login_url),
-            booking.customer.email,
-            event="tour_started", entity_id=booking.id, recipient_type="customer",
-        )
-    _email_agent_booking_status(db, booking, "ongoing", transition_reason, event="tour_started")
-    _email_admins_booking_event(db, "Tour started", f"Supplier started tour for booking {booking.booking_code}.", booking)
+    # The lifecycle state is already committed above. Notification delivery is
+    # important but must never turn a successful Start Tour action into a 500
+    # because of SMTP, a custom template, or a delayed mail-delivery table.
+    try:
+        if _belongs_to_customer_portal(booking) and booking.customer and booking.customer.email:
+            login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+            _send_booking_email(
+                db, "booking_status_update",
+                {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+                 "new_status": "Ongoing", "reason": transition_reason, "login_url": login_url,
+                 "button_text": "View booking", "button_url": login_url},
+                f"Tour started - {booking.booking_code}",
+                booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, "ongoing", transition_reason, login_url),
+                booking.customer.email,
+                event="tour_started", entity_id=booking.id, recipient_type="customer",
+            )
+        _email_agent_booking_status(db, booking, "ongoing", transition_reason, event="tour_started")
+        _email_admins_booking_event(db, "Tour started", f"Supplier started tour for booking {booking.booking_code}.", booking)
+    except Exception:
+        logger.exception("Could not schedule post-start notifications for booking %s", booking.id)
     return serialize_booking_for_actor(db, booking, actor)
 
 
