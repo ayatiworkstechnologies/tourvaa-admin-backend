@@ -1288,7 +1288,7 @@ def _supplier_payment_summary(db: Session, booking: Booking) -> dict | None:
 
 
 def serialize_traveller(t: BookingTraveller) -> dict:
-    return {"id": t.id, "traveller_type": t.traveller_type, "first_name": t.first_name, "last_name": t.last_name, "full_name": t.full_name, "age": t.age, "gender": t.gender, "nationality": t.nationality, "passport_number": _mask_passport(t.passport_number), "email": t.email, "phone": t.phone, "is_primary_contact": bool(t.is_primary_contact), "special_requirements": t.special_requirements, "pickup_location": t.pickup_location, "emergency_contact": t.emergency_contact}
+    return {"id": t.id, "traveller_type": t.traveller_type, "first_name": t.first_name, "last_name": t.last_name, "full_name": t.full_name, "date_of_birth": t.date_of_birth, "age": t.age, "gender": t.gender, "nationality": t.nationality, "passport_number": _mask_passport(t.passport_number), "passport_expiry_date": t.passport_expiry_date, "email": t.email, "phone": t.phone, "is_primary_contact": bool(t.is_primary_contact), "special_requirements": t.special_requirements, "pickup_location": t.pickup_location, "emergency_contact": t.emergency_contact}
 
 
 def serialize_activity(a: BookingOptionalActivity) -> dict:
@@ -2272,7 +2272,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         calendar.booked_seats += adults + children
     for t in data.travellers:
         full = t.full_name or f"{t.first_name} {t.last_name}".strip()
-        db.add(BookingTraveller(booking_id=booking.id, traveller_type=t.traveller_type, first_name=t.first_name, last_name=t.last_name, full_name=full, age=t.age, gender=t.gender, nationality=t.nationality, passport_number=t.passport_number, email=t.email, phone=t.phone, is_primary_contact=1 if t.is_primary_contact else 0, special_requirements=t.special_requirements))
+        db.add(BookingTraveller(booking_id=booking.id, traveller_type=t.traveller_type, first_name=t.first_name, last_name=t.last_name, full_name=full, date_of_birth=_parse_dt(t.date_of_birth), age=t.age, gender=t.gender, nationality=t.nationality, passport_number=t.passport_number, passport_expiry_date=_parse_dt(t.passport_expiry_date), email=t.email, phone=t.phone, is_primary_contact=1 if t.is_primary_contact else 0, special_requirements=t.special_requirements))
     for row, qty, unit, total in activities:
         db.add(BookingOptionalActivity(booking_id=booking.id, tour_optional_activity_id=row.id, activity_name_snapshot=row.activity_name, quantity=qty, unit_price=unit, total_price=total))
     for row, qty, unit, total in accommodations:
