@@ -395,7 +395,13 @@ def download_invoice_pdf(db: Session, invoice_id: int, actor: User | None = None
     if not inv.pdf_path:
         raise HTTPException(status_code=404, detail="PDF not yet generated for this invoice")
     fs_path = resolve_private_docs_path(inv.pdf_path, "/private-docs/")
-    if not fs_path or not fs_path.exists():
+    def _valid_pdf(path) -> bool:
+        try:
+            return bool(path and path.is_file() and path.stat().st_size > 5 and path.read_bytes()[:5] == b"%PDF-")
+        except OSError:
+            return False
+
+    if not _valid_pdf(fs_path):
         # PDF files are derived, private artifacts; the invoice and its line
         # items in the database are the source of truth.  A container rebuild
         # or an old host cleanup must not leave a valid invoice permanently
@@ -403,7 +409,7 @@ def download_invoice_pdf(db: Session, invoice_id: int, actor: User | None = None
         logger.warning("Invoice PDF is missing; regenerating invoice_id=%s", invoice_id)
         regenerated = regenerate_invoice_pdf(db, invoice_id, actor)
         fs_path = resolve_private_docs_path(regenerated.pdf_path, "/private-docs/")
-        if not fs_path or not fs_path.exists():
+        if not _valid_pdf(fs_path):
             raise HTTPException(status_code=404, detail="PDF file could not be regenerated on server")
     return str(fs_path), f"{inv.invoice_number}.pdf"
 

@@ -32,3 +32,29 @@ def test_download_regenerates_a_missing_derived_pdf(monkeypatch, tmp_path):
     assert Path(resolved) == pdf_path
     assert filename == "30.pdf"
     assert regenerated == [(30, "agent")]
+
+
+def test_download_regenerates_a_corrupt_derived_pdf(monkeypatch, tmp_path):
+    invoice = _Invoice()
+    pdf_path = tmp_path / "30.pdf"
+    pdf_path.write_text("not a PDF", encoding="utf-8")
+    regenerated = []
+
+    monkeypatch.setattr(invoices, "get_invoice", lambda db, invoice_id, actor: invoice)
+
+    def regenerate(db, invoice_id, actor, request=None):
+        regenerated.append((invoice_id, actor))
+        pdf_path.write_bytes(b"%PDF-1.4\nvalid")
+        return invoice
+
+    monkeypatch.setattr(invoices, "regenerate_invoice_pdf", regenerate)
+    monkeypatch.setattr(
+        "app.utils.media.resolve_private_docs_path",
+        lambda file_path, prefix: pdf_path if file_path == invoice.pdf_path else None,
+    )
+
+    resolved, filename = invoices.download_invoice_pdf(object(), 30, actor="agent")
+
+    assert Path(resolved) == pdf_path
+    assert filename == "30.pdf"
+    assert regenerated == [(30, "agent")]

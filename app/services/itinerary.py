@@ -51,7 +51,16 @@ def download_itinerary_pdf(db: Session, booking_id: int, actor: User) -> tuple[s
     filename = f"{booking.booking_code or booking.id}-itinerary-v2.pdf"
     pdf_path = storage.joinpath(filename)
 
-    if not pdf_path.exists():
+    # Older deployments could cache a text fallback under a .pdf filename.
+    # Regenerate any missing, empty, or non-PDF cached artifact so every
+    # response can be opened by a browser PDF viewer.
+    has_valid_pdf = pdf_path.exists() and pdf_path.is_file() and pdf_path.stat().st_size > 5
+    if has_valid_pdf:
+        try:
+            has_valid_pdf = pdf_path.read_bytes()[:5] == b"%PDF-"
+        except OSError:
+            has_valid_pdf = False
+    if not has_valid_pdf:
         support_setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
         support_email = (support_setting.value or "").strip() if support_setting else ""
         website = urlparse(settings.FRONTEND_URL or "").netloc or "www.tourvaa.com"
@@ -77,6 +86,6 @@ def download_itinerary_pdf(db: Session, booking_id: int, actor: User) -> tuple[s
         }
         generate_pdf(pdf_path, itinerary_data)
 
-    if not os.path.exists(pdf_path):
+    if not os.path.exists(pdf_path) or not pdf_path.is_file() or pdf_path.stat().st_size <= 5 or pdf_path.read_bytes()[:5] != b"%PDF-":
         raise HTTPException(status_code=404, detail="Itinerary PDF could not be generated")
     return str(pdf_path), filename

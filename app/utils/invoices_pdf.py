@@ -8,6 +8,8 @@ import logging
 from html import escape
 from pathlib import Path
 
+from app.utils.pdf_fallback import write_text_pdf
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -47,7 +49,7 @@ except ImportError as exc:
 
 
 def _plain_text_pdf(path: Path, data: dict) -> None:
-    """Minimal fallback: write a readable text file with .pdf extension."""
+    """Write a readable, standards-valid PDF if ReportLab is unavailable."""
     inv = data
     lines = [
         "=" * 60,
@@ -77,7 +79,7 @@ def _plain_text_pdf(path: Path, data: dict) -> None:
         "=" * 60,
         "Thank you for booking with Tourvaa.",
     ]
-    path.write_text("\n".join(lines), encoding="utf-8")
+    write_text_pdf(path, lines)
 
 
 def _money(inv: dict, value) -> str:
