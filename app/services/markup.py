@@ -43,14 +43,14 @@ def effective_markup_percentage(db: Session, slab: TourPricing | None, default: 
 
 
 def storefront_price(db: Session, slab: TourPricing, supplier_amount, default: Decimal | None = None) -> Decimal:
-    """Customer price after supplier commission, then Tourvaa markup.
+    """Customer price from the published supplier rate plus Tourvaa markup.
 
-    Commercial order: supplier offer/price -> Tourvaa commission deduction ->
-    markup on the supplier's resulting payout.  Keep this single helper for
-    stored slabs, date overrides and checkout quotes.
+    Supplier commission and supplier-funded discounts affect settlement, not
+    the advertised unit price.  Keeping the customer calculation independent
+    of commission makes the saved slab, public tour, quote and checkout agree.
     """
-    net_supplier = money(Decimal(str(supplier_amount or 0)) * (Decimal("1") - Decimal(str(slab.commission_percentage or 0)) / Decimal("100")))
-    return apply_markup(max(Decimal("0"), net_supplier), effective_markup_percentage(db, slab, default))
+    base_price = max(Decimal("0"), Decimal(str(supplier_amount or 0)))
+    return apply_markup(base_price, effective_markup_percentage(db, slab, default))
 
 
 def apply_storefront(db: Session, slab: TourPricing, default: Decimal | None = None) -> None:

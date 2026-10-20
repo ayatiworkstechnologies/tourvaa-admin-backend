@@ -69,8 +69,8 @@ def test_admin_sets_markup_and_storefront_price():
     _apply(row, is_supplier=False, markup_in_payload=20)
 
     assert row.admin_markup_value == 20
-    assert row.storefront_adult_price == 216   # 200 - 10% commission, then +20% markup
-    assert row.storefront_child_price == 108
+    assert row.storefront_adult_price == 240   # 200 +20% markup; commission is settlement only
+    assert row.storefront_child_price == 120
     assert row.supplier_final_adult_price == 180  # commission still on the supplier price
     assert _ser_pricing(row)["admin_markup_value"] == 20
 
@@ -80,7 +80,7 @@ def test_supplier_cannot_change_markup():
     _apply(row, is_supplier=True, markup_in_payload=0)
 
     assert row.admin_markup_value == 25
-    assert row.storefront_adult_price == 225
+    assert row.storefront_adult_price == 250
 
 
 def test_new_supplier_slab_follows_default_markup():
@@ -88,7 +88,7 @@ def test_new_supplier_slab_follows_default_markup():
     _apply(row, is_supplier=True, markup_in_payload=90, is_update=False, default_markup=5)
 
     assert row.admin_markup_value is None       # follows the platform default
-    assert row.storefront_adult_price == 189    # 200 - 10% commission, then +5% default markup
+    assert row.storefront_adult_price == 210    # 200 +5% default markup
 
 
 def test_slab_without_markup_uses_tour_markup_before_default():
@@ -96,7 +96,7 @@ def test_slab_without_markup_uses_tour_markup_before_default():
     _apply(row, is_supplier=False, markup_in_payload=None, default_markup=5, tour_markup=15)
 
     assert row.admin_markup_value is None
-    assert row.storefront_adult_price == 207    # 200 - 10% commission, then +15% tour markup
+    assert row.storefront_adult_price == 230    # 200 +15% tour markup
 
 
 def test_admin_can_clear_markup_to_follow_default():
@@ -104,7 +104,7 @@ def test_admin_can_clear_markup_to_follow_default():
     _apply(row, is_supplier=False, markup_in_payload=None, default_markup=10)
 
     assert row.admin_markup_value is None
-    assert row.storefront_adult_price == 198    # 200 - 10% commission, then +10% default markup
+    assert row.storefront_adult_price == 220    # 200 +10% default markup
     assert _ser_pricing(row)["markup_follows_default"] is True
 
 

@@ -179,15 +179,14 @@ def _ser_overview(o: TourOverview):
     }
 
 
-def _advertised_discount_percent(supplier_pct: float, tourvaa_pct: float) -> float:
-    """Customer-facing offer label for stacked supplier and Tourvaa offers.
+def _advertised_discount_percent(_supplier_pct: float, tourvaa_pct: float) -> float:
+    """Return the customer-facing Tourvaa offer percentage.
 
-    Pricing remains sequential (and is calculated by the booking service),
-    but storefront badges advertise the visible components: 10% + 15% is a
-    25% offer. Keeping this here makes category, homepage, and search cards
-    agree with the tour-detail badge.
+    Supplier offers reduce supplier settlement only and are not a customer
+    promotion, so they must never reduce an advertised storefront price or
+    inflate a customer-facing discount badge.
     """
-    return round(max(0.0, min(100.0, supplier_pct + tourvaa_pct)), 2)
+    return round(max(0.0, min(100.0, tourvaa_pct)), 2)
 
 
 def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime | None = None) -> dict[int, dict]:
@@ -209,27 +208,22 @@ def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime 
         if base_price <= 0:
             continue
         supplier_pct = discount_percent_for_display(supplier_row, base_price) if supplier_row else 0
-        supplier_price = round(base_price * (1 - supplier_pct / 100), 2)
-        tourvaa_pct = discount_percent_for_display(tourvaa_row, supplier_price) if tourvaa_row else 0
+        tourvaa_pct = discount_percent_for_display(tourvaa_row, base_price) if tourvaa_row else 0
         display_pct = _advertised_discount_percent(supplier_pct, tourvaa_pct)
         if display_pct <= 0:
             continue
         best[tour.id] = {
             "discount_percentage": display_pct,
-            "supplier_discount_percentage": supplier_pct or None,
+            "supplier_discount_percentage": None,
             "tourvaa_discount_percentage": tourvaa_pct or None,
-            "supplier_discount_name": supplier_row.discount_name if supplier_row else None,
+            "supplier_discount_name": None,
             "tourvaa_discount_name": tourvaa_row.discount_name if tourvaa_row else None,
-            # Explicit price stages for storefront clients. Keep the legacy
-            # original_price_per_person comparison value below unchanged: it
-            # is the price immediately before a TourVaa offer.
+            # Only Tourvaa-funded offers change customer prices. Supplier
+            # offers are intentionally excluded from public price stages.
             "storefront_original_price_per_person": base_price,
-            "supplier_discounted_price_per_person": supplier_price,
-            # When Tourvaa adds an offer, its comparison price is the
-            # supplier-discounted, marked-up publishable price. Otherwise the
-            # supplier's original discount compares against the raw storefront.
-            "original_price_per_person": supplier_price if tourvaa_pct else base_price,
-            "discounted_price_per_person": round(supplier_price * (1 - tourvaa_pct / 100), 2),
+            "supplier_discounted_price_per_person": base_price,
+            "original_price_per_person": base_price,
+            "discounted_price_per_person": round(base_price * (1 - tourvaa_pct / 100), 2),
         }
     return best
 
@@ -307,31 +301,23 @@ def _public_pricing_rows(
                 "currency": base.currency,
             })
 
-    # An active tour-wide discount (see _active_discount_map) applies the same
-    # percentage the admin/supplier pricing screen shows as "PRICE AFTER
-    # DISCOUNT" against every pax-range row here, not just the headline
-    # price_start_per_person -- otherwise the public group-pricing ladder
-    # would show pre-discount numbers while the admin screen and the
-    # storefront's own "Save X% today" badge both already reflect the
-    # discounted price.
-    supplier_pct = float((discount_info or {}).get("supplier_discount_percentage") or 0)
+    # A Tourvaa-funded discount applies to every pax-range row. Supplier
+    # discounts are settlement-only and do not alter public prices.
     tourvaa_pct = float((discount_info or {}).get("tourvaa_discount_percentage") or discount_percentage or 0)
-    if supplier_pct or tourvaa_pct:
+    if tourvaa_pct:
         for row in rows:
             raw_adult = row["price_per_person"]
             raw_child = row["child_price_per_person"]
-            supplier_adult = raw_adult * (1 - supplier_pct / 100)
-            supplier_child = raw_child * (1 - supplier_pct / 100)
             # Preserve each stage so a client never has to reverse-engineer
             # a percentage (which can lose cents with fixed-value offers).
             row["storefront_original_price_per_person"] = round(raw_adult, 2)
             row["storefront_original_child_price_per_person"] = round(raw_child, 2)
-            row["supplier_discounted_price_per_person"] = round(supplier_adult, 2)
-            row["supplier_discounted_child_price_per_person"] = round(supplier_child, 2)
-            row["original_price_per_person"] = round(supplier_adult if tourvaa_pct else raw_adult, 2)
-            row["original_child_price_per_person"] = round(supplier_child if tourvaa_pct else raw_child, 2)
-            row["price_per_person"] = round(max(0.0, supplier_adult * (1 - tourvaa_pct / 100)), 2)
-            row["child_price_per_person"] = round(max(0.0, supplier_child * (1 - tourvaa_pct / 100)), 2)
+            row["supplier_discounted_price_per_person"] = round(raw_adult, 2)
+            row["supplier_discounted_child_price_per_person"] = round(raw_child, 2)
+            row["original_price_per_person"] = round(raw_adult, 2)
+            row["original_child_price_per_person"] = round(raw_child, 2)
+            row["price_per_person"] = round(max(0.0, raw_adult * (1 - tourvaa_pct / 100)), 2)
+            row["child_price_per_person"] = round(max(0.0, raw_child * (1 - tourvaa_pct / 100)), 2)
     # ``max_group_size`` is a vehicle/allocation grouping. Do not hide price
     # tiers above it: a customer or agent may reserve the departure's full
     # remaining calendar capacity and operations can allocate multiple

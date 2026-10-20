@@ -1672,9 +1672,10 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # real charge currency explicitly when it differs from what they were
     # browsing in (see the booking page's price breakdown).
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
-    # Supplier prices first (slab, or a per-date override of it). An active
-    # supplier discount reduces these units BEFORE Tourvaa markup. Tourvaa's
-    # own discount is resolved later against the marked-up storefront subtotal.
+    # Customer unit prices use the published supplier rate plus Tourvaa markup.
+    # Supplier-funded discounts are recorded below for settlement only; they
+    # never reduce the advertised or charged unit price. Tourvaa's own discount
+    # is resolved later against the marked-up storefront subtotal.
     from app.services.markup import effective_markup_percentage, storefront_price
     markup_percentage = money(effective_markup_percentage(db, slab)) if slab else money(0)
     supplier_adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
@@ -1703,19 +1704,17 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
                 supplier_child_unit = money(supplier_child_unit * supplier_factor)
                 if consume_discount:
                     supplier_discount.used_count = (supplier_discount.used_count or 0) + 1
-    adult_unit = storefront_price(db, slab, supplier_adult_unit) if slab else apply_markup(supplier_adult_unit, markup_percentage)
-    child_unit = storefront_price(db, slab, supplier_child_unit) if slab else apply_markup(supplier_child_unit, markup_percentage)
+    adult_unit = storefront_price(db, slab, supplier_adult_original_unit) if slab else apply_markup(supplier_adult_original_unit, markup_percentage)
+    child_unit = storefront_price(db, slab, supplier_child_original_unit) if slab else apply_markup(supplier_child_original_unit, markup_percentage)
     per_person_amount = money(adult_unit * adults + child_unit * children)
-    # Expose the customer-visible value of the supplier-funded offer in a
-    # quote.  This is presentation data only: supplier discounts still apply
-    # before markup and no booking calculation changes here.
+    # Supplier-funded discounts do not change the customer charge. They are
+    # reflected in supplier_base_amount and settlement, not as a storefront
+    # promotion.
     original_per_person_amount = money(
         (storefront_price(db, slab, supplier_adult_original_unit) if slab else apply_markup(supplier_adult_original_unit, markup_percentage)) * adults
         + (storefront_price(db, slab, supplier_child_original_unit) if slab else apply_markup(supplier_child_original_unit, markup_percentage)) * children
     )
-    supplier_offer_discount_amount = max(
-        money(0), original_per_person_amount - per_person_amount
-    )
+    supplier_offer_discount_amount = money(0)
     supplier_per_person_amount = money(supplier_adult_unit * adults + supplier_child_unit * children)
     # Group discount is a percentage of the seat-paying (adult+child) price
     # only -- infants and the solo single-supplement below are resolved
