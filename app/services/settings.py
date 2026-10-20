@@ -567,10 +567,10 @@ def compute_commission_preview(db: Session, sample_price=None) -> dict:
     affiliate_pct = get_affiliate_default_commission(db)
     markup_pct = Decimal(str(get_default_admin_markup_percentage(db) or 0))
 
-    customer_price = (price * (Decimal("1") + markup_pct / Decimal("100"))).quantize(Decimal("0.01"))
-    markup_amount = customer_price - price
     commission_amount = (price * commission_pct / Decimal("100")).quantize(Decimal("0.01"))
     supplier_net = price - commission_amount
+    customer_price = (supplier_net * (Decimal("1") + markup_pct / Decimal("100"))).quantize(Decimal("0.01"))
+    markup_amount = customer_price - supplier_net
     agent_amount = (price * agent_pct / Decimal("100")).quantize(Decimal("0.01"))
     affiliate_amount = (price * affiliate_pct / Decimal("100")).quantize(Decimal("0.01"))
     tourvaa_total = commission_amount + markup_amount

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models.cms import Tour
 from app.models.tours import TourPricing
-from app.utils.money import apply_markup
+from app.utils.money import apply_markup, money
 
 
 def default_markup_percentage(db: Session) -> Decimal:
@@ -42,11 +42,21 @@ def effective_markup_percentage(db: Session, slab: TourPricing | None, default: 
     return tour_markup_percentage(db, slab.tour_id, default)
 
 
+def storefront_price(db: Session, slab: TourPricing, supplier_amount, default: Decimal | None = None) -> Decimal:
+    """Customer price after supplier commission, then Tourvaa markup.
+
+    Commercial order: supplier offer/price -> Tourvaa commission deduction ->
+    markup on the supplier's resulting payout.  Keep this single helper for
+    stored slabs, date overrides and checkout quotes.
+    """
+    net_supplier = money(Decimal(str(supplier_amount or 0)) * (Decimal("1") - Decimal(str(slab.commission_percentage or 0)) / Decimal("100")))
+    return apply_markup(max(Decimal("0"), net_supplier), effective_markup_percentage(db, slab, default))
+
+
 def apply_storefront(db: Session, slab: TourPricing, default: Decimal | None = None) -> None:
     """Refresh the slab's stored storefront prices from its effective markup."""
-    pct = effective_markup_percentage(db, slab, default)
-    slab.storefront_adult_price = apply_markup(max(Decimal("0"), Decimal(str(slab.adult_price or 0))), pct)
-    slab.storefront_child_price = apply_markup(max(Decimal("0"), Decimal(str(slab.child_price or 0))), pct)
+    slab.storefront_adult_price = storefront_price(db, slab, slab.adult_price, default)
+    slab.storefront_child_price = storefront_price(db, slab, slab.child_price, default)
     slab.final_price = slab.storefront_adult_price
 
 

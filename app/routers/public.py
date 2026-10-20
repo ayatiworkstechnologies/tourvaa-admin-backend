@@ -268,9 +268,9 @@ def _public_pricing_rows(
         # selector showed the default slab price until the customer reached
         # checkout, even though the admin had set a price for that date.
         if date_override is not None and db is not None:
-            markup = effective_markup_percentage(db, slab)
-            adult = apply_markup(date_override.adult_price or 0, markup)
-            child = apply_markup(date_override.child_price or 0, markup)
+            from app.services.markup import storefront_price
+            adult = storefront_price(db, slab, date_override.adult_price)
+            child = storefront_price(db, slab, date_override.child_price)
         else:
             adult = slab.storefront_adult_price if slab.storefront_adult_price is not None else slab.adult_price
             child = slab.storefront_child_price if slab.storefront_child_price is not None else (slab.child_price or 0)

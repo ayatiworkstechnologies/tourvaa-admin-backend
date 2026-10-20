@@ -1675,7 +1675,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # Supplier prices first (slab, or a per-date override of it). An active
     # supplier discount reduces these units BEFORE Tourvaa markup. Tourvaa's
     # own discount is resolved later against the marked-up storefront subtotal.
-    from app.services.markup import effective_markup_percentage
+    from app.services.markup import effective_markup_percentage, storefront_price
     markup_percentage = money(effective_markup_percentage(db, slab)) if slab else money(0)
     supplier_adult_unit = money(slab.adult_price if slab else (tour.price_start_per_person if tour else 0))
     supplier_child_unit = money(slab.child_price if slab else 0)
@@ -1703,15 +1703,15 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
                 supplier_child_unit = money(supplier_child_unit * supplier_factor)
                 if consume_discount:
                     supplier_discount.used_count = (supplier_discount.used_count or 0) + 1
-    adult_unit = apply_markup(supplier_adult_unit, markup_percentage)
-    child_unit = apply_markup(supplier_child_unit, markup_percentage)
+    adult_unit = storefront_price(db, slab, supplier_adult_unit) if slab else apply_markup(supplier_adult_unit, markup_percentage)
+    child_unit = storefront_price(db, slab, supplier_child_unit) if slab else apply_markup(supplier_child_unit, markup_percentage)
     per_person_amount = money(adult_unit * adults + child_unit * children)
     # Expose the customer-visible value of the supplier-funded offer in a
     # quote.  This is presentation data only: supplier discounts still apply
     # before markup and no booking calculation changes here.
     original_per_person_amount = money(
-        apply_markup(supplier_adult_original_unit, markup_percentage) * adults
-        + apply_markup(supplier_child_original_unit, markup_percentage) * children
+        (storefront_price(db, slab, supplier_adult_original_unit) if slab else apply_markup(supplier_adult_original_unit, markup_percentage)) * adults
+        + (storefront_price(db, slab, supplier_child_original_unit) if slab else apply_markup(supplier_child_original_unit, markup_percentage)) * children
     )
     supplier_offer_discount_amount = max(
         money(0), original_per_person_amount - per_person_amount

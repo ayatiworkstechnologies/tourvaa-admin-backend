@@ -496,14 +496,14 @@ def recalculate_price_start(db: Session, tour_id: int) -> None:
     it's always the lowest currently active, approved (storefront) adult
     selling price -- including Tourvaa's markup -- recomputed here whenever
     pricing changes or is approved."""
-    from app.services.markup import effective_markup_percentage
+    from app.services.markup import storefront_price
 
     tour = db.query(Tour).filter(Tour.id == tour_id).first()
     if not tour:
         return
     slabs = db.query(TourPricing).filter(TourPricing.tour_id == tour_id, TourPricing.status == "active").all()
     prices = [
-        s.storefront_adult_price if s.storefront_adult_price is not None else apply_markup(s.adult_price, effective_markup_percentage(db, s))
+        s.storefront_adult_price if s.storefront_adult_price is not None else storefront_price(db, s, s.adult_price)
         for s in slabs
     ]
     tour.price_start_per_person = min(prices) if prices else 0.0
