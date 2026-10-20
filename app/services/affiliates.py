@@ -253,6 +253,8 @@ def request_affiliate_bank_edit(db: Session, affiliate: Affiliate, actor: User, 
         return serialize_affiliate(affiliate, mask_bank_details=True)
     affiliate.invoicing.bank_edit_requested_at = utcnow()
     log_audit(db, actor=actor, action="request_affiliate_bank_edit", entity_type="affiliate", entity_id=affiliate.id, request=request)
+    from app.utils.notification_triggers import notify_bank_detail_edit_requested
+    notify_bank_detail_edit_requested(db, partner_type="affiliate", partner_id=affiliate.id, partner_name=affiliate.name)
     db.commit(); db.refresh(affiliate)
     return serialize_affiliate(affiliate, mask_bank_details=True)
 

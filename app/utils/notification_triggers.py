@@ -121,6 +121,50 @@ def _user_email(db: Session, user_id: int | None) -> str | None:
     return user.email if user else None
 
 
+def notify_bank_detail_edit_requested(
+    db: Session,
+    *,
+    partner_type: str,
+    partner_id: int,
+    partner_name: str,
+) -> None:
+    """Notify administrators about a protected payout-detail edit request.
+
+    Only the request metadata is delivered. Bank numbers, IBANs, and SWIFT
+    codes remain in the authenticated portal and never enter email content.
+    """
+    from app.config import settings
+    from app.utils.email_templates import bank_detail_edit_requested_admin_email
+
+    entity_type = partner_type.lower()
+    title = "Bank-detail edit requested"
+    notify_admins(
+        db,
+        notification_type="bank_detail_edit_requested",
+        title=title,
+        message=f"{partner_type.title()} '{partner_name}' requested a bank-detail edit.",
+        entity_type=entity_type,
+        entity_id=partner_id,
+    )
+    admin_url = f"{settings.FRONTEND_URL}/admin/{entity_type}s/{partner_id}"
+    email_admins(
+        db,
+        "bank_detail_edit_requested",
+        {
+            "partner_type": partner_type.title(),
+            "partner_name": partner_name,
+            "admin_url": admin_url,
+            "button_text": "Review request",
+            "button_url": admin_url,
+        },
+        f"Bank-detail edit request - {partner_name}",
+        bank_detail_edit_requested_admin_email(partner_type, partner_name, admin_url),
+        entity_type=entity_type,
+        entity_id=partner_id,
+    )
+    db.flush()
+
+
 # ---------------------------------------------------------------------------
 # Supplier events
 # ---------------------------------------------------------------------------

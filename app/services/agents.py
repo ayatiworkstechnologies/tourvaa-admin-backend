@@ -431,6 +431,8 @@ def request_agent_bank_edit(db: Session, agent: Agent, actor: User, request: Req
         return serialize_agent(agent, mask_bank_details=True)
     agent.invoicing.bank_edit_requested_at = utcnow()
     log_audit(db, actor=actor, action="request_agent_bank_edit", entity_type="agent", entity_id=agent.id, request=request)
+    from app.utils.notification_triggers import notify_bank_detail_edit_requested
+    notify_bank_detail_edit_requested(db, partner_type="agent", partner_id=agent.id, partner_name=agent.agent_name)
     db.commit(); db.refresh(agent)
     return serialize_agent(agent, mask_bank_details=True)
 

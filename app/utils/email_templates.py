@@ -503,6 +503,27 @@ def admin_booking_event_email(event_title: str, detail: str, booking_code: str, 
     )
 
 
+def bank_detail_edit_requested_admin_email(partner_type: str, partner_name: str, admin_url: str):
+    """Admin alert for a protected payout-detail edit request.
+
+    Bank credentials are deliberately never included in notification emails.
+    Admins must open the authenticated portal to review and unlock the edit.
+    """
+    role = (partner_type or "partner").title()
+    summary = _summary_card([("Account type", esc(role)), ("Account", esc(partner_name) or "Unknown")])
+    return base_email(
+        "Bank-detail edit requested",
+        "Hi team,",
+        (
+            f"A {esc(role).lower()} has requested a one-time edit to their payout bank details. "
+            "No bank credentials are included in this email.<br /><br />"
+            f"{summary}<br />Review the request in the authenticated admin portal before unlocking the account."
+        ),
+        "Review request",
+        admin_url,
+    )
+
+
 def booking_cancelled_supplier_email(supplier_name: str, booking_code: str, tour_name: str, reason: str, portal_url: str):
     return base_email(
         "Booking cancelled",

@@ -449,6 +449,8 @@ def request_supplier_bank_edit(db: Session, supplier: Supplier, actor: User, req
         return serialize_supplier(supplier, mask_bank_details=True)
     supplier.invoicing.bank_edit_requested_at = utcnow()
     log_audit(db, actor=actor, action="request_supplier_bank_edit", entity_type="supplier", entity_id=supplier.id, request=request)
+    from app.utils.notification_triggers import notify_bank_detail_edit_requested
+    notify_bank_detail_edit_requested(db, partner_type="supplier", partner_id=supplier.id, partner_name=supplier.supplier_name)
     db.commit(); db.refresh(supplier)
     return serialize_supplier(supplier, mask_bank_details=True)
 
