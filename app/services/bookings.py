@@ -1344,7 +1344,7 @@ def _validate_supplier_lifecycle_transition(booking: Booking, target_status: str
     return True
 
 
-def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consume: bool = False, travel_date=None):
+def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consume: bool = False, travel_date=None, redemption_rows: list | None = None):
     """Look up and validate a promo code against tour_discounts. Raises 400 if the
     code doesn't exist or doesn't apply. When no code is supplied, auto-applies
     the same best-active discount the storefront/booking-flow already
@@ -1377,6 +1377,8 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
             return money(0), None
         if consume:
             row.used_count = (row.used_count or 0) + 1
+        if redemption_rows is not None:
+            redemption_rows.append((row, money(amount)))
         return money(amount), "TOURVAA"
     code = promo_code.strip().upper()
     discount_query = db.query(TourDiscount).filter(func.upper(TourDiscount.discount_code) == code, TourDiscount.status == "active")
@@ -1416,6 +1418,8 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
     amount = min(money(amount), money(subtotal))
     if consume:
         discount.used_count = (discount.used_count or 0) + 1
+    if redemption_rows is not None:
+        redemption_rows.append((discount, money(amount)))
     return money(amount), (discount.funded_by or "SUPPLIER")
 
 
@@ -1828,6 +1832,7 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
     # tour offer or be discounted by it.
     discounted_tour_amount = money(base_amount - group_discount_amount)
     addon_total = money(activity_total + accommodation_total + extension_total)
+    discount_redemptions: list[tuple[TourDiscount, object]] = []
     discount, promo_discount_funded_by = _resolve_discount(
         db,
         data.promo_code,
@@ -1835,7 +1840,10 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         discounted_tour_amount,
         consume=consume_discount,
         travel_date=discount_travel_date,
+        redemption_rows=discount_redemptions,
     )
+    if pricing_details is not None:
+        pricing_details["discount_redemptions"] = discount_redemptions
     # Tax remains payable on the full selected order, after the tour-only
     # discount; service_fee is a flat per-booking amount.
     taxable_amount = money(discounted_tour_amount - discount + addon_total)
@@ -2218,6 +2226,19 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     db.add(booking)
     db.flush()
     booking.booking_code = _booking_code(db, booking.id, booking.booking_source)
+    # Record the exact discount row that was consumed.  The old aggregate
+    # ``used_count`` cannot identify a booking, so this is deliberately saved
+    # alongside the new booking rather than reconstructed later from a code.
+    if pricing_details.get("discount_redemptions"):
+        from app.models.tours import TourDiscountRedemption
+
+        for discount_row, discount_amount in pricing_details["discount_redemptions"]:
+            db.add(TourDiscountRedemption(
+                discount_id=discount_row.id,
+                booking_id=booking.id,
+                discount_amount=discount_amount,
+                currency=currency or "USD",
+            ))
     if resolved_attribution:
         resolved_attribution.booking_id = booking.id
         resolved_attribution.status = "consumed"

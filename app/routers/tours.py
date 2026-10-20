@@ -75,6 +75,7 @@ from app.services.tours import (
     list_all_discounts,
     list_calendar,
     list_discount_history,
+    list_discount_usage,
     list_date_prices,
     list_discounts,
     _is_supplier_owned_discount,
@@ -782,3 +783,13 @@ def global_discount_history(
 ):
     _reject_supplier_global_discount_access(current_user)
     return {"status": "success", "data": list_discount_history(db, discount_id)}
+
+
+@discounts_router.get("/{discount_id}/usage")
+def global_discount_usage(
+    discount_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission(VIEW)),
+):
+    _reject_supplier_global_discount_access(current_user)
+    return {"status": "success", "data": list_discount_usage(db, discount_id)}

@@ -435,6 +435,29 @@ class TourDiscountHistory(Base):
     changed_by_user = relationship("User", foreign_keys=[changed_by])
 
 
+class TourDiscountRedemption(Base):
+    """Immutable link between an applied offer and the booking that used it.
+
+    ``TourDiscount.used_count`` remains the fast aggregate used for usage
+    limits.  This table provides the auditable answer to who used that count.
+    """
+
+    __tablename__ = "tour_discount_redemptions"
+    __table_args__ = (
+        UniqueConstraint("discount_id", "booking_id", name="uq_tour_discount_redemption_booking"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    discount_id = Column(Integer, ForeignKey("tour_discounts.id"), nullable=False, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=False, index=True)
+    discount_amount = Column(Numeric(12, 2), nullable=False)
+    currency = Column(String(10), nullable=False, default="USD")
+    applied_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    discount = relationship("TourDiscount", foreign_keys=[discount_id])
+    booking = relationship("Booking", foreign_keys=[booking_id])
+
+
 class TourGroupDiscountTier(Base):
     """Supplier-defined group-size discount, scoped to the whole Tour (not a
     single TourPricing slab). When a booking's total traveller count

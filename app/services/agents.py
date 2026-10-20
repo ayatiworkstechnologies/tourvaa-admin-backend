@@ -366,7 +366,7 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
     existing_invoicing = getattr(item, "invoicing", None)
     if actor.id == item.user_id and existing_invoicing and invoicing_data:
         bank_is_locked = any(getattr(existing_invoicing, key, None) for key in bank_fields)
-        if bank_is_locked and not existing_invoicing.bank_edit_unlocked_at:
+        if bank_is_locked and not getattr(existing_invoicing, "bank_edit_unlocked_at", None):
             changed_bank_fields = []
             for key in bank_fields.intersection(invoicing_data):
                 submitted = invoicing_data[key]

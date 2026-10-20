@@ -5,6 +5,9 @@ from sqlalchemy.orm import Session
 from app.services.audit import log_audit
 from app.services.notifications import notify_admins
 from app.models.bookings import Booking
+from app.models.customers import Customer
+from app.models.agents import Agent
+from app.models.suppliers import Supplier
 from app.models.reviews import TourReview
 from app.models.users import User
 from app.schemas.reviews import ReviewCreate, ReviewModerate
@@ -16,6 +19,7 @@ def _serialize(review: TourReview) -> dict:
     return {
         "id": review.id,
         "booking_id": review.booking_id,
+        "booking_code": review.booking.booking_code if review.booking else None,
         "customer_id": review.customer_id,
         "customer_name": customer_name,
         "tour_id": review.tour_id,
@@ -88,6 +92,55 @@ def list_reviews(db: Session, page: int, limit: int, status: str = ""):
     if status:
         query = query.filter(TourReview.status == status)
     return simple_paginate(query.order_by(TourReview.created_at.desc()), page, limit, _serialize)
+
+
+def list_portal_reviews(db: Session, actor: User) -> dict:
+    """Reviews visible to the authenticated portal role.
+
+    Customers see their own moderation state and completed trips still eligible
+    for a review. Agents and suppliers see only approved public feedback for
+    bookings in their own commercial scope; they cannot submit as travellers.
+    """
+    role = ((actor.role.slug if actor.role else "") or actor.user_type or "").lower()
+    if "customer" in role:
+        customer = db.query(Customer).filter(Customer.user_id == actor.id).first()
+        if not customer:
+            raise HTTPException(status_code=403, detail="Customer profile not found")
+        reviews = db.query(TourReview).filter(TourReview.customer_id == customer.id).order_by(TourReview.created_at.desc()).all()
+        reviewed_booking_ids = {review.booking_id for review in reviews}
+        eligible = (
+            db.query(Booking)
+            .filter(Booking.customer_id == customer.id, Booking.booking_status == "completed")
+            .order_by(Booking.updated_at.desc())
+            .all()
+        )
+        return {
+            "role": "customer",
+            "reviews": [_serialize(review) for review in reviews],
+            "eligible_bookings": [
+                {"id": booking.id, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date}
+                for booking in eligible if booking.id not in reviewed_booking_ids
+            ],
+        }
+
+    query = db.query(TourReview).join(Booking, TourReview.booking_id == Booking.id).filter(TourReview.status == "approved")
+    if "agent" in role:
+        agent = db.query(Agent).filter(Agent.user_id == actor.id).first()
+        if not agent:
+            raise HTTPException(status_code=403, detail="Agent profile not found")
+        query = query.filter(Booking.agent_id == agent.id)
+        portal_role = "agent"
+    elif "supplier" in role:
+        supplier = db.query(Supplier).filter(Supplier.user_id == actor.id).first()
+        if not supplier:
+            raise HTTPException(status_code=403, detail="Supplier profile not found")
+        query = query.filter(Booking.supplier_id == supplier.id)
+        portal_role = "supplier"
+    else:
+        raise HTTPException(status_code=403, detail="This endpoint is available in customer, agent, and supplier portals only")
+
+    reviews = query.order_by(TourReview.created_at.desc()).all()
+    return {"role": portal_role, "reviews": [_serialize(review) for review in reviews], "eligible_bookings": []}
 
 
 def moderate_review(db: Session, review_id: int, data: ReviewModerate, actor: User, request=None) -> dict:

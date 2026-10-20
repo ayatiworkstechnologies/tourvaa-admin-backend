@@ -17,6 +17,7 @@ from app.models.tours import (
     TourDatePrice,
     TourDiscount,
     TourDiscountHistory,
+    TourDiscountRedemption,
     TourExclusion,
     TourExtension,
     TourGalleryImage,
@@ -1063,6 +1064,52 @@ def list_discount_history(db: Session, disc_id: int) -> list[dict]:
         .order_by(TourDiscountHistory.version_number.desc())
         .all()
     ]
+
+
+def list_discount_usage(db: Session, disc_id: int) -> dict:
+    """Return booked redemptions for the admin audit view.
+
+    Older discounts only have an aggregate ``used_count``.  We expose the
+    difference explicitly instead of guessing who used those historical
+    redemptions from mutable booking fields.
+    """
+    discount = db.query(TourDiscount).filter(TourDiscount.id == disc_id).first()
+    if not discount:
+        raise HTTPException(status_code=404, detail="Discount not found")
+
+    redemptions = (
+        db.query(TourDiscountRedemption)
+        .options(joinedload(TourDiscountRedemption.booking))
+        .filter(TourDiscountRedemption.discount_id == disc_id)
+        .order_by(TourDiscountRedemption.applied_at.desc(), TourDiscountRedemption.id.desc())
+        .all()
+    )
+    items = []
+    for redemption in redemptions:
+        booking = redemption.booking
+        if not booking:
+            continue
+        customer_name = booking.customer.full_name if booking.customer else None
+        agent_name = booking.agent.agent_name if booking.agent else None
+        items.append({
+            "id": redemption.id,
+            "booking_id": booking.id,
+            "booking_code": booking.booking_code,
+            "booking_source": booking.booking_source,
+            "customer_name": customer_name,
+            "agent_name": agent_name,
+            "discount_amount": redemption.discount_amount,
+            "currency": redemption.currency,
+            "applied_at": redemption.applied_at,
+            "booking_status": booking.booking_status,
+        })
+    tracked_count = len(items)
+    return {
+        "items": items,
+        "tracked_count": tracked_count,
+        "used_count": discount.used_count or 0,
+        "unattributed_historical_count": max(0, (discount.used_count or 0) - tracked_count),
+    }
 
 
 def create_discount(db: Session, tour_id: int, data: DiscountPayload, actor: User, request: Request | None = None) -> dict:

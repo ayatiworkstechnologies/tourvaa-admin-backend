@@ -16,6 +16,11 @@ def submit_review(data: ReviewCreate, request: Request, db: Session = Depends(ge
     return {"status": "success", "message": "Thanks for your review - it'll appear once approved.", "data": result}
 
 
+@router.get("/portal/reviews")
+def portal_reviews(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    return {"status": "success", "data": service.list_portal_reviews(db, current_user)}
+
+
 @router.get("/admin/reviews")
 def list_reviews(pagination=Depends(pagination_params), status: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("tours.view", "view-tours"))):
     return {"status": "success", **service.list_reviews(db, page=pagination["page"], limit=pagination["limit"], status=status)}
