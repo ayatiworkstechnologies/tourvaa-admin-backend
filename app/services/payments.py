@@ -1,5 +1,6 @@
 import logging
 from datetime import timedelta
+from decimal import Decimal
 from math import ceil
 from typing import Optional
 
@@ -257,6 +258,20 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
         notify_booking_received_after_payment(db, booking)
 
 
+def active_authorized_amount(db: Session, booking_id: int) -> Decimal:
+    """Funds currently held by the gateway but not captured yet.
+
+    A gateway authorization must not be counted as captured revenue, but it
+    does cover the customer's balance and therefore must prevent a duplicate
+    Pay Now checkout for the same amount.
+    """
+    rows = db.query(Payment.authorized_amount, Payment.captured_amount).filter(
+        Payment.booking_id == booking_id,
+        Payment.payment_status == "authorized",
+    ).all()
+    return sum((max(money(0), money(authorized) - money(captured)) for authorized, captured in rows), money(0))
+
+
 def _sync_customer_payment_fields(db: Session, customer: Customer) -> None:
     from sqlalchemy import func as sqlfunc
     paid = db.query(sqlfunc.coalesce(sqlfunc.sum(Payment.captured_amount), 0)).filter(Payment.customer_id == customer.id, Payment.payment_status.notin_(["voided", "failed"])).scalar()
@@ -398,7 +413,11 @@ def authorize_payment(db: Session, data: PaymentAuthorize, actor: Optional[User]
     if existing:
         return serialize_payment(existing, detail=True)
     amount = money(data.amount)
-    outstanding = money(booking.amount_pending if booking.amount_pending is not None else booking.final_amount or booking.total_cost or 0)
+    outstanding = max(
+        money(0),
+        money(booking.amount_pending if booking.amount_pending is not None else booking.final_amount or booking.total_cost or 0)
+        - active_authorized_amount(db, booking.id),
+    )
     if amount > outstanding:
         raise HTTPException(status_code=400, detail=f"Authorization amount cannot exceed the booking's outstanding balance of {outstanding:.2f}")
     payment = Payment(booking_id=booking.id, customer_id=booking.customer_id, created_by=actor.id if actor else None, payment_method=data.payment_method, payment_type=data.payment_type, gateway=data.gateway, gateway_payment_id=data.gateway_payment_id, gateway_order_id=data.gateway_order_id, idempotency_key=data.idempotency_key, total_amount=money(booking.final_amount or booking.total_cost), authorized_amount=amount, captured_amount=money(0), paid_amount=money(0), pending_amount=money(booking.final_amount or booking.total_cost), payment_status="authorized", notes=data.notes)
