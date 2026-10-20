@@ -530,7 +530,14 @@ def stripe_confirm_return(body: StripeReturnConfirmRequest, db: Session = Depend
     return {
         "status": "success",
         "message": "Stripe payment authorized; it will be captured only after supplier acceptance",
-        "data": {"payment_id": payment.id, "booking_id": booking.id, "payment_status": payment.payment_status},
+        "data": {
+            "payment_id": payment.id,
+            "payment_code": payment.payment_code,
+            "booking_id": booking.id,
+            "payment_status": payment.payment_status,
+            "gateway": "stripe",
+            "gateway_reference": payment.gateway_payment_id or payment.gateway_order_id,
+        },
     }
 
 @router.post("/paypal/create-order")
@@ -588,9 +595,9 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
     _ensure_booking_payment_access(payment.booking, current_user)
     if payment.payment_status == "paid":
         _ensure_payment_invoice(db, payment, actor=current_user)
-        return {"status": "success", "message": "PayPal payment was already captured", "data": {"paypal_status": "COMPLETED", "payment_id": payment.id}}
+        return {"status": "success", "message": "PayPal payment was already captured", "data": {"paypal_status": "COMPLETED", "payment_id": payment.id, "payment_code": payment.payment_code, "gateway": "paypal", "gateway_reference": payment.gateway_payment_id or payment.gateway_order_id}}
     if payment.payment_status == "authorized":
-        return {"status": "success", "message": "PayPal payment is already authorized", "data": {"paypal_status": "COMPLETED", "payment_id": payment.id}}
+        return {"status": "success", "message": "PayPal payment is already authorized", "data": {"paypal_status": "COMPLETED", "payment_id": payment.id, "payment_code": payment.payment_code, "gateway": "paypal", "gateway_reference": payment.gateway_payment_id or payment.gateway_order_id}}
 
     paypal = get_paypal(db)
     captured = paypal.authorize_order(order_id=body.order_id, idempotency_key=f"authorize:{payment.id}")
@@ -611,7 +618,7 @@ def paypal_capture(body: PayPalCaptureRequest, db: Session = Depends(get_db), cu
         expires_at = datetime.fromisoformat(expiration.replace("Z", "+00:00")) if expiration else None
         record_gateway_authorization(db, payment, gateway_reference=authorization.get("id", ""), expires_at=expires_at, actor=current_user)
 
-    return {"status": "success", "message": f"PayPal authorization status: {status}; capture follows supplier acceptance", "data": {"paypal_status": status, "payment_id": payment.id}}
+    return {"status": "success", "message": f"PayPal authorization status: {status}; capture follows supplier acceptance", "data": {"paypal_status": status, "payment_id": payment.id, "payment_code": payment.payment_code, "gateway": "paypal", "gateway_reference": payment.gateway_payment_id or payment.gateway_order_id}}
 
 
 @router.post("/paypal/webhook")

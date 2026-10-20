@@ -20,6 +20,7 @@ from app.services.bookings import (
     _validate_supplier_lifecycle_transition,
     create_booking,
     notify_booking_received_after_payment,
+    _has_secured_booking_funds,
 )
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
 from app.routers.payments_gateway import _ensure_booking_payment_access, _require_captured_amount_matches_pending, _validate_payment_currency, _validate_payment_request
@@ -611,7 +612,14 @@ def test_supplier_assignment_email_requires_a_settled_booking_total():
     assert _is_booking_fully_paid(SimpleNamespace(payment_status="partially_paid", final_amount=100, total_cost=100, amount_paid=100)) is False
 
 
-def test_booking_received_email_requires_a_deposit_or_full_payment(monkeypatch):
+def test_supplier_assignment_accepts_authorized_or_partially_paid_funds():
+    assert _has_secured_booking_funds(SimpleNamespace(payment_status="authorized")) is True
+    assert _has_secured_booking_funds(SimpleNamespace(payment_status="partially_paid")) is True
+    assert _has_secured_booking_funds(SimpleNamespace(payment_status="paid")) is True
+    assert _has_secured_booking_funds(SimpleNamespace(payment_status="pending")) is False
+
+
+def test_booking_received_email_requires_secured_funds(monkeypatch):
     from app.services import bookings as booking_service
     from app.services import notifications as notification_service
     from app.services import notification_delivery
@@ -633,13 +641,22 @@ def test_booking_received_email_requires_a_deposit_or_full_payment(monkeypatch):
         customer=SimpleNamespace(full_name="Unpaid Customer", email="unpaid@example.test", user_id=None),
         agent=None, supplier=None,
     )
+    authorized_booking = SimpleNamespace(
+        id=103, payment_status="authorized", final_amount=100, total_cost=100, amount_paid=0,
+        customer=SimpleNamespace(full_name="Authorized Customer", email="authorized@example.test", user_id=None),
+        booking_code="TV-103", tour_name="Authorized Tour", tour_date="2027-06-02",
+        adults_count=1, currency="INR", agent=None, supplier=None,
+    )
 
     notify_booking_received_after_payment(SimpleNamespace(), unpaid_booking)
     notify_booking_received_after_payment(SimpleNamespace(), paid_booking)
+    notify_booking_received_after_payment(SimpleNamespace(), authorized_booking)
 
-    assert len(sent) == 1
+    assert len(sent) == 2
     assert sent[0][0][1] == "booking_confirmation"
     assert sent[0][0][-1] == "paid@example.test"
+    assert sent[1][0][1] == "booking_confirmation"
+    assert sent[1][0][-1] == "authorized@example.test"
 
 
 def test_agent_booking_does_not_email_selected_customer_or_lead_traveller():

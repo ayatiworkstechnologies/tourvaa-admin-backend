@@ -437,6 +437,8 @@ def authorize_payment(db: Session, data: PaymentAuthorize, actor: Optional[User]
     from app.services.notifications import notify_admins
     notify_admins(db, notification_type="payment_authorized", title="Payment authorized", message=f"Payment hold created for booking {booking.booking_code}", entity_type="payment", entity_id=payment.id)
     db.commit()
+    from app.services.bookings import notify_booking_received_after_payment
+    notify_booking_received_after_payment(db, booking)
     db.refresh(payment)
     return serialize_payment(payment, detail=True)
 
@@ -475,6 +477,9 @@ def record_gateway_authorization(db: Session, payment: Payment, *, gateway_refer
         if payment.booking.booking_status == "pending_payment":
             payment.booking.booking_status = "pending_supplier_acceptance" if payment.booking.supplier_id else "payment_authorized"
     db.commit()
+    if payment.booking:
+        from app.services.bookings import notify_booking_received_after_payment
+        notify_booking_received_after_payment(db, payment.booking)
     db.refresh(payment)
     return payment
 
