@@ -20,7 +20,10 @@ def _money(value: Decimal) -> Decimal:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    default = bind.execute(sa.text("SELECT value FROM app_settings WHERE key = 'default_admin_markup_percentage' LIMIT 1")).scalar() or "0"
+    # ``key`` is reserved syntax in MySQL. Quote both settings columns so the
+    # data migration works on the production MySQL database as well as local
+    # development databases.
+    default = bind.execute(sa.text("SELECT `value` FROM app_settings WHERE `key` = 'default_admin_markup_percentage' LIMIT 1")).scalar() or "0"
     rows = bind.execute(sa.text("""
         SELECT p.id, p.adult_price, p.child_price, p.commission_percentage,
                p.admin_markup_value, t.admin_markup_percentage AS tour_markup
