@@ -35,6 +35,7 @@ def _serialize_request(r: CancellationRequest) -> dict:
         "status": r.status,
         "refund_percentage": str(r.refund_percentage),
         "refund_amount": str(r.refund_amount),
+        "refund_processed_amount": str(r.refund_processed_amount or 0),
         "currency": r.currency,
         "admin_notes": r.admin_notes,
         "reviewed_by": r.reviewed_by,
@@ -516,7 +517,7 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
     from app.schemas.payments import RefundRequest as PaymentRefundRequest
     from app.services.payments import process_refund as process_payment_refund
 
-    remaining = money(req.refund_amount)
+    remaining = max(money(0), money(req.refund_amount) - money(req.refund_processed_amount))
     gateway_refund_ids: list[str] = []
     if remaining > 0:
         payments = (
@@ -541,6 +542,12 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
             if refund_result.get("gateway_refund_id"):
                 gateway_refund_ids.append(refund_result["gateway_refund_id"])
             remaining -= amount
+            # Payment refund succeeded and committed. Persist request-specific
+            # progress before moving to another payment so a later retry only
+            # issues the outstanding balance.
+            req.refund_processed_amount = money(req.refund_processed_amount) + amount
+            db.commit()
+            db.refresh(req)
 
     # A live gateway refund must account for the entire approved amount. Do
     # not mark the request complete after refunding only part of it; an admin
@@ -551,6 +558,11 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
             status_code=502,
             detail=f"Refund could not cover the approved amount; {remaining} remains refundable",
         )
+    if remaining > 0 and data.gateway_refund_id:
+        # An operator supplied a gateway reference for the uncovered amount.
+        # Record it against this request, not merely as a status transition.
+        req.refund_processed_amount = money(req.refund_processed_amount) + remaining
+        remaining = money(0)
 
     req.status = "refund_processed"
     # Real gateway refund id(s) from the actual Stripe/PayPal call, not an

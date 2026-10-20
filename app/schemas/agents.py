@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.schemas.auth import validate_strong_password
+from app.schemas.validation import normalize_e164_phone
 from app.utils.operations import ACTIVE_STATUSES, APPROVAL_STATUSES, VALUE_TYPES
 
 
@@ -62,7 +63,7 @@ class AgentContactUpdate(BaseModel):
     last_name: str | None = Field(default=None, max_length=75)
     designation: str | None = Field(default=None, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
-    email: str | None = Field(default=None, max_length=150)
+    email: EmailStr | None = None
     alternate_phone: str | None = Field(default=None, max_length=30)
     preferred_contact_method: str | None = Field(default=None, max_length=20)
 
@@ -70,6 +71,11 @@ class AgentContactUpdate(BaseModel):
     @classmethod
     def trim_optional_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("phone", "alternate_phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        return normalize_e164_phone(value)
 
 
 class AgentBusinessInfoUpdate(BaseModel):
@@ -81,7 +87,7 @@ class AgentBusinessInfoUpdate(BaseModel):
     iata_registration_number: str | None = Field(default=None, max_length=100)
     gst_tax_number: str | None = Field(default=None, max_length=100)
     trading_name: str | None = Field(default=None, max_length=150)
-    business_email: str | None = Field(default=None, max_length=150)
+    business_email: EmailStr | None = None
     website_url: str | None = Field(default=None, max_length=255)
     business_registration_number: str | None = Field(default=None, max_length=100)
 
@@ -93,7 +99,7 @@ class AgentBusinessInfoUpdate(BaseModel):
 
 class AgentInvoicingUpdate(BaseModel):
     contact_name: str | None = Field(default=None, max_length=150)
-    email: str | None = Field(default=None, max_length=150)
+    email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=30)
     preferred_payment_method: str | None = Field(default=None, max_length=30)
     account_name: str | None = Field(default=None, max_length=150)
@@ -113,6 +119,11 @@ class AgentInvoicingUpdate(BaseModel):
     @classmethod
     def trim_optional_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        return normalize_e164_phone(value)
 
 
 class AgentUpdate(BaseModel):

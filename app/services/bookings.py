@@ -2881,6 +2881,14 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
     # issue the customer-facing final confirmation.
     _set_status(db, booking, "supplier_accepted", actor, "supplier", data.reason or "Supplier accepted booking")
 
+    # Persist the supplier's operational decision before any gateway, ledger,
+    # notification or email work.  Those integrations must not turn a valid
+    # acceptance into a 500 (or roll it back) when a secondary service is
+    # temporarily unavailable.
+    log_audit(db, actor=actor, action="supplier_accept_booking", entity_type="booking", entity_id=booking.id, request=request)
+    db.commit()
+    db.refresh(booking)
+
     from app.services.notifications import enqueue_notification, notify_admins
     from app.models.payments import Payment
     from app.schemas.payments import PaymentCapture
@@ -2892,10 +2900,18 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
     for payment in authorized_payments:
         amount = money(payment.authorized_amount) - money(payment.captured_amount)
         if amount > 0:
-            if payment.gateway in {"stripe", "paypal"}:
-                capture_gateway_authorized_payment(db, payment, actor=actor, request=request)
-            else:
-                capture_payment(db, payment.id, PaymentCapture(amount=amount, notes="Captured after supplier acceptance"), actor=actor, request=request)
+            try:
+                if payment.gateway in {"stripe", "paypal"}:
+                    capture_gateway_authorized_payment(db, payment, actor=actor, request=request)
+                else:
+                    capture_payment(db, payment.id, PaymentCapture(amount=amount, notes="Captured after supplier acceptance"), actor=actor, request=request)
+            except Exception:
+                # Supplier acceptance remains authoritative.  Capture failures
+                # are operational follow-up work, never a reason to reject an
+                # accepted tour or return a generic server error to the supplier.
+                db.rollback()
+                logger.exception("Payment capture after supplier acceptance failed for booking %s and payment %s", booking.id, payment.id)
+                continue
             try:
                 generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id, payment_id=payment.id), actor, request)
             except Exception as error:
@@ -2933,70 +2949,46 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
             except Exception as error:
                 logger.warning("Affiliate conversion recording failed for booking %s: %s", booking.id, error)
 
-    notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
-    if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
-        enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_confirmed", title="Booking confirmed", message=f"Booking {booking.booking_code} is confirmed", entity_type="booking", entity_id=booking.id)
-    log_audit(db, actor=actor, action="supplier_accept_booking", entity_type="booking", entity_id=booking.id, request=request)
-    db.commit(); db.refresh(booking)
+    try:
+        notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
+        if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
+            enqueue_notification(db, user_id=booking.customer.user_id, notification_type="supplier_accepted", title="Supplier accepted your booking", message=f"Booking {booking.booking_code} is awaiting Tourvaa confirmation", entity_type="booking", entity_id=booking.id)
 
-    # 1. Booking Party Notification (Customer / Agent): Booking is Confirmed
-    recipient = _booking_email_recipient(booking)
-    if recipient:
-        from app.utils.email_templates import booking_confirmed_email
-        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-        _send_booking_email(
-            db, "booking_confirmed",
-            {"name": recipient[0], "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-             "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
-             "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
-            f"Your booking is confirmed - {booking.booking_code}",
-            booking_confirmed_email(recipient[0], booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
-            recipient[1],
-            event="booking_confirmed",
-            entity_id=booking.id,
-            recipient_type="customer",
+        recipient = _booking_email_recipient(booking)
+        if recipient:
+            from app.utils.email_templates import booking_status_update_email
+            login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+            _send_booking_email(
+                db, "booking_status_update",
+                {"name": recipient[0], "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+                 "new_status": "Supplier Accepted — Awaiting Tourvaa Confirmation", "reason": "", "login_url": login_url,
+                 "button_text": "View booking", "button_url": login_url},
+                f"Supplier accepted your booking - {booking.booking_code}",
+                booking_status_update_email(recipient[0], booking.booking_code, booking.tour_name, "supplier_accepted", "Awaiting Tourvaa confirmation.", login_url),
+                recipient[1], event="supplier_accepted", entity_id=booking.id, recipient_type="customer",
+            )
+
+        _email_agent_booking_status(
+            db, booking, "supplier_accepted", "Supplier accepted the booking. It is awaiting Tourvaa confirmation.", event="supplier_accepted",
         )
 
-    # 2. Supplier Notification: Confirmation / Record
-    if booking.supplier and booking.supplier.user and booking.supplier.user.email:
-        from app.utils.email_templates import supplier_booking_confirmed_email
-        portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
-        customer_name = booking.customer.full_name if booking.customer else "Customer"
-        _send_booking_email(
-            db, "supplier_booking_confirmed",
-            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
-            f"Booking confirmed - {booking.booking_code}",
-            supplier_booking_confirmed_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
-            booking.supplier.user.email,
-            event="booking_confirmed",
-            entity_id=booking.id,
-            recipient_type="supplier",
+        from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+        from app.utils.email_templates import admin_booking_event_email
+        admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
+        admin_detail = f"Supplier accepted booking {booking.booking_code}. It awaits Tourvaa final confirmation."
+        dispatch_admin_lifecycle_emails(
+            db, event="supplier_accepted", entity_type="booking", entity_id=booking.id,
+            template_key="admin_booking_event",
+            values={"event_title": "Supplier accepted booking", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "Review and confirm booking", "button_url": admin_url},
+            fallback_subject=f"Supplier accepted booking - {booking.booking_code}",
+            fallback_html=admin_booking_event_email("Supplier accepted booking", admin_detail, booking.booking_code, booking.tour_name, admin_url),
         )
-
-    # 3. Agent Notification
-    _email_agent_booking_status(
-        db,
-        booking,
-        "confirmed",
-        "Great news! Your Tourvaa booking is now confirmed.",
-        event="booking_confirmed",
-    )
-
-    # 4. Tourvaa Admin: Booking Confirmed by Supplier
-    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
-    from app.utils.email_templates import admin_booking_event_email
-    admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
-    admin_detail = f"Supplier accepted booking {booking.booking_code}."
-    dispatch_admin_lifecycle_emails(
-        db,
-        event="supplier_accepted",
-        entity_type="booking",
-        entity_id=booking.id,
-        template_key="admin_booking_event",
-        values={"event_title": "Booking Confirmed by Supplier", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "Review and confirm booking", "button_url": admin_url},
-        fallback_subject=f"Booking Confirmed by Supplier - {booking.booking_code}",
-        fallback_html=admin_booking_event_email("Booking Confirmed by Supplier", admin_detail, booking.booking_code, booking.tour_name, admin_url),
-    )
+        db.commit()
+    except Exception:
+        # The booking was already committed above.  Keep notification/email
+        # failures observable in server logs without breaking the supplier UI.
+        db.rollback()
+        logger.exception("Post-acceptance notifications failed for booking %s", booking.id)
 
     return serialize_booking_for_actor(db, booking, actor)
 

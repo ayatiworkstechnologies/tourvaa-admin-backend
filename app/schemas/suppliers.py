@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.schemas.auth import validate_strong_password
+from app.schemas.validation import normalize_e164_phone
 from app.utils.operations import ACTIVE_STATUSES
 
 # The supplier domain was migrated (20260724_0034) onto its own canonical,
@@ -75,9 +76,14 @@ class SupplierContactUpdate(BaseModel):
     last_name: str | None = Field(default=None, max_length=75)
     designation: str | None = Field(default=None, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
-    email: str | None = Field(default=None, max_length=150)
+    email: EmailStr | None = None
     alternate_phone: str | None = Field(default=None, max_length=30)
     preferred_contact_method: str | None = Field(default=None, max_length=20)
+
+    @field_validator("phone", "alternate_phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        return normalize_e164_phone(value)
 
 class SupplierBusinessInfoUpdate(BaseModel):
     years_in_business: int | None = Field(default=None, ge=0)
@@ -88,12 +94,12 @@ class SupplierBusinessInfoUpdate(BaseModel):
     gst_tax_number: str | None = Field(default=None, max_length=100)
     business_registration_number: str | None = Field(default=None, max_length=100)
     trading_name: str | None = Field(default=None, max_length=150)
-    business_email: str | None = Field(default=None, max_length=150)
+    business_email: EmailStr | None = None
     website_url: str | None = Field(default=None, max_length=255)
 
 class SupplierInvoicingUpdate(BaseModel):
     contact_name: str | None = Field(default=None, max_length=150)
-    email: str | None = Field(default=None, max_length=150)
+    email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=30)
     preferred_payment_method: str | None = Field(default=None, max_length=30)
     account_name: str | None = Field(default=None, max_length=150)
@@ -109,6 +115,11 @@ class SupplierInvoicingUpdate(BaseModel):
     billing_city: str | None = Field(default=None, max_length=100)
     billing_state: str | None = Field(default=None, max_length=100)
     billing_postal_code: str | None = Field(default=None, max_length=30)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        return normalize_e164_phone(value)
 
 class SupplierUpdate(BaseModel):
     supplier_name: str | None = Field(default=None, max_length=150)

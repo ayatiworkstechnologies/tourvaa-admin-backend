@@ -242,6 +242,20 @@ def register_unified_user(db: Session, data):
     else:
         country = db.query(Country).filter(Country.country_code == data.country_iso).first()
 
+    # The browser's country selector sends the ISO country and calling code as
+    # one choice.  Enforce that relationship when the country is in Tourvaa's
+    # geo catalogue so a direct API caller cannot pair (for example) India
+    # with an unrelated calling code.  A missing catalogue row remains valid
+    # for international supplier registration.
+    if country:
+        expected_iso = (getattr(country, "country_code", "") or "").strip().upper()
+        expected_code = str(getattr(country, "phone_code", "") or "").strip()
+        expected_code = expected_code if expected_code.startswith("+") else f"+{expected_code}" if expected_code else ""
+        if expected_iso and data.country_iso != expected_iso:
+            raise HTTPException(status_code=422, detail="Selected country does not match country_iso")
+        if expected_code and data.country_code != expected_code:
+            raise HTTPException(status_code=422, detail="Selected country does not match country_code")
+
     role_slug = {"CUSTOMER": "customer", "AGENT": "agent-reseller", "SUPPLIER": "supplier", "AFFILIATE": "affiliate"}[data.account_type]
     role = db.query(Role).filter(Role.slug == role_slug, Role.is_active == True).first()
     if not role:

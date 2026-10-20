@@ -30,7 +30,7 @@ class CheckoutSession(Base):
     data = Column(JSON, nullable=True)
 
     # Set once a booking is created from this session
-    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id"), nullable=True, unique=True)
 
     expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

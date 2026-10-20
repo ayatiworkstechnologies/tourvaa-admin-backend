@@ -7,7 +7,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ from app.services.reviews import get_review_stats, list_tour_reviews
 from app.services.settings import sanitize_public_contact_setting
 from app.services.viator import build_generic_affiliate_url, is_configured as is_viator_configured, search_day_trips
 from app.schemas.cms import slugify
+from app.schemas.validation import normalize_e164_phone
 from app.utils.ratelimit import check_rate_limit
 from app.models.tours import (
     TourAccommodationExtra,
@@ -65,6 +66,11 @@ class ContactMessageRequest(BaseModel):
     enquiry_type: str = Field(default="General enquiry", max_length=50)
     subject: str = Field(min_length=1, max_length=200)
     message: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str):
+        return normalize_e164_phone(value) or ""
 
 
 class PublicPriceQuoteRequest(BaseModel):
@@ -395,6 +401,8 @@ def public_tours(
     search: str = Query(default=""),
     country: str = Query(default=""),
     city: str = Query(default=""),
+    destination: str = Query(default=""),
+    min_rating: float | None = Query(default=None, ge=0, le=5),
     category: str = Query(default=""),
     subcategory: str = Query(default=""),
     min_days: str = Query(default=""),
@@ -449,6 +457,24 @@ def public_tours(
         ci = db.query(City).filter(City.city_name.ilike(city)).first()
         if ci:
             query = query.filter(Tour.city_id == ci.id)
+    if destination:
+        term = destination.strip()
+        if term:
+            pat = f"%{term}%"
+            query = query.filter(or_(
+                Tour.country.has(Country.country_name.ilike(pat)),
+                Tour.city.has(City.city_name.ilike(pat)),
+                Tour.start_location.ilike(pat),
+                Tour.finish_location.ilike(pat),
+            ))
+    if min_rating is not None:
+        from app.models.reviews import TourReview
+        rated_tours = (
+            db.query(TourReview.tour_id)
+            .group_by(TourReview.tour_id)
+            .having(func.avg(TourReview.rating) >= min_rating)
+        )
+        query = query.filter(Tour.id.in_(rated_tours))
     if category:
         cat = db.query(TourCategory).filter(
             or_(TourCategory.slug == category, TourCategory.category_name.ilike(category))
@@ -543,6 +569,8 @@ def public_tours(
             "search": search,
             "country": country,
             "city": city,
+            "destination": destination,
+            "min_rating": min_rating,
             "category": category,
             "min_days": min_days,
             "max_days": max_days,

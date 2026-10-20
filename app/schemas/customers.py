@@ -2,6 +2,7 @@ import re
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
+from app.schemas.validation import normalize_e164_phone, normalize_optional_email
 
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,19}$")
 CUSTOMER_STATUSES = {"active", "inactive", "blocked"}
@@ -265,6 +266,16 @@ class SavedTravellerRequest(BaseModel):
         if value is None:
             return value
         return value.strip()
+
+    @field_validator("email")
+    @classmethod
+    def validate_traveller_email(cls, value: str):
+        return normalize_optional_email(value) or ""
+
+    @field_validator("phone")
+    @classmethod
+    def validate_traveller_phone(cls, value: str):
+        return normalize_e164_phone(value) or ""
 
     @field_validator("traveller_type")
     @classmethod

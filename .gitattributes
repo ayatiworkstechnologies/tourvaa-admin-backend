@@ -1,0 +1,2 @@
+# Linux container entrypoints must retain a POSIX shebang after checkout.
+*.sh text eol=lf

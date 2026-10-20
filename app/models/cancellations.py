@@ -38,6 +38,9 @@ class CancellationRequest(Base):
     # Calculated refund
     refund_percentage = Column(Numeric(5, 2), default=0, nullable=False)
     refund_amount = Column(Numeric(12, 2), default=0, nullable=False)
+    # Amount successfully refunded specifically for this cancellation request.
+    # Payment-level refunded totals can include unrelated adjustments.
+    refund_processed_amount = Column(Numeric(12, 2), default=0, nullable=False)
     currency = Column(String(10), default="USD", nullable=False)
 
     # Admin decision

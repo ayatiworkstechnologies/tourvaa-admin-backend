@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.schemas.auth import validate_strong_password
+from app.schemas.validation import normalize_e164_phone
 from app.utils.operations import ACTIVE_STATUSES, APPROVAL_STATUSES
 
 
@@ -59,7 +60,7 @@ class AffiliateMarketingInfoUpdate(BaseModel):
 
 class AffiliateInvoicingUpdate(BaseModel):
     contact_name: str | None = Field(default=None, max_length=150)
-    email: str | None = Field(default=None, max_length=150)
+    email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=30)
     preferred_payment_method: str | None = Field(default=None, max_length=30)
     account_name: str | None = Field(default=None, max_length=150)
@@ -75,6 +76,11 @@ class AffiliateInvoicingUpdate(BaseModel):
     billing_state: str | None = Field(default=None, max_length=100)
     billing_postal_code: str | None = Field(default=None, max_length=30)
 
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        return normalize_e164_phone(value)
+
 
 class AffiliateUpdate(BaseModel):
     business_type: str | None = Field(default=None, max_length=75)
@@ -89,6 +95,11 @@ class AffiliateUpdate(BaseModel):
     commission_percentage: float | None = Field(default=None, ge=0, le=100)
     marketing_info: AffiliateMarketingInfoUpdate | None = None
     invoicing: AffiliateInvoicingUpdate | None = None
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        return normalize_e164_phone(value)
 
 
 class AffiliateSelfUpdate(BaseModel):
@@ -113,6 +124,11 @@ class AffiliateSelfUpdate(BaseModel):
     @classmethod
     def trim_self_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: str | None):
+        return normalize_e164_phone(value)
 
 
 class AffiliateDocumentReviewRequest(BaseModel):

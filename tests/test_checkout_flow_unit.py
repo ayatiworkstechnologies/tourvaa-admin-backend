@@ -119,6 +119,21 @@ def test_start_cannot_resume_another_users_session():
     assert db.committed is False
 
 
+def test_start_cannot_resume_a_session_for_a_different_tour():
+    row = session(tour_id=10)
+    db = _ExistingSessionDb(row)
+
+    with pytest.raises(HTTPException) as exc:
+        start_session(
+            db,
+            CheckoutStart(tour_id=99, session_key=row.session_key),
+            current_user=None,
+        )
+
+    assert exc.value.status_code == 409
+    assert db.committed is False
+
+
 def test_start_cannot_resume_expired_session():
     row = session(expires_at=utcnow() - timedelta(seconds=1))
     db = _ExistingSessionDb(row)

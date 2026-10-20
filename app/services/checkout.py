@@ -30,6 +30,19 @@ def _ensure_session_not_expired(s: CheckoutSession) -> None:
         raise HTTPException(status_code=410, detail="Checkout session has expired")
 
 
+def _bind_session_identity(db: Session, s: CheckoutSession, current_user: Optional[User]) -> None:
+    """Attach an authenticated owner and their Customer record together."""
+    if not current_user:
+        return
+    if not s.user_id:
+        s.user_id = current_user.id
+    if s.user_id == current_user.id and not s.customer_id:
+        from app.models.customers import Customer
+        customer = db.query(Customer).filter(Customer.user_id == current_user.id).first()
+        if customer:
+            s.customer_id = customer.id
+
+
 def _serialize(s: CheckoutSession) -> dict:
     return {
         "id": s.id,
@@ -83,12 +96,9 @@ def start_session(db: Session, body: CheckoutStart, current_user: Optional[User]
         if existing and existing.status == "active":
             _ensure_session_not_expired(existing)
             _ensure_session_owner(existing, current_user)
-            if current_user and not existing.user_id:
-                existing.user_id = current_user.id
-                from app.models.customers import Customer
-                customer = db.query(Customer).filter(Customer.user_id == current_user.id).first()
-                if customer:
-                    existing.customer_id = customer.id
+            if body.tour_id != existing.tour_id:
+                raise HTTPException(status_code=409, detail="Checkout session belongs to a different tour")
+            _bind_session_identity(db, existing, current_user)
             db.commit()
             db.refresh(existing)
             return _serialize(existing)
@@ -124,14 +134,9 @@ def get_session(db: Session, session_key: str, current_user: Optional[User]) -> 
     _ensure_session_not_expired(s)
     _ensure_session_owner(s, current_user)
     # Attach user to session if they just logged in
-    if current_user and not s.user_id:
-        s.user_id = current_user.id
-        from app.models.customers import Customer
-        customer = db.query(Customer).filter(Customer.user_id == current_user.id).first()
-        if customer:
-            s.customer_id = customer.id
-        db.commit()
-        db.refresh(s)
+    _bind_session_identity(db, s, current_user)
+    db.commit()
+    db.refresh(s)
     return _serialize(s)
 
 
@@ -156,12 +161,21 @@ def update_session(db: Session, session_key: str, body: CheckoutUpdate, current_
         # confirm_session books the date actually chosen, not the initial one.
         if "tour_calendar_id" in incoming:
             calendar_id = incoming.pop("tour_calendar_id")
-            s.tour_calendar_id = int(calendar_id) if calendar_id not in (None, "") else None
+            if calendar_id in (None, ""):
+                s.tour_calendar_id = None
+            else:
+                try:
+                    s.tour_calendar_id = int(calendar_id)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=422, detail="tour_calendar_id must be an integer")
+                from app.models.tours import TourCalendar
+                departure = db.query(TourCalendar).filter(TourCalendar.id == s.tour_calendar_id).first()
+                if not departure or departure.tour_id != s.tour_id:
+                    raise HTTPException(status_code=422, detail="tour_calendar_id does not belong to this tour")
         existing = dict(s.data or {})
         existing.update(incoming)
         s.data = existing
-    if current_user and not s.user_id:
-        s.user_id = current_user.id
+    _bind_session_identity(db, s, current_user)
 
     db.commit()
     db.refresh(s)
@@ -169,9 +183,13 @@ def update_session(db: Session, session_key: str, body: CheckoutUpdate, current_
 
 
 def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, current_user: User) -> dict:
-    s = db.query(CheckoutSession).filter(CheckoutSession.session_key == session_key).first()
-    if not s or s.status != "active":
+    s = db.query(CheckoutSession).filter(CheckoutSession.session_key == session_key).with_for_update().first()
+    if not s:
         raise HTTPException(status_code=404, detail="Active checkout session not found")
+    if s.status == "completed" and s.booking_id:
+        raise HTTPException(status_code=409, detail="Checkout session has already been confirmed")
+    if s.status != "active":
+        raise HTTPException(status_code=409, detail="Checkout session confirmation is already in progress")
     _ensure_session_not_expired(s)
     _ensure_session_owner(s, current_user)
     if not s.tour_id:
@@ -201,6 +219,13 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
         ):
             raise HTTPException(status_code=400, detail="A deposit is no longer available for this departure; full payment is required")
 
+    # Persist an atomic claim before create_booking(), which currently owns
+    # and commits its own transaction. A second request sees this state and
+    # cannot create another booking for the same session.
+    s.status = "confirming"
+    db.commit()
+    db.refresh(s)
+
     def _addons(raw_list):
         return [BookingAddonPayload(**a) if isinstance(a, dict) else BookingAddonPayload(id=int(a)) for a in (raw_list or [])]
 
@@ -226,7 +251,12 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
         agreed_cancellation_policy=body.agreed_cancellation_policy,
     )
 
-    booking = create_booking(db, booking_data, actor=current_user)
+    try:
+        booking = create_booking(db, booking_data, actor=current_user)
+    except Exception:
+        s.status = "active"
+        db.commit()
+        raise
     s.booking_id = booking["id"]
     s.status = "completed"
     s.step = "payment"
@@ -244,8 +274,11 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
 
         booking_row = db.query(Booking).filter(Booking.id == booking["id"]).first()
         selected_payment_amount = _minimum_deposit_amount(db, booking_row) if booking_row else selected_payment_amount
+        # Price/deposit changes after the initial eligibility check must not
+        # reject an operation that has already created a booking. Returning
+        # the authoritative full balance lets the payment step complete it.
         if selected_payment_amount >= money(booking["amount_pending"]):
-            raise HTTPException(status_code=400, detail="A deposit is no longer available for this departure; full payment is required")
+            selected_payment_amount = money(booking["amount_pending"])
 
     booking["selected_payment_amount"] = money_str(selected_payment_amount)
     return {"session": _serialize(s), "booking": booking}
