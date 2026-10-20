@@ -64,7 +64,7 @@ def booking(**overrides):
     ["pending_supplier_assignment", "payment_authorized", "pending_supplier_acceptance", "supplier_accepted"],
 )
 def test_customer_and_agent_confirmation_pending_labels_match_the_status_standard(status):
-    expected = "Booking Successful — Awaiting Tourvaa Confirmation"
+    expected = "Booking Successful - Awaiting Tourvaa Confirmation"
 
     assert _booking_status_label(status, "customer") == expected
     assert _booking_status_label(status, "agent") == expected
