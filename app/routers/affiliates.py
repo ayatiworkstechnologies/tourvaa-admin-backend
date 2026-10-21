@@ -100,10 +100,13 @@ def affiliates(
     country_id: str = Query(default=""),
     status: str = Query(default=""),
     approval_status: str = Query(default=""),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+    sort_by: str = Query(default=""),
     db: Session = Depends(get_db),
     _=Depends(require_any_permission("affiliates.view")),
 ):
-    return {"status": "success", **list_affiliates(db, params["page"], params["limit"], params["search"], country_id, status, approval_status)}
+    return {"status": "success", **list_affiliates(db, params["page"], params["limit"], params["search"], country_id, status, approval_status, start_date, end_date, sort_by)}
 
 
 @router.post("")

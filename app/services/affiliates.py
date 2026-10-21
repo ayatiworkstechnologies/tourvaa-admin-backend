@@ -101,7 +101,7 @@ def serialize_affiliate(item: Affiliate, *, mask_bank_details: bool = False):
     }
 
 
-def list_affiliates(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = ""):
+def list_affiliates(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = "", sort_by: str = ""):
     query = db.query(Affiliate)
     if search:
         pattern = f"%{search.strip()}%"
@@ -112,7 +112,17 @@ def list_affiliates(db: Session, page: int, limit: int, search: str = "", countr
         query = query.filter(Affiliate.status == status.strip().lower())
     if approval_status:
         query = query.filter(Affiliate.approval_status == approval_status.strip().lower())
-    return simple_paginate(query.order_by(Affiliate.id.desc()), page, limit, serialize_affiliate)
+    if start_date:
+        query = query.filter(Affiliate.created_at >= start_date)
+    if end_date:
+        query = query.filter(Affiliate.created_at <= f"{end_date} 23:59:59")
+    if sort_by == "oldest":
+        query = query.order_by(Affiliate.id.asc())
+    elif sort_by == "name_az":
+        query = query.order_by(Affiliate.name.asc())
+    else:
+        query = query.order_by(Affiliate.id.desc())
+    return simple_paginate(query, page, limit, serialize_affiliate)
 
 
 def get_affiliate(db: Session, affiliate_id: int):
