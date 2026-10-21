@@ -55,6 +55,12 @@ DEFAULT_EMAIL_TEMPLATES = [
         ),
     },
     {
+        "key": "otp_login",
+        "name": "One-time Login Code",
+        "subject": "Your Tourvaa verification code",
+        "body": "Hi {{name}}, use this verification code to continue: {{code}}. It expires in 10 minutes. Do not share this code with anyone.",
+    },
+    {
         "key": "registration_password_created",
         "name": "Registration Password Created",
         "subject": "Your Tourvaa account is ready to sign in",
@@ -314,6 +320,12 @@ DEFAULT_EMAIL_TEMPLATES = [
         "body": "Supplier {{supplier_name}} has submitted their profile for admin review.",
     },
     {
+        "key": "supplier_registered",
+        "name": "Supplier Registered (Admin)",
+        "subject": "New supplier registration awaiting review",
+        "body": "Supplier {{supplier_name}} completed registration and is ready for review. Review the supplier in the authenticated admin portal: {{admin_url}}",
+    },
+    {
         "key": "supplier_rejected",
         "name": "Supplier Rejected",
         "subject": "Your Tourvaa supplier profile was rejected",
@@ -330,6 +342,12 @@ DEFAULT_EMAIL_TEMPLATES = [
         "name": "Agent Submitted Verification",
         "subject": "Agent profile submitted for review",
         "body": "Agent {{agent_name}} has submitted their profile for admin review.",
+    },
+    {
+        "key": "agent_registered",
+        "name": "Agent Registered (Admin)",
+        "subject": "New agent registration awaiting review",
+        "body": "Agent {{agent_name}} completed registration and is ready for review. Review the agent in the authenticated admin portal: {{admin_url}}",
     },
     {
         "key": "agent_changes_requested",

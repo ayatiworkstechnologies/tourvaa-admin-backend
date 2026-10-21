@@ -437,6 +437,7 @@ def complete_registration(db: Session, token: str, password: str, background_tas
             supplier_id=supplier.id,
             supplier_name=supplier.supplier_name,
             user_id=user.id,
+            background_tasks=background_tasks,
         )
         notify_supplier_approval_pending(
             db,
@@ -446,30 +447,42 @@ def complete_registration(db: Session, token: str, password: str, background_tas
         )
     if agent:
         from app.utils.notification_triggers import notify_agent_registered
-        notify_agent_registered(db, agent_id=agent.id, agent_name=agent.agent_name, user_id=user.id)
+        notify_agent_registered(
+            db,
+            agent_id=agent.id,
+            agent_name=agent.agent_name,
+            user_id=user.id,
+            background_tasks=background_tasks,
+        )
     if affiliate:
         from app.utils.notification_triggers import notify_affiliate_registered
         notify_affiliate_registered(db, affiliate_id=affiliate.id, affiliate_name=affiliate.name, background_tasks=background_tasks)
     db.commit()
-    try:
-        login_url = build_portal_login_url(user)
-        subject, html = render_database_email(
-            db,
-            "registration_password_created",
-            {
-                "name": user.name,
-                "email": user.email,
-                "portal_name": portal_display_name(user),
-                "login_url": login_url,
-                "button_text": "Login to Tourvaa",
-                "button_url": login_url,
-            },
-            "Your Tourvaa account is ready to sign in",
-            registration_password_created_email(user.name, login_url),
-        )
-        try_send_email(user.email, subject, html, template_key="registration_password_created")
-    except Exception as exc:
-        logger.warning("Password-created login email failed for user id=%s: %s", user.id, exc)
+    login_url = build_portal_login_url(user)
+    name = getattr(user, "name", "")
+    email = getattr(user, "email", "")
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatch_lifecycle_email(
+        db,
+        event="customer_registered" if user.user_type == "CUSTOMER" else "partner_registration_completed",
+        entity_type="user",
+        entity_id=user.id,
+        recipient_type=user.user_type.lower(),
+        recipient_email=email,
+        template_key="registration_password_created",
+        values={
+            "name": name,
+            "email": email,
+            "portal_name": portal_display_name(user),
+            "login_url": login_url,
+            "button_text": "Login to Tourvaa",
+            "button_url": login_url,
+        },
+        fallback_subject="Your Tourvaa account is ready to sign in",
+        fallback_html=registration_password_created_email(name, login_url),
+        background_tasks=background_tasks,
+    )
+    db.commit()
     return user
 
 

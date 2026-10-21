@@ -170,15 +170,36 @@ def notify_bank_detail_edit_requested(
 # ---------------------------------------------------------------------------
 
 
-def notify_supplier_registered(db: Session, *, supplier_id: int, supplier_name: str, user_id: int | None = None):
-    notify_admins(db, notification_type="supplier_registered", title="New Supplier Registered", message=f"Supplier '{supplier_name}' has registered and is awaiting approval.", entity_type="supplier", entity_id=supplier_id)
+def notify_supplier_registered(
+    db: Session,
+    *,
+    supplier_id: int,
+    supplier_name: str,
+    user_id: int | None = None,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Tell Tourvaa operations about a verified supplier registration.
+
+    Registration must not depend on SMTP being available.  Reserve one
+    durable delivery per configured admin recipient so failures are visible
+    and retryable from the notification-delivery queue.
+    """
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
     from app.utils.email_templates import supplier_registered_email
-    email_admins(
+
+    notify_admins(db, notification_type="supplier_registered", title="New Supplier Registered", message=f"Supplier '{supplier_name}' has registered and is awaiting approval.", entity_type="supplier", entity_id=supplier_id)
+    admin_url = f"{settings.FRONTEND_URL}/admin/suppliers/{supplier_id}"
+    dispatch_admin_lifecycle_emails(
         db,
-        "supplier_registered",
-        {"supplier_name": supplier_name},
-        "New supplier registration awaiting review",
-        supplier_registered_email(supplier_name),
+        event="supplier_registered",
+        entity_type="supplier",
+        entity_id=supplier_id,
+        template_key="supplier_registered",
+        values={"supplier_name": supplier_name, "admin_url": admin_url},
+        fallback_subject="New supplier registration awaiting review",
+        fallback_html=supplier_registered_email(supplier_name),
+        background_tasks=background_tasks,
     )
     db.flush()
 
@@ -315,8 +336,32 @@ def notify_supplier_reupload_requested(db: Session, *, supplier_id: int, supplie
 # ---------------------------------------------------------------------------
 
 
-def notify_agent_registered(db: Session, *, agent_id: int, agent_name: str, user_id: int | None = None):
+def notify_agent_registered(
+    db: Session,
+    *,
+    agent_id: int,
+    agent_name: str,
+    user_id: int | None = None,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Tell Tourvaa operations about a verified agent registration."""
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+    from app.utils.email_templates import agent_submitted_verification_email
+
     notify_admins(db, notification_type="agent_registered", title="New Agent Registered", message=f"Agent/reseller '{agent_name}' has registered and is awaiting approval.", entity_type="agent", entity_id=agent_id)
+    admin_url = f"{settings.FRONTEND_URL}/admin/agents/{agent_id}"
+    dispatch_admin_lifecycle_emails(
+        db,
+        event="agent_registered",
+        entity_type="agent",
+        entity_id=agent_id,
+        template_key="agent_registered",
+        values={"agent_name": agent_name, "admin_url": admin_url},
+        fallback_subject="New agent registration awaiting review",
+        fallback_html=agent_submitted_verification_email(agent_name),
+        background_tasks=background_tasks,
+    )
     db.flush()
 
 

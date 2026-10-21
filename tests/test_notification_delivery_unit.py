@@ -134,3 +134,44 @@ def test_affiliate_lifecycle_events_use_durable_delivery(monkeypatch):
     ]
     assert all(event["recipient_email"] == "affiliate@example.test" for event in scheduled)
     assert all(event["background_tasks"] is background_tasks for event in scheduled)
+
+
+def test_supplier_and_agent_registration_reserve_durable_admin_deliveries(monkeypatch):
+    """New partner applications must remain retryable if SMTP is unavailable."""
+    from app.services import notification_delivery
+    from app.utils import notification_triggers
+
+    scheduled = []
+    monkeypatch.setattr(notification_triggers, "notify_admins", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notification_triggers, "admin_notification_recipients", lambda *_args: {"ops@example.test"})
+    monkeypatch.setattr(notification_delivery, "dispatch_lifecycle_email", lambda *args, **kwargs: scheduled.append(kwargs) or True)
+
+    background_tasks = object()
+    db = SimpleNamespace(flush=lambda: None)
+    notification_triggers.notify_supplier_registered(
+        db, supplier_id=31, supplier_name="Example Supplier", background_tasks=background_tasks
+    )
+    notification_triggers.notify_agent_registered(
+        db, agent_id=32, agent_name="Example Agent", background_tasks=background_tasks
+    )
+
+    assert [event["event"] for event in scheduled] == ["supplier_registered", "agent_registered"]
+    assert [event["recipient_email"] for event in scheduled] == ["ops@example.test", "ops@example.test"]
+    assert all(event["background_tasks"] is background_tasks for event in scheduled)
+
+
+def test_every_runtime_rendered_auth_template_has_a_seed_default():
+    """Avoid silently falling back when an auth email is made editable."""
+    from app.services.email_templates import DEFAULT_EMAIL_TEMPLATES
+
+    template_keys = {template["key"] for template in DEFAULT_EMAIL_TEMPLATES}
+    assert {
+        "email_verification",
+        "otp_login",
+        "password_reset",
+        "password_changed",
+        "registration_password_created",
+        "user_created",
+        "account_approved",
+        "account_reactivated",
+    }.issubset(template_keys)

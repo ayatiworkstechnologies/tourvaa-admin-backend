@@ -407,8 +407,8 @@ def complete_registration_request(data: CompleteRegistrationSchema, background_t
 
 
 @router.post("/create-password")
-def create_registration_password(data: CompleteRegistrationSchema, db: Session = Depends(get_db)):
-    return complete_registration_request(data, db)
+def create_registration_password(data: CompleteRegistrationSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    return complete_registration_request(data, background_tasks, db)
 
 
 @router.post("/resend-verification")

@@ -24,6 +24,9 @@ from app.utils import notification_triggers
 def test_password_creation_activates_every_registration_type(monkeypatch, user_type, profile_model):
     user = SimpleNamespace(
         id=42,
+        name="Test User",
+        email="test@example.test",
+        role=None,
         user_type=user_type,
         account_status="PENDING_PASSWORD_CREATION",
         is_active=False,
@@ -80,8 +83,12 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     monkeypatch.setattr(notification_triggers, "notify_supplier_registered", lambda *_args, **_values: None)
     monkeypatch.setattr(notification_triggers, "notify_supplier_approval_pending", lambda *_args, **_values: None)
     monkeypatch.setattr(notification_triggers, "notify_agent_registered", lambda *_args, **_values: None)
+    monkeypatch.setattr(notification_triggers, "notify_affiliate_registered", lambda *_args, **_values: None)
     from app.services import notifications as notifications_service
     monkeypatch.setattr(notifications_service, "notify_admins", lambda *_args, **_values: None)
+    from app.services import notification_delivery
+    lifecycle_deliveries = []
+    monkeypatch.setattr(notification_delivery, "dispatch_lifecycle_email", lambda *_args, **values: lifecycle_deliveries.append(values))
 
     result = auth.complete_registration(db, "raw-token", "StrongPass1!")
 
@@ -111,4 +118,7 @@ def test_password_creation_activates_every_registration_type(monkeypatch, user_t
     assert history.from_status == "PENDING_PASSWORD_CREATION"
     assert history.to_status == "ACTIVE"
     assert "activated" in history.reason
-    db.commit.assert_called_once()
+    # Activation is committed before partner/admin notification reservations,
+    # then the account-ready delivery reservation is committed separately.
+    assert db.commit.call_count >= 2
+    assert lifecycle_deliveries[0]["event"] == ("customer_registered" if user_type == "CUSTOMER" else "partner_registration_completed")
