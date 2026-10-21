@@ -1,5 +1,6 @@
 from datetime import timedelta
 import logging
+import re
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -249,8 +250,17 @@ def register_unified_user(db: Session, data):
     # for international supplier registration.
     if country:
         expected_iso = (getattr(country, "country_code", "") or "").strip().upper()
-        expected_code = str(getattr(country, "phone_code", "") or "").strip()
-        expected_code = expected_code if expected_code.startswith("+") else f"+{expected_code}" if expected_code else ""
+        # Country reference imports may store calling codes as "+91", "91",
+        # or a numeric value rendered as "91.0". Compare the digits so a
+        # correctly selected phone country never fails because of formatting.
+        raw_phone_code = str(getattr(country, "phone_code", "") or "").strip()
+        # Spreadsheet/CSV imports sometimes turn a dialing code into "91.0".
+        raw_phone_code = re.sub(r"\.0+$", "", raw_phone_code)
+        expected_digits = "".join(re.findall(r"\d", raw_phone_code))
+        expected_code = f"+{expected_digits}" if expected_digits else ""
+        # The compact registration selector chooses the phone country, ISO
+        # code, and calling code as one value. Enforce that relationship when
+        # the selected country is in the geo catalogue.
         if expected_iso and data.country_iso != expected_iso:
             raise HTTPException(status_code=422, detail="Selected country does not match country_iso")
         if expected_code and data.country_code != expected_code:
