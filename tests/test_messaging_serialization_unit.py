@@ -36,11 +36,13 @@ def test_support_message_email_links_to_the_correct_secure_inbox(monkeypatch):
     admin_url = _support_message_url(conversation_id=17, recipient_role="admin", participant_type="customer")
     customer_url = _support_message_url(conversation_id=17, recipient_role="customer", participant_type="customer")
     supplier_url = _support_message_url(conversation_id=17, recipient_role="supplier", participant_type="supplier")
+    affiliate_url = _support_message_url(conversation_id=17, recipient_role="affiliate", participant_type="affiliate")
     html = _support_message_email(sender_label="Customer portal", message_url=admin_url, body="Please review")
 
     assert admin_url == "https://tourvaa.example/admin/messages?type=customer&conversation=17"
     assert customer_url == "https://tourvaa.example/customer/support"
-    assert supplier_url == "https://tourvaa.example/supplier/messages?tab=support"
+    assert supplier_url == "https://tourvaa.example/supplier/messages"
+    assert affiliate_url == "https://tourvaa.example/affiliate/messages"
     assert "View message &amp; reply" in html
     assert "https://tourvaa.example/admin/messages?type=customer&amp;conversation=17" in html
     assert "reply securely without signing in" in html

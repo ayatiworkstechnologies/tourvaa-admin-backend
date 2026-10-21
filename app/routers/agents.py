@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -367,8 +367,8 @@ class BulkRejectAgentsRequest(BaseModel):
 
 
 @router.post("/bulk-approve")
-def bulk_approve(data: BulkApproveAgentsRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.approve"))):
-    return {"status": "success", "message": "Bulk approval processed", "data": bulk_approve_agents(db, data.agent_ids, current_user, request)}
+def bulk_approve(data: BulkApproveAgentsRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.approve"))):
+    return {"status": "success", "message": "Bulk approval processed", "data": bulk_approve_agents(db, data.agent_ids, current_user, request, background_tasks)}
 
 
 @router.post("/bulk-reject")
@@ -379,8 +379,8 @@ def bulk_reject(data: BulkRejectAgentsRequest, request: Request, db: Session = D
 
 @router.post("/{agent_id}/approve")
 @router.patch("/{agent_id}/approve")
-def approve(agent_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.approve"))):
-    return {"status": "success", "message": "Agent approved successfully", "data": approve_agent(db, agent_id, current_user, request)}
+def approve(agent_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("agents.approve"))):
+    return {"status": "success", "message": "Agent approved successfully", "data": approve_agent(db, agent_id, current_user, request, background_tasks)}
 
 
 @router.post("/{agent_id}/bank-details/unlock")

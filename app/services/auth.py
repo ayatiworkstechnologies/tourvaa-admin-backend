@@ -4,7 +4,7 @@ import re
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -364,7 +364,7 @@ def _registration_token_user(db: Session, token: str):
     return user
 
 
-def complete_registration(db: Session, token: str, password: str):
+def complete_registration(db: Session, token: str, password: str, background_tasks: BackgroundTasks | None = None):
     user = _registration_token_user(db, token)
     old_status = user.account_status
     now = utcnow()
@@ -426,6 +426,10 @@ def complete_registration(db: Session, token: str, password: str):
         entity_id=user.id,
         new_values={"account_status": "ACTIVE"},
     )
+    db.commit()
+
+    # The account and partner rows must be committed before lifecycle email
+    # deliveries are reserved and scheduled.
     if supplier:
         from app.utils.notification_triggers import notify_supplier_approval_pending, notify_supplier_registered
         notify_supplier_registered(
@@ -444,8 +448,8 @@ def complete_registration(db: Session, token: str, password: str):
         from app.utils.notification_triggers import notify_agent_registered
         notify_agent_registered(db, agent_id=agent.id, agent_name=agent.agent_name, user_id=user.id)
     if affiliate:
-        from app.services.notifications import notify_admins
-        notify_admins(db, notification_type="affiliate_application", title="New Affiliate Application", message=f"{affiliate.name} applied to become an affiliate.", entity_type="affiliate", entity_id=affiliate.id)
+        from app.utils.notification_triggers import notify_affiliate_registered
+        notify_affiliate_registered(db, affiliate_id=affiliate.id, affiliate_name=affiliate.name, background_tasks=background_tasks)
     db.commit()
     try:
         login_url = build_portal_login_url(user)

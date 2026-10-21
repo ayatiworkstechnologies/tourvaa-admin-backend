@@ -2,7 +2,7 @@ import logging
 from math import ceil
 from typing import Any
 
-from fastapi import HTTPException, Request
+from fastapi import BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -195,7 +195,15 @@ def _entity_name(item) -> str:
     return f"#{item.id}"
 
 
-def approve_item(db: Session, item, actor: User, entity_type: str, serializer, request: Request | None = None):
+def approve_item(
+    db: Session,
+    item,
+    actor: User,
+    entity_type: str,
+    serializer,
+    request: Request | None = None,
+    background_tasks: BackgroundTasks | None = None,
+):
     old = serializer(item)
     item.approval_status = "approved"
     item.status = "active"
@@ -218,17 +226,21 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
                 db.add(UserStatusHistory(user_id=user.id, from_status=old_account_status, to_status="ACTIVE", reason=f"{entity_type.title()} profile approved", changed_by=actor.id))
             
     log_audit(db, actor=actor, action=f"approve_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
-    # Notifications
+    # The approval must exist before a retryable lifecycle delivery is
+    # reserved. SMTP failure must never roll back an approved partner.
+    db.commit()
+    db.refresh(item)
+
     try:
         from app.utils.notification_triggers import notify_supplier_approved, notify_agent_approved, notify_affiliate_approved
         user_id = _entity_user_id(item)
         name = _entity_name(item)
         if entity_type == "supplier":
-            notify_supplier_approved(db, supplier_id=item.id, supplier_name=name, user_id=user_id)
+            notify_supplier_approved(db, supplier_id=item.id, supplier_name=name, user_id=user_id, background_tasks=background_tasks)
         elif entity_type == "agent":
-            notify_agent_approved(db, agent_id=item.id, agent_name=name, user_id=user_id)
+            notify_agent_approved(db, agent_id=item.id, agent_name=name, user_id=user_id, background_tasks=background_tasks)
         elif entity_type == "affiliate":
-            notify_affiliate_approved(db, affiliate_id=item.id, affiliate_name=name, user_id=user_id)
+            notify_affiliate_approved(db, affiliate_id=item.id, affiliate_name=name, user_id=user_id, background_tasks=background_tasks)
     except Exception:
         logger.exception("Failed to send %s approval notification for id=%s", entity_type, item.id)
     db.commit()
@@ -236,7 +248,16 @@ def approve_item(db: Session, item, actor: User, entity_type: str, serializer, r
     return serializer(item)
 
 
-def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type: str, serializer, request: Request | None = None):
+def reject_item(
+    db: Session,
+    item,
+    data: RejectRequest,
+    actor: User,
+    entity_type: str,
+    serializer,
+    request: Request | None = None,
+    background_tasks: BackgroundTasks | None = None,
+):
     old = serializer(item)
     item.approval_status = "rejected"
     item.status = "inactive"
@@ -252,7 +273,10 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
             user.approval_status = "rejected"
             
     log_audit(db, actor=actor, action=f"reject_{entity_type}", entity_type=entity_type, entity_id=item.id, old_values=old, new_values=serializer(item), request=request)
-    # Notifications
+    # Persist the decision before reserving a retryable lifecycle delivery.
+    db.commit()
+    db.refresh(item)
+
     try:
         from app.utils.notification_triggers import notify_supplier_rejected, notify_agent_rejected, notify_affiliate_rejected
         user_id = _entity_user_id(item)
@@ -263,7 +287,7 @@ def reject_item(db: Session, item, data: RejectRequest, actor: User, entity_type
         elif entity_type == "agent":
             notify_agent_rejected(db, agent_id=item.id, agent_name=name, rejection_reason=reason, user_id=user_id)
         elif entity_type == "affiliate":
-            notify_affiliate_rejected(db, affiliate_id=item.id, affiliate_name=name, rejection_reason=reason, user_id=user_id)
+            notify_affiliate_rejected(db, affiliate_id=item.id, affiliate_name=name, rejection_reason=reason, user_id=user_id, background_tasks=background_tasks)
     except Exception:
         logger.exception("Failed to send %s rejection notification for id=%s", entity_type, item.id)
     db.commit()

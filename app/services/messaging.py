@@ -82,8 +82,8 @@ def _support_message_url(*, recipient_role: str, participant_type: str, conversa
     portal_path = {
         "customer": "/customer/support",
         "agent": "/agent/messages",
-        "supplier": "/supplier/messages?tab=support",
-        "affiliate": "/affiliate/support",
+        "supplier": "/supplier/messages",
+        "affiliate": "/affiliate/messages",
     }.get(participant, "/")
     return f"{settings.FRONTEND_URL.rstrip('/')}{portal_path}"
 

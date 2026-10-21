@@ -204,7 +204,7 @@ def notify_supplier_approved(
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="supplier_approved", title="Supplier operations unlocked", message=f"Your supplier profile '{supplier_name}' is approved. Tour, booking, calendar and payout features are now available.", entity_type="supplier", entity_id=supplier_id)
         from app.utils.email_templates import approved_email
-        login_url = f"{settings.FRONTEND_URL}/login"
+        login_url = f"{settings.FRONTEND_URL}/supplier-portal/login"
         # Account approval is a lifecycle event: reserve it durably before
         # sending so SMTP failures are visible in notification_deliveries and
         # retried by the lifecycle sweep instead of being silently swallowed.
@@ -337,14 +337,15 @@ def notify_agent_changes_requested(db: Session, *, agent_id: int, agent_name: st
     db.flush()
 
 
-def notify_agent_approved(db: Session, *, agent_id: int, agent_name: str, user_id: int | None = None):
+def notify_agent_approved(db: Session, *, agent_id: int, agent_name: str, user_id: int | None = None, background_tasks: "BackgroundTasks | None" = None):
     notify_admins(db, notification_type="agent_approved", title="Agent Approved", message=f"Agent '{agent_name}' has been approved.", entity_type="agent", entity_id=agent_id)
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="agent_approved", title="Your agent profile is approved!", message=f"Congratulations! Your agent profile '{agent_name}' has been approved.", entity_type="agent", entity_id=agent_id)
         from app.config import settings
         from app.utils.email_templates import agent_approved_email
-        login_url = f"{settings.FRONTEND_URL}/login"
-        send_templated_email(db, _user_email(db, user_id), "agent_approved", {"agent_name": agent_name, "login_url": login_url}, "Your agent profile is approved", agent_approved_email(agent_name, login_url))
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        login_url = f"{settings.FRONTEND_URL}/agent-portal/login"
+        dispatch_lifecycle_email(db, event="agent_account_approved", entity_type="agent", entity_id=agent_id, recipient_type="agent", recipient_email=_user_email(db, user_id), template_key="agent_approved", values={"agent_name": agent_name, "name": agent_name, "login_url": login_url}, fallback_subject="Your Tourvaa agent profile is approved", fallback_html=agent_approved_email(agent_name, login_url), background_tasks=background_tasks)
     db.flush()
 
 
@@ -356,32 +357,64 @@ def notify_agent_rejected(db: Session, *, agent_id: int, agent_name: str, reject
     db.flush()
 
 
-def notify_affiliate_approved(db: Session, *, affiliate_id: int, affiliate_name: str, user_id: int | None = None):
+def notify_affiliate_approved(db: Session, *, affiliate_id: int, affiliate_name: str, user_id: int | None = None, background_tasks: "BackgroundTasks | None" = None):
     notify_admins(db, notification_type="affiliate_approved", title="Affiliate Approved", message=f"Affiliate '{affiliate_name}' has been approved.", entity_type="affiliate", entity_id=affiliate_id)
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="affiliate_approved", title="Your affiliate profile is approved!", message=f"Congratulations! Your affiliate profile '{affiliate_name}' has been approved. You can now generate referral links.", entity_type="affiliate", entity_id=affiliate_id)
         from app.config import settings
         from app.utils.email_templates import approved_email
-        login_url = f"{settings.FRONTEND_URL}/login"
-        send_templated_email(db, _user_email(db, user_id), "affiliate_approved", {"affiliate_name": affiliate_name, "name": affiliate_name, "login_url": login_url}, "Your Tourvaa affiliate profile is approved", approved_email(affiliate_name, login_url))
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        login_url = f"{settings.FRONTEND_URL}/affiliate-portal/login"
+        dispatch_lifecycle_email(db, event="affiliate_account_approved", entity_type="affiliate", entity_id=affiliate_id, recipient_type="affiliate", recipient_email=_user_email(db, user_id), template_key="affiliate_approved", values={"affiliate_name": affiliate_name, "name": affiliate_name, "login_url": login_url}, fallback_subject="Your Tourvaa affiliate profile is approved", fallback_html=approved_email(affiliate_name, login_url), background_tasks=background_tasks)
     db.flush()
 
 
-def notify_affiliate_rejected(db: Session, *, affiliate_id: int, affiliate_name: str, rejection_reason: str = "", user_id: int | None = None):
+def notify_affiliate_registered(db: Session, *, affiliate_id: int, affiliate_name: str, background_tasks: "BackgroundTasks | None" = None):
+    """Alert Tourvaa operations after a verified affiliate registration."""
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+
+    notify_admins(db, notification_type="affiliate_application", title="New Affiliate Application", message=f"{affiliate_name} applied to become an affiliate.", entity_type="affiliate", entity_id=affiliate_id)
+    admin_url = f"{settings.FRONTEND_URL}/admin/affiliates/{affiliate_id}"
+    dispatch_admin_lifecycle_emails(
+        db,
+        event="affiliate_registered",
+        entity_type="affiliate",
+        entity_id=affiliate_id,
+        template_key="affiliate_registered",
+        values={"affiliate_name": affiliate_name, "admin_url": admin_url},
+        fallback_subject=f"New affiliate application - {affiliate_name}",
+        fallback_html=f"{affiliate_name} has completed registration and is ready for review. Review it here: {admin_url}",
+        background_tasks=background_tasks,
+    )
+    db.flush()
+
+
+def notify_affiliate_rejected(db: Session, *, affiliate_id: int, affiliate_name: str, rejection_reason: str = "", user_id: int | None = None, background_tasks: "BackgroundTasks | None" = None):
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="affiliate_rejected", title="Affiliate Application Rejected", message=f"Your affiliate application '{affiliate_name}' was not approved. Reason: {rejection_reason}", entity_type="affiliate", entity_id=affiliate_id)
+        from app.config import settings
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        login_url = f"{settings.FRONTEND_URL}/affiliate-portal/login"
+        dispatch_lifecycle_email(db, event="affiliate_account_rejected", entity_type="affiliate", entity_id=affiliate_id, recipient_type="affiliate", recipient_email=_user_email(db, user_id), template_key="affiliate_rejected", values={"affiliate_name": affiliate_name, "name": affiliate_name, "rejection_reason": rejection_reason, "login_url": login_url}, fallback_subject="Your Tourvaa affiliate application needs attention", fallback_html=f"Hi {affiliate_name}, your affiliate application was not approved. Reason: {rejection_reason}", background_tasks=background_tasks)
     db.flush()
 
 
-def notify_affiliate_activated(db: Session, *, affiliate_id: int, affiliate_name: str, user_id: int | None = None):
+def notify_affiliate_activated(db: Session, *, affiliate_id: int, affiliate_name: str, user_id: int | None = None, background_tasks: "BackgroundTasks | None" = None):
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="affiliate_activated", title="Affiliate Account Activated", message=f"Your affiliate account '{affiliate_name}' is active again. Link generation and commissions are unblocked.", entity_type="affiliate", entity_id=affiliate_id)
+        from app.config import settings
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        login_url = f"{settings.FRONTEND_URL}/affiliate-portal/login"
+        dispatch_lifecycle_email(db, event="affiliate_account_reactivated", entity_type="affiliate", entity_id=affiliate_id, recipient_type="affiliate", recipient_email=_user_email(db, user_id), template_key="affiliate_reactivated", values={"affiliate_name": affiliate_name, "name": affiliate_name, "login_url": login_url}, fallback_subject="Your Tourvaa affiliate account is active again", fallback_html=f"Hi {affiliate_name}, your affiliate account is active again. Sign in here: {login_url}", background_tasks=background_tasks)
     db.flush()
 
 
-def notify_affiliate_suspended(db: Session, *, affiliate_id: int, affiliate_name: str, reason: str = "", user_id: int | None = None):
+def notify_affiliate_suspended(db: Session, *, affiliate_id: int, affiliate_name: str, reason: str = "", user_id: int | None = None, background_tasks: "BackgroundTasks | None" = None):
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="affiliate_suspended", title="Affiliate Account Suspended", message=f"Your affiliate account '{affiliate_name}' has been suspended. Reason: {reason}", entity_type="affiliate", entity_id=affiliate_id)
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        dispatch_lifecycle_email(db, event="affiliate_account_suspended", entity_type="affiliate", entity_id=affiliate_id, recipient_type="affiliate", recipient_email=_user_email(db, user_id), template_key="affiliate_suspended", values={"affiliate_name": affiliate_name, "name": affiliate_name, "reason": reason}, fallback_subject="Your Tourvaa affiliate account has been suspended", fallback_html=f"Hi {affiliate_name}, your affiliate account has been suspended. Reason: {reason}", background_tasks=background_tasks)
     db.flush()
 
 

@@ -394,8 +394,8 @@ def verify_email_link(token: str = Query(default=""), db: Session = Depends(get_
 
 
 @router.post("/complete-registration")
-def complete_registration_request(data: CompleteRegistrationSchema, db: Session = Depends(get_db)):
-    user = complete_registration(db, data.token, data.password)
+def complete_registration_request(data: CompleteRegistrationSchema, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    user = complete_registration(db, data.token, data.password, background_tasks)
     return {
         "status": "success",
         "message": "Password created. Your account is active and ready to use.",

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -337,8 +337,8 @@ def review_document(
 
 
 @router.patch("/{affiliate_id}/approve")
-def approve(affiliate_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.approve"))):
-    return {"status": "success", "message": "Affiliate approved successfully", "data": approve_affiliate(db, affiliate_id, current_user, request)}
+def approve(affiliate_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.approve"))):
+    return {"status": "success", "message": "Affiliate approved successfully", "data": approve_affiliate(db, affiliate_id, current_user, request, background_tasks)}
 
 
 @router.post("/{affiliate_id}/bank-details/unlock")
@@ -347,18 +347,18 @@ def unlock_bank_detail_edit(affiliate_id: int, request: Request, db: Session = D
 
 
 @router.patch("/{affiliate_id}/reject")
-def reject(affiliate_id: int, data: RejectRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.reject"))):
-    return {"status": "success", "message": "Affiliate rejected successfully", "data": reject_affiliate(db, affiliate_id, data, current_user, request)}
+def reject(affiliate_id: int, data: RejectRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.reject"))):
+    return {"status": "success", "message": "Affiliate rejected successfully", "data": reject_affiliate(db, affiliate_id, data, current_user, request, background_tasks)}
 
 
 @router.post("/{affiliate_id}/activate")
-def activate(affiliate_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.activate"))):
-    return {"status": "success", "message": "Affiliate activated successfully", "data": activate_affiliate(db, affiliate_id, current_user, request)}
+def activate(affiliate_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.activate"))):
+    return {"status": "success", "message": "Affiliate activated successfully", "data": activate_affiliate(db, affiliate_id, current_user, request, background_tasks)}
 
 
 @router.post("/{affiliate_id}/suspend")
-def suspend(affiliate_id: int, data: AffiliateSuspendRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.suspend"))):
-    return {"status": "success", "message": "Affiliate suspended successfully", "data": suspend_affiliate(db, affiliate_id, data, current_user, request)}
+def suspend(affiliate_id: int, data: AffiliateSuspendRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.suspend"))):
+    return {"status": "success", "message": "Affiliate suspended successfully", "data": suspend_affiliate(db, affiliate_id, data, current_user, request, background_tasks)}
 
 
 @router.patch("/{affiliate_id}/api-link")

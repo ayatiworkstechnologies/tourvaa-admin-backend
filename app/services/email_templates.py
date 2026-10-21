@@ -341,7 +341,37 @@ DEFAULT_EMAIL_TEMPLATES = [
         "key": "agent_approved",
         "name": "Agent Approved",
         "subject": "Your Tourvaa agent profile is approved",
-        "body": "Hi {{agent_name}}, your agent profile is approved. You can now manage bookings from the agent portal.",
+        "body": "Hi {{agent_name}}, your agent profile is approved. You can now manage bookings from the agent portal: {{login_url}}",
+    },
+    {
+        "key": "affiliate_approved",
+        "name": "Affiliate Approved",
+        "subject": "Your Tourvaa affiliate profile is approved",
+        "body": "Hi {{affiliate_name}}, your affiliate profile is approved. You can now create referral links from the affiliate portal: {{login_url}}",
+    },
+    {
+        "key": "affiliate_registered",
+        "name": "Affiliate Registered (Admin)",
+        "subject": "New affiliate application - {{affiliate_name}}",
+        "body": "{{affiliate_name}} has completed registration and is ready for review. Review the application in the authenticated admin portal: {{admin_url}}",
+    },
+    {
+        "key": "affiliate_rejected",
+        "name": "Affiliate Rejected",
+        "subject": "Your Tourvaa affiliate application needs attention",
+        "body": "Hi {{affiliate_name}}, your affiliate application was not approved. Reason: {{rejection_reason}}. You can review your profile in the affiliate portal: {{login_url}}",
+    },
+    {
+        "key": "affiliate_reactivated",
+        "name": "Affiliate Reactivated",
+        "subject": "Your Tourvaa affiliate account is active again",
+        "body": "Hi {{affiliate_name}}, your affiliate account is active again. You can create referral links and view commissions in the affiliate portal: {{login_url}}",
+    },
+    {
+        "key": "affiliate_suspended",
+        "name": "Affiliate Suspended",
+        "subject": "Your Tourvaa affiliate account has been suspended",
+        "body": "Hi {{affiliate_name}}, your affiliate account has been suspended. Reason: {{reason}}. Contact Tourvaa support if you need help.",
     },
     {
         "key": "agent_rejected",

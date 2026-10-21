@@ -55,3 +55,82 @@ def test_supplier_approval_reserves_a_durable_email_delivery(monkeypatch):
     assert scheduled["kwargs"]["entity_id"] == 18
     assert scheduled["kwargs"]["recipient_email"] == "supplier@example.test"
     assert scheduled["kwargs"]["background_tasks"] is background_tasks
+
+
+def test_agent_approval_reserves_a_durable_email_delivery(monkeypatch):
+    from app.services import notification_delivery
+    from app.utils import notification_triggers
+
+    scheduled = {}
+    monkeypatch.setattr(notification_triggers, "notify_admins", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notification_triggers, "enqueue_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notification_triggers, "_user_email", lambda *_args: "agent@example.test")
+    monkeypatch.setattr(notification_delivery, "dispatch_lifecycle_email", lambda *args, **kwargs: scheduled.update(args=args, kwargs=kwargs))
+
+    background_tasks = object()
+    notification_triggers.notify_agent_approved(
+        SimpleNamespace(flush=lambda: None),
+        agent_id=19,
+        agent_name="Example Agent",
+        user_id=28,
+        background_tasks=background_tasks,
+    )
+
+    assert scheduled["kwargs"]["event"] == "agent_account_approved"
+    assert scheduled["kwargs"]["entity_type"] == "agent"
+    assert scheduled["kwargs"]["entity_id"] == 19
+    assert scheduled["kwargs"]["recipient_email"] == "agent@example.test"
+    assert scheduled["kwargs"]["background_tasks"] is background_tasks
+    assert scheduled["kwargs"]["values"]["login_url"].endswith("/agent-portal/login")
+
+
+def test_affiliate_approval_reserves_a_durable_email_delivery(monkeypatch):
+    from app.services import notification_delivery
+    from app.utils import notification_triggers
+
+    scheduled = {}
+    monkeypatch.setattr(notification_triggers, "notify_admins", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notification_triggers, "enqueue_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notification_triggers, "_user_email", lambda *_args: "affiliate@example.test")
+    monkeypatch.setattr(notification_delivery, "dispatch_lifecycle_email", lambda *args, **kwargs: scheduled.update(args=args, kwargs=kwargs))
+
+    background_tasks = object()
+    notification_triggers.notify_affiliate_approved(
+        SimpleNamespace(flush=lambda: None),
+        affiliate_id=20,
+        affiliate_name="Example Affiliate",
+        user_id=29,
+        background_tasks=background_tasks,
+    )
+
+    assert scheduled["kwargs"]["event"] == "affiliate_account_approved"
+    assert scheduled["kwargs"]["entity_type"] == "affiliate"
+    assert scheduled["kwargs"]["entity_id"] == 20
+    assert scheduled["kwargs"]["recipient_email"] == "affiliate@example.test"
+    assert scheduled["kwargs"]["background_tasks"] is background_tasks
+    assert scheduled["kwargs"]["values"]["login_url"].endswith("/affiliate-portal/login")
+
+
+def test_affiliate_lifecycle_events_use_durable_delivery(monkeypatch):
+    from app.services import notification_delivery
+    from app.utils import notification_triggers
+
+    scheduled = []
+    monkeypatch.setattr(notification_triggers, "notify_admins", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notification_triggers, "enqueue_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notification_triggers, "_user_email", lambda *_args: "affiliate@example.test")
+    monkeypatch.setattr(notification_delivery, "dispatch_lifecycle_email", lambda *args, **kwargs: scheduled.append(kwargs))
+
+    background_tasks = object()
+    db = SimpleNamespace(flush=lambda: None)
+    notification_triggers.notify_affiliate_rejected(db, affiliate_id=21, affiliate_name="Example Affiliate", rejection_reason="Details required", user_id=29, background_tasks=background_tasks)
+    notification_triggers.notify_affiliate_activated(db, affiliate_id=21, affiliate_name="Example Affiliate", user_id=29, background_tasks=background_tasks)
+    notification_triggers.notify_affiliate_suspended(db, affiliate_id=21, affiliate_name="Example Affiliate", reason="Compliance review", user_id=29, background_tasks=background_tasks)
+
+    assert [event["event"] for event in scheduled] == [
+        "affiliate_account_rejected",
+        "affiliate_account_reactivated",
+        "affiliate_account_suspended",
+    ]
+    assert all(event["recipient_email"] == "affiliate@example.test" for event in scheduled)
+    assert all(event["background_tasks"] is background_tasks for event in scheduled)

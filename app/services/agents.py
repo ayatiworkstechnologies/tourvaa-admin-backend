@@ -1,7 +1,7 @@
 import logging
 from app.utils.money import utcnow
 
-from fastapi import HTTPException, Request
+from fastapi import BackgroundTasks, HTTPException, Request
 from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -285,11 +285,11 @@ def export_agents_directory(db: Session) -> list[dict]:
     return rows
 
 
-def bulk_approve_agents(db: Session, agent_ids: list[int], actor: User, request: Request | None = None) -> list[dict]:
+def bulk_approve_agents(db: Session, agent_ids: list[int], actor: User, request: Request | None = None, background_tasks: BackgroundTasks | None = None) -> list[dict]:
     results = []
     for agent_id in agent_ids:
         try:
-            approve_agent(db, agent_id, actor, request)
+            approve_agent(db, agent_id, actor, request, background_tasks)
             results.append({"id": agent_id, "ok": True})
         except HTTPException as error:
             db.rollback()
@@ -449,7 +449,7 @@ def unlock_agent_bank_edit(db: Session, agent_id: int, actor: User, request: Req
     return serialize_agent(item)
 
 
-def approve_agent(db: Session, agent_id: int, actor: User, request: Request | None = None):
+def approve_agent(db: Session, agent_id: int, actor: User, request: Request | None = None, background_tasks: BackgroundTasks | None = None):
     agent = get_agent(db, agent_id)
     # The formal verification path is strict. Keep the legacy direct-admin approval
     # path compatible for records created before document onboarding was introduced.
@@ -466,7 +466,7 @@ def approve_agent(db: Session, agent_id: int, actor: User, request: Request | No
                 status_code=400,
                 detail=f"Approve all required documents first: {', '.join(labels)}",
             )
-    return approve_item(db, agent, actor, "agent", serialize_agent, request)
+    return approve_item(db, agent, actor, "agent", serialize_agent, request, background_tasks)
 
 
 def reject_agent(db: Session, agent_id: int, data: RejectRequest, actor: User, request: Request | None = None):

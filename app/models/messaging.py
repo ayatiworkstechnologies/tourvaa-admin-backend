@@ -6,7 +6,7 @@ from app.database import Base
 
 
 class Conversation(Base):
-    """One thread per agent/supplier/customer user talking to admin support.
+    """One thread per portal user talking to Tourvaa Admin support.
 
     A single conversation per (participant_type, participant_user_id) keeps
     the admin inbox simple: one row per person, tabbed by role, rather than
@@ -16,7 +16,7 @@ class Conversation(Base):
     __table_args__ = (UniqueConstraint("participant_user_id", name="uq_conversation_participant_user"),)
 
     id = Column(Integer, primary_key=True, index=True)
-    participant_type = Column(String(20), nullable=False, index=True)  # agent | supplier | customer
+    participant_type = Column(String(20), nullable=False, index=True)  # agent | supplier | customer | affiliate
     participant_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     status = Column(String(20), default="open", nullable=False)
     last_message_at = Column(DateTime(timezone=True), nullable=True, index=True)
@@ -36,7 +36,7 @@ class Message(Base):
     id = Column(Integer, primary_key=True, index=True)
     conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, index=True)
     sender_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    sender_role = Column(String(20), nullable=False)  # admin | agent | supplier | customer
+    sender_role = Column(String(20), nullable=False)  # admin | agent | supplier | customer | affiliate
     body = Column(Text, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
