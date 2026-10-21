@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import PurePosixPath
 from time import time
 from urllib.parse import urlparse
 
@@ -103,6 +104,33 @@ def get_private_file_url(public_id: str, resource_type: str = "image") -> str:
     cached or reused.
     """
     _configure()
+
+    # Cloudinary's CDN signed-delivery URL is appropriate for authenticated
+    # images and video. Raw files (PDF/DOC/DOCX) need its signed download API
+    # instead. A CDN delivery URL for an authenticated raw file may be
+    # rejected by Cloudinary even when its signature is present, leaving the
+    # admin "View document" tab on an error page. The download API returns a
+    # short-lived URL which preserves inline PDF viewing and never exposes a
+    # permanent public document URL.
+    if resource_type == "raw":
+        extension = PurePosixPath(public_id).suffix.removeprefix(".").lower()
+        if not extension:
+            raise HTTPException(status_code=500, detail="Private raw document is missing its file extension")
+        try:
+            url = cloudinary.utils.private_download_url(
+                public_id,
+                extension,
+                resource_type="raw",
+                type="authenticated",
+                attachment=False,
+                expires_at=int(time()) + 300,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=502, detail="Could not prepare the private document") from error
+        if not url:
+            raise HTTPException(status_code=502, detail="Could not prepare the private document")
+        return url
+
     url, _options = cloudinary.utils.cloudinary_url(
         public_id,
         resource_type=resource_type,

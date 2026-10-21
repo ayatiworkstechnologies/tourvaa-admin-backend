@@ -1,7 +1,7 @@
 import logging
 from decimal import Decimal
 
-from fastapi import HTTPException, Request
+from fastapi import BackgroundTasks, HTTPException, Request
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -205,7 +205,6 @@ def serialize_supplier(item: Supplier, *, mask_bank_details: bool = False):
                 "trading_name": item.business_info.trading_name,
                 "business_email": item.business_info.business_email,
                 "website_url": item.business_info.website_url,
-                "approval_status": item.business_info.approval_status,
             } if item.business_info else None,
             "invoicing": {
                 "contact_name": item.invoicing.contact_name,
@@ -490,7 +489,13 @@ def accept_supplier_commission(db: Session, supplier_id: int, actor: User, reque
     return serialize_supplier(item)
 
 
-def approve_supplier(db: Session, supplier_id: int, actor: User, request: Request | None = None):
+def approve_supplier(
+    db: Session,
+    supplier_id: int,
+    actor: User,
+    request: Request | None = None,
+    background_tasks: BackgroundTasks | None = None,
+):
     item = get_supplier(db, supplier_id)
     if not item.user or item.user.user_type != "SUPPLIER":
         raise HTTPException(status_code=400, detail="Supplier account is invalid")
@@ -543,6 +548,11 @@ def approve_supplier(db: Session, supplier_id: int, actor: User, request: Reques
         new_values=serialize_supplier(item),
         request=request,
     )
+    # The approval itself must be committed before a background delivery can
+    # consume its durable notification record.  Email remains best-effort and
+    # therefore must never undo the valid approval.
+    db.commit()
+    db.refresh(item)
     try:
         from app.utils.notification_triggers import notify_supplier_approved
         notify_supplier_approved(
@@ -550,6 +560,7 @@ def approve_supplier(db: Session, supplier_id: int, actor: User, request: Reques
             supplier_id=item.id,
             supplier_name=item.supplier_name,
             user_id=item.user_id,
+            background_tasks=background_tasks,
         )
     except Exception:
         logger.exception("Failed to send supplier approval notification for supplier_id=%s", item.id)
@@ -574,11 +585,17 @@ def reject_supplier(db: Session, supplier_id: int, data: RejectRequest, actor: U
     )
 
 
-def bulk_approve_suppliers(db: Session, supplier_ids: list[int], actor: User, request: Request | None = None) -> list[dict]:
+def bulk_approve_suppliers(
+    db: Session,
+    supplier_ids: list[int],
+    actor: User,
+    request: Request | None = None,
+    background_tasks: BackgroundTasks | None = None,
+) -> list[dict]:
     results = []
     for supplier_id in supplier_ids:
         try:
-            approve_supplier(db, supplier_id, actor, request)
+            approve_supplier(db, supplier_id, actor, request, background_tasks)
             results.append({"id": supplier_id, "ok": True})
         except HTTPException as error:
             db.rollback()

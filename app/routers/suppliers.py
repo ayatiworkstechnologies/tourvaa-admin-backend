@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -720,8 +720,8 @@ class BulkRejectRequest(BaseModel):
 
 
 @router.post("/bulk-approve")
-def bulk_approve(data: BulkApproveRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
-    return {"status": "success", "message": "Bulk approval processed", "data": bulk_approve_suppliers(db, data.supplier_ids, current_user, request)}
+def bulk_approve(data: BulkApproveRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
+    return {"status": "success", "message": "Bulk approval processed", "data": bulk_approve_suppliers(db, data.supplier_ids, current_user, request, background_tasks)}
 
 
 @router.post("/bulk-reject")
@@ -733,8 +733,8 @@ def bulk_reject(data: BulkRejectRequest, request: Request, db: Session = Depends
 @router.post("/{supplier_id}/approve")
 @router.patch("/{supplier_id}/approve")
 @router.post("/{supplier_id}/accept")
-def approve(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
-    return {"status": "success", "message": "Supplier approved successfully", "data": approve_supplier(db, supplier_id, current_user, request)}
+def approve(supplier_id: int, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
+    return {"status": "success", "message": "Supplier approved successfully", "data": approve_supplier(db, supplier_id, current_user, request, background_tasks)}
 
 
 @router.post("/{supplier_id}/bank-details/unlock")

@@ -1,4 +1,7 @@
 import os
+import re
+import tempfile
+from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -89,3 +92,40 @@ def download_itinerary_pdf(db: Session, booking_id: int, actor: User) -> tuple[s
     if not os.path.exists(pdf_path) or not pdf_path.is_file() or pdf_path.stat().st_size <= 5 or pdf_path.read_bytes()[:5] != b"%PDF-":
         raise HTTPException(status_code=404, detail="Itinerary PDF could not be generated")
     return str(pdf_path), filename
+
+
+def build_public_tour_itinerary_pdf(db: Session, tour) -> tuple[bytes, str]:
+    """Render the supplier-maintained itinerary for public viewing/download.
+
+    This deliberately derives the document from structured itinerary days; it
+    does not repurpose the optional marketing brochure upload.
+    """
+    days = db.query(TourItinerary).filter(
+        TourItinerary.tour_id == tour.id, TourItinerary.status == "active"
+    ).order_by(TourItinerary.day_number.asc()).all()
+    if not days:
+        raise HTTPException(status_code=404, detail="No itinerary is available for this tour yet")
+    highlights = db.query(TourHighlight).filter(
+        TourHighlight.tour_id == tour.id, TourHighlight.status == "active"
+    ).order_by(TourHighlight.display_order.asc()).all()
+    support_setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
+    support_email = (support_setting.value or "").strip() if support_setting else ""
+    website = urlparse(settings.FRONTEND_URL or "").netloc or "www.tourvaa.com"
+    data = {
+        "public_tour": True,
+        "tour_name": tour.title or "Tour",
+        "support_email": support_email,
+        "website": website,
+        "highlights": [{"title": h.title, "description": h.short_description or ""} for h in highlights],
+        "days": [{"day": d.day_number, "title": d.day_title, "location": d.location_name,
+                  "description": d.long_description or d.short_description or "", "meals": d.meals_included,
+                  "transport": d.transport_type} for d in days],
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "itinerary.pdf")
+        generate_pdf(Path(path), data)
+        content = Path(path).read_bytes()
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(status_code=502, detail="Itinerary PDF could not be generated")
+    safe_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", (tour.slug or f"tour-{tour.id}")).strip("-.")
+    return content, f"{safe_slug or f'tour-{tour.id}'}-itinerary.pdf"

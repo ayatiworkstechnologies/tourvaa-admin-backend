@@ -1,5 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from typing import Literal
 
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, File
+
+from app.config import settings
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.cloudinary_client import upload_to_cloudinary
 from app.utils.media import detect_image_type, detect_video_type, sanitize_filename
@@ -68,6 +71,7 @@ async def upload_profile_image(
 async def upload_admin_asset(
     request: Request,
     file: UploadFile = File(...),
+    scope: Literal["tour", "cms"] = Form(default="cms"),
     current_user: User = Depends(
         require_any_permission("tours.edit", "update-tours", "website_cms.edit", "update-website_cms")
     ),
@@ -112,7 +116,13 @@ async def upload_admin_asset(
 
     filename = sanitize_filename(file.filename, extension)
     asset_folder = "videos" if is_video else "documents" if extension == "pdf" else "images"
-    uploaded = upload_to_cloudinary(content, filename, folder=f"tourvaa/admin-assets/{asset_folder}", content_type=file.content_type)
+    public_root = settings.CLOUDINARY_PUBLIC_ROOT.strip("/") or "tourvaa_demo/public"
+    uploaded = upload_to_cloudinary(
+        content,
+        filename,
+        folder=f"{public_root}/{scope}/{asset_folder}",
+        content_type=file.content_type,
+    )
 
     return {
         "status": "success",

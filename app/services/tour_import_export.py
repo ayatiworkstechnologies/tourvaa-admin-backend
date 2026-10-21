@@ -218,8 +218,20 @@ def build_tour_detail_workbook(db: Session, tour: Tour) -> io.BytesIO:
     return buffer
 
 
-def build_import_template_workbook(db: Session, include_supplier_column: bool) -> io.BytesIO:
+def build_import_template_workbook(
+    db: Session,
+    include_supplier_column: bool,
+    supplier_currency: str | None = None,
+) -> io.BytesIO:
+    """Build the bulk-import workbook.
+
+    A supplier cannot choose a tour currency in the normal tour editor: it is
+    always the supplier's operating currency.  The spreadsheet must follow the
+    same rule so a downloaded template cannot accidentally create USD tours for
+    an NZD supplier (or the reverse).
+    """
     headers = IMPORT_HEADERS if include_supplier_column else IMPORT_HEADERS[:-1]
+    locked_supplier_currency = (supplier_currency or "").strip().upper() or None
     wb = Workbook()
     ws = wb.active
     ws.title = "Tours"
@@ -229,7 +241,7 @@ def build_import_template_workbook(db: Session, include_supplier_column: bool) -
         cell.fill = _HEADER_FILL
     example = [
         "Golden Triangle Explorer", "Delhi - Agra - Jaipur in 6 days", "Cultural", "India", "Delhi", "New Delhi",
-        "New Delhi", "Jaipur", "USD", 6, "", 5, 15, 2, "English", "All ages", "public",
+        "New Delhi", "Jaipur", locked_supplier_currency or "USD", 6, "", 5, 15, 2, "English", "All ages", "public",
         "A classic introduction to India's cultural heartland.",
     ]
     if include_supplier_column:
@@ -241,7 +253,7 @@ def build_import_template_workbook(db: Session, include_supplier_column: bool) -
     reference = wb.create_sheet("Reference")
     categories = [c.category_name for c in db.query(TourCategory).filter(TourCategory.status == "active").order_by(TourCategory.category_name.asc()).all()]
     visibilities = ["public", "private", "unlisted"]
-    currencies = ["USD", "EUR", "GBP", "INR", "AED"]
+    currencies = list(dict.fromkeys(([locked_supplier_currency] if locked_supplier_currency else []) + ["USD", "EUR", "GBP", "INR", "AED"]))
     reference.append(["Valid Categories", "Valid Visibility Values", "Example Currencies"])
     for cell in reference[1]:
         cell.font = _HEADER_FONT
@@ -254,6 +266,19 @@ def build_import_template_workbook(db: Session, include_supplier_column: bool) -
         ])
     for column in ("A", "B", "C"):
         reference.column_dimensions[column].width = 26
+
+    instructions = wb.create_sheet("Instructions")
+    instructions.column_dimensions["A"].width = 110
+    instructions.append(["How to import tours"])
+    instructions["A1"].font = _HEADER_FONT
+    instructions["A1"].fill = _HEADER_FILL
+    instructions.append(["Complete one tour per row in the Tours sheet. Keep the header row unchanged; required columns are marked with *."])
+    if locked_supplier_currency:
+        instructions.append([
+            f"Currency is locked to your operating currency ({locked_supplier_currency}). The Currency value in uploaded rows is ignored for supplier imports."
+        ])
+    else:
+        instructions.append(["For admin imports, choose a currency for each tour and select a supplier in the Supplier (admin only) column."])
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -324,12 +349,25 @@ def _lookup_supplier_id(db: Session, value) -> int | None:
     return match.id if match else None
 
 
+def _supplier_operating_currency(db: Session, supplier_id: int | None) -> str | None:
+    if not supplier_id:
+        return None
+    from app.models.suppliers import Supplier
+
+    supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+    currency = str(getattr(supplier, "currency", "") or "").strip().upper()
+    return currency or None
+
+
 def import_tours(db: Session, rows: list[dict], actor: User, actor_supplier_id: int | None, request: Request | None = None) -> list[dict]:
     """Bulk-creates draft tours from parsed spreadsheet rows, one at a time
     through save_tour() so every existing validation/audit-log/slug rule
     still applies - a bad row is reported and skipped, it never aborts the
     whole batch."""
     results = []
+    # Mirror the supplier tour form: a supplier's profile, not a spreadsheet
+    # cell, is the authoritative source for the operating currency.
+    supplier_currency = _supplier_operating_currency(db, actor_supplier_id)
     for row_number, row in enumerate(rows, start=2):
         title = str(row.get("title") or "").strip()
         if not title:
@@ -383,7 +421,7 @@ def import_tours(db: Session, rows: list[dict], actor: User, actor_supplier_id: 
                 city_id=city_id,
                 start_location=str(row.get("start_location") or ""),
                 finish_location=str(row.get("finish_location") or ""),
-                currency=(str(row.get("currency") or "").strip() or "USD"),
+                currency=supplier_currency or (str(row.get("currency") or "").strip() or "USD"),
                 number_of_days=days,
                 number_of_hours=_to_int(row.get("hours")),
                 number_of_nights=_to_int(row.get("nights")),

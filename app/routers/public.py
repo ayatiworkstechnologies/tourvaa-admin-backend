@@ -15,6 +15,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.models.cms import City, Country, Tour, TourCategory, TourSubcategory
 from app.models.cancellations import RefundRule
@@ -678,23 +679,6 @@ def public_tour_price_quote(
     return {"status": "success", "data": quote}
 
 
-@router.get("/tours/{country_slug}/{tour_slug}")
-def public_tour_detail_by_slug(country_slug: str, tour_slug: str, travel_date: str = Query(default=""), db: Session = Depends(get_db)):
-    """Resolve the canonical public tour URL and reject mismatched countries."""
-    from fastapi import HTTPException
-
-    tour = db.query(Tour).filter(Tour.slug == tour_slug, Tour.status == "published").first()
-    if not tour:
-        raise HTTPException(status_code=404, detail="Tour not found")
-    expected_country = slugify(tour.country.country_name if tour.country else "worldwide")
-    if country_slug != expected_country:
-        raise HTTPException(
-            status_code=404,
-            detail={"message": "Tour not found for this country", "canonical_path": f"/tours/{expected_country}/{tour.slug}"},
-        )
-    return public_tour_detail(tour.slug, travel_date, db)
-
-
 def _public_brochure_download_url(source: str) -> str:
     """Resolve an admin-provided public brochure without signing arbitrary URLs."""
     value = source.strip()
@@ -719,10 +703,12 @@ def _public_brochure_download_url(source: str) -> str:
     if delivery_parts and re.fullmatch(r"v\d+", delivery_parts[0]):
         delivery_parts = delivery_parts[1:]
     public_id = "/".join(delivery_parts)
-    if not (
-        public_id.startswith("tourvaa/admin-assets/documents/")
-        and public_id.lower().endswith(".pdf")
-    ):
+    public_root = settings.CLOUDINARY_PUBLIC_ROOT.strip("/") or "tourvaa_demo/public"
+    allowed_document_prefixes = (
+        "tourvaa/admin-assets/documents/",  # existing public tour PDFs
+        f"{public_root}/tour/documents/",   # new public-only tour structure
+    )
+    if not (public_id.startswith(allowed_document_prefixes) and public_id.lower().endswith(".pdf")):
         raise HTTPException(status_code=404, detail="Brochure is unavailable")
 
     from app.utils.cloudinary_client import get_signed_download_url
@@ -731,7 +717,7 @@ def _public_brochure_download_url(source: str) -> str:
 
 
 @router.get("/tours/{tour_id}/brochure")
-def public_tour_brochure_download(tour_id: str, db: Session = Depends(get_db)):
+def public_tour_brochure_download(tour_id: str, inline: bool = Query(default=False), db: Session = Depends(get_db)):
     """Download a published tour's brochure as a PDF attachment, never JSON."""
     lookup = Tour.id == int(tour_id) if tour_id.isdigit() else Tour.slug == tour_id
     tour = db.query(Tour).filter(lookup, Tour.status == "published").first()
@@ -748,16 +734,53 @@ def public_tour_brochure_download(tour_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=502, detail="Brochure download did not return a PDF")
 
     filename_base = re.sub(r"[^A-Za-z0-9._-]+", "-", (tour.slug or f"tour-{tour.id}")).strip("-.")
-    filename = f"{filename_base or f'tour-{tour.id}'}-brochure.pdf"
+    filename = f"{filename_base or f'tour-{tour.id}'}-trip-notes.pdf"
     return StreamingResponse(
         iter([response.content]),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{filename}"',
             "Content-Length": str(len(response.content)),
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.get("/tours/{tour_id}/itinerary")
+def public_tour_itinerary(tour_id: str, download: bool = Query(default=False), db: Session = Depends(get_db)):
+    """Open or download a published tour's supplier-authored itinerary PDF."""
+    lookup = Tour.id == int(tour_id) if tour_id.isdigit() else Tour.slug == tour_id
+    tour = db.query(Tour).filter(lookup, Tour.status == "published").first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    from app.services.itinerary import build_public_tour_itinerary_pdf
+
+    content, filename = build_public_tour_itinerary_pdf(db, tour)
+    disposition = "attachment" if download else "inline"
+    return StreamingResponse(
+        iter([content]), media_type="application/pdf",
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"', "Content-Length": str(len(content)), "Cache-Control": "no-store"},
+    )
+
+
+# These concrete PDF routes must be registered before the canonical two-part
+# route below. Otherwise FastAPI treats `/tours/3/brochure` as
+# `{country_slug=3}/{tour_slug=brochure}` and the public PDF can never open.
+@router.get("/tours/{country_slug}/{tour_slug}")
+def public_tour_detail_by_slug(country_slug: str, tour_slug: str, travel_date: str = Query(default=""), db: Session = Depends(get_db)):
+    """Resolve the canonical public tour URL and reject mismatched countries."""
+    from fastapi import HTTPException
+
+    tour = db.query(Tour).filter(Tour.slug == tour_slug, Tour.status == "published").first()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    expected_country = slugify(tour.country.country_name if tour.country else "worldwide")
+    if country_slug != expected_country:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "Tour not found for this country", "canonical_path": f"/tours/{expected_country}/{tour.slug}"},
+        )
+    return public_tour_detail(tour.slug, travel_date, db)
 
 
 @router.get("/tours/{tour_id}")

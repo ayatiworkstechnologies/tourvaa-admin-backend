@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     STORAGE_ROOT: str = "storage"
 
     CLOUDINARY_URL: str = ""
+    # Public website assets are deliberately segregated from authenticated
+    # supplier, vehicle, agent, and affiliate documents. Cloudinary creates
+    # these folders lazily on the first public upload.
+    CLOUDINARY_PUBLIC_ROOT: str = "tourvaa_demo/public"
 
     SUPER_ADMIN_NAME: str = "Super Admin"
     SUPER_ADMIN_EMAIL: str = "admin@tourvaa.com"

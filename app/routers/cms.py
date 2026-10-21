@@ -237,8 +237,15 @@ def tours_import_template(db: Session = Depends(get_db), current_user: User = De
     # A supplier acting on their own portal never gets to pick a supplier -
     # a row's tour is always attached to them - so their template omits that
     # column entirely rather than showing a field they can't use.
-    include_supplier_column = _get_actor_supplier_id(db, current_user) is None
-    buffer = build_import_template_workbook(db, include_supplier_column)
+    actor_supplier_id = _get_actor_supplier_id(db, current_user)
+    include_supplier_column = actor_supplier_id is None
+    supplier_currency = None
+    if actor_supplier_id:
+        from app.models.suppliers import Supplier
+
+        supplier = db.query(Supplier).filter(Supplier.id == actor_supplier_id).first()
+        supplier_currency = (supplier.currency or "").strip().upper() if supplier else None
+    buffer = build_import_template_workbook(db, include_supplier_column, supplier_currency)
     return StreamingResponse(
         buffer,
         media_type=_XLSX_MEDIA_TYPE,

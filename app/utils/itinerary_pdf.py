@@ -41,12 +41,17 @@ def _plain_text_pdf(path: Path, data: dict) -> None:
     lines = [
         "=" * 60,
         f"ITINERARY: {data['tour_name']}",
-        f"Booking: {data['booking_code']}",
         "=" * 60,
-        f"Traveller: {data.get('customer_name', '-')}",
-        f"Travel Date: {data.get('tour_date', '-')}",
         "",
     ]
+    if data.get("public_tour"):
+        lines.insert(2, "Tour itinerary and travel information")
+    else:
+        lines[2:2] = [
+            f"Booking: {data['booking_code']}",
+            f"Traveller: {data.get('customer_name', '-')}",
+            f"Travel Date: {data.get('tour_date', '-')}",
+        ]
     if data.get("highlights"):
         lines += ["TOUR HIGHLIGHTS", "-" * 60]
         for highlight in data["highlights"]:
@@ -133,17 +138,17 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
         Spacer(1, 0.3 * cm),
     ]
 
-    meta = [
+    meta = ([["Tour itinerary", "", "", ""]] if data.get("public_tour") else [
         ["Booking Code:", data["booking_code"], "Travel Date:", data.get("tour_date", "-")],
         ["Traveller:", data.get("customer_name", "-"), "", ""],
-    ]
+    ])
     meta_table = Table(meta, colWidths=[3.5 * cm, 7 * cm, 3.5 * cm, 4 * cm])
     meta_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
         ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
         ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("SPAN", (1, 1), (3, 1)),
+        ("SPAN", (1, 0 if data.get("public_tour") else 1), (3, 0 if data.get("public_tour") else 1)),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
     story.append(meta_table)

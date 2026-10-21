@@ -190,14 +190,37 @@ def notify_supplier_submitted_verification(db: Session, *, supplier_id: int, sup
     db.flush()
 
 
-def notify_supplier_approved(db: Session, *, supplier_id: int, supplier_name: str, user_id: int | None = None):
+def notify_supplier_approved(
+    db: Session,
+    *,
+    supplier_id: int,
+    supplier_name: str,
+    user_id: int | None = None,
+    background_tasks: "BackgroundTasks | None" = None,
+):
     from app.config import settings
+    from app.services.notification_delivery import dispatch_lifecycle_email
     notify_admins(db, notification_type="supplier_approved", title="Supplier Approved", message=f"Supplier '{supplier_name}' has been approved.", entity_type="supplier", entity_id=supplier_id)
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="supplier_approved", title="Supplier operations unlocked", message=f"Your supplier profile '{supplier_name}' is approved. Tour, booking, calendar and payout features are now available.", entity_type="supplier", entity_id=supplier_id)
         from app.utils.email_templates import approved_email
         login_url = f"{settings.FRONTEND_URL}/login"
-        send_templated_email(db, _user_email(db, user_id), "supplier_approved", {"supplier_name": supplier_name, "name": supplier_name, "login_url": login_url}, "Your Tourvaa supplier operations are unlocked", approved_email(supplier_name, login_url))
+        # Account approval is a lifecycle event: reserve it durably before
+        # sending so SMTP failures are visible in notification_deliveries and
+        # retried by the lifecycle sweep instead of being silently swallowed.
+        dispatch_lifecycle_email(
+            db,
+            event="supplier_account_approved",
+            entity_type="supplier",
+            entity_id=supplier_id,
+            recipient_type="supplier",
+            recipient_email=_user_email(db, user_id),
+            template_key="supplier_approved",
+            values={"supplier_name": supplier_name, "name": supplier_name, "login_url": login_url},
+            fallback_subject="Your Tourvaa supplier operations are unlocked",
+            fallback_html=approved_email(supplier_name, login_url),
+            background_tasks=background_tasks,
+        )
     db.flush()
 
 
