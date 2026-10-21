@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.cms import City, Country, Currency, State, Tour, TourCategory, TourSubcategory
 from app.schemas.cms import CategoryPayload, CityPayload, CountryPayload, CurrencyPayload, StatePayload, StatusUpdate, SubcategoryPayload, TourCommissionUpdate, TourPayload
-from app.services.cms import _category, _city, _country, _currency, _state, _subcategory, _tour, delete_tour, get_tour, list_categories, list_cities, list_countries, list_currencies, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_currency, save_state, save_subcategory, save_tour, update_status, update_tour_commission
+from app.services.cms import _category, _city, _country, _currency, _state, _subcategory, _tour, delete_tour, get_tour, is_tour_publish_ready, list_categories, list_cities, list_countries, list_currencies, list_states, list_subcategories, list_tours, save_category, save_city, save_country, save_currency, save_state, save_subcategory, save_tour, update_status, update_tour_commission
 from app.services.tour_import_export import build_import_template_workbook, build_tour_detail_workbook, import_tours, parse_tour_import_rows
 from app.auth.permissions import get_current_user, require_any_permission
 from app.utils.pagination import pagination_params
@@ -342,12 +342,10 @@ def tour_status(tour_id: int, data: StatusUpdate, request: Request, db: Session 
         # submit-for-approval / admin-review workflow, never set directly by
         # a supplier -- otherwise this generic endpoint lets them bypass review.
         raise HTTPException(status_code=403, detail="Tour status is managed through the approval workflow, not directly by suppliers")
-    if data.status == "published" and tour.supplier_id is not None and tour.status not in ("active", "published"):
-        # A supplier-owned tour must have cleared at least one admin review
-        # (submit-for-approval -> approve, which sets Tour.status="active")
-        # before it can go live -- otherwise an admin could publish content
-        # that was never actually reviewed, bypassing the approval workflow
-        # this endpoint already protects suppliers from bypassing themselves.
+    if data.status == "published" and not is_tour_publish_ready(tour):
+        # A supplier-owned tour must have cleared at least one admin review.
+        # is_tour_publish_ready also permits republishing a disabled tour that
+        # has an approved version, without letting an unreviewed draft go live.
         raise HTTPException(status_code=409, detail="This tour must be submitted for review and approved before it can be published")
     return {"status": "success", "data": update_status(db, Tour, _tour, tour_id, data, current_user, "tour", request)}
 

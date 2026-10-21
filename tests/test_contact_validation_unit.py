@@ -41,29 +41,60 @@ def test_contact_payloads_accept_normalized_e164_details():
     assert traveller.email == "alex@example.com"
 
 
-def test_registration_rejects_calling_code_that_conflicts_with_catalogue_country():
+@pytest.mark.parametrize("mobile_number", ["6789", "678901", "1234567890"])
+def test_indian_registration_rejects_invalid_mobile_numbers(mobile_number):
+    with pytest.raises(ValidationError, match="valid mobile number"):
+        UnifiedRegisterSchema(
+            account_type="CUSTOMER", first_name="Alex", email="alex@ayatiworks.com",
+            country_id=1, country_iso="IN", country_code="+91",
+            mobile_number=mobile_number, accepted_terms=True,
+        )
+
+
+def test_indian_registration_accepts_valid_mobile_number():
     data = UnifiedRegisterSchema(
-        account_type="CUSTOMER", first_name="Alex", email="alex@example.com",
-        country_id=1, country_iso="IN", country_code="+61", mobile_number="9876543210", accepted_terms=True,
+        account_type="CUSTOMER", first_name="Alex", email="alex@ayatiworks.com",
+        country_id=1, country_iso="IN", country_code="+91",
+        mobile_number="6789012345", accepted_terms=True,
     )
-    country = SimpleNamespace(id=1, country_name="India", country_code="IN", phone_code="+91")
-    db = MagicMock()
 
-    def query(model):
-        result = MagicMock()
-        result.filter.return_value.first.return_value = country if model is Country else None
-        return result
+    assert data.mobile_number == "6789012345"
 
-    db.query.side_effect = query
-    with pytest.raises(HTTPException) as exc:
-        auth.register_unified_user(db, data)
 
-    assert exc.value.status_code == 422
+@pytest.mark.parametrize(
+    "email",
+    ["xyz@gmail.com", "test@example.com", "dummy@mailinator.com", "user+name@test.com"],
+)
+def test_registration_rejects_placeholder_or_disposable_email(email):
+    with pytest.raises(ValidationError, match="real email address"):
+        UnifiedRegisterSchema(
+            account_type="CUSTOMER", first_name="Alex", email=email,
+            country_id=1, country_iso="IN", country_code="+91",
+            mobile_number="6789012345", accepted_terms=True,
+        )
+
+
+def test_registration_accepts_non_placeholder_email():
+    data = UnifiedRegisterSchema(
+        account_type="CUSTOMER", first_name="Alex", email="alex.smith@gmail.com",
+        country_id=1, country_iso="IN", country_code="+91",
+        mobile_number="6789012345", accepted_terms=True,
+    )
+
+    assert str(data.email) == "alex.smith@gmail.com"
+
+
+def test_registration_rejects_calling_code_that_conflicts_with_catalogue_country():
+    with pytest.raises(ValidationError, match="valid mobile number"):
+        UnifiedRegisterSchema(
+            account_type="CUSTOMER", first_name="Alex", email="alex@ayatiworks.com",
+            country_id=1, country_iso="IN", country_code="+61", mobile_number="9876543210", accepted_terms=True,
+        )
 
 
 def test_registration_accepts_equivalent_catalogue_calling_code_formats():
     data = UnifiedRegisterSchema(
-        account_type="CUSTOMER", first_name="Alex", email="alex@example.com",
+        account_type="CUSTOMER", first_name="Alex", email="alex@ayatiworks.com",
         country_id=1, country_iso="IN", country_code="+91", mobile_number="9876543210", accepted_terms=True,
     )
     country = SimpleNamespace(id=1, country_name="India", country_code="IN", phone_code="91.0")

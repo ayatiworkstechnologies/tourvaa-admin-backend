@@ -21,7 +21,11 @@ from app.models.cms import City, Country, Tour, TourCategory, TourSubcategory
 from app.models.cancellations import RefundRule
 from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.services.cms import _category, _city, _country, _subcategory, _tour
-from app.services.website_cms import list_active_country_pages_public
+from app.services.website_cms import (
+    get_public_destination_guide,
+    list_active_country_pages_public,
+    list_public_destination_guides,
+)
 from app.services.reviews import get_review_stats, list_tour_reviews
 from app.services.settings import sanitize_public_contact_setting
 from app.services.viator import build_generic_affiliate_url, is_configured as is_viator_configured, search_day_trips
@@ -1045,6 +1049,20 @@ def public_country_pages(db: Session = Depends(get_db)):
     # country's name so the frontend can match it against the slug in the
     # URL the same way it already resolves /public/countries.
     return {"status": "success", "items": list_active_country_pages_public(db)}
+
+
+@router.get("/destination-guides")
+def public_destination_guides(db: Session = Depends(get_db)):
+    """List destination guides that have been explicitly published in CMS."""
+    return {"status": "success", "items": list_public_destination_guides(db)}
+
+
+@router.get("/destination-guides/{slug}")
+def public_destination_guide(slug: str, db: Session = Depends(get_db)):
+    guide = get_public_destination_guide(db, slug)
+    if not guide:
+        raise HTTPException(status_code=404, detail="Destination guide not found")
+    return {"status": "success", "data": guide}
 
 
 @router.get("/cities")

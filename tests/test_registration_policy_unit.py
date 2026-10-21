@@ -24,7 +24,7 @@ def registration_data(account_type: str, **overrides):
     values = {
         "account_type": account_type,
         "first_name": "Tourvaa User",
-        "email": f"{account_type.lower()}@example.com",
+        "email": f"{account_type.lower()}@ayatiworks.com",
         "country_id": 91,
         "country_iso": "IN",
         "country_code": "+91",
@@ -104,7 +104,7 @@ def test_every_role_starts_email_verification(monkeypatch, account_type, role_sl
 
 
 def test_supplier_registration_allows_a_phone_country_missing_from_the_geo_catalogue(monkeypatch):
-    data = UnifiedRegisterSchema(**registration_data("SUPPLIER", country_id=None, country_iso="AU", country_code="+61"))
+    data = UnifiedRegisterSchema(**registration_data("SUPPLIER", country_id=None, country_iso="AU", country_code="+61", mobile_number="0412345678"))
     role = SimpleNamespace(id=7, slug="supplier", is_active=True)
     db = MagicMock()
 

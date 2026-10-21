@@ -98,6 +98,9 @@ def _tour(item: Tour):
         "tour_video_url": item.tour_video_url,
         "brochure_pdf": item.brochure_pdf,
         "status": item.status,
+        # Keep publish eligibility server-owned so every admin client follows
+        # the supplier review workflow instead of offering an invalid action.
+        "publish_ready": is_tour_publish_ready(item),
         # Set only while item.status stays "published" during an in-review
         # edit (see tour_versions._stage_pending_version) -- the frontend
         # uses this to show "Unpublished Changes"/"Repricing Required"
@@ -110,6 +113,27 @@ def _tour(item: Tour):
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
+
+
+def is_tour_publish_ready(item: Tour) -> bool:
+    """Return whether this tour may be published without bypassing review."""
+    if item.supplier_id is None or item.status in ("active", "published"):
+        return True
+    if not item.id:
+        return False
+
+    from app.models.tour_versions import TourVersion
+    from sqlalchemy.orm import object_session
+
+    session = object_session(item)
+    if session is None:
+        return False
+    return (
+        session.query(TourVersion.id)
+        .filter(TourVersion.tour_id == item.id, TourVersion.status == "approved")
+        .first()
+        is not None
+    )
 
 
 def _pending_review_kind(item: Tour) -> str | None:

@@ -575,6 +575,40 @@ def get_content_block(db, key: str):
     obj = db.query(HomepageContentBlock).filter(HomepageContentBlock.key == key).first()
     return _s_content_block(obj, key)
 
+
+def list_public_destination_guides(db):
+    """Return only explicitly authored destination guides.
+
+    Destination pages must never be synthesized from demo defaults.  The
+    country name inside each block is required because it is also used as the
+    public label and tour lookup value.
+    """
+    rows = (
+        db.query(HomepageContentBlock)
+        .filter(HomepageContentBlock.key.like("country_info_%"))
+        .order_by(HomepageContentBlock.key.asc())
+        .all()
+    )
+    return [
+        {"slug": row.key.removeprefix("country_info_"), "data": row.data}
+        for row in rows
+        if isinstance(row.data, dict) and str(row.data.get("country_name") or "").strip()
+    ]
+
+
+def get_public_destination_guide(db, slug: str):
+    normalized_slug = re.sub(r"[^a-z0-9-]", "", slug.lower().strip())
+    if not normalized_slug:
+        return None
+    row = (
+        db.query(HomepageContentBlock)
+        .filter(HomepageContentBlock.key == f"country_info_{normalized_slug}")
+        .first()
+    )
+    if not row or not isinstance(row.data, dict) or not str(row.data.get("country_name") or "").strip():
+        return None
+    return {"slug": normalized_slug, "data": row.data}
+
 def upsert_content_block(db, key: str, data: ContentBlockPayload):
     if not _is_allowed_content_block_key(key):
         raise HTTPException(status_code=404, detail="Unknown content block")

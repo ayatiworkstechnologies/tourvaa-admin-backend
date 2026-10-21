@@ -2,9 +2,27 @@
 import re
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+import phonenumbers
 
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,19}$")
 STRONG_PASSWORD_PATTERN = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$")
+PLACEHOLDER_EMAIL_LOCAL_PARTS = {
+    "abc", "asdf", "demo", "dummy", "email", "example", "fake", "mail",
+    "na", "none", "null", "qwerty", "sample", "temp", "temporary", "test",
+    "testing", "user", "username", "xyz",
+}
+NON_REGISTRATION_EMAIL_DOMAINS = {
+    "example.com", "example.net", "example.org", "mailinator.com", "test.com",
+}
+
+
+def validate_registration_email(value: EmailStr) -> str:
+    email = str(value).strip().lower()
+    local_part, domain = email.rsplit("@", 1)
+    normalized_local_part = re.sub(r"[._+-]", "", local_part)
+    if normalized_local_part in PLACEHOLDER_EMAIL_LOCAL_PARTS or domain in NON_REGISTRATION_EMAIL_DOMAINS:
+        raise ValueError("Enter a real email address; placeholder or disposable emails are not allowed")
+    return email
 
 
 def validate_strong_password(value: str) -> str:
@@ -41,7 +59,7 @@ class RegisterSchema(BaseModel):
     @field_validator("email")
     @classmethod
     def normalize_email(cls, value: EmailStr):
-        return str(value).strip().lower()
+        return validate_registration_email(value)
 
     @field_validator(
         "profile_image",
@@ -78,7 +96,7 @@ class UnifiedRegisterSchema(BaseModel):
     country_id: Optional[int] = Field(default=None, gt=0)
     country_iso: str = Field(min_length=2, max_length=2)
     country_code: str = Field(min_length=2, max_length=8)
-    mobile_number: str = Field(min_length=6, max_length=20)
+    mobile_number: str = Field(min_length=1, max_length=20)
     accepted_terms: bool
     redirect: Optional[str] = None
 
@@ -106,7 +124,7 @@ class UnifiedRegisterSchema(BaseModel):
     @field_validator("email")
     @classmethod
     def normalize_unified_email(cls, value: EmailStr):
-        return str(value).strip().lower()
+        return validate_registration_email(value)
 
     @model_validator(mode="after")
     def validate_registration(self):
@@ -116,8 +134,24 @@ class UnifiedRegisterSchema(BaseModel):
         mobile = re.sub(r"\D", "", self.mobile_number)
         if not PHONE_PATTERN.fullmatch(f"{country_code}{mobile}"):
             raise ValueError("Enter a valid mobile number")
+        try:
+            parsed_phone = phonenumbers.parse(mobile, self.country_iso)
+            expected_calling_code = phonenumbers.country_code_for_region(self.country_iso)
+        except phonenumbers.NumberParseException as exc:
+            raise ValueError("Enter a valid mobile number for the selected country") from exc
+        if (
+            not expected_calling_code
+            or parsed_phone.country_code != expected_calling_code
+            or int(country_code.lstrip("+")) != expected_calling_code
+            or not phonenumbers.is_valid_number(parsed_phone)
+            or phonenumbers.number_type(parsed_phone) not in {
+                phonenumbers.PhoneNumberType.MOBILE,
+                phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE,
+            }
+        ):
+            raise ValueError("Enter a valid mobile number for the selected country")
         self.country_code = country_code
-        self.mobile_number = mobile
+        self.mobile_number = str(parsed_phone.national_number)
         if self.redirect and (not self.redirect.startswith("/") or self.redirect.startswith("//")):
             raise ValueError("Invalid redirect path")
         return self
