@@ -1099,6 +1099,10 @@ def my_bookings_report(
             # Supplier-price value of the booking, never the customer total
             # (which includes Tourvaa's markup, tax and fees).
             "total_amount": _money(_supplier_booking_value(b)),
+            # Amounts are stored in this booking's own operating currency.
+            # The portal must receive the code so its display-currency helper
+            # never assumes USD and converts an INR booking a second time.
+            "currency": b.currency or "USD",
             "booking_status": b.booking_status,
             "payment_status": b.payment_status,
             "special_requests": b.customer_notes,
@@ -1129,10 +1133,15 @@ def my_bookings_summary(
     pending = query.filter(Booking.booking_status.in_(["pending_supplier_acceptance", "pending_payment", "pending_supplier_assignment"])).with_entities(func.count(Booking.id)).scalar() or 0
     cancelled = query.filter(Booking.booking_status.in_(["cancelled", "declined", "refunded"])).with_entities(func.count(Booking.id)).scalar() or 0
 
+    # A supplier's realised booking value is only earned after the trip is
+    # completed. Pending, accepted and cancelled records remain visible in
+    # the count/status cards above, but must not inflate this financial
+    # summary or be reported as completed business.
+    completed_query = query.filter(Booking.booking_status == "completed")
     amount_column = func.coalesce(Booking.supplier_gross_amount, Booking.final_amount)
     amounts = [
         {"currency": currency or "USD", "booking_value": _money(amount), "bookings": count}
-        for currency, count, amount in query.with_entities(
+        for currency, count, amount in completed_query.with_entities(
             Booking.currency, func.count(Booking.id), func.coalesce(func.sum(amount_column), 0),
         ).group_by(Booking.currency).all()
     ]
