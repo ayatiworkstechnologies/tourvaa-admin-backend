@@ -84,6 +84,19 @@ class ContentBlockPayload(BaseModel):
     data: Dict[str, Any] = {}
 
 
+class BlogFaqPayload(BaseModel):
+    # The editor accepts any non-empty plain-text question.  Keep the API
+    # contract identical so legacy FAQs such as "Hi" can be recovered and
+    # saved instead of blocking the whole article with a 422.
+    question: str = Field(min_length=1, max_length=300)
+    answer: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("question", "answer", mode="before")
+    @classmethod
+    def strip_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
 class BlogPayload(BaseModel):
     """The editorial contract shared by the admin studio and public blog.
 
@@ -99,6 +112,7 @@ class BlogPayload(BaseModel):
     banner_alt: Optional[str] = Field(default=None, max_length=300)
     author: Optional[str] = Field(default=None, max_length=120)
     tags: Optional[List[str]] = Field(default=None, max_length=12)
+    faqs: Optional[List[BlogFaqPayload]] = Field(default=None, max_length=30)
     seo_title: Optional[str] = Field(default=None, max_length=200)
     seo_description: Optional[str] = Field(default=None, max_length=400)
     status: Literal["draft", "published"] = "draft"

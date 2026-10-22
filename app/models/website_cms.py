@@ -131,6 +131,10 @@ class Blog(Base):
     banner_alt = Column(String(300), nullable=True)
     author = Column(String(120), nullable=True)
     tags = Column(JSON, nullable=True)
+    # Article FAQs are structured editorial data, never hidden markup inside
+    # the article body.  Keeping them separate prevents sanitisation from
+    # leaking implementation JSON into public prose.
+    faqs = Column(JSON, nullable=True)
     seo_title = Column(String(200), nullable=True)
     seo_description = Column(String(400), nullable=True)
     status = Column(String(20), default="draft", nullable=False)
