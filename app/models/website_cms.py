@@ -151,7 +151,8 @@ class CustomerReview(Base):
     id = Column(Integer, primary_key=True, index=True)
     reviewer_name = Column(String(120), nullable=False)
     reviewer_image = Column(String(255), nullable=True)
-    rating = Column(Integer, default=5, nullable=False)
+    # CMS testimonials support half-star scores (for example, 3.5).
+    rating = Column(Float, default=5, nullable=False)
     review_text = Column(Text, nullable=False)
     tour_name = Column(String(200), nullable=True)
     country = Column(String(100), nullable=True)
