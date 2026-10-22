@@ -1,8 +1,9 @@
-"""Display-currency conversion using USD as the platform accounting base.
+"""Currency conversion using USD as the platform accounting base.
 
-Bookings retain the tour/transaction currency that was priced by the server.
-These rates are for browsing and reporting display only; payment endpoints must
-always charge the immutable booking currency.
+Public prices can be displayed approximately in a visitor-selected currency.
+At customer booking creation the selected currency and current rate are locked
+onto the booking; payment endpoints then charge that immutable booking currency.
+Supplier settlement snapshots remain in the tour's original currency.
 """
 
 from __future__ import annotations

@@ -7,6 +7,7 @@ from app.auth.permissions import get_current_user_optional, require_any_permissi
 from app.models.users import User
 from app.utils.pagination import pagination_params
 from app.services import website_cms as service
+from app.utils.money import utcnow
 from app.schemas.website_cms import (
     BannerPayload, BlogPayload, CmsPagePayload, ContentBlockPayload,
     CountryPagePayload, ExternalLinkPayload, FavouriteCountryPayload,
@@ -208,7 +209,8 @@ def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(
 @router.get("/blogs/{item_id}")
 def get_blog(item_id: int, db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
     blog = service.get_blog(db, item_id)
-    if blog.get("status") != "published" and not user_has_any_permission(db, current_user, *BLOG_VIEW_PERMS):
+    is_live_scheduled = blog.get("status") == "scheduled" and blog.get("scheduled_at") and blog.get("scheduled_at") <= utcnow()
+    if blog.get("status") != "published" and not is_live_scheduled and not user_has_any_permission(db, current_user, *BLOG_VIEW_PERMS):
         raise HTTPException(status_code=404, detail="Blog not found")
     return {"status": "success", "data": blog}
 

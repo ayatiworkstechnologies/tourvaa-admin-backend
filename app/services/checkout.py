@@ -246,6 +246,7 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
         notes=body.notes or payload.get("notes"),
         promo_code=body.promo_code or payload.get("promo_code"),
         booking_source="customer",
+        display_currency=body.display_currency,
         payment_type=body.payment_type,
         agreed_terms=body.agreed_terms,
         agreed_cancellation_policy=body.agreed_cancellation_policy,

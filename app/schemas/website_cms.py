@@ -115,7 +115,11 @@ class BlogPayload(BaseModel):
     faqs: Optional[List[BlogFaqPayload]] = Field(default=None, max_length=30)
     seo_title: Optional[str] = Field(default=None, max_length=200)
     seo_description: Optional[str] = Field(default=None, max_length=400)
-    status: Literal["draft", "published"] = "draft"
+    status: Literal["draft", "published", "scheduled"] = "draft"
+    scheduled_at: Optional[datetime] = None
+    category: Optional[str] = Field(default=None, max_length=120)
+    og_image: Optional[str] = Field(default=None, max_length=255)
+    related_tour_ids: Optional[List[int]] = None
 
     @field_validator("title", "slug", "excerpt", "featured_image", "banner_title", "banner_alt", "author", "seo_title", "seo_description", mode="before")
     @classmethod

@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.services.bookings import (
+    _apply_customer_checkout_currency,
     _bookable_calendar_capacity,
     _booking_status_label,
     _booking_email_recipient,
@@ -23,7 +24,7 @@ from app.services.bookings import (
     _has_secured_booking_funds,
 )
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
-from app.routers.payments_gateway import _ensure_booking_payment_access, _require_captured_amount_matches_pending, _validate_payment_currency, _validate_payment_request
+from app.routers.payments_gateway import _ensure_booking_payment_access, _minimum_deposit_amount, _require_captured_amount_matches_pending, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
 from app.schemas.checkout import CheckoutConfirm
 from app.schemas.tours import AccommodationExtraPayload
@@ -707,3 +708,88 @@ def test_agent_self_update_rejects_admin_only_fields():
 def test_agent_role_detection_handles_agent_reseller():
     actor = SimpleNamespace(role=SimpleNamespace(slug="agent-reseller"))
     assert is_agent_user(actor) is True
+
+
+def test_customer_checkout_locks_selected_currency_without_converting_supplier_settlement(monkeypatch):
+    from decimal import Decimal
+    from app.services import currency as currency_service
+
+    monkeypatch.setattr(
+        currency_service,
+        "convert_amount",
+        lambda amount, source, target: (Decimal("95.00"), Decimal("95"), {"source": "unit_test_rates"}),
+    )
+    booking_row = SimpleNamespace(
+        currency="CHF",
+        display_currency="CHF",
+        total_cost=Decimal("100"),
+        base_amount=Decimal("80"),
+        optional_activity_amount=Decimal("20"),
+        accommodation_amount=Decimal("0"),
+        extension_amount=Decimal("0"),
+        non_commissionable_addon_amount=Decimal("0"),
+        cost_plus_customer_amount=Decimal("0"),
+        group_discount_amount=Decimal("0"),
+        discount_amount=Decimal("0"),
+        tax_amount=Decimal("0"),
+        surcharge_amount=Decimal("0"),
+        service_fee_amount=Decimal("0"),
+        gateway_fee_amount=Decimal("0"),
+        final_amount=Decimal("100"),
+        agent_net_price=Decimal("0"),
+        agent_markup=Decimal("0"),
+        customer_selling_price=Decimal("100"),
+        amount_paid=Decimal("0"),
+        amount_pending=Decimal("100"),
+        supplier_base_amount=Decimal("70"),
+        supplier_net_payable=Decimal("65"),
+        commission_base_amount=Decimal("30"),
+        tourvaa_commission_amount=Decimal("5"),
+    )
+    addon = SimpleNamespace(unit_price=Decimal("10"), total_price=Decimal("20"))
+
+    _apply_customer_checkout_currency(booking_row, "INR", "CHF", [addon])
+
+    assert booking_row.currency == "INR"
+    assert booking_row.display_currency == "INR"
+    assert booking_row.exchange_rate == Decimal("95.000000")
+    assert booking_row.exchange_rate_source == "unit_test_rates"
+    assert booking_row.final_amount == Decimal("9500.00")
+    assert booking_row.amount_pending == Decimal("9500.00")
+    assert addon.unit_price == Decimal("950.00")
+    assert addon.total_price == Decimal("1900.00")
+    assert booking_row.supplier_net_payable == Decimal("65")
+    assert booking_row.tourvaa_commission_amount == Decimal("5")
+
+
+def test_fixed_supplier_deposit_is_converted_to_locked_booking_currency():
+    from decimal import Decimal
+
+    booking_row = SimpleNamespace(
+        amount_pending=Decimal("9500"),
+        amount_paid=Decimal("0"),
+        booking_source="agent",
+        supplier_currency="CHF",
+        currency="INR",
+        exchange_rate=Decimal("95"),
+        tour_start_date=None,
+        tour=SimpleNamespace(
+            deposit_cutoff_days=None,
+            deposit_type="fixed",
+            deposit_percentage=None,
+            booking_deposit=Decimal("10"),
+        ),
+    )
+
+    assert _minimum_deposit_amount(None, booking_row) == Decimal("950.00")
+
+
+def test_checkout_confirm_accepts_selected_display_currency():
+    payload = CheckoutConfirm(display_currency="INR", agreed_terms=True, agreed_cancellation_policy=True)
+
+    assert payload.display_currency == "INR"
+
+
+def test_checkout_confirm_rejects_malformed_display_currency():
+    with pytest.raises(ValidationError):
+        CheckoutConfirm(display_currency="rupees")

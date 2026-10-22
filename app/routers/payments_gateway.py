@@ -206,6 +206,17 @@ def _minimum_deposit_amount(db: Session, booking: Booking) -> Decimal:
     full = money(booking.amount_pending or 0)
     tour = getattr(booking, "tour", None)
 
+    def fixed_in_booking_currency(value) -> Decimal:
+        configured = money(value or 0)
+        source = str(getattr(booking, "supplier_currency", None) or booking.currency or "USD").upper()
+        target = str(booking.currency or source).upper()
+        if source == target:
+            return configured
+        rate = Decimal(str(getattr(booking, "exchange_rate", None) or 0))
+        if rate <= 0:
+            raise HTTPException(status_code=409, detail="Booking exchange-rate snapshot is unavailable")
+        return money(configured * rate)
+
     # A customer's very first payment on this booking follows the same
     # eligibility window as the agent branch above (see
     # tour_availability.customer_deposit_eligibility / _deposit_window) --
@@ -227,7 +238,7 @@ def _minimum_deposit_amount(db: Session, booking: Booking) -> Decimal:
         if eligibility["deposit_type"] == "percentage" and eligibility["deposit_percentage"]:
             return money(full * Decimal(str(eligibility["deposit_percentage"])) / Decimal("100"))
         if eligibility["booking_deposit"]:
-            return money(min(Decimal(str(eligibility["booking_deposit"])), full))
+            return min(fixed_in_booking_currency(eligibility["booking_deposit"]), full)
         return full
 
     cutoff_days = getattr(tour, "deposit_cutoff_days", None) if tour else None
@@ -259,7 +270,7 @@ def _minimum_deposit_amount(db: Session, booking: Booking) -> Decimal:
         if not pct:
             return full
         return money(full * Decimal(str(pct)) / Decimal("100"))
-    return money(min(Decimal(str(fixed)), full))
+    return min(fixed_in_booking_currency(fixed), full)
 
 
 def _validate_payment_request(db: Session, booking: Booking, amount: Decimal, current_user, already_pending: Decimal = Decimal("0"), payment_type: str | None = None) -> Decimal:

@@ -132,7 +132,7 @@ def create_ledger_entry(db: Session, *, booking: Booking, supplier_id: int, gros
         net_payable=net_payable,
         amount_paid=Decimal("0"),
         amount_pending=net_payable,
-        currency=booking.currency or "USD",
+        currency=booking.supplier_currency or booking.currency or "USD",
         status="pending",
     )
     db.add(entry)

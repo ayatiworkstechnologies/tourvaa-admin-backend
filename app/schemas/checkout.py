@@ -1,5 +1,5 @@
 from typing import Any, Dict, Literal, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CheckoutStart(BaseModel):
@@ -30,3 +30,6 @@ class CheckoutConfirm(BaseModel):
     # gateway amount is then derived server-side from the saved booking,
     # rather than being reconstructed from browser state after confirmation.
     payment_type: Literal["partial", "full"] = "full"
+    # Currency currently shown to the customer. It is converted and locked
+    # server-side when the booking is created, never trusted as an amount.
+    display_currency: Optional[str] = Field(default=None, min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")

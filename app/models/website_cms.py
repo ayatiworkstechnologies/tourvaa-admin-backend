@@ -140,6 +140,7 @@ class Blog(Base):
     status = Column(String(20), default="draft", nullable=False)
     # draft, published
     published_at = Column(DateTime(timezone=True), nullable=True)
+    scheduled_at = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

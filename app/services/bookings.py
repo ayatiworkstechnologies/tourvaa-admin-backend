@@ -1064,6 +1064,11 @@ def supplier_booking_value(booking: Booking):
     return booking.final_amount
 
 
+def supplier_booking_currency(booking: Booking) -> str:
+    """Currency for supplier-priced and supplier-payable booking amounts."""
+    return getattr(booking, "supplier_currency", None) or getattr(booking, "currency", None) or "USD"
+
+
 def _is_booking_fully_paid(booking: Booking) -> bool:
     """Whether a supplier may be asked to action the booking.
 
@@ -1099,6 +1104,7 @@ def _supplier_safe(data: dict, booking: Booking) -> dict:
     amounts are dropped. Bookings without a snapshot fall back to the stored
     amounts, which carried no markup."""
     supplier_total = supplier_booking_value(booking)
+    data["currency"] = supplier_booking_currency(booking)
     if supplier_total is not None:
         for key in ("final_amount", "total_cost", "customer_selling_price", "agent_net_price"):
             data[key] = money_str(supplier_total)
@@ -1543,7 +1549,7 @@ def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict |
     figures. Returns None when the booking has no supplier assigned."""
     if not booking.supplier_id:
         return None
-    currency = booking.currency or "USD"
+    currency = supplier_booking_currency(booking)
     customer_price = money(booking.customer_selling_price or booking.final_amount or booking.total_cost or 0)
     if booking.financials_locked_at is not None and booking.supplier_net_payable is not None:
         gross = money(booking.supplier_gross_amount if booking.supplier_gross_amount is not None else money(booking.supplier_net_payable) + money(booking.tourvaa_commission_amount or 0))
@@ -1555,7 +1561,7 @@ def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict |
             "commission_amount": money(booking.tourvaa_commission_amount or 0),
             "net_payable": money(booking.supplier_net_payable),
             "customer_price": customer_price,
-            "customer_price_currency": currency,
+            "customer_price_currency": booking.currency or currency,
         }
 
     if booking.tourvaa_commission_percentage is not None:
@@ -1574,7 +1580,7 @@ def compute_booking_supplier_financials(db: Session, booking: Booking) -> dict |
         "commission_amount": split["commission_amount"],
         "net_payable": split["supplier_net_payable"],
         "customer_price": customer_price,
-        "customer_price_currency": currency,
+        "customer_price_currency": booking.currency or currency,
     }
 
 def _bookable_calendar_capacity(tour: Tour | None, calendar: TourCalendar) -> int:
@@ -1657,20 +1663,9 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
             has_any_slab = db.query(TourPricing.id).filter(TourPricing.tour_id == data.tour_id, TourPricing.status == "active").first() is not None
             if has_any_slab:
                 raise HTTPException(status_code=400, detail=f"No pricing available for {seat_travellers} traveller(s) on this tour. Please choose a different traveller count or contact support.")
-    # The booking's real transaction currency is always the tour/slab's
-    # configured currency -- never the browsing/display currency the
-    # customer's frontend happened to be showing converted amounts in
-    # (data.currency, used only as a last-resort fallback when there's no
-    # tour/slab to price against at all). This is deliberate: it's the
-    # currency the payment gateway actually charges, the supplier is
-    # actually paid in, and every downstream view (admin, invoice, supplier
-    # ledger) consistently reads from booking.currency -- switching this to
-    # the customer's ambient display currency would require rate-locked
-    # re-pricing of every line item and gateway-side currency support
-    # checks, and would leave the supplier settlement currency inconsistent
-    # with what was actually charged. The customer-facing UI discloses the
-    # real charge currency explicitly when it differs from what they were
-    # browsing in (see the booking page's price breakdown).
+    # Price in the tour/slab's authoritative source currency. Customer
+    # checkout can rate-lock these customer-facing amounts into the selected
+    # storefront currency after supplier/platform settlement is snapshotted.
     currency = slab.currency if slab else (tour.currency if tour else data.currency)
     # Customer unit prices start with the supplier rate.  An eligible supplier
     # offer reduces that rate before markup; Tourvaa's own discount is resolved
@@ -2122,6 +2117,83 @@ def _validate_agreements(db: Session, data: BookingCreate, tour) -> None:
             raise HTTPException(status_code=400, detail="You must agree to this tour's cancellation & refund policy to continue")
 
 
+_CUSTOMER_CURRENCY_FIELDS = (
+    "total_cost",
+    "base_amount",
+    "optional_activity_amount",
+    "accommodation_amount",
+    "extension_amount",
+    "non_commissionable_addon_amount",
+    "cost_plus_customer_amount",
+    "group_discount_amount",
+    "discount_amount",
+    "tax_amount",
+    "surcharge_amount",
+    "service_fee_amount",
+    "gateway_fee_amount",
+    "final_amount",
+    "agent_net_price",
+    "agent_markup",
+    "customer_selling_price",
+    "amount_paid",
+    "amount_pending",
+    "adult_unit_price",
+    "child_unit_price",
+    "infant_unit_price",
+    "single_supplement_amount",
+    "group_discount_base_amount",
+)
+
+
+def _apply_customer_checkout_currency(
+    booking: Booking,
+    requested_currency: str | None,
+    source_currency: str,
+    addon_rows: list,
+) -> None:
+    """Rate-lock customer checkout into the storefront currency.
+
+    Supplier and Tourvaa settlement snapshot fields have already been locked
+    in the source currency by _apply_commission_snapshot and are left
+    untouched. Only customer-facing booking amounts and add-on line items are
+    converted, so the gateway can charge exactly the currency shown at
+    checkout without relabelling supplier-priced numbers.
+    """
+    from app.services.currency import convert_amount, normalize_currency
+
+    source = normalize_currency(source_currency)
+    target = normalize_currency(requested_currency, source)
+    if target == source:
+        booking.currency = source
+        booking.display_currency = source
+        booking.exchange_rate = Decimal("1.000000")
+        booking.exchange_rate_source = "same_currency"
+        booking.exchange_rate_captured_at = utcnow()
+        booking.converted_customer_amount = money(booking.customer_selling_price or 0)
+        return
+
+    try:
+        _, rate, rate_payload = convert_amount(Decimal("1"), source, target)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    for field in _CUSTOMER_CURRENCY_FIELDS:
+        value = getattr(booking, field, None)
+        if value is not None:
+            setattr(booking, field, money(Decimal(str(value)) * rate))
+
+    for row in addon_rows:
+        row.unit_price = money(Decimal(str(row.unit_price or 0)) * rate)
+        row.total_price = money(Decimal(str(row.total_price or 0)) * rate)
+
+    booking.currency = target
+    booking.display_currency = target
+    booking.exchange_rate = rate.quantize(Decimal("0.000001"))
+    booking.exchange_rate_source = str(rate_payload.get("source") or "currency_service")[:30]
+    booking.exchange_rate_captured_at = utcnow()
+    booking.converted_customer_amount = money(booking.customer_selling_price or 0)
+
+
 def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = None, request: Optional[Request] = None, background_tasks: BackgroundTasks | None = None) -> dict:
     # Portal users may only create bookings in their own role. In particular,
     # a customer must never be able to attach an Agent ID (or spoof an agent
@@ -2229,15 +2301,12 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         no_of_adults=adults, no_of_children=children, no_of_infants=data.no_of_infants, no_of_rooms=data.no_of_rooms, adults_count=adults, children_count=children, total_travellers=total_travellers, currency=currency,
         total_cost=customer_selling_price, base_amount=base, optional_activity_amount=activity_total, accommodation_amount=accommodation_total, extension_amount=extension_total, non_commissionable_addon_amount=non_commissionable_addon_total, cost_plus_customer_amount=cost_plus_customer_total, cost_plus_supplier_payable=cost_plus_supplier_total, group_discount_tier_id=group_tier.id if group_tier else None, group_discount_amount=group_discount_amount, group_discount_funded_by=group_discount_funded_by, discount_amount=discount, promo_code=data.promo_code, promo_discount_funded_by=promo_discount_funded_by, tax_amount=tax, surcharge_amount=surcharge, service_fee_amount=service_fee, gateway_fee_amount=gateway_fee, final_amount=customer_selling_price, agent_net_price=agent_net_price, agent_markup=agent_markup, customer_selling_price=customer_selling_price, amount_paid=money(0), amount_pending=customer_selling_price,
         booking_status=booking_status, supplier_acceptance_status="pending" if supplier_id else "not_assigned", payment_status=payment_status, payment_type=data.payment_type, agent_payment_method=data.agent_payment_method if data.booking_source == "agent" else None, agent_reference=data.agent_reference if data.booking_source == "agent" else None, notes=data.notes, customer_notes=data.customer_notes, admin_notes=data.admin_notes,
-        # Pricing/currency snapshot -- captured once here and never touched
-        # again, even if the slab, commission, or exchange rates change
-        # later. No live display-currency conversion happens at checkout
-        # today, so display_currency/exchange_rate reflect "charged as-is"
-        # rather than a real conversion; this is the hook a future
-        # visitor-currency checkout flow would populate instead.
+        # Pricing/currency snapshot. Supplier pricing starts in the source
+        # currency; customer checkout below may replace booking.currency with
+        # the selected storefront currency and lock the conversion rate.
         pricing_slab_id=slab.id if slab else None,
         supplier_price=slab.adult_price if slab else None,
-        supplier_currency=slab.currency if slab else None,
+        supplier_currency=(slab.currency if slab else currency),
         tourvaa_selling_price=(slab.storefront_adult_price if slab else None),
         display_currency=currency,
         exchange_rate=money(1),
@@ -2269,23 +2338,41 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     for t in data.travellers:
         full = t.full_name or f"{t.first_name} {t.last_name}".strip()
         db.add(BookingTraveller(booking_id=booking.id, traveller_type=t.traveller_type, first_name=t.first_name, last_name=t.last_name, full_name=full, date_of_birth=_parse_dt(t.date_of_birth), age=t.age, gender=t.gender, nationality=t.nationality, passport_number=t.passport_number, passport_expiry_date=_parse_dt(t.passport_expiry_date), email=t.email, phone=t.phone, is_primary_contact=1 if t.is_primary_contact else 0, special_requirements=t.special_requirements))
+    customer_addon_rows = []
     for row, qty, unit, total in activities:
-        db.add(BookingOptionalActivity(booking_id=booking.id, tour_optional_activity_id=row.id, activity_name_snapshot=row.activity_name, quantity=qty, unit_price=unit, total_price=total))
+        booking_row = BookingOptionalActivity(booking_id=booking.id, tour_optional_activity_id=row.id, activity_name_snapshot=row.activity_name, quantity=qty, unit_price=unit, total_price=total)
+        customer_addon_rows.append(booking_row)
+        db.add(booking_row)
     for row, qty, unit, total in accommodations:
-        db.add(BookingAccommodation(booking_id=booking.id, tour_accommodation_extra_id=row.id, accommodation_name_snapshot=row.accommodation_name, quantity=qty, price_type=row.price_type, unit_price=unit, total_price=total))
+        booking_row = BookingAccommodation(booking_id=booking.id, tour_accommodation_extra_id=row.id, accommodation_name_snapshot=row.accommodation_name, quantity=qty, price_type=row.price_type, unit_price=unit, total_price=total)
+        customer_addon_rows.append(booking_row)
+        db.add(booking_row)
     for row, qty, unit, total in extensions:
-        db.add(BookingExtension(booking_id=booking.id, tour_extension_id=row.id, extension_tour_id=row.extension_tour_id, extension_name_snapshot=row.extension_title, quantity=qty, unit_price=unit, total_price=total))
+        booking_row = BookingExtension(booking_id=booking.id, tour_extension_id=row.id, extension_tour_id=row.extension_tour_id, extension_name_snapshot=row.extension_title, quantity=qty, unit_price=unit, total_price=total)
+        customer_addon_rows.append(booking_row)
+        db.add(booking_row)
+
+    # Lock supplier/platform settlement in the tour currency first. Customer
+    # checkout can then be converted independently without changing what the
+    # supplier priced or is owed.
+    _apply_commission_snapshot(db, booking, pricing_details)
+    if data.booking_source == "customer":
+        _apply_customer_checkout_currency(
+            booking,
+            data.display_currency,
+            currency,
+            customer_addon_rows,
+        )
+
     _history(db, booking, None, booking.booking_status, actor, _user_role(actor), "Booking created")
     if _belongs_to_customer_portal(booking):
         customer.total_bookings = (customer.total_bookings or 0) + 1
         customer.upcoming_bookings = (customer.upcoming_bookings or 0) + 1
-        customer.total_amount_pending = money(customer.total_amount_pending or 0) + customer_selling_price
+        customer.total_amount_pending = money(customer.total_amount_pending or 0) + money(booking.customer_selling_price or 0)
     log_audit(db, actor=actor, action="create_booking", entity_type="booking", entity_id=booking.id, new_values=serialize_booking(db, booking), request=request)
     from app.services.notifications import enqueue_notification, notify_admins
     if _belongs_to_customer_portal(booking) and customer.user_id:
         enqueue_notification(db, user_id=customer.user_id, notification_type="booking_created", title="Booking created", message=f"Your booking {booking.booking_code} was created", entity_type="booking", entity_id=booking.id)
-
-    _apply_commission_snapshot(db, booking, pricing_details)
 
     if booking.agent_id and booking.agent:
         from app.services.agent_ledger import create_ledger_entry
@@ -2365,7 +2452,7 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
         no_of_rooms=booking.no_of_rooms,
         adults_count=adults,
         children_count=children,
-        currency=booking.currency or "USD",
+        currency=booking.supplier_currency or booking.currency or "USD",
         promo_code=promo_code,
         optional_activities=optional_activities,
         accommodations=accommodations,
@@ -2431,7 +2518,40 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
     # Re-pricing is only allowed before any payment (see update_booking), so
     # re-locking the financial snapshot here is the one sanctioned change to
     # it. Keep the pending agent ledger entry in step with the new figure.
+    booking.currency = currency
+    booking.supplier_currency = currency
+
+    for existing in list(booking.optional_activities):
+        db.delete(existing)
+    for existing in list(booking.accommodations):
+        db.delete(existing)
+    for existing in list(booking.extensions):
+        db.delete(existing)
+    db.flush()
+
+    customer_addon_rows = []
+    for row, qty, unit, total in activities:
+        booking_row = BookingOptionalActivity(booking_id=booking.id, tour_optional_activity_id=row.id, activity_name_snapshot=row.activity_name, quantity=qty, unit_price=unit, total_price=total)
+        customer_addon_rows.append(booking_row)
+        db.add(booking_row)
+    for row, qty, unit, total in accommodation_rows:
+        booking_row = BookingAccommodation(booking_id=booking.id, tour_accommodation_extra_id=row.id, accommodation_name_snapshot=row.accommodation_name, quantity=qty, price_type=row.price_type, unit_price=unit, total_price=total)
+        customer_addon_rows.append(booking_row)
+        db.add(booking_row)
+    for row, qty, unit, total in extension_rows:
+        booking_row = BookingExtension(booking_id=booking.id, tour_extension_id=row.id, extension_tour_id=row.extension_tour_id, extension_name_snapshot=row.extension_title, quantity=qty, unit_price=unit, total_price=total)
+        customer_addon_rows.append(booking_row)
+        db.add(booking_row)
+
     _apply_commission_snapshot(db, booking, pricing_details)
+    if booking.booking_source == "customer":
+        _apply_customer_checkout_currency(
+            booking,
+            booking.display_currency,
+            currency,
+            customer_addon_rows,
+        )
+
     if booking.agent_id:
         from app.models.agent_ledger import AgentLedger
         entry = db.query(AgentLedger).filter(AgentLedger.booking_id == booking.id, AgentLedger.status == "pending").first()
@@ -2446,21 +2566,6 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
             )
             entry.net_payable = new_commission
             entry.amount_pending = max(money(0), new_commission - money(entry.amount_paid or 0))
-
-    for existing in list(booking.optional_activities):
-        db.delete(existing)
-    for existing in list(booking.accommodations):
-        db.delete(existing)
-    for existing in list(booking.extensions):
-        db.delete(existing)
-    db.flush()
-    for row, qty, unit, total in activities:
-        db.add(BookingOptionalActivity(booking_id=booking.id, tour_optional_activity_id=row.id, activity_name_snapshot=row.activity_name, quantity=qty, unit_price=unit, total_price=total))
-    for row, qty, unit, total in accommodation_rows:
-        db.add(BookingAccommodation(booking_id=booking.id, tour_accommodation_extra_id=row.id, accommodation_name_snapshot=row.accommodation_name, quantity=qty, price_type=row.price_type, unit_price=unit, total_price=total))
-    for row, qty, unit, total in extension_rows:
-        db.add(BookingExtension(booking_id=booking.id, tour_extension_id=row.id, extension_tour_id=row.extension_tour_id, extension_name_snapshot=row.extension_title, quantity=qty, unit_price=unit, total_price=total))
-
 
 def update_booking(db: Session, booking_id: int, data: BookingUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     booking = get_booking_by_id(db, booking_id)
@@ -2605,9 +2710,9 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
         customer_name = booking.customer.full_name if booking.customer else "Customer"
         _send_booking_email(
             db, "supplier_booking_confirmed",
-            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
+            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": supplier_booking_currency(booking), "total": supplier_booking_value(booking), "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
             f"Booking confirmed - {booking.booking_code}",
-            supplier_booking_confirmed_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
+            supplier_booking_confirmed_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, supplier_booking_currency(booking), money_str(supplier_booking_value(booking)), portal_url),
             booking.supplier.user.email,
             event=notification_event, entity_id=booking.id, recipient_type="supplier", event_version=event_version,
         )
@@ -2909,10 +3014,10 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
             {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code,
              "tour_name": booking.tour_name, "tour_date": booking.tour_date or "",
              "customer_name": customer_name, "adults": booking.adults_count,
-             "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url,
+             "currency": supplier_booking_currency(booking), "total": supplier_booking_value(booking), "portal_url": portal_url,
              "button_text": "View booking", "button_url": portal_url},
             f"New booking assigned - {booking.booking_code}",
-            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
+            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, supplier_booking_currency(booking), money_str(supplier_booking_value(booking)), portal_url),
             booking.supplier.user.email,
             event="supplier_assigned", entity_id=booking.id, recipient_type="supplier",
         )
@@ -3025,7 +3130,7 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         else:
             try:
                 from app.services.affiliate_tracking import record_conversion
-                record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=booking.currency or "USD")
+                record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=supplier_booking_currency(booking))
             except Exception as error:
                 logger.warning("Affiliate conversion recording failed for booking %s: %s", booking.id, error)
 
@@ -3377,9 +3482,9 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
         enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New booking assigned", message=f"Booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
         _send_booking_email(
             db, "supplier_booking_assigned",
-            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount, "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
+            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": supplier_booking_currency(booking), "total": supplier_booking_value(booking), "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
             f"New booking assigned - {booking.booking_code}",
-            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, booking.currency, money_str(supplier_booking_value(booking)), portal_url),
+            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, supplier_booking_currency(booking), money_str(supplier_booking_value(booking)), portal_url),
             booking.supplier.user.email,
             event="booking_created",
             entity_id=booking.id,

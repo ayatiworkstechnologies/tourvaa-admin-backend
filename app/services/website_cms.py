@@ -161,7 +161,7 @@ def _s_popular_tour(r: PopularTour, db: Session | None = None):
 def _s_deal(r: TourOnDeal, db: Session | None = None):
     tour = _tour_label(db, r.tour_id) if db else {"tour_title": "", "tour_code": ""}
     return {"id": r.id, "tour_id": r.tour_id, **tour, "deal_label": r.deal_label, "discount_percentage": r.discount_percentage, "valid_until": r.valid_until, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
-def _s_blog(r: Blog): return {"id": r.id, "title": r.title, "slug": r.slug, "excerpt": r.excerpt, "content": r.content, "featured_image": r.featured_image, "banner_title": r.banner_title, "banner_alt": r.banner_alt, "author": r.author, "tags": r.tags, "faqs": r.faqs or [], "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "published_at": r.published_at, "created_at": r.created_at, "updated_at": r.updated_at}
+def _s_blog(r: Blog): return {"id": r.id, "title": r.title, "slug": r.slug, "excerpt": r.excerpt, "content": r.content, "featured_image": r.featured_image, "banner_title": r.banner_title, "banner_alt": r.banner_alt, "author": r.author, "tags": r.tags, "faqs": r.faqs or [], "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "scheduled_at": r.scheduled_at, "published_at": r.published_at, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_cms_page(r: CmsPage): return {"id": r.id, "title": r.title, "slug": r.slug, "content": r.content, "sections": r.sections or [], "seo_title": r.seo_title, "seo_description": r.seo_description, "status": r.status, "footer_section_id": r.footer_section_id, "sort_order": r.sort_order, "created_at": r.created_at, "updated_at": r.updated_at}
 def _s_review(r: CustomerReview): return {"id": r.id, "reviewer_name": r.reviewer_name, "reviewer_image": r.reviewer_image, "rating": r.rating, "review_text": r.review_text, "tour_name": r.tour_name, "country": r.country, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_help(r: HelpCentreArticle): return {"id": r.id, "category": r.category, "question": r.question, "answer": r.answer, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
@@ -213,8 +213,14 @@ def _create(db, model, payload_dict, serializer):
 def _update(db, model, item_id, payload_dict, serializer, label):
     obj = _get_or_404(db, model, item_id, label)
     for k, v in payload_dict.items():
-        if v is not None or k in payload_dict:
-            setattr(obj, k, v)
+        # Guard: skip computed/read-only keys that are not real columns on the
+        # model (e.g. country_name, created_at, updated_at that the frontend
+        # may spread into a PUT body). Calling setattr on a missing attribute
+        # would attach an arbitrary Python attribute to the SQLAlchemy instance
+        # without persisting it, or raise an error on some SQLAlchemy versions.
+        if not hasattr(obj, k):
+            continue
+        setattr(obj, k, v)
     try:
         db.commit()
     except IntegrityError:
@@ -306,7 +312,11 @@ def _slugify(title: str) -> str:
 def list_blogs(db, page, limit, active_only=False, slug="", search="", tag=""):
     q = db.query(Blog)
     if active_only:
-        q = q.filter(Blog.status == "published")
+        now = utcnow()
+        q = q.filter(
+            (Blog.status == "published")
+            | ((Blog.status == "scheduled") & (Blog.scheduled_at != None) & (Blog.scheduled_at <= now))
+        )
     if slug:
         q = q.filter(Blog.slug == slug)
     if search:

@@ -249,8 +249,8 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
     if booking.booking_status == "confirmed" and booking.affiliate_ref_code:
         try:
             from app.services.affiliate_tracking import record_conversion
-            from app.services.bookings import affiliate_eligible_amount
-            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=booking.currency or "USD")
+            from app.services.bookings import affiliate_eligible_amount, supplier_booking_currency
+            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=supplier_booking_currency(booking))
         except Exception:
             logger.warning("Affiliate conversion recording failed for booking %s", booking.id, exc_info=True)
     if booking.payment_status in {"paid", "partially_paid"} and not was_funded:
