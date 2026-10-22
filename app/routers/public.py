@@ -95,7 +95,7 @@ class PublicPriceQuoteRequest(BaseModel):
 def submit_contact_message(request: Request, data: ContactMessageRequest, db: Session = Depends(get_db)):
     check_rate_limit(request, "contact", max_calls=5, window_seconds=300)
     from app.models.settings import AppSetting
-    from app.utils.mailer import try_send_email
+    from app.services.notification_delivery import dispatch_lifecycle_email
 
     message = ContactMessage(
         name=data.name,
@@ -107,7 +107,7 @@ def submit_contact_message(request: Request, data: ContactMessageRequest, db: Se
         message=data.message,
     )
     db.add(message)
-    db.commit()
+    db.flush()
 
     setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
     support_email = sanitize_public_contact_setting("support_email", setting.value if setting else "")
@@ -124,7 +124,14 @@ def submit_contact_message(request: Request, data: ContactMessageRequest, db: Se
         f"<p><strong>Message:</strong><br/>{esc(data.message).replace(chr(10), '<br/>')}</p>"
     )
     if support_email:
-        try_send_email(support_email, f"New enquiry: {data.subject}", body, template_key="contact_enquiry")
+        dispatch_lifecycle_email(
+            db, event="contact_enquiry", entity_type="contact_message", entity_id=message.id,
+            recipient_type="tourvaa_support", recipient_email=support_email, template_key="contact_enquiry",
+            values={"name": data.name, "email": str(data.email), "phone": data.phone or "-", "audience": data.audience,
+                    "enquiry_type": data.enquiry_type, "subject": data.subject, "message": data.message},
+            fallback_subject=f"New enquiry: {data.subject}", fallback_html=body,
+        )
+    db.commit()
     return {"status": "success", "message": "Your enquiry has been received."}
 
 
@@ -136,17 +143,18 @@ class NewsletterSubscribeRequest(BaseModel):
 def subscribe_newsletter(request: Request, data: NewsletterSubscribeRequest, db: Session = Depends(get_db)):
     check_rate_limit(request, "newsletter-subscribe", max_calls=5, window_seconds=300)
     from app.models.settings import AppSetting
-    from app.utils.mailer import try_send_email
+    from app.services.notification_delivery import dispatch_lifecycle_email
 
     email = str(data.email).strip().lower()
     existing = db.query(NewsletterSubscriber).filter(NewsletterSubscriber.email == email).first()
     if existing:
         if not existing.is_active:
             existing.is_active = True
-            db.commit()
+        subscriber = existing
     else:
-        db.add(NewsletterSubscriber(email=email))
-        db.commit()
+        subscriber = NewsletterSubscriber(email=email)
+        db.add(subscriber)
+    db.flush()
 
     setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
     support_email = sanitize_public_contact_setting("support_email", setting.value if setting else "")
@@ -154,7 +162,13 @@ def subscribe_newsletter(request: Request, data: NewsletterSubscribeRequest, db:
     esc = html_escape.escape
     body = f"<p><strong>New newsletter signup from the Tourvaa website</strong></p><p><strong>Email:</strong> {esc(email)}</p>"
     if support_email:
-        try_send_email(support_email, "New newsletter signup", body, template_key="newsletter_signup")
+        dispatch_lifecycle_email(
+            db, event="newsletter_signup", entity_type="newsletter_subscriber", entity_id=subscriber.id,
+            recipient_type="tourvaa_support", recipient_email=support_email, template_key="newsletter_signup",
+            values={"email": email}, fallback_subject="New newsletter signup", fallback_html=body,
+            event_version=str(subscriber.updated_at or subscriber.created_at or subscriber.id),
+        )
+    db.commit()
     return {"status": "success", "message": "You're subscribed! Watch your inbox for travel inspiration."}
 
 

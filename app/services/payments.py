@@ -54,12 +54,13 @@ def _email_customer_payment_received(db: Session, payment: Payment, amount) -> N
     from app.services.notification_delivery import dispatch_lifecycle_email
     prior_paid = max(money(0), money(booking.amount_paid or 0) - money(amount))
     event = "deposit_payment_received" if payment.payment_type == "partial" else "balance_payment_received" if prior_paid > 0 else "payment_success"
+    template_key = event if event in {"deposit_payment_received", "balance_payment_received"} else "payment_received"
     if booking.booking_source != "agent" and customer and customer.email:
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         dispatch_lifecycle_email(
             db, event=event, entity_type="payment", entity_id=payment.id,
             recipient_type="customer", recipient_email=customer.email,
-            template_key="payment_received",
+            template_key=template_key,
             values={"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
                     "currency": booking.currency, "amount": amount, "login_url": login_url,
                     "button_text": "View booking", "button_url": login_url},
@@ -77,7 +78,7 @@ def _email_customer_payment_received(db: Session, payment: Payment, amount) -> N
             dispatch_lifecycle_email(
                 db, event=event, entity_type="payment", entity_id=payment.id,
                 recipient_type="agent", recipient_email=booking.agent.user.email,
-                template_key="payment_received",
+                template_key=template_key,
                 values={"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "currency": booking.currency, "amount": amount, "login_url": agent_url, "button_text": "View booking", "button_url": agent_url},
                 fallback_subject=f"Payment received - {booking.booking_code}",
                 fallback_html=payment_received_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, agent_url),
@@ -131,9 +132,7 @@ def _email_customer_refund_processed(db: Session, payment: Payment, amount) -> N
             fallback_html=refund_processed_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
             event_version=str(payment.id),
         )
-    # Agent-made reservations need the same final refund confirmation as the
-    # traveller. This is deliberately sent only after the gateway/payment
-    # record is marked refunded, not when a cancellation is merely requested.
+    # Agent-owned reservations notify the agent, never the traveller record.
     if booking.agent and booking.agent.user and booking.agent.user.email:
         agent_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
         dispatch_lifecycle_email(
@@ -144,6 +143,31 @@ def _email_customer_refund_processed(db: Session, payment: Payment, amount) -> N
             fallback_html=refund_processed_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, agent_url),
             event_version=str(payment.id),
         )
+
+
+def _email_refund_initiated(db: Session, payment: Payment, amount) -> None:
+    booking = payment.booking
+    if not booking:
+        return
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    if booking.booking_source == "agent" and booking.agent and booking.agent.user and booking.agent.user.email:
+        recipient_type, email, name = "agent", booking.agent.user.email, booking.agent.agent_name
+        login_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
+    elif booking.booking_source != "agent" and booking.customer and booking.customer.email:
+        recipient_type, email, name = "customer", booking.customer.email, booking.customer.full_name
+        login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
+    else:
+        return
+    dispatch_lifecycle_email(
+        db, event="refund_initiated", entity_type="payment", entity_id=payment.id,
+        recipient_type=recipient_type, recipient_email=email, template_key="refund_initiated",
+        values={"name": name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
+                "currency": booking.currency, "amount": amount, "login_url": login_url,
+                "button_text": "View booking", "button_url": login_url},
+        fallback_subject=f"Refund initiated - {booking.booking_code}",
+        fallback_html=f"<p>A refund of {booking.currency} {amount} has been initiated for booking {booking.booking_code}. We will notify you when it is completed.</p>",
+        event_version=str(payment.gateway_payment_id or payment.id),
+    )
 
 
 def serialize_transaction(row: PaymentTransaction) -> dict:
@@ -399,9 +423,9 @@ def create_payment(db: Session, data: PaymentCreate, actor: Optional[User] = Non
     notify_admins(db, notification_type="payment_success", title="Payment recorded", message=f"Payment {payment.payment_code} was recorded", entity_type="payment", entity_id=payment.id)
     if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="payment_success", title="Payment recorded", message=f"Payment for booking {booking.booking_code} was recorded", entity_type="payment", entity_id=payment.id)
+    _email_customer_payment_received(db, payment, paid)
     db.commit()
     db.refresh(payment)
-    _email_customer_payment_received(db, payment, paid)
     return serialize_payment(payment, detail=True)
 
 
@@ -436,9 +460,9 @@ def authorize_payment(db: Session, data: PaymentAuthorize, actor: Optional[User]
     log_audit(db, actor=actor, action="authorize_payment", entity_type="payment", entity_id=payment.id, request=request)
     from app.services.notifications import notify_admins
     notify_admins(db, notification_type="payment_authorized", title="Payment authorized", message=f"Payment hold created for booking {booking.booking_code}", entity_type="payment", entity_id=payment.id)
-    db.commit()
     from app.services.bookings import notify_booking_received_after_payment
     notify_booking_received_after_payment(db, booking)
+    db.commit()
     db.refresh(payment)
     return serialize_payment(payment, detail=True)
 
@@ -476,10 +500,10 @@ def record_gateway_authorization(db: Session, payment: Payment, *, gateway_refer
         payment.booking.payment_status = "authorized"
         if payment.booking.booking_status == "pending_payment":
             payment.booking.booking_status = "pending_supplier_acceptance" if payment.booking.supplier_id else "payment_authorized"
-    db.commit()
     if payment.booking:
         from app.services.bookings import notify_booking_received_after_payment
         notify_booking_received_after_payment(db, payment.booking)
+    db.commit()
     db.refresh(payment)
     return payment
 
@@ -559,13 +583,13 @@ def capture_payment(db: Session, payment_id: int, data: PaymentCapture, actor: O
     if payment.booking and payment.booking.booking_source != "agent" and payment.booking.customer and payment.booking.customer.user_id:
         enqueue_notification(db, user_id=payment.booking.customer.user_id, notification_type="payment_captured", title="Payment captured", message=f"Payment for booking {payment.booking.booking_code} was captured", entity_type="payment", entity_id=payment.id)
     log_audit(db, actor=actor, action="capture_payment", entity_type="payment", entity_id=payment.id, request=request)
+    _email_customer_payment_received(db, payment, amount)
     db.commit()
     db.refresh(payment)
     try:
         generate_invoice(db, InvoiceGenerateRequest(booking_id=payment.booking_id, payment_id=payment.id), actor, request)
     except Exception as error:
         logger.warning("Invoice generation after payment capture failed for payment %s: %s", payment.id, error)
-    _email_customer_payment_received(db, payment, amount)
     return serialize_payment(payment, detail=True)
 
 
@@ -703,6 +727,19 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
         db.commit()
         raise
 
+    normalized_gateway_status = str(gateway_status or "").lower()
+    if gateway_refund_id and normalized_gateway_status not in {"succeeded", "completed"}:
+        payment.payment_status = "refund_pending"
+        _transaction(db, payment, "refund_pending", amount, actor, metadata={"reason": data.reason, "gateway_status": gateway_status}, gateway_reference=gateway_refund_id)
+        log_audit(db, actor=actor, action="initiate_refund", entity_type="payment", entity_id=payment.id, new_values={"gateway_refund_id": gateway_refund_id, "gateway_status": gateway_status}, request=request)
+        _email_refund_initiated(db, payment, amount)
+        _email_admin_payment_event(db, payment, "Refund initiated", f"Refund of {money_str(amount)} is pending at the payment provider for {payment.payment_code}.", "refund_initiated")
+        db.commit(); db.refresh(payment)
+        result = serialize_payment(payment, detail=True)
+        result["gateway_refund_id"] = gateway_refund_id
+        result["refund_pending"] = True
+        return result
+
     payment.refunded_amount = money(payment.refunded_amount) + amount
     if money(payment.refunded_amount) >= money(payment.captured_amount or payment.paid_amount):
         payment.payment_status = "refunded"
@@ -724,6 +761,7 @@ def process_refund(db: Session, payment_id: int, data: RefundRequest, actor: Opt
         f"Refund of {money_str(amount)} was processed for payment {payment.payment_code}.",
         "refund_completed",
     )
+    db.commit()
     result = serialize_payment(payment, detail=True)
     result["gateway_refund_id"] = gateway_refund_id
     return result

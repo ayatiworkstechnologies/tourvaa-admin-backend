@@ -162,10 +162,14 @@ def base_email(title: str, intro: str, body: str, button_text: str | None = None
 
 
 def apply_template_values(content: str, values: dict):
+    required = set(re.findall(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}", content or ""))
+    missing = sorted(required.difference(values))
+    if missing:
+        raise ValueError(f"Email template is missing required values: {', '.join(missing)}")
     output = content
 
     for key, value in values.items():
-        output = output.replace("{{" + key + "}}", esc(value) if value else "")
+        output = output.replace("{{" + key + "}}", "" if value is None else esc(value))
 
     return output
 

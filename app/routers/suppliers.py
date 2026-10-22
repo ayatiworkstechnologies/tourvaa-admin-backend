@@ -38,6 +38,7 @@ from app.services.suppliers import (
     review_supplier_vehicle,
     serialize_supplier,
     request_supplier_bank_edit,
+    reject_supplier_bank_edit,
     submit_supplier_verification,
     submit_supplier_verification_for,
     set_supplier_account_status,
@@ -740,6 +741,11 @@ def approve(supplier_id: int, request: Request, background_tasks: BackgroundTask
 @router.post("/{supplier_id}/bank-details/unlock")
 def unlock_bank_detail_edit(supplier_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.approve"))):
     return {"status": "success", "message": "Bank details unlocked for one update", "data": unlock_supplier_bank_edit(db, supplier_id, current_user, request)}
+
+
+@router.post("/{supplier_id}/bank-details/reject")
+def reject_bank_detail_edit(supplier_id: int, data: RejectRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("suppliers.reject", "suppliers.approve"))):
+    return {"status": "success", "message": "Bank-detail edit request rejected", "data": reject_supplier_bank_edit(db, supplier_id, data.rejection_reason, current_user, request)}
 
 
 @router.post("/{supplier_id}/reject")

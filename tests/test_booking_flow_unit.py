@@ -650,9 +650,10 @@ def test_booking_received_email_requires_secured_funds(monkeypatch):
         adults_count=1, currency="INR", agent=None, supplier=None,
     )
 
-    notify_booking_received_after_payment(SimpleNamespace(), unpaid_booking)
-    notify_booking_received_after_payment(SimpleNamespace(), paid_booking)
-    notify_booking_received_after_payment(SimpleNamespace(), authorized_booking)
+    db = SimpleNamespace(commit=lambda: None)
+    notify_booking_received_after_payment(db, unpaid_booking)
+    notify_booking_received_after_payment(db, paid_booking)
+    notify_booking_received_after_payment(db, authorized_booking)
 
     assert len(sent) == 2
     assert sent[0][0][1] == "booking_confirmation"

@@ -199,6 +199,12 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Reference: {{reference_number}}\n\nView your payouts: {{portal_url}}"
         ),
     },
+    {
+        "key": "partner_payout_event",
+        "name": "Partner Payout Update",
+        "subject": "{{title}} - {{payout_code}}",
+        "body": "Hi {{name}}, {{detail}}\n\nPayout: {{payout_code}}\nAmount: {{currency}} {{amount}}\nReference: {{reference_number}}\n\nView payouts: {{portal_url}}",
+    },
 
     {
         "key": "admin_booking_event",
@@ -279,6 +285,22 @@ DEFAULT_EMAIL_TEMPLATES = [
         "body": "Hi {{name}}, your booking {{booking_code}} for {{tour_name}} is scheduled for {{tour_date}}. Please review your booking details and contact Tourvaa if you need help.\n\nView booking: {{login_url}}",
     },
     {
+        "key": "balance_due_reminder",
+        "name": "Balance Payment Due",
+        "subject": "Payment reminder - {{booking_code}}",
+        "body": (
+            "Hi {{name}}, invoice {{invoice_number}} for booking {{booking_code}} has an outstanding "
+            "balance of {{currency}} {{amount_due}}, due {{due_date}} ({{due_label}}).\n\n"
+            "View your invoice: {{login_url}}"
+        ),
+    },
+    {
+        "key": "payment_due_reminder",
+        "name": "Booking Payment Due Reminder",
+        "subject": "Balance payment due - {{booking_code}}",
+        "body": "Hi {{name}}, {{currency}} {{amount_due}} remains due for booking {{booking_code}}. Due date: {{due_date}}. View booking: {{login_url}}",
+    },
+    {
         "key": "review_request",
         "name": "Review Request",
         "subject": "How was your tour? - {{booking_code}}",
@@ -342,6 +364,18 @@ DEFAULT_EMAIL_TEMPLATES = [
         "name": "Agent Submitted Verification",
         "subject": "Agent profile submitted for review",
         "body": "Agent {{agent_name}} has submitted their profile for admin review.",
+    },
+    {
+        "key": "partner_verification_received",
+        "name": "Partner Verification Received",
+        "subject": "Verification received - {{partner_name}}",
+        "body": "Hi {{partner_name}}, we received your verification information and it is awaiting Tourvaa review. We will notify you of the decision. View your portal: {{login_url}}",
+    },
+    {
+        "key": "bank_detail_edit_decision",
+        "name": "Bank Detail Edit Decision",
+        "subject": "Bank-detail edit {{decision}}",
+        "body": "Hi {{partner_name}}, your bank-detail edit request was {{decision}}. {{reason}} {{login_url}}",
     },
     {
         "key": "agent_registered",
@@ -409,6 +443,26 @@ DEFAULT_EMAIL_TEMPLATES = [
         ),
     },
     {
+        "key": "deposit_payment_received",
+        "name": "Deposit Payment Received",
+        "subject": "Deposit received - {{booking_code}}",
+        "body": (
+            "We received your deposit for booking {{booking_code}}.\n\n"
+            "Tour: {{tour_name}}\nAmount received: {{currency}} {{amount}}\n\n"
+            "Your booking remains subject to the Tourvaa confirmation workflow.\n\nView booking: {{login_url}}"
+        ),
+    },
+    {
+        "key": "balance_payment_received",
+        "name": "Balance Payment Received",
+        "subject": "Balance payment received - {{booking_code}}",
+        "body": (
+            "We received the balance payment for booking {{booking_code}}.\n\n"
+            "Tour: {{tour_name}}\nAmount received: {{currency}} {{amount}}\n\n"
+            "Payment completion does not replace the Tourvaa booking confirmation.\n\nView booking: {{login_url}}"
+        ),
+    },
+    {
         "key": "payment_failed",
         "name": "Payment Failed",
         "subject": "Payment needs attention - {{booking_code}}",
@@ -432,7 +486,98 @@ DEFAULT_EMAIL_TEMPLATES = [
         "subject": "Tour review update - {{tour_name}}",
         "body": "Your tour {{tour_name}} (version {{version}}) was {{decision}}. {{reason}} {{login_url}}",
     },
+    {
+        "key": "booking_modification_requested",
+        "name": "Booking Modification Requested",
+        "subject": "Booking change requested - {{booking_code}}",
+        "body": "A change was requested for booking {{booking_code}} ({{tour_name}}). {{detail}} View booking: {{login_url}}",
+    },
+    {
+        "key": "booking_modification_confirmed",
+        "name": "Booking Modification Confirmed",
+        "subject": "Booking change confirmed - {{booking_code}}",
+        "body": "The requested change for booking {{booking_code}} ({{tour_name}}) is confirmed. {{detail}} View booking: {{login_url}}",
+    },
+    {
+        "key": "booking_modification_rejected",
+        "name": "Booking Modification Rejected",
+        "subject": "Booking change not approved - {{booking_code}}",
+        "body": "The requested change for booking {{booking_code}} ({{tour_name}}) was not approved. Reason: {{reason}} View booking: {{login_url}}",
+    },
+    {
+        "key": "refund_initiated",
+        "name": "Refund Initiated",
+        "subject": "Refund initiated - {{booking_code}}",
+        "body": "A refund of {{currency}} {{amount}} has been initiated for booking {{booking_code}}. We will notify you when it is completed. View booking: {{login_url}}",
+    },
+    {
+        "key": "booking_message_received",
+        "name": "Booking Message Received",
+        "subject": "New booking message from {{sender_name}}",
+        "body": "A new booking message from {{sender_name}} is waiting in your secure Tourvaa portal.",
+    },
+    {
+        "key": "wishlist_reminder",
+        "name": "Wishlist Reminder",
+        "subject": "Your Tourvaa wishlist is waiting",
+        "body": "Hi {{name}}, you have {{tour_count}} available tour(s) saved to your wishlist. View your wishlist: {{login_url}}",
+    },
+    {
+        "key": "tour_availability_ending_soon",
+        "name": "Tour Availability Ending Soon",
+        "subject": "Tour availability ending soon - {{tour_name}}",
+        "body": "Availability for {{tour_name}} ends on {{end_date}}, within the next {{days}} days. Review the calendar here: {{login_url}}",
+    },
+    {
+        "key": "booking_communication", "name": "Booking Communication",
+        "subject": "New message about booking {{booking_code}}",
+        "body": "You have a new message about booking {{booking_code}} ({{tour_name}}) from {{sender_name}}. Read it securely: {{login_url}}",
+    },
+    {
+        "key": "customer_communication", "name": "Customer Communication",
+        "subject": "New Tourvaa message",
+        "body": "Hi {{name}}, you have a new message from {{sender_name}}. Read it securely: {{login_url}}",
+    },
+    {
+        "key": "invoice_emailed", "name": "Invoice Emailed",
+        "subject": "Invoice {{invoice_number}} - booking {{booking_code}}",
+        "body": "Hi {{name}}, invoice {{invoice_number}} for {{currency}} {{total}} is attached or available in your portal: {{login_url}}",
+    },
+    {
+        "key": "scheduled_report", "name": "Scheduled Report",
+        "subject": "Your scheduled Tourvaa report - {{report_name}}",
+        "body": "Your {{report_name}} report for {{period}} is ready. {{attachment_note}}",
+    },
+    {
+        "key": "contact_enquiry", "name": "Contact Enquiry",
+        "subject": "New enquiry: {{subject}}",
+        "body": "Name: {{name}}\nEmail: {{email}}\nPhone: {{phone}}\nMessage: {{message}}",
+    },
+    {
+        "key": "newsletter_signup", "name": "Newsletter Signup",
+        "subject": "New newsletter signup",
+        "body": "{{email}} subscribed to the Tourvaa newsletter.",
+    },
 ]
+
+
+_PLACEHOLDER_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
+
+
+def validate_template_content(key: str, subject: str, body: str) -> None:
+    """Reject malformed or unsupported placeholders before activation."""
+    combined = f"{subject}\n{body}"
+    if combined.count("{{") != combined.count("}}"):
+        raise HTTPException(status_code=422, detail="Email template contains an unmatched placeholder delimiter")
+    defaults = next((item for item in DEFAULT_EMAIL_TEMPLATES if item["key"] == key), None)
+    if not defaults:
+        return
+    supported = set(_PLACEHOLDER_RE.findall(f"{defaults['subject']}\n{defaults['body']}"))
+    supported.update({"button_text", "button_url", "login_url", "name"})
+    used = set(_PLACEHOLDER_RE.findall(combined))
+    unsupported = sorted(used - supported)
+    if unsupported:
+        raise HTTPException(status_code=422, detail=f"Unsupported variables for template '{key}': {', '.join(unsupported)}")
 
 
 def seed_email_templates(db: Session):
@@ -503,6 +648,7 @@ def create_template(db: Session, data: EmailTemplateCreate):
     if existing:
         raise HTTPException(status_code=400, detail="Template key already exists")
 
+    validate_template_content(data.key, data.subject, data.body)
     template = EmailTemplate(**data.model_dump())
     db.add(template)
     db.commit()
@@ -512,8 +658,9 @@ def create_template(db: Session, data: EmailTemplateCreate):
 
 def update_template(db: Session, template_id: int, data: EmailTemplateUpdate):
     template = get_template(db, template_id)
-
-    for key, value in data.model_dump(exclude_unset=True).items():
+    updates = data.model_dump(exclude_unset=True)
+    validate_template_content(template.key, updates.get("subject", template.subject), updates.get("body", template.body))
+    for key, value in updates.items():
         setattr(template, key, value)
 
     db.commit()

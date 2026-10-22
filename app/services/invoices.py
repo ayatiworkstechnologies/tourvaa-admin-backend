@@ -15,6 +15,7 @@ from app.utils.money import money, money_str, utcnow
 from app.models.invoices import Invoice, InvoiceItem
 from app.schemas.invoices import InvoiceEmailRequest, InvoiceGenerateRequest
 from app.models.payments import Payment
+from app.models.notifications import NotificationDelivery
 from app.models.users import User
 
 import logging
@@ -436,7 +437,7 @@ def email_invoice_to_customer(db: Session, invoice_id: int, data: InvoiceEmailRe
         recipient = data.email or (booking.customer.user.email if booking and booking.customer and booking.customer.user else None)
     if not recipient:
         raise HTTPException(status_code=400, detail="No agent invoice email address available" if is_agent_booking else "No recipient email address available")
-    from app.utils.mailer import try_send_email
+    from app.services.notification_delivery import dispatch_lifecycle_email
     subject = f"Your Invoice {inv.invoice_number} from Tourvaa"
     personal_message = f"<p>{escape(data.message)}</p>" if data.message else ""
     body = f"""
@@ -455,19 +456,27 @@ def email_invoice_to_customer(db: Session, invoice_id: int, data: InvoiceEmailRe
         if fs_path and fs_path.exists():
             with open(fs_path, "rb") as pdf_file:
                 attachments.append((f"{inv.invoice_number}.pdf", pdf_file.read(), "pdf"))
-    delivered = try_send_email(
-        recipient,
-        subject,
-        body,
-        attachments,
+    queued = dispatch_lifecycle_email(
+        db, event="invoice_emailed", entity_type="invoice", entity_id=inv.id,
+        recipient_type="agent" if is_agent_booking else "customer", recipient_email=recipient,
         template_key="invoice_emailed",
-        entity_type="invoice",
-        entity_id=inv.id,
+        values={"name": booking.agent.agent_name if is_agent_booking and booking.agent else "Customer",
+                "invoice_number": inv.invoice_number, "booking_code": getattr(booking, "booking_code", inv.invoice_number),
+                "currency": inv.currency, "total": money_str(inv.total_amount),
+                "amount_due": money_str(inv.amount_due), "login_url": f"{settings.FRONTEND_URL}/{'agent' if is_agent_booking else 'customer'}/invoices",
+                "button_text": "View invoice", "button_url": f"{settings.FRONTEND_URL}/{'agent' if is_agent_booking else 'customer'}/invoices"},
+        fallback_subject=subject, fallback_html=body, attachments=attachments,
+        event_version=str(getattr(inv, "updated_at", None) or inv.id),
     )
-    if not delivered:
-        raise HTTPException(status_code=502, detail="Invoice email delivery failed; check email logs")
-    inv.status = "emailed"
-    inv.emailed_at = utcnow()
+    if not queued:
+        # A duplicate reservation means this invoice/version was already queued.
+        existing_delivery = db.query(NotificationDelivery.id).filter(
+            NotificationDelivery.entity_type == "invoice", NotificationDelivery.entity_id == inv.id,
+            NotificationDelivery.event_type == "invoice_emailed", NotificationDelivery.recipient_email == recipient.lower(),
+        ).first()
+        if not existing_delivery:
+            raise HTTPException(status_code=400, detail="No invoice email recipient could be queued")
+    inv.status = "email_queued"
     log_audit(db, actor=actor, action="email_invoice", entity_type="invoice", entity_id=inv.id, request=request)
     db.commit()
     db.refresh(inv)
@@ -518,7 +527,7 @@ def check_balance_due_reminders(db: Session) -> list[int]:
     the background loop in app/main.py. Sends once per stage transition;
     overdue invoices are re-reminded every _OVERDUE_RESEND_INTERVAL."""
     from app.services.notifications import enqueue_notification
-    from app.utils.mailer import try_send_email
+    from app.services.notification_delivery import dispatch_lifecycle_email
 
     now = utcnow()
     invoices = (
@@ -552,9 +561,31 @@ def check_balance_due_reminders(db: Session) -> list[int]:
                 f"due <b>{due_str}</b>.</p>"
             )
             if inv.booking and inv.booking.booking_source != "agent" and inv.customer and inv.customer.email:
-                try_send_email(
-                    inv.customer.email, subject, body,
-                    template_key="balance_due_reminder", entity_type="invoice", entity_id=inv.id,
+                portal_url = f"{settings.FRONTEND_URL}/customer/invoices"
+                event_version = stage if stage != "overdue" else f"overdue:{now.date().isoformat()}"
+                dispatch_lifecycle_email(
+                    db,
+                    event="payment_due_reminder",
+                    entity_type="invoice",
+                    entity_id=inv.id,
+                    recipient_type="customer",
+                    recipient_email=inv.customer.email,
+                    template_key="balance_due_reminder",
+                    values={
+                        "name": inv.customer.full_name,
+                        "invoice_number": inv.invoice_number,
+                        "booking_code": booking_code,
+                        "currency": inv.currency,
+                        "amount_due": money_str(inv.amount_due),
+                        "due_date": due_str,
+                        "due_label": label,
+                        "login_url": portal_url,
+                        "button_text": "View invoice",
+                        "button_url": portal_url,
+                    },
+                    fallback_subject=subject,
+                    fallback_html=body,
+                    event_version=event_version,
                 )
             if inv.booking and inv.booking.booking_source != "agent" and inv.customer and inv.customer.user_id:
                 enqueue_notification(

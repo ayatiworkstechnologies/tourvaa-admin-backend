@@ -58,7 +58,7 @@ def test_invoice_currency_metadata_normalizes_code_and_has_symbol_fallback():
     assert invoices._currency_metadata(SimpleNamespace(currency="xyz")) == ("XYZ", "XYZ")
 
 
-def test_failed_smtp_does_not_mark_invoice_as_emailed(monkeypatch):
+def test_invoice_email_is_queued_without_claiming_smtp_delivery(monkeypatch):
     invoice = SimpleNamespace(
         id=7,
         invoice_number="TVA-INV-000007",
@@ -74,18 +74,13 @@ def test_failed_smtp_does_not_mark_invoice_as_emailed(monkeypatch):
         emailed_at=None,
     )
     monkeypatch.setattr(invoices, "get_invoice", lambda *_args, **_kwargs: invoice)
-    monkeypatch.setattr("app.utils.mailer.try_send_email", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("app.services.notification_delivery.dispatch_lifecycle_email", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(invoices, "log_audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(invoices, "serialize_invoice", lambda row, detail=False: {"status": row.status})
+    db = SimpleNamespace(commit=lambda: None, refresh=lambda *_args: None)
+    invoices.email_invoice_to_customer(db, invoice.id, InvoiceEmailRequest(), SimpleNamespace(id=1))
 
-    with pytest.raises(HTTPException) as error:
-        invoices.email_invoice_to_customer(
-            SimpleNamespace(),
-            invoice.id,
-            InvoiceEmailRequest(),
-            SimpleNamespace(id=1),
-        )
-
-    assert error.value.status_code == 502
-    assert invoice.status == "generated"
+    assert invoice.status == "email_queued"
     assert invoice.emailed_at is None
 
 

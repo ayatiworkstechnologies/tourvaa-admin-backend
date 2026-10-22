@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import AuditLog, log_audit
 from app.services.auth import build_password_reset_url
-from app.utils.email_templates import password_reset_email
-from app.utils.mailer import send_email
+from app.config import settings
+from app.utils.email_templates import base_email, esc, password_reset_email
 from app.models.cms import City
 from app.models.customers import Customer, CustomerCommunication
 from app.models.sessions import LoginHistory
@@ -671,17 +671,16 @@ def reset_customer_password(
     user.token_version += 1
 
     reset_url = build_password_reset_url(token)
-    email_status = "pending"
-    try:
-        send_email(
-            user.email,
-            "Reset your Tourvaa password",
-            password_reset_email(user.name, reset_url),
-            template_key="password_reset",
-        )
-        email_status = "sent"
-    except Exception:
-        email_status = "failed"
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    queued = dispatch_lifecycle_email(
+        db, event="password_reset", entity_type="user", entity_id=user.id,
+        recipient_type="customer", recipient_email=user.email, template_key="password_reset",
+        values={"name": user.name, "email": user.email, "reset_url": reset_url, "button_text": "Reset Password", "button_url": reset_url},
+        fallback_subject="Reset your Tourvaa password",
+        fallback_html=password_reset_email(user.name, reset_url),
+        event_version=token_hash,
+    )
+    email_status = "queued" if queued else "duplicate"
 
     log_audit(
         db,
@@ -770,18 +769,28 @@ def send_customer_message(
     db.add(message)
     db.flush()
 
-    try:
-        send_email(
-            customer.email,
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    portal_url = f"{settings.FRONTEND_URL.rstrip('/')}/customer/support"
+    queued = dispatch_lifecycle_email(
+        db, event="customer_communication", entity_type="customer_communication", entity_id=message.id,
+        recipient_type="customer", recipient_email=customer.email, template_key="customer_communication",
+        values={
+            "name": customer.full_name or customer.first_name or "Customer",
+            "sender_name": actor.name if actor else "Tourvaa Admin",
+            "login_url": portal_url,
+            "button_text": "View message",
+            "button_url": portal_url,
+        },
+        fallback_subject=data.subject,
+        fallback_html=base_email(
             data.subject,
-            data.message,
-            template_key="customer_communication",
-            entity_type="customer_communication",
-            entity_id=message.id,
-        )
-        message.email_status = "sent"
-    except Exception:
-        message.email_status = "failed"
+            f"Hi {esc(customer.full_name or customer.first_name or 'Customer')},",
+            f"<p style=\"white-space:pre-wrap\">{esc(data.message)}</p>",
+            "View message",
+            portal_url,
+        ),
+    )
+    message.email_status = "queued" if queued else "duplicate"
 
     log_audit(
         db,

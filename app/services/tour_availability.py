@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.cms import Tour
 from app.models.suppliers import Supplier
 from app.models.tours import TourAvailabilityConfig, TourCalendar
@@ -311,7 +312,7 @@ def check_availability_end_date_reminders(db: Session) -> None:
     """Hourly sweep (app.main._tour_availability_reminder_loop): email the
     supplier + admin once a tour's availability window is within 30 days of
     its end date, suggesting they extend it. Resent at most weekly."""
-    from app.utils.mailer import try_send_email
+    from app.services.notification_delivery import dispatch_lifecycle_email
 
     now = datetime.now(timezone.utc)
     window_end = now + timedelta(days=_END_DATE_REMINDER_WINDOW_DAYS)
@@ -334,19 +335,19 @@ def check_availability_end_date_reminders(db: Session) -> None:
             if not tour:
                 continue
             end_date_str = config.availability_end_date.date().isoformat()
-            recipients = []
+            recipients: list[tuple[str, str]] = []
             if tour.supplier_id:
                 supplier = db.query(Supplier).filter(Supplier.id == tour.supplier_id).first()
                 if supplier and supplier.contacts:
                     primary = next((c for c in supplier.contacts if c.is_primary), supplier.contacts[0])
                     if primary and primary.email:
-                        recipients.append(primary.email)
+                        recipients.append(("supplier", primary.email))
             from app.models.settings import AppSetting
             from app.services.settings import sanitize_public_contact_setting
             setting = db.query(AppSetting).filter(AppSetting.key == "support_email").first()
             admin_email = sanitize_public_contact_setting("support_email", setting.value if setting else "")
             if admin_email:
-                recipients.append(admin_email)
+                recipients.append(("tourvaa_admin", admin_email))
 
             subject = f"Tour availability ending soon - {tour.title}"
             body = (
@@ -354,8 +355,28 @@ def check_availability_end_date_reminders(db: Session) -> None:
                 f"which is within the next {_END_DATE_REMINDER_WINDOW_DAYS} days.</p>"
                 f"<p>Extend the Tour End Date in the tour's Calendar tab if you'd like to keep taking bookings beyond that date.</p>"
             )
-            for recipient in recipients:
-                try_send_email(recipient, subject, body, template_key="tour_availability_ending_soon")
+            for recipient_type, recipient in recipients:
+                portal_url = f"{settings.FRONTEND_URL}/supplier/tours/{tour.id}"
+                dispatch_lifecycle_email(
+                    db,
+                    event="tour_availability_ending_soon",
+                    entity_type="tour",
+                    entity_id=tour.id,
+                    recipient_type=recipient_type,
+                    recipient_email=recipient,
+                    template_key="tour_availability_ending_soon",
+                    values={
+                        "tour_name": tour.title,
+                        "end_date": end_date_str,
+                        "days": _END_DATE_REMINDER_WINDOW_DAYS,
+                        "login_url": portal_url,
+                        "button_text": "Review availability",
+                        "button_url": portal_url,
+                    },
+                    fallback_subject=subject,
+                    fallback_html=body,
+                    event_version=now.date().isoformat(),
+                )
 
             config.last_end_date_reminder_at = now
             db.commit()

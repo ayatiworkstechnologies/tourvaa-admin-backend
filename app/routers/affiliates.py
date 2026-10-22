@@ -22,6 +22,7 @@ from app.services.affiliates import (
     reject_affiliate,
     review_affiliate_document,
     request_affiliate_bank_edit,
+    reject_affiliate_bank_edit,
     serialize_affiliate,
     submit_affiliate_verification,
     suspend_affiliate,
@@ -344,6 +345,11 @@ def approve(affiliate_id: int, request: Request, background_tasks: BackgroundTas
 @router.post("/{affiliate_id}/bank-details/unlock")
 def unlock_bank_detail_edit(affiliate_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.approve"))):
     return {"status": "success", "message": "Bank details unlocked for one update", "data": unlock_affiliate_bank_edit(db, affiliate_id, current_user, request)}
+
+
+@router.post("/{affiliate_id}/bank-details/reject")
+def reject_bank_detail_edit(affiliate_id: int, data: RejectRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("affiliates.reject", "affiliates.approve"))):
+    return {"status": "success", "message": "Bank-detail edit request rejected", "data": reject_affiliate_bank_edit(db, affiliate_id, data.rejection_reason, current_user, request)}
 
 
 @router.patch("/{affiliate_id}/reject")

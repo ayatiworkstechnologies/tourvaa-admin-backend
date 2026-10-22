@@ -131,6 +131,8 @@ def _email_support_message_admins(
             },
             f"New {participant_type} support message",
             _support_message_email(sender_label=sender_label, message_url=message_url),
+            entity_type="support_conversation",
+            entity_id=conversation_id,
         )
     except Exception as exc:
         logger.warning("Support-message email to admins failed: %s", exc)
@@ -160,6 +162,9 @@ def _email_support_message_recipient(
             },
             "New message from Tourvaa Admin",
             _support_message_email(sender_label="Tourvaa Admin", message_url=message_url, body=body),
+            entity_type="support_conversation",
+            entity_id=conversation_id,
+            recipient_type=participant_type,
         )
     except Exception as exc:
         logger.warning("Support-message email to user %s failed: %s", user_id, exc)
@@ -192,6 +197,7 @@ def _email_booking_message_recipient(
             _booking_message_email(sender_label=sender_label, message_url=message_url),
             entity_type="booking_message",
             entity_id=message_id,
+            recipient_type=recipient_role,
         )
     except Exception as exc:
         logger.warning("Booking-message email to user %s failed: %s", user_id, exc)

@@ -205,6 +205,13 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
     _ensure_booking_owner(booking, actor)
+    requester_role = _user_role(actor)
+    if requester_role == "supplier":
+        raise HTTPException(
+            status_code=400,
+            detail="Suppliers must use the booking withdrawal action so Tourvaa can reassign the booking.",
+        )
+    requester_label = "Agent" if requester_role == "agent" else "Customer" if requester_role == "customer" else "Tourvaa Admin"
     if booking.booking_status in {"cancelled", "completed", "refunded", "cancellation_requested"}:
         raise HTTPException(status_code=400, detail=f"This booking cannot be cancelled (current status: '{booking.booking_status}')")
 
@@ -250,12 +257,12 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
     db.refresh(req)
 
     # Notify admin and customer
-    notify_admins(db, notification_type="cancellation_requested", title="Cancellation Requested", message=f"Customer requested cancellation for booking {booking.booking_code}. Estimated refund: {refund_amount} {req.currency}", entity_type="cancellation_request", entity_id=req.id)
-    if booking.customer and booking.customer.user_id:
+    notify_admins(db, notification_type="cancellation_requested", title="Cancellation Requested", message=f"{requester_label} requested cancellation for booking {booking.booking_code}. Estimated refund: {refund_amount} {req.currency}", entity_type="cancellation_request", entity_id=req.id)
+    if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="cancellation_requested", title="Cancellation Request Received", message=f"Your cancellation request for booking {booking.booking_code} has been received. Estimated refund: {refund_amount} {req.currency}.", entity_type="cancellation_request", entity_id=req.id)
     db.commit()
 
-    if booking.customer and booking.customer.email:
+    if booking.booking_source != "agent" and booking.customer and booking.customer.email:
         from app.utils.email_templates import cancellation_requested_email
         from app.services.notification_delivery import dispatch_lifecycle_email
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
@@ -273,7 +280,7 @@ def create_request(db: Session, data: CancellationRequestCreate, actor: User, re
     from app.utils.email_templates import admin_booking_event_email
     from app.services.notification_delivery import dispatch_admin_lifecycle_emails
     admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
-    admin_detail = f"Customer requested cancellation for booking {booking.booking_code}. Estimated refund: {refund_amount} {req.currency}."
+    admin_detail = f"{requester_label} requested cancellation for booking {booking.booking_code}. Estimated refund: {refund_amount} {req.currency}."
     dispatch_admin_lifecycle_emails(
         db, event="cancellation_requested", entity_type="cancellation_request", entity_id=req.id,
         template_key="admin_booking_event",
@@ -392,11 +399,11 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
     db.commit()
     db.refresh(req)
 
-    if booking.customer and booking.customer.user_id:
+    if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="cancellation_approved", title="Cancellation Approved", message=f"Your cancellation request for booking {booking.booking_code} has been approved. Refund: {req.refund_amount} {req.currency}", entity_type="cancellation_request", entity_id=req.id)
         db.commit()
 
-    if booking.customer and booking.customer.email:
+    if booking.booking_source != "agent" and booking.customer and booking.customer.email:
         from app.utils.email_templates import cancellation_approved_email
         from app.services.notification_delivery import dispatch_lifecycle_email
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
@@ -408,6 +415,19 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
              "button_text": "View booking", "button_url": login_url},
             fallback_subject=f"Cancellation approved - {booking.booking_code}",
             fallback_html=cancellation_approved_email(booking.customer.full_name, booking.booking_code, booking.tour_name, req.refund_amount, req.currency, login_url),
+        )
+    if booking.supplier and booking.supplier.user and booking.supplier.user.email:
+        from app.utils.email_templates import booking_cancelled_supplier_email
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        supplier_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
+        dispatch_lifecycle_email(
+            db, event="cancellation_approved", entity_type="cancellation_request", entity_id=req.id,
+            recipient_type="supplier", recipient_email=booking.supplier.user.email, template_key="booking_cancelled_supplier",
+            values={"supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code,
+                    "tour_name": booking.tour_name, "reason": req.reason or "Cancellation approved by Tourvaa",
+                    "portal_url": supplier_url, "button_text": "View booking", "button_url": supplier_url},
+            fallback_subject=f"Booking cancelled - {booking.booking_code}",
+            fallback_html=booking_cancelled_supplier_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, req.reason or "Cancellation approved by Tourvaa", supplier_url),
         )
     _notify_agent_cancellation_update(db, booking, "cancellation approved", f"Refund: {req.refund_amount} {req.currency}", event="cancellation_approved", request_id=req.id)
 
@@ -481,11 +501,11 @@ def reject_request(db: Session, request_id: int, data: CancellationReject, actor
     db.commit()
     db.refresh(req)
 
-    if booking.customer and booking.customer.user_id:
+    if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="cancellation_rejected", title="Cancellation Rejected", message=f"Your cancellation request for booking {booking.booking_code} was rejected. Reason: {data.admin_notes}", entity_type="cancellation_request", entity_id=req.id)
         db.commit()
 
-    if booking.customer and booking.customer.email:
+    if booking.booking_source != "agent" and booking.customer and booking.customer.email:
         from app.utils.email_templates import cancellation_rejected_email
         from app.services.notification_delivery import dispatch_lifecycle_email
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
@@ -553,6 +573,10 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
             )
             if refund_result.get("gateway_refund_id"):
                 gateway_refund_ids.append(refund_result["gateway_refund_id"])
+            if refund_result.get("refund_pending"):
+                req.gateway_refund_id = ", ".join(gateway_refund_ids) or req.gateway_refund_id
+                db.commit(); db.refresh(req)
+                return _serialize_request(req)
             remaining -= amount
             # Payment refund succeeded and committed. Persist request-specific
             # progress before moving to another payment so a later retry only
@@ -587,7 +611,7 @@ def process_refund(db: Session, request_id: int, data: ProcessRefundBody, actor:
     db.refresh(req)
     db.refresh(booking)
 
-    if booking.customer and booking.customer.user_id:
+    if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
         enqueue_notification(db, user_id=booking.customer.user_id, notification_type="refund_processed", title="Refund Processed", message=f"Refund of {req.refund_amount} {req.currency} has been processed for booking {booking.booking_code}.", entity_type="cancellation_request", entity_id=req.id)
         db.commit()
 

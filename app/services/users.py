@@ -296,17 +296,18 @@ def create_user(
         new_values=serialize_user(user),
         request=request,
     )
+    reset_url = build_password_reset_url(token)
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatch_lifecycle_email(
+        db, event="user_created", entity_type="user", entity_id=user.id,
+        recipient_type="user", recipient_email=user.email, template_key="user_created",
+        values={"name": user.name, "email": user.email, "set_password_url": reset_url},
+        fallback_subject="Your Tourvaa account is ready",
+        fallback_html=user_created_email(user.name, user.email, reset_url),
+        event_version=token_hash,
+    )
     db.commit()
     db.refresh(user)
-
-    reset_url = build_password_reset_url(token)
-    subject, html = render_database_email(
-        db, "user_created",
-        {"name": user.name, "email": user.email, "set_password_url": reset_url},
-        "Your Tourvaa account is ready",
-        user_created_email(user.name, user.email, reset_url),
-    )
-    try_send_email(user.email, subject, html, template_key="user_created")
 
     return serialize_user(user)
 
@@ -439,17 +440,18 @@ def approve_user(
         new_values=serialize_user(user),
         request=request,
     )
+    login_url = f"{settings.FRONTEND_URL}/login"
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatch_lifecycle_email(
+        db, event="account_approved", entity_type="user", entity_id=user.id,
+        recipient_type="user", recipient_email=user.email, template_key="account_approved",
+        values={"name": user.name, "login_url": login_url},
+        fallback_subject="Your Tourvaa account is active",
+        fallback_html=approved_email(user.name, login_url),
+        event_version=str(user.token_version),
+    )
     db.commit()
     db.refresh(user)
-
-    login_url = f"{settings.FRONTEND_URL}/login"
-    subject, html = render_database_email(
-        db, "account_approved",
-        {"name": user.name, "login_url": login_url},
-        "Your Tourvaa account is active",
-        approved_email(user.name, login_url),
-    )
-    try_send_email(user.email, subject, html, template_key="account_approved")
 
     return serialize_user(user)
 
@@ -481,9 +483,17 @@ def deactivate_user(db: Session, user_id: int, reason: str, actor: User | None =
         profile.status = "inactive"
     db.add(UserStatusHistory(user_id=user.id, from_status=old_status, to_status="INACTIVE", reason=reason.strip(), changed_by=actor.id if actor else None))
     log_audit(db, actor=actor, action="deactivate_user", entity_type="user", entity_id=user.id, old_values=old_values, new_values=serialize_user(user), request=request)
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatch_lifecycle_email(
+        db, event="account_deactivated", entity_type="user", entity_id=user.id,
+        recipient_type="user", recipient_email=user.email, template_key="account_deactivated",
+        values={"name": user.name, "reason": reason},
+        fallback_subject="Your Tourvaa account is inactive",
+        fallback_html=base_email("Account deactivated", f"Hi {esc(user.name)},", f"Your Tourvaa account has been deactivated.<br /><br />Reason: {esc(reason)}"),
+        event_version=str(user.token_version),
+    )
     db.commit()
     db.refresh(user)
-    try_send_email(user.email, "Your Tourvaa account is inactive", base_email("Account deactivated", f"Hi {esc(user.name)},", f"Your Tourvaa account has been deactivated.<br /><br />Reason: {esc(reason)}"), template_key="account_deactivated")
     return serialize_user(user)
 
 
@@ -557,18 +567,18 @@ def reactivate_user(
         new_values=serialize_user(user),
         request=request,
     )
+    login_url = f"{settings.FRONTEND_URL}/login"
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatch_lifecycle_email(
+        db, event="account_reactivated", entity_type="user", entity_id=user.id,
+        recipient_type="user", recipient_email=user.email, template_key="account_reactivated",
+        values={"name": user.name, "login_url": login_url},
+        fallback_subject="Your Tourvaa account is active again",
+        fallback_html=approved_email(user.name, login_url),
+        event_version=str(user.token_version),
+    )
     db.commit()
     db.refresh(user)
-
-    login_url = f"{settings.FRONTEND_URL}/login"
-    subject, html = render_database_email(
-        db,
-        "account_reactivated",
-        {"name": user.name, "login_url": login_url},
-        "Your Tourvaa account is active again",
-        approved_email(user.name, login_url),
-    )
-    try_send_email(user.email, subject, html, template_key="account_reactivated")
     return serialize_user(user)
 
 
@@ -634,28 +644,23 @@ def send_user_password_reset(db: Session, user_id: int):
 
     user.reset_password_token = token_hash
     user.reset_password_expires_at = utcnow() + timedelta(minutes=30)
-    db.commit()
-
     reset_url = build_password_reset_url(token)
-    subject, html = render_database_email(
-        db,
-        "password_reset",
-        {
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatch_lifecycle_email(
+        db, event="password_reset", entity_type="user", entity_id=user.id,
+        recipient_type="user", recipient_email=user.email, template_key="password_reset",
+        values={
             "name": user.name,
             "email": user.email,
             "reset_url": reset_url,
             "button_text": "Reset Password",
             "button_url": reset_url,
         },
-        "Reset your Tourvaa password",
-        password_reset_email(user.name, reset_url),
+        fallback_subject="Reset your Tourvaa password",
+        fallback_html=password_reset_email(user.name, reset_url),
+        event_version=token_hash,
     )
-    send_email(
-        user.email,
-        subject,
-        html,
-        template_key="password_reset",
-    )
+    db.commit()
 
     return serialize_user(user)
 

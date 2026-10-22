@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from app.models.reports import ReportSchedule
 from app.models.users import User
 from app.services.audit import log_audit
-from app.utils.mailer import try_send_email
 
 logger = logging.getLogger(__name__)
 
@@ -58,24 +57,33 @@ def _send_scheduled_report(db: Session, schedule: ReportSchedule, now: datetime)
     label = REPORT_LABELS.get(schedule.report_type, schedule.report_type)
     recipients = [email.strip() for email in (schedule.recipient_emails or "").split(",") if email.strip()]
     attachment = (f"{schedule.report_type}.csv", buffer.getvalue().encode("utf-8"), "csv")
-    delivered, failed = [], []
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    queued = []
     for recipient in recipients:
-        sent = try_send_email(
-            recipient,
-            f"Tourvaa scheduled report: {label}",
-            f"<p>Your scheduled <strong>{label}</strong> report is attached as a CSV file.</p>",
-            attachments=[attachment],
+        if dispatch_lifecycle_email(
+            db,
+            event="scheduled_report",
+            entity_type="report_schedule",
+            entity_id=schedule.id,
+            recipient_type="report_recipient",
+            recipient_email=recipient,
             template_key="scheduled_report",
-        )
-        (delivered if sent else failed).append(recipient)
+            values={"report_name": label, "period": period, "attachment_note": "The CSV report is attached."},
+            fallback_subject=f"Tourvaa scheduled report: {label}",
+            fallback_html=f"<p>Your scheduled <strong>{label}</strong> report is attached as a CSV file.</p>",
+            event_version=now.date().isoformat(),
+            attachments=[attachment],
+        ):
+            queued.append(recipient)
     schedule.last_run_at = now
     log_audit(
         db,
         actor=actor,
-        action="report_schedule_delivered",
+        action="report_schedule_queued",
         entity_type="report_schedule",
         entity_id=schedule.id,
-        new_values={"report_type": schedule.report_type, "delivered_to": delivered, "failed": failed},
+        new_values={"report_type": schedule.report_type, "queued_for": queued},
     )
 
 

@@ -4,6 +4,7 @@ from app.models.permissions import Permission, RolePermission
 from app.models.users import User
 from app.models.settings import ApiSetting, AppSetting, PaymentSetting
 from app.models.email_templates import EmailTemplate
+from app.models.booking_modifications import BookingModificationRequest
 from app.models.audit import AuditLog
 from app.models.customers import Customer, CustomerCommunication, CustomerSavedTraveller, CustomerCancellationRequest, CustomerWishlistItem
 from app.models.cms import Country, State, City, TourCategory, TourSubcategory, TourSubcategoryMap, Tour

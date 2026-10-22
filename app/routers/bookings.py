@@ -15,6 +15,8 @@ from app.schemas.bookings import (
     BookingStatusUpdate,
     BookingTravelDateUpdate,
     BookingUpdate,
+    BookingModificationCreate,
+    BookingModificationDecision,
     SupplierDecisionRequest,
     SupplierDueDateUpdate,
     SupplierNotifyRequest,
@@ -144,6 +146,30 @@ def hide_from_agent_bookings(booking_id: int, request: Request, db: Session = De
 @router.put("/{booking_id}")
 def edit_booking(booking_id: int, data: BookingUpdate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.edit", "update-bookings"))):
     return {"status": "success", "message": "Booking updated successfully", "data": update_booking(db, booking_id, data, actor=current_user, request=request)}
+
+
+@router.post("/{booking_id}/modifications")
+def request_booking_modification(booking_id: int, data: BookingModificationCreate, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.services.booking_modifications import create_modification_request
+    return {"status": "success", "message": "Booking modification requested", "data": create_modification_request(db, booking_id, data, current_user, request)}
+
+
+@router.get("/{booking_id}/modifications")
+def booking_modifications(booking_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.services.booking_modifications import list_modification_requests
+    return {"status": "success", "data": list_modification_requests(db, booking_id, current_user)}
+
+
+@router.post("/{booking_id}/modifications/{modification_id}/approve")
+def approve_booking_modification(booking_id: int, modification_id: int, data: BookingModificationDecision, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.edit", "update-bookings"))):
+    from app.services.booking_modifications import decide_modification_request
+    return {"status": "success", "message": "Booking modification approved", "data": decide_modification_request(db, booking_id, modification_id, True, data, current_user, request)}
+
+
+@router.post("/{booking_id}/modifications/{modification_id}/reject")
+def reject_booking_modification(booking_id: int, modification_id: int, data: BookingModificationDecision, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("bookings.edit", "update-bookings"))):
+    from app.services.booking_modifications import decide_modification_request
+    return {"status": "success", "message": "Booking modification rejected", "data": decide_modification_request(db, booking_id, modification_id, False, data, current_user, request)}
 
 
 @router.patch("/{booking_id}/travel-date")

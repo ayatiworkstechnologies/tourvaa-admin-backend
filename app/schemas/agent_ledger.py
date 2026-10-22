@@ -30,3 +30,7 @@ class AgentPayoutMarkPaid(BaseModel):
 
 class AgentPayoutApprove(BaseModel):
     notes: Optional[str] = None
+
+
+class AgentPayoutReject(BaseModel):
+    reason: str = Field(min_length=1, max_length=255)

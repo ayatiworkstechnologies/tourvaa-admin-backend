@@ -238,7 +238,20 @@ def request_payout(db: Session, affiliate: Affiliate, data: AffiliatePayoutReque
 
     log_audit(db, actor=None, action="request_affiliate_payout", entity_type="affiliate_payout", entity_id=payout.id, new_values=_s_payout(payout), request=request)
     notify_admins(db, notification_type="affiliate_payout_requested", title="Affiliate Payout Requested", message=f"{affiliate.name} requested a payout of {running_total} {payout.currency}.", entity_type="affiliate_payout", entity_id=payout.id)
-
+    _notify_affiliate(db, payout, "affiliate_payout_requested", "Payout requested", f"Your payout request {payout.payout_code} for {running_total} {payout.currency} was submitted for review.")
+    from app.config import settings
+    from app.utils.notification_triggers import email_admins
+    admin_url = f"{settings.FRONTEND_URL.rstrip('/')}/admin/affiliates/payouts"
+    email_admins(
+        db, "partner_payout_event",
+        {"title": "Affiliate payout requested", "name": "Tourvaa Operations",
+         "detail": f"{affiliate.name} requested a payout.", "payout_code": payout.payout_code,
+         "currency": payout.currency, "amount": running_total, "reference_number": "Pending",
+         "portal_url": admin_url},
+        f"Affiliate payout requested - {payout.payout_code}",
+        f"<p>{affiliate.name} requested {payout.currency} {running_total}.</p>",
+        entity_type="affiliate_payout", entity_id=payout.id,
+    )
     db.commit()
     db.refresh(payout)
     return _s_payout(payout)
@@ -345,4 +358,21 @@ def _notify_affiliate(db: Session, payout: AffiliatePayout, notification_type: s
     aff = db.query(Affiliate).filter(Affiliate.id == payout.affiliate_id).first()
     if aff and aff.user_id:
         enqueue_notification(db, user_id=aff.user_id, notification_type=notification_type, title=title, message=message, entity_type="affiliate_payout", entity_id=payout.id)
+        from app.config import settings
+        from app.models.users import User
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        user = db.query(User).filter(User.id == aff.user_id).first()
+        portal_url = f"{settings.FRONTEND_URL.rstrip('/')}/affiliate/payouts"
+        if user and user.email:
+            dispatch_lifecycle_email(
+                db, event=notification_type, entity_type="affiliate_payout", entity_id=payout.id,
+                recipient_type="affiliate", recipient_email=user.email, template_key="partner_payout_event",
+                values={"title": title, "name": aff.name or user.name, "detail": message,
+                        "payout_code": payout.payout_code, "currency": payout.currency,
+                        "amount": payout.total_amount, "reference_number": payout.reference_number or "Pending",
+                        "portal_url": portal_url},
+                fallback_subject=f"{title} - {payout.payout_code}",
+                fallback_html=f"<p>{message}</p><p><a href='{portal_url}'>View payouts</a></p>",
+                event_version=notification_type,
+            )
         db.commit()

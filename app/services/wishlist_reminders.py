@@ -21,7 +21,7 @@ _REMINDER_INTERVAL = timedelta(days=7)
 
 def check_wishlist_reminders(db: Session) -> None:
     from app.schemas.cms import slugify
-    from app.utils.mailer import try_send_email
+    from app.services.notification_delivery import dispatch_lifecycle_email
 
     now = datetime.now(timezone.utc)
     cutoff = now - _REMINDER_INTERVAL
@@ -68,7 +68,25 @@ def check_wishlist_reminders(db: Session) -> None:
                 f"<ul>{''.join(rows)}</ul>"
                 f"<p>Book now before seats fill up.</p>"
             )
-            try_send_email(user.email, subject, body, template_key="wishlist_reminder")
+            dispatch_lifecycle_email(
+                db,
+                event="wishlist_reminder",
+                entity_type="user",
+                entity_id=user.id,
+                recipient_type="customer",
+                recipient_email=user.email,
+                template_key="wishlist_reminder",
+                values={
+                    "name": user.name or "there",
+                    "tour_count": len(rows),
+                    "login_url": f"{settings.FRONTEND_URL}/wishlist",
+                    "button_text": "View wishlist",
+                    "button_url": f"{settings.FRONTEND_URL}/wishlist",
+                },
+                fallback_subject=subject,
+                fallback_html=body,
+                event_version=now.date().isoformat(),
+            )
 
             for item in items:
                 item.last_reminder_sent_at = now

@@ -1,7 +1,11 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+
 from app.services import notification_delivery
+from app.models.notifications import NotificationDelivery
 
 
 def test_lifecycle_delivery_payload_serializes_decimal_template_values(monkeypatch):
@@ -10,8 +14,7 @@ def test_lifecycle_delivery_payload_serializes_decimal_template_values(monkeypat
     scheduled = []
 
     monkeypatch.setattr(notification_delivery, "reserve_delivery", lambda *_args, **_kwargs: row)
-    from app.utils import mailer
-    monkeypatch.setattr(mailer, "dispatch_email_task", lambda *_args: scheduled.append(True))
+    monkeypatch.setattr(notification_delivery, "_schedule_after_commit", lambda *_args: scheduled.append(True))
 
     queued = notification_delivery.dispatch_lifecycle_email(
         SimpleNamespace(), event="payment_received", entity_type="booking", entity_id=43,
@@ -24,6 +27,135 @@ def test_lifecycle_delivery_payload_serializes_decimal_template_values(monkeypat
     assert queued is True
     assert row.payload_json["values"] == {"amount": "252.91", "nested": {"tax": "0.00"}}
     assert scheduled == [True]
+
+
+class _BackgroundTasks:
+    def __init__(self):
+        self.tasks = []
+
+    def add_task(self, target, *args):
+        self.tasks.append((target, args))
+
+
+def test_delivery_worker_is_registered_only_after_outer_commit():
+    db = Session(create_engine("sqlite://"))
+    tasks = _BackgroundTasks()
+
+    db.execute(text("select 1"))
+    notification_delivery._schedule_after_commit(db, 41, tasks)
+    assert tasks.tasks == []
+
+    db.commit()
+    assert tasks.tasks == [(notification_delivery._deliver_in_new_session, (41,))]
+
+
+def test_delivery_worker_is_not_registered_after_rollback():
+    db = Session(create_engine("sqlite://"))
+    tasks = _BackgroundTasks()
+
+    db.execute(text("select 1"))
+    notification_delivery._schedule_after_commit(db, 42, tasks)
+    db.rollback()
+    db.execute(text("select 1"))
+    db.commit()
+
+    assert tasks.tasks == []
+
+
+def test_delivery_worker_does_not_send_a_row_already_being_processed(monkeypatch):
+    row = SimpleNamespace(status="processing", attempt_count=1)
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def with_for_update(self):
+            return self
+
+        def first(self):
+            return row
+
+        def update(self, *_args, **_kwargs):
+            return 0
+
+    db = SimpleNamespace(query=lambda *_args: Query(), commit=lambda: None)
+    monkeypatch.setattr("app.utils.mailer.send_email", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("duplicate send")))
+
+    notification_delivery._deliver(db, 42)
+
+    assert row.status == "processing"
+    assert row.attempt_count == 1
+
+
+def _delivery_session():
+    engine = create_engine("sqlite://")
+    NotificationDelivery.__table__.create(engine)
+    return Session(engine)
+
+
+def test_atomic_claim_records_smtp_acceptance(monkeypatch):
+    db = _delivery_session()
+    row = NotificationDelivery(event_type="booking_created", entity_type="booking", entity_id=1,
+        recipient_type="customer", recipient_email="a@example.test", template_key="booking_confirmation",
+        payload_json={"values": {}, "fallback_subject": "Subject", "fallback_html": "<p>Body</p>"},
+        status="pending", attempt_count=0, idempotency_key="claim-success")
+    db.add(row); db.commit()
+    monkeypatch.setattr("app.utils.email_templates.render_database_email", lambda *_args: ("Subject", "<p>Body</p>"))
+    monkeypatch.setattr("app.utils.mailer.send_email", lambda *_args, **_kwargs: SimpleNamespace(ok=True, error=None))
+
+    notification_delivery._deliver(db, row.id)
+    db.refresh(row)
+
+    assert row.status == "smtp_accepted"
+    assert row.attempt_count == 1
+    assert row.smtp_accepted_at is not None
+    assert row.lease_token is None
+
+
+def test_failed_claim_uses_backoff_then_exhausts(monkeypatch):
+    db = _delivery_session()
+    row = NotificationDelivery(event_type="booking_created", entity_type="booking", entity_id=2,
+        recipient_type="customer", recipient_email="b@example.test", template_key="booking_confirmation",
+        payload_json={"values": {}, "fallback_subject": "Subject", "fallback_html": "<p>Body</p>"},
+        status="pending", attempt_count=2, idempotency_key="claim-fail")
+    db.add(row); db.commit()
+    monkeypatch.setattr("app.utils.email_templates.render_database_email", lambda *_args: ("Subject", "<p>Body</p>"))
+    monkeypatch.setattr("app.utils.mailer.send_email", lambda *_args, **_kwargs: SimpleNamespace(ok=False, error="smtp unavailable"))
+
+    notification_delivery._deliver(db, row.id)
+    db.refresh(row)
+
+    assert row.status == "exhausted"
+    assert row.attempt_count == 3
+    assert row.exhausted_at is not None
+    assert "smtp unavailable" in row.error_message
+
+
+def test_legacy_stale_delivery_without_payload_requires_manual_review():
+    from datetime import timedelta
+    from app.utils.money import utcnow
+
+    db = _delivery_session()
+    row = NotificationDelivery(event_type="legacy", entity_type="booking", entity_id=3,
+        recipient_type="customer", recipient_email="c@example.test", template_key="legacy",
+        payload_json=None, status="failed", attempt_count=0, idempotency_key="legacy-no-payload",
+        next_attempt_at=utcnow() - timedelta(minutes=1))
+    db.add(row); db.commit()
+
+    assert notification_delivery.retry_failed_lifecycle_emails(db) == 0
+    db.refresh(row)
+    assert row.status == "manual_review"
+
+
+def test_template_interpolation_rejects_missing_values():
+    from app.utils.email_templates import apply_template_values
+
+    try:
+        apply_template_values("Booking {{booking_code}} for {{name}}", {"name": "Alex"})
+    except ValueError as error:
+        assert "booking_code" in str(error)
+    else:
+        raise AssertionError("missing template variables must fail closed")
 
 
 def test_supplier_approval_reserves_a_durable_email_delivery(monkeypatch):

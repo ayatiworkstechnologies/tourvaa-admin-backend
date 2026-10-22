@@ -208,20 +208,28 @@ def portal_display_name(user: User):
 
 def send_email_verification(db: Session, user: User, token: str, redirect: str | None = None):
     verification_url = build_email_verification_url(token, redirect)
-    subject, html = render_database_email(
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    values = {
+        "name": user.name,
+        "email": user.email,
+        "verification_url": verification_url,
+        "button_text": "Verify Email & Create Password",
+        "button_url": verification_url,
+    }
+    dispatch_lifecycle_email(
         db,
-        "email_verification",
-        {
-            "name": user.name,
-            "email": user.email,
-            "verification_url": verification_url,
-            "button_text": "Verify Email & Create Password",
-            "button_url": verification_url,
-        },
-        "Verify your Tourvaa email and create your password",
-        email_verification_email(user.name, verification_url),
+        event="email_verification",
+        entity_type="user",
+        entity_id=user.id,
+        recipient_type=user.user_type.lower(),
+        recipient_email=user.email,
+        template_key="email_verification",
+        values=values,
+        fallback_subject="Verify your Tourvaa email and create your password",
+        fallback_html=email_verification_email(user.name, verification_url),
+        event_version=user.email_verification_token or str(user.email_verification_expires_at),
     )
-    try_send_email(user.email, subject, html, template_key="email_verification")
 
 
 def register_unified_user(db: Session, data):
@@ -503,6 +511,7 @@ def resend_registration_verification(db: Session, email: str, redirect: str | No
     user.email_verification_expires_at = utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
     db.commit()
     send_email_verification(db, user, token, redirect)
+    db.commit()
     return True
 
 
@@ -543,6 +552,7 @@ def change_registration_email(
     user.email_verification_expires_at = utcnow() + timedelta(minutes=settings.EMAIL_VERIFICATION_EXPIRE_MINUTES)
     db.commit()
     send_email_verification(db, user, token, redirect)
+    db.commit()
     return user
 
 def login_user(db: Session, data, request=None):
@@ -845,17 +855,22 @@ def request_otp(db: Session, data):
     user.otp_expires_at = now + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
     user.otp_attempts = 0
     db.add(user)
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatch_lifecycle_email(
+        db,
+        event="otp_login",
+        entity_type="user",
+        entity_id=user.id,
+        recipient_type="user",
+        recipient_email=user.email,
+        template_key="otp_login",
+        values={"name": user.name, "email": user.email, "code": code},
+        fallback_subject="Your Tourvaa verification code",
+        fallback_html=otp_login_email(user.name, code),
+        event_version=code_hash,
+    )
     db.commit()
     db.refresh(user)
-
-    subject, html = render_database_email(
-        db,
-        "otp_login",
-        {"name": user.name, "email": user.email, "code": code},
-        "Your Tourvaa verification code",
-        otp_login_email(user.name, code),
-    )
-    try_send_email(user.email, subject, html, template_key="otp_login")
     return {"email": email, "expires_in_minutes": settings.OTP_EXPIRE_MINUTES}
 
 
@@ -1066,44 +1081,30 @@ def forgot_password(db: Session, email: str, client_type: str | None = "web", ba
     user.reset_password_token = token_hash
     user.reset_password_expires_at = utcnow() + timedelta(minutes=30)
 
-    db.commit()
-
     role_slug = user.role.slug if user.role else None
     reset_url = build_password_reset_url(token, client_type, role_slug)
-    subject, html = render_database_email(
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatch_lifecycle_email(
         db,
-        "password_reset",
-        {
+        event="password_reset",
+        entity_type="user",
+        entity_id=user.id,
+        recipient_type="user",
+        recipient_email=user.email,
+        template_key="password_reset",
+        values={
             "name": user.name,
             "email": user.email,
             "reset_url": reset_url,
             "button_text": "Reset Password",
             "button_url": reset_url,
         },
-        "Reset your Tourvaa password",
-        password_reset_email(user.name, reset_url),
+        fallback_subject="Reset your Tourvaa password",
+        fallback_html=password_reset_email(user.name, reset_url),
+        event_version=token_hash,
+        background_tasks=background_tasks,
     )
-
-    # send_email() opens its own DB session and does a live SMTP round-trip,
-    # which can hang for the full SMTP timeout when a mail server is slow or
-    # unreachable - doing that inline here means the client's HTTP request
-    # (and any proxy in front of it) sits blocked for that entire duration.
-    # When called from a request handler, background_tasks lets the response
-    # return immediately after the token is committed and the email goes out
-    # after; callers without a request context (scripts, tests) fall back to
-    # sending synchronously as before.
-    if background_tasks is not None:
-        background_tasks.add_task(send_email, user.email, subject, html, template_key="password_reset")
-    else:
-        try:
-            send_email(
-                user.email,
-                subject,
-                html,
-                template_key="password_reset",
-            )
-        except Exception as error:
-            logger.warning("Password reset email failed for user id=%s: %s", user.id, error)
+    db.commit()
 
     return True
 
@@ -1113,26 +1114,31 @@ def send_password_changed_email(db: Session, user: User, background_tasks=None):
     profile change). Sent in the background when possible so a slow SMTP
     server can never hold up the request."""
     login_url = f"{settings.FRONTEND_URL}/login"
-    subject, html = render_database_email(
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    dispatched = dispatch_lifecycle_email(
         db,
-        "password_changed",
-        {
+        event="password_changed",
+        entity_type="user",
+        entity_id=user.id,
+        recipient_type="user",
+        recipient_email=user.email,
+        template_key="password_changed",
+        values={
             "name": user.name,
             "email": user.email,
             "login_url": login_url,
             "button_text": "Login to Tourvaa",
             "button_url": login_url,
         },
-        "Your Tourvaa password was changed",
-        password_changed_email(user.name, login_url),
+        fallback_subject="Your Tourvaa password was changed",
+        fallback_html=password_changed_email(user.name, login_url),
+        event_version=str(user.token_version),
+        background_tasks=background_tasks,
     )
-    if background_tasks is not None:
-        background_tasks.add_task(try_send_email, user.email, subject, html, template_key="password_changed")
-    else:
-        try:
-            try_send_email(user.email, subject, html, template_key="password_changed")
-        except Exception as exc:
-            logger.warning("Password changed email failed for user id=%s: %s", user.id, exc)
+    # Password/session revocation currently commits inside force_logout_user;
+    # persist the courtesy alert immediately afterward so it remains durable.
+    if dispatched:
+        db.commit()
 
 
 def change_password_everywhere(db: Session, user: User, new_password: str, *, request=None, background_tasks=None) -> dict:

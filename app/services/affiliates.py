@@ -277,6 +277,20 @@ def unlock_affiliate_bank_edit(db: Session, affiliate_id: int, actor: User, requ
     item.invoicing.bank_edit_unlocked_by = actor.id
     item.invoicing.bank_edit_requested_at = None
     log_audit(db, actor=actor, action="unlock_affiliate_bank_edit", entity_type="affiliate", entity_id=item.id, request=request)
+    from app.utils.notification_triggers import notify_bank_detail_edit_decision
+    notify_bank_detail_edit_decision(db, partner_type="affiliate", partner_id=item.id, partner_name=item.name, user_id=item.user_id, approved=True)
+    db.commit(); db.refresh(item)
+    return serialize_affiliate(item)
+
+
+def reject_affiliate_bank_edit(db: Session, affiliate_id: int, reason: str, actor: User, request: Request | None = None):
+    item = get_affiliate(db, affiliate_id)
+    if not item.invoicing or not item.invoicing.bank_edit_requested_at:
+        raise HTTPException(status_code=409, detail="No pending bank-detail edit request")
+    item.invoicing.bank_edit_requested_at = None
+    log_audit(db, actor=actor, action="reject_affiliate_bank_edit", entity_type="affiliate", entity_id=item.id, new_values={"reason": reason}, request=request)
+    from app.utils.notification_triggers import notify_bank_detail_edit_decision
+    notify_bank_detail_edit_decision(db, partner_type="affiliate", partner_id=item.id, partner_name=item.name, user_id=item.user_id, approved=False, reason=reason)
     db.commit(); db.refresh(item)
     return serialize_affiliate(item)
 

@@ -3010,6 +3010,10 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
                     event="booking_expired", entity_id=booking.id, recipient_type="customer",
                 )
             _email_agent_booking_status(db, booking, "booking expired", reason, event="booking_expired")
+        # Persist every delivery reservation created after the expiry commit.
+        # The sender is registered on this commit and cannot race an uncommitted
+        # notification row.
+        db.commit()
     return expired_ids
 
 
@@ -3047,6 +3051,7 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
             booking.supplier.user.email,
             event="supplier_assigned", entity_id=booking.id, recipient_type="supplier",
         )
+        db.commit()
 
     return serialize_booking_for_actor(db, booking, actor)
 
@@ -3346,6 +3351,9 @@ def supplier_complete_booking(db: Session, booking_id: int, reason: str | None, 
             booking.customer.email,
             event="review_requested", entity_id=booking.id, recipient_type="customer",
         )
+        # _email_admins_booking_event commits the completion notifications, but
+        # the review request is reserved afterwards and needs its own boundary.
+        db.commit()
     return serialize_booking_for_actor(db, booking, actor)
 
 
@@ -3394,8 +3402,19 @@ def check_booking_reminders(db: Session) -> list[int]:
                 f"Your tour is coming up - {booking.booking_code}",
                 booking_reminder_email(booking.customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date, customer_url),
                 booking.customer.email,
+                event=marker,
+                entity_id=booking.id,
+                recipient_type="customer",
+                event_version=tour_date.isoformat(),
             )
-        _email_agent_booking_status(db, booking, "tour reminder", f"The tour is {label} ({booking.tour_date}).")
+        _email_agent_booking_status(
+            db,
+            booking,
+            "tour reminder",
+            f"The tour is {label} ({booking.tour_date}).",
+            event=marker,
+            event_version=tour_date.isoformat(),
+        )
         reminders_sent.append(booking.id)
     if reminders_sent:
         db.commit()
@@ -3439,7 +3458,12 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
             f"Supplier withdrawal received - {booking.booking_code}",
             booking_status_update_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, "withdrawal request received", reason, portal_url),
             booking.supplier.user.email,
+            event="supplier_withdrawal_acknowledged",
+            entity_id=booking.id,
+            recipient_type="supplier",
+            event_version=(booking.updated_at.isoformat() if booking.updated_at else "1"),
         )
+        db.commit()
     return serialize_booking_for_actor(db, booking, actor)
 
 
@@ -3729,6 +3753,8 @@ def supplier_notify_parties(db: Session, booking_id: int, message: str, notify_c
         enqueue_notification(db, user_id=booking.agent.user_id, notification_type="booking_update", title=f"Supplier update: {booking.booking_code}", message=message, entity_type="booking", entity_id=booking.id)
         _email_agent_booking_status(db, booking, booking.booking_status, message, event="supplier_message", event_version=str(row.id))
         notified.append("agent")
+    if notified:
+        db.commit()
     return {"message": "Notification sent", "notified": notified, "communication_id": row.id}
 
 
@@ -3756,7 +3782,7 @@ def _communication_recipients(booking: Booking, visibility: str) -> list[tuple[s
 
 def add_communication(db: Session, booking_id: int, data: BookingCommunicationCreate, actor: User, request: Request | None = None) -> dict:
     from html import escape
-    from app.utils.mailer import try_send_email
+    from app.services.notification_delivery import dispatch_lifecycle_email
 
     booking = get_booking_by_id(db, booking_id)
     _ensure_booking_access(booking, actor)
@@ -3770,14 +3796,24 @@ def add_communication(db: Session, booking_id: int, data: BookingCommunicationCr
     row = BookingCommunication(booking_id=booking.id, sender_user_id=actor.id, sender_type=_user_role(actor), message_type=data.message_type, subject=data.subject, message=data.message, visibility=data.visibility)
     db.add(row)
     log_audit(db, actor=actor, action="create_booking_communication", entity_type="booking", entity_id=booking.id, request=request)
-    db.commit(); db.refresh(row)
+    db.flush()
 
     # "internal" notes are admin-only and are never emailed to booking stakeholders.
     if data.visibility != "internal":
         subject = data.subject or f"Update on your booking {booking.booking_code or booking.id}"
         body = f"<p>{escape(data.message)}</p>"
-        for _label, email in recipients:
-            try_send_email(email, subject, body, template_key="booking_communication", entity_type="booking_communication", entity_id=row.id)
+        sender_name = getattr(actor, "name", None) or _user_role(actor).title()
+        for label, email in dict.fromkeys(recipients):
+            login_url = f"{settings.FRONTEND_URL}/{label}/bookings/{booking.id}"
+            dispatch_lifecycle_email(
+                db, event="booking_communication", entity_type="booking_communication", entity_id=row.id,
+                recipient_type=label, recipient_email=email, template_key="booking_communication",
+                values={"booking_code": booking.booking_code or booking.id, "tour_name": booking.tour_name,
+                        "sender_name": sender_name, "message": data.message, "login_url": login_url,
+                        "button_text": "Read message", "button_url": login_url},
+                fallback_subject=subject, fallback_html=body,
+            )
+    db.commit(); db.refresh(row)
 
     return serialize_communication(row)
 
@@ -3868,6 +3904,31 @@ def notify_overdue_agent_balances(db: Session) -> list[int]:
                 message=f"The balance for booking {code} was due on {due:%d %b %Y}. Please pay now to keep the booking.",
                 entity_type="booking", entity_id=booking.id,
             )
+            if booking.agent.user and booking.agent.user.email:
+                from app.services.notification_delivery import dispatch_lifecycle_email
+                agent_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
+                dispatch_lifecycle_email(
+                    db,
+                    event="payment_due_reminder",
+                    entity_type="booking",
+                    entity_id=booking.id,
+                    recipient_type="agent",
+                    recipient_email=booking.agent.user.email,
+                    template_key="payment_due_reminder",
+                    values={
+                        "name": booking.agent.agent_name,
+                        "booking_code": code,
+                        "currency": booking.currency,
+                        "amount_due": money_str(booking.amount_pending),
+                        "due_date": due.strftime("%Y-%m-%d"),
+                        "login_url": agent_url,
+                        "button_text": "View booking",
+                        "button_url": agent_url,
+                    },
+                    fallback_subject=f"Balance payment overdue - {code}",
+                    fallback_html=f"<p>The balance of {booking.currency} {money_str(booking.amount_pending)} for booking {code} was due on {due:%d %b %Y}.</p><p><a href='{agent_url}'>View booking</a></p>",
+                    event_version=due.date().isoformat(),
+                )
         notify_admins(
             db, notification_type="balance_overdue", title="Agent balance overdue",
             message=f"Booking {code} has an unpaid balance past its {due:%d %b %Y} due date.",

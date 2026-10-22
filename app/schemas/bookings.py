@@ -176,6 +176,15 @@ class BookingUpdate(BaseModel):
     affiliate_id: Optional[int] = None
 
 
+class BookingModificationCreate(BaseModel):
+    proposed_changes: BookingUpdate
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class BookingModificationDecision(BaseModel):
+    reason: str = Field(default="", max_length=1000)
+
+
 class BookingTravelDateUpdate(BaseModel):
     tour_date: str = Field(min_length=10, max_length=32)
     reason: str = Field(min_length=3, max_length=500)

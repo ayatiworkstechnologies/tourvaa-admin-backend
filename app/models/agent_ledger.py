@@ -62,6 +62,9 @@ class AgentPayout(Base):
     notes = Column(Text, nullable=True)
     initiated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    rejected_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    rejected_at = Column(DateTime(timezone=True), nullable=True)
+    rejection_reason = Column(String(255), nullable=True)
     paid_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     paid_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -70,6 +73,7 @@ class AgentPayout(Base):
     agent = relationship("Agent")
     initiator = relationship("User", foreign_keys=[initiated_by])
     approver = relationship("User", foreign_keys=[approved_by])
+    rejecter = relationship("User", foreign_keys=[rejected_by])
     payer = relationship("User", foreign_keys=[paid_by])
     items = relationship("AgentPayoutItem", back_populates="payout", cascade="all, delete-orphan")
 

@@ -27,24 +27,32 @@ def send_templated_email(
     *,
     entity_type: str = "email",
     entity_id: int | None = None,
+    recipient_type: str = "user",
+    event_version: str = "1",
+    background_tasks: "BackgroundTasks | None" = None,
 ):
-    """Render an admin-editable DB email template (falling back to hardcoded HTML) and send it."""
+    """Reserve an editable templated email in the durable outbox."""
     if not to_email:
-        return
-    from app.utils.email_templates import render_database_email
-    from app.utils.mailer import try_send_email
+        return False
+    from app.services.notification_delivery import dispatch_lifecycle_email
     try:
-        subject, html = render_database_email(db, key, values, fallback_subject, fallback_html)
-        try_send_email(
-            to_email,
-            subject,
-            html,
-            template_key=key,
+        return dispatch_lifecycle_email(
+            db,
+            event=key,
             entity_type=entity_type,
-            entity_id=entity_id,
+            entity_id=entity_id or 0,
+            recipient_type=recipient_type,
+            recipient_email=to_email,
+            template_key=key,
+            values=values,
+            fallback_subject=fallback_subject,
+            fallback_html=fallback_html,
+            event_version=event_version,
+            background_tasks=background_tasks,
         )
     except Exception as exc:
-        logger.warning("Templated email %s to %s failed: %s", key, to_email, exc)
+        logger.warning("Could not reserve templated email %s to %s: %s", key, to_email, exc)
+        return False
 
 
 def admin_notification_recipients(db: Session) -> set[str]:
@@ -64,24 +72,6 @@ def admin_notification_recipients(db: Session) -> set[str]:
     return recipients
 
 
-def _do_email_admins(
-    db: Session,
-    key: str,
-    values: dict,
-    fallback_subject: str,
-    fallback_html: str,
-    *,
-    entity_type: str = "email",
-    entity_id: int | None = None,
-) -> None:
-    recipients = admin_notification_recipients(db)
-    for recipient in recipients:
-        send_templated_email(
-            db, recipient, key, values, fallback_subject, fallback_html,
-            entity_type=entity_type, entity_id=entity_id,
-        )
-
-
 def email_admins(
     db: Session,
     key: str,
@@ -92,24 +82,21 @@ def email_admins(
     *,
     entity_type: str = "email",
     entity_id: int | None = None,
+    event_version: str = "1",
 ):
-    """Render a DB email template and send it to every super-admin/admin user.
-
-    Runs inline by default, unchanged for existing (low-traffic) callers.
-    Pass `background_tasks` from a high-traffic request path (e.g. booking
-    creation) to schedule the send instead of blocking the response on SMTP
-    - see app.utils.mailer.dispatch_email_task.
-    """
-    if background_tasks is None:
-        _do_email_admins(
-            db, key, values, fallback_subject, fallback_html,
-            entity_type=entity_type, entity_id=entity_id,
-        )
-        return
-    from app.utils.mailer import dispatch_email_task
-    dispatch_email_task(
-        background_tasks, db, _do_email_admins, key, values, fallback_subject, fallback_html,
-        entity_type=entity_type, entity_id=entity_id,
+    """Reserve one private, deduplicated outbox delivery per admin recipient."""
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+    return dispatch_admin_lifecycle_emails(
+        db,
+        event=key,
+        entity_type=entity_type,
+        entity_id=entity_id or 0,
+        template_key=key,
+        values=values,
+        fallback_subject=fallback_subject,
+        fallback_html=fallback_html,
+        event_version=event_version,
+        background_tasks=background_tasks,
     )
 
 
@@ -134,6 +121,7 @@ def notify_bank_detail_edit_requested(
     codes remain in the authenticated portal and never enter email content.
     """
     from app.config import settings
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
     from app.utils.email_templates import bank_detail_edit_requested_admin_email
 
     entity_type = partner_type.lower()
@@ -147,22 +135,41 @@ def notify_bank_detail_edit_requested(
         entity_id=partner_id,
     )
     admin_url = f"{settings.FRONTEND_URL}/admin/{entity_type}s/{partner_id}"
-    email_admins(
+    dispatch_admin_lifecycle_emails(
         db,
-        "bank_detail_edit_requested",
-        {
+        event="bank_detail_edit_requested",
+        entity_type=entity_type,
+        entity_id=partner_id,
+        template_key="bank_detail_edit_requested",
+        values={
             "partner_type": partner_type.title(),
             "partner_name": partner_name,
             "admin_url": admin_url,
             "button_text": "Review request",
             "button_url": admin_url,
         },
-        f"Bank-detail edit request - {partner_name}",
-        bank_detail_edit_requested_admin_email(partner_type, partner_name, admin_url),
-        entity_type=entity_type,
-        entity_id=partner_id,
+        fallback_subject=f"Bank-detail edit request - {partner_name}",
+        fallback_html=bank_detail_edit_requested_admin_email(partner_type, partner_name, admin_url),
     )
     db.flush()
+
+
+def notify_bank_detail_edit_decision(db: Session, *, partner_type: str, partner_id: int, partner_name: str, user_id: int | None, approved: bool, reason: str = "") -> None:
+    """Record the partner-facing outcome without exposing bank data by email."""
+    if not user_id:
+        return
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_lifecycle_email
+    decision = "approved" if approved else "not approved"
+    portal_url = f"{settings.FRONTEND_URL.rstrip('/')}/{partner_type}-portal"
+    dispatch_lifecycle_email(
+        db, event=f"{partner_type}_bank_edit_{'approved' if approved else 'rejected'}",
+        entity_type=partner_type, entity_id=partner_id, recipient_type=partner_type,
+        recipient_email=_user_email(db, user_id), template_key="bank_detail_edit_decision",
+        values={"partner_name": partner_name, "decision": decision, "reason": reason or "", "login_url": portal_url},
+        fallback_subject=f"Bank-detail edit {decision}",
+        fallback_html=f"<p>Hi {partner_name},</p><p>Your bank-detail edit request was {decision}. {reason}</p>",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -206,8 +213,23 @@ def notify_supplier_registered(
 
 def notify_supplier_submitted_verification(db: Session, *, supplier_id: int, supplier_name: str, user_id: int | None = None):
     notify_admins(db, notification_type="supplier_submitted_verification", title="Supplier Submitted for Review", message=f"Supplier '{supplier_name}' has submitted their profile for admin review.", entity_type="supplier", entity_id=supplier_id)
+    from app.config import settings
     from app.utils.email_templates import supplier_submitted_verification_email
-    email_admins(db, "supplier_submitted_verification", {"supplier_name": supplier_name}, "Supplier profile submitted for review", supplier_submitted_verification_email(supplier_name))
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+    dispatch_admin_lifecycle_emails(
+        db, event="supplier_submitted_verification", entity_type="supplier", entity_id=supplier_id,
+        template_key="supplier_submitted_verification", values={"supplier_name": supplier_name},
+        fallback_subject="Supplier profile submitted for review",
+        fallback_html=supplier_submitted_verification_email(supplier_name),
+    )
+    if user_id:
+        dispatch_lifecycle_email(
+            db, event="supplier_verification_received", entity_type="supplier", entity_id=supplier_id,
+            recipient_type="supplier", recipient_email=_user_email(db, user_id), template_key="partner_verification_received",
+            values={"partner_name": supplier_name, "login_url": f"{settings.FRONTEND_URL}/supplier/profile"},
+            fallback_subject="Supplier verification received",
+            fallback_html=f"<p>Hi {supplier_name},</p><p>We received your verification information and it is awaiting review.</p>",
+        )
     db.flush()
 
 
@@ -262,6 +284,9 @@ def notify_supplier_approval_pending(db: Session, *, supplier_id: int, supplier_
         {"supplier_name": supplier_name, "name": supplier_name},
         "Your Tourvaa supplier profile is pending approval",
         "Your account is active and your supplier profile is pending review. Sign in to complete your profile and verification documents.",
+        entity_type="supplier",
+        entity_id=supplier_id,
+        recipient_type="supplier",
     )
     db.flush()
 
@@ -309,6 +334,10 @@ def notify_supplier_account_status(
         },
         title,
         message,
+        entity_type="supplier",
+        entity_id=supplier_id,
+        recipient_type="supplier",
+        event_version=normalized,
     )
     db.flush()
 
@@ -317,7 +346,14 @@ def notify_supplier_rejected(db: Session, *, supplier_id: int, supplier_name: st
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="supplier_rejected", title="Supplier Profile Rejected", message=f"Your supplier profile '{supplier_name}' was not approved. Reason: {rejection_reason}", entity_type="supplier", entity_id=supplier_id)
         from app.utils.email_templates import supplier_rejected_email
-        send_templated_email(db, _user_email(db, user_id), "supplier_rejected", {"supplier_name": supplier_name, "rejection_reason": rejection_reason}, "Your Tourvaa supplier profile was rejected", supplier_rejected_email(supplier_name, rejection_reason))
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        dispatch_lifecycle_email(
+            db, event="supplier_account_rejected", entity_type="supplier", entity_id=supplier_id,
+            recipient_type="supplier", recipient_email=_user_email(db, user_id), template_key="supplier_rejected",
+            values={"supplier_name": supplier_name, "rejection_reason": rejection_reason},
+            fallback_subject="Your Tourvaa supplier profile was rejected",
+            fallback_html=supplier_rejected_email(supplier_name, rejection_reason),
+        )
     db.flush()
 
 
@@ -327,7 +363,14 @@ def notify_supplier_reupload_requested(db: Session, *, supplier_id: int, supplie
         from app.config import settings
         from app.utils.email_templates import supplier_changes_requested_email
         login_url = f"{settings.FRONTEND_URL}/supplier/profile"
-        send_templated_email(db, _user_email(db, user_id), "supplier_changes_requested", {"supplier_name": supplier_name, "pending_requirements": requirements, "login_url": login_url}, "Updates required on your supplier profile", supplier_changes_requested_email(supplier_name, requirements, login_url))
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        dispatch_lifecycle_email(
+            db, event="supplier_changes_requested", entity_type="supplier", entity_id=supplier_id,
+            recipient_type="supplier", recipient_email=_user_email(db, user_id), template_key="supplier_changes_requested",
+            values={"supplier_name": supplier_name, "pending_requirements": requirements, "login_url": login_url},
+            fallback_subject="Updates required on your supplier profile",
+            fallback_html=supplier_changes_requested_email(supplier_name, requirements, login_url),
+        )
     db.flush()
 
 
@@ -368,7 +411,22 @@ def notify_agent_registered(
 def notify_agent_submitted_verification(db: Session, *, agent_id: int, agent_name: str, user_id: int | None = None):
     notify_admins(db, notification_type="agent_submitted_verification", title="Agent Submitted for Review", message=f"Agent '{agent_name}' has submitted their profile for admin review.", entity_type="agent", entity_id=agent_id)
     from app.utils.email_templates import agent_submitted_verification_email
-    email_admins(db, "agent_submitted_verification", {"agent_name": agent_name}, "Agent profile submitted for review", agent_submitted_verification_email(agent_name))
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+    dispatch_admin_lifecycle_emails(
+        db, event="agent_submitted_verification", entity_type="agent", entity_id=agent_id,
+        template_key="agent_submitted_verification", values={"agent_name": agent_name},
+        fallback_subject="Agent profile submitted for review",
+        fallback_html=agent_submitted_verification_email(agent_name),
+    )
+    if user_id:
+        from app.config import settings
+        dispatch_lifecycle_email(
+            db, event="agent_verification_received", entity_type="agent", entity_id=agent_id,
+            recipient_type="agent", recipient_email=_user_email(db, user_id), template_key="partner_verification_received",
+            values={"partner_name": agent_name, "login_url": f"{settings.FRONTEND_URL}/agent/profile"},
+            fallback_subject="Agent verification received",
+            fallback_html=f"<p>Hi {agent_name},</p><p>We received your verification information and it is awaiting review.</p>",
+        )
     db.flush()
 
 
@@ -378,7 +436,14 @@ def notify_agent_changes_requested(db: Session, *, agent_id: int, agent_name: st
         from app.config import settings
         from app.utils.email_templates import agent_changes_requested_email
         login_url = f"{settings.FRONTEND_URL}/agent/profile"
-        send_templated_email(db, _user_email(db, user_id), "agent_changes_requested", {"agent_name": agent_name, "pending_requirements": requirements, "login_url": login_url}, "Updates required on your agent profile", agent_changes_requested_email(agent_name, requirements, login_url))
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        dispatch_lifecycle_email(
+            db, event="agent_changes_requested", entity_type="agent", entity_id=agent_id,
+            recipient_type="agent", recipient_email=_user_email(db, user_id), template_key="agent_changes_requested",
+            values={"agent_name": agent_name, "pending_requirements": requirements, "login_url": login_url},
+            fallback_subject="Updates required on your agent profile",
+            fallback_html=agent_changes_requested_email(agent_name, requirements, login_url),
+        )
     db.flush()
 
 
@@ -398,7 +463,14 @@ def notify_agent_rejected(db: Session, *, agent_id: int, agent_name: str, reject
     if user_id:
         enqueue_notification(db, user_id=user_id, notification_type="agent_rejected", title="Agent Profile Rejected", message=f"Your agent profile '{agent_name}' was not approved. Reason: {rejection_reason}", entity_type="agent", entity_id=agent_id)
         from app.utils.email_templates import agent_rejected_email
-        send_templated_email(db, _user_email(db, user_id), "agent_rejected", {"agent_name": agent_name, "rejection_reason": rejection_reason}, "Your Tourvaa agent profile was rejected", agent_rejected_email(agent_name, rejection_reason))
+        from app.services.notification_delivery import dispatch_lifecycle_email
+        dispatch_lifecycle_email(
+            db, event="agent_account_rejected", entity_type="agent", entity_id=agent_id,
+            recipient_type="agent", recipient_email=_user_email(db, user_id), template_key="agent_rejected",
+            values={"agent_name": agent_name, "rejection_reason": rejection_reason},
+            fallback_subject="Your Tourvaa agent profile was rejected",
+            fallback_html=agent_rejected_email(agent_name, rejection_reason),
+        )
     db.flush()
 
 

@@ -347,9 +347,31 @@ def approve_payout(db: Session, payout_id: int, actor: User, request=None) -> di
 
     payout.status = "approved"
     payout.approved_by = actor.id
+    log_audit(db, actor=actor, action="approve_agent_payout", entity_type="agent_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "approved"}, request=request)
+    _email_agent_payout(db, payout, "agent_payout_approved", "Payout approved", "Your payout request was approved.")
     db.commit()
     db.refresh(payout)
-    log_audit(db, actor=actor, action="approve_agent_payout", entity_type="agent_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "approved"}, request=request)
+    return _serialize_payout(payout)
+
+
+def reject_payout(db: Session, payout_id: int, reason: str, actor: User, request=None) -> dict:
+    payout = db.query(AgentPayout).filter(AgentPayout.id == payout_id).with_for_update().first()
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    if payout.status != "pending":
+        raise HTTPException(status_code=400, detail=f"Payout cannot be rejected from status '{payout.status}'")
+    payout.status = "rejected"
+    payout.rejected_by = actor.id
+    payout.rejected_at = utcnow()
+    payout.rejection_reason = reason.strip()
+    for item in payout.items:
+        ledger = item.ledger
+        if ledger and ledger.status == "reserved":
+            ledger.status = "pending"
+    log_audit(db, actor=actor, action="reject_agent_payout", entity_type="agent_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "rejected", "reason": payout.rejection_reason}, request=request)
+    _email_agent_payout(db, payout, "agent_payout_rejected", "Payout rejected", f"Your payout request was not approved. Reason: {payout.rejection_reason}")
+    db.commit()
+    db.refresh(payout)
     return _serialize_payout(payout)
 
 
@@ -388,7 +410,29 @@ def mark_payout_paid(db: Session, payout_id: int, data: AgentPayoutMarkPaid, act
 
     if payout.agent and payout.agent.user_id:
         enqueue_notification(db, user_id=payout.agent.user_id, notification_type="payout_completed", title="Payout Processed", message=f"Your payout of {payout.total_amount} {payout.currency} has been processed. Ref: {payout.reference_number or 'N/A'}", entity_type="agent_payout", entity_id=payout.id)
+        _email_agent_payout(db, payout, "agent_payout_paid", "Payout paid", f"Your payout has been paid. Reference: {payout.reference_number or 'N/A'}.")
         db.commit()
 
     log_audit(db, actor=actor, action="mark_agent_payout_paid", entity_type="agent_payout", entity_id=payout_id, old_values={"status": "pending"}, new_values={"status": "paid"}, request=request)
     return _serialize_payout(payout)
+
+
+def _email_agent_payout(db: Session, payout: AgentPayout, event: str, title: str, detail: str) -> None:
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    agent = payout.agent
+    if not (agent and agent.user and agent.user.email):
+        return
+    portal_url = f"{settings.FRONTEND_URL.rstrip('/')}/agent/payouts"
+    dispatch_lifecycle_email(
+        db, event=event, entity_type="agent_payout", entity_id=payout.id,
+        recipient_type="agent", recipient_email=agent.user.email, template_key="partner_payout_event",
+        values={"title": title, "name": agent.agent_name, "detail": detail,
+                "payout_code": payout.payout_code, "currency": payout.currency,
+                "amount": payout.total_amount, "reference_number": payout.reference_number or "Pending",
+                "portal_url": portal_url},
+        fallback_subject=f"{title} - {payout.payout_code}",
+        fallback_html=f"<p>{detail}</p><p><a href='{portal_url}'>View payouts</a></p>",
+        event_version=event,
+    )

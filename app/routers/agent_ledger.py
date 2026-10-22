@@ -6,7 +6,7 @@ from app.database import get_db
 from app.auth.permissions import require_any_permission
 from app.utils.pagination import pagination_params
 from app.services import agent_ledger as service
-from app.schemas.agent_ledger import AgentPayoutCreate, AgentPayoutMarkPaid
+from app.schemas.agent_ledger import AgentPayoutCreate, AgentPayoutMarkPaid, AgentPayoutReject
 from app.services.agent_scope import ensure_agent_account_access, get_actor_agent, is_agent_user
 
 router = APIRouter(tags=["Agent Ledger"])
@@ -57,6 +57,12 @@ def create_payout(
 def approve_payout(payout_id: int, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("agent_ledger.approve", "update-agent_ledger"))):
     result = service.approve_payout(db, payout_id=payout_id, actor=current_user, request=request)
     return {"status": "success", "message": "Payout approved", "data": result}
+
+
+@router.post("/agent-payouts/{payout_id}/reject")
+def reject_payout(payout_id: int, data: AgentPayoutReject, request: Request, db: Session = Depends(get_db), current_user=Depends(require_any_permission("agent_ledger.approve", "update-agent_ledger"))):
+    result = service.reject_payout(db, payout_id=payout_id, reason=data.reason, actor=current_user, request=request)
+    return {"status": "success", "message": "Payout rejected", "data": result}
 
 
 @router.patch("/agent-payouts/{payout_id}/mark-paid")
