@@ -21,7 +21,7 @@ class PaymentCreate(BaseModel):
     gateway_order_id: Optional[str] = None
     idempotency_key: Optional[str] = None
     transaction_id: Optional[str] = None
-    payment_date: Optional[str] = None
+    payment_date: Optional[str] = Field(default=None, max_length=30)
     notes: Optional[str] = None
 
     @field_validator("payment_method")
@@ -70,7 +70,7 @@ class PaymentUpdate(BaseModel):
     gst_amount: Optional[Decimal] = None
     surcharge_amount: Optional[Decimal] = None
     transaction_id: Optional[str] = None
-    payment_date: Optional[str] = None
+    payment_date: Optional[str] = Field(default=None, max_length=30)
     notes: Optional[str] = None
 
 

@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.routers.payments_gateway import gateways_status
+from app.schemas.payments import PaymentCreate, PaymentUpdate
+from pydantic import ValidationError
 
 
 @pytest.mark.parametrize("key, enabled, test_mode", [
@@ -49,3 +51,13 @@ def test_gateway_status_uses_mode_specific_paypal_credentials(monkeypatch, mode,
 
     assert data["paypal"] is True
     assert data["paypal_test"] is test_mode
+
+
+def test_payment_date_input_matches_legacy_database_limit():
+    with pytest.raises(ValidationError):
+        PaymentUpdate(payment_date="x" * 31)
+
+    assert PaymentCreate(
+        booking_id=1, customer_id=1, total_amount=1,
+        payment_date="2026-10-22T18:20:24Z",
+    ).payment_date == "2026-10-22T18:20:24Z"

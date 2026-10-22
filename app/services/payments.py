@@ -350,7 +350,7 @@ def _ensure_payment_access(payment: Payment, actor: User | None) -> None:
     raise HTTPException(status_code=403, detail="Payment access denied")
 
 
-def get_payments(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_id: Optional[int] = None, payment_status: str = "", payment_method: str = "", start_date: str = "", end_date: str = "", actor: Optional[User] = None) -> dict:
+def get_payments(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_id: Optional[int] = None, payment_status: str = "", payment_method: str = "", gateway: str = "", start_date: str = "", end_date: str = "", actor: Optional[User] = None) -> dict:
     query = db.query(Payment).options(joinedload(Payment.booking), joinedload(Payment.customer))
     role = _user_role(actor)
     if role == "supplier":
@@ -380,6 +380,8 @@ def get_payments(db: Session, page: int = 1, limit: int = 20, search: str = "", 
         query = query.filter(Payment.payment_status == payment_status.strip().lower())
     if payment_method:
         query = query.filter(Payment.payment_method == payment_method.strip().lower())
+    if gateway:
+        query = query.filter(Payment.gateway == gateway.strip().lower())
     if start_date:
         query = query.filter(Payment.created_at >= start_date)
     if end_date:
@@ -525,6 +527,89 @@ def capture_gateway_authorized_payment(db: Session, payment: Payment, actor: Opt
     return capture_payment(db, payment.id, PaymentCapture(amount=amount, transaction_id=payment.gateway_payment_id, notes="Captured after supplier acceptance"), actor=actor, request=request)
 
 
+def capture_authorized_payment_for_operator(db: Session, payment_id: int, data: PaymentCapture, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
+    """Capture through the real provider when the authorization is gateway-held.
+
+    The admin UI must never mark a Stripe/PayPal payment paid merely because
+    an operator clicked Capture. Gateway-held authorizations are full-capture
+    only in this workflow, so reject a mismatched amount before making the
+    provider call.
+    """
+    payment = get_payment_by_id(db, payment_id, for_update=True)
+    available = money(payment.authorized_amount or payment.total_amount) - money(payment.captured_amount)
+    if payment.gateway in {"stripe", "paypal"} and payment.payment_status == "authorized":
+        if money(data.amount) != available:
+            raise HTTPException(status_code=400, detail="Gateway authorization must be captured for its full remaining amount")
+        return capture_gateway_authorized_payment(db, payment, actor=actor, request=request)
+    return capture_payment(db, payment_id, data, actor=actor, request=request)
+
+
+def record_gateway_capture_failure(db: Session, payment_id: int, error: Exception | str) -> None:
+    """Persist an actionable capture failure after the caller rolled back.
+
+    A supplier acceptance is valid even when a gateway is temporarily down.
+    The failure must nevertheless be durable and visible; logging alone leaves
+    an authorized hold stranded without an operator or retry path.
+    """
+    payment = get_payment_by_id(db, payment_id, for_update=True)
+    if payment.payment_status != "authorized":
+        return
+    message = str(error).strip() or "Gateway capture failed"
+    payment.failure_reason = message[:255]
+    _transaction(
+        db, payment, "capture", money(0), None, status="failed",
+        metadata={"reason": payment.failure_reason, "retryable": payment.gateway in {"stripe", "paypal"}},
+    )
+    from app.services.notifications import notify_admins
+    notify_admins(
+        db,
+        notification_type="payment_failed",
+        title="Payment capture needs attention",
+        message=f"Could not capture authorized payment {payment.payment_code} for booking {payment.booking.booking_code if payment.booking else payment.booking_id}. It will retry automatically.",
+        entity_type="payment",
+        entity_id=payment.id,
+        event_key="gateway_capture_failed",
+        # One admin alert per payment; attempts remain visible in transactions.
+        event_version=str(payment.id),
+    )
+    db.commit()
+
+
+def retry_authorized_gateway_captures(db: Session) -> list[int]:
+    """Retry capture only for accepted supplier bookings with an active hold.
+
+    The provider idempotency key is stable per payment, and capture_payment
+    atomically changes the local row to paid. Repeated workers therefore cannot
+    charge or notify twice. Expired holds remain handled by the separate hold
+    release sweep.
+    """
+    rows = (
+        db.query(Payment)
+        .join(Booking, Booking.id == Payment.booking_id)
+        .filter(
+            Payment.payment_status == "authorized",
+            Payment.gateway.in_(["stripe", "paypal"]),
+            Booking.supplier_acceptance_status == "accepted",
+            Booking.booking_status.in_(["supplier_accepted", "confirmed", "ready_to_travel", "ongoing", "completed"]),
+        )
+        .all()
+    )
+    captured: list[int] = []
+    for row in rows:
+        try:
+            capture_gateway_authorized_payment(db, row)
+            captured.append(row.id)
+        except Exception as error:
+            db.rollback()
+            logger.exception("Scheduled gateway capture retry failed for payment %s", row.id)
+            try:
+                record_gateway_capture_failure(db, row.id, error)
+            except Exception:
+                db.rollback()
+                logger.exception("Could not persist gateway capture failure for payment %s", row.id)
+    return captured
+
+
 def release_gateway_authorized_payment(db: Session, payment: Payment, reason: str, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     """Release an uncaptured hold at the provider, then update local state."""
     if payment.payment_status != "authorized":
@@ -566,8 +651,12 @@ def capture_payment(db: Session, payment_id: int, data: PaymentCapture, actor: O
     payment.paid_amount = payment.captured_amount
     payment.pending_amount = max(money(0), money(payment.total_amount) - money(payment.captured_amount))
     payment.transaction_id = data.transaction_id or payment.transaction_id
-    payment.payment_date = utcnow().isoformat()
+    # payments.payment_date is a legacy VARCHAR(30). Keep a stable UTC value
+    # within that limit; datetime.isoformat() with microseconds and +00:00 is
+    # 32 characters and causes MySQL to reject an otherwise valid capture.
+    payment.payment_date = utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     payment.payment_status = _derive_booking_status(payment.captured_amount, payment.total_amount)
+    payment.failure_reason = None
     hold = db.query(PaymentHold).filter(PaymentHold.payment_id == payment.id, PaymentHold.status == "active").first()
     if hold:
         hold.captured_amount = money(hold.captured_amount) + amount

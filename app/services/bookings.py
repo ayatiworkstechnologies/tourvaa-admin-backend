@@ -825,6 +825,12 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         ),
         money(0),
     )
+    # A short, non-sensitive operational signal for staff lists. The detailed
+    # gateway error stays on the payment record and is never exposed here.
+    payment_capture_retry_pending = any(
+        payment.payment_status == "authorized" and bool(payment.failure_reason)
+        for payment in (booking.payments or [])
+    )
     # A booking's lead contact is the selected primary traveller.  Customer
     # profile fields are only a fallback: an existing profile can be shared,
     # incomplete, or differ from the person travelling on this reservation.
@@ -914,6 +920,7 @@ def serialize_booking(db: Session, booking: Booking, detail: bool = False, inclu
         "booking_status": booking.booking_status,
         "supplier_acceptance_status": booking.supplier_acceptance_status,
         "payment_status": booking.payment_status,
+        "payment_capture_retry_pending": payment_capture_retry_pending,
         "payment_type": booking.payment_type,
         "agent_payment_method": booking.agent_payment_method,
         "agent_reference": booking.agent_reference,
@@ -3108,7 +3115,7 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
     from app.services.notifications import enqueue_notification, notify_admins
     from app.models.payments import Payment
     from app.schemas.payments import PaymentCapture
-    from app.services.payments import capture_gateway_authorized_payment, capture_payment
+    from app.services.payments import capture_gateway_authorized_payment, capture_payment, record_gateway_capture_failure
     from app.schemas.invoices import InvoiceGenerateRequest
     from app.services.invoices import generate_invoice
 
@@ -3121,12 +3128,17 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
                     capture_gateway_authorized_payment(db, payment, actor=actor, request=request)
                 else:
                     capture_payment(db, payment.id, PaymentCapture(amount=amount, notes="Captured after supplier acceptance"), actor=actor, request=request)
-            except Exception:
+            except Exception as error:
                 # Supplier acceptance remains authoritative.  Capture failures
                 # are operational follow-up work, never a reason to reject an
                 # accepted tour or return a generic server error to the supplier.
                 db.rollback()
                 logger.exception("Payment capture after supplier acceptance failed for booking %s and payment %s", booking.id, payment.id)
+                try:
+                    record_gateway_capture_failure(db, payment.id, error)
+                except Exception:
+                    db.rollback()
+                    logger.exception("Could not record payment capture failure for booking %s and payment %s", booking.id, payment.id)
                 continue
             try:
                 generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id, payment_id=payment.id), actor, request)

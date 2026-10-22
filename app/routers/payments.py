@@ -5,7 +5,7 @@ from app.database import get_db
 from app.auth.permissions import require_any_permission
 from app.utils.pagination import pagination_params
 from app.schemas.payments import PaymentAuthorize, PaymentCapture, PaymentCreate, PaymentStatusUpdate, PaymentUpdate, PaymentVoid, RefundRequest
-from app.services.payments import authorize_payment, capture_payment, create_payment, get_customer_payments, get_payment_detail, get_payments, process_refund, update_payment, update_payment_status, void_payment
+from app.services.payments import authorize_payment, capture_authorized_payment_for_operator, create_payment, get_customer_payments, get_payment_detail, get_payments, process_refund, update_payment, update_payment_status, void_payment
 from app.models.users import User
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
@@ -13,8 +13,8 @@ router = APIRouter(prefix="/payments", tags=["Payments"])
 
 @router.get("")
 @router.get("/")
-def list_payments(params: dict = Depends(pagination_params), customer_id: int = Query(default=0), booking_id: int = Query(default=0), payment_status: str = Query(default=""), payment_method: str = Query(default=""), start_date: str = Query(default=""), end_date: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.view", "view-payments"))):
-    return {"status": "success", **get_payments(db, page=params["page"], limit=params["limit"], search=params["search"], customer_id=customer_id or None, booking_id=booking_id or None, payment_status=payment_status, payment_method=payment_method, start_date=start_date, end_date=end_date, actor=current_user)}
+def list_payments(params: dict = Depends(pagination_params), customer_id: int = Query(default=0), booking_id: int = Query(default=0), payment_status: str = Query(default=""), payment_method: str = Query(default=""), gateway: str = Query(default=""), start_date: str = Query(default=""), end_date: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.view", "view-payments"))):
+    return {"status": "success", **get_payments(db, page=params["page"], limit=params["limit"], search=params["search"], customer_id=customer_id or None, booking_id=booking_id or None, payment_status=payment_status, payment_method=payment_method, gateway=gateway, start_date=start_date, end_date=end_date, actor=current_user)}
 
 
 @router.post("/")
@@ -54,7 +54,7 @@ def change_payment_status(payment_id: int, data: PaymentStatusUpdate, request: R
 
 @router.post("/{payment_id}/capture")
 def capture(payment_id: int, data: PaymentCapture, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("payments.capture"))):
-    return {"status": "success", "message": "Payment captured", "data": capture_payment(db, payment_id, data, actor=current_user, request=request)}
+    return {"status": "success", "message": "Payment captured", "data": capture_authorized_payment_for_operator(db, payment_id, data, actor=current_user, request=request)}
 
 
 @router.post("/{payment_id}/void")
