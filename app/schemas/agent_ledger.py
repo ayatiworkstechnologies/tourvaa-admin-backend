@@ -1,6 +1,6 @@
 from decimal import Decimal
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class AgentPayoutCreate(BaseModel):
@@ -11,6 +11,16 @@ class AgentPayoutCreate(BaseModel):
     payment_method: str = "bank_transfer"
     reference_number: Optional[str] = None
     notes: Optional[str] = None
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        code = value.strip().upper()
+        if len(code) != 3 or not code.isalpha():
+            raise ValueError("currency must be a three-letter ISO code")
+        return code
 
 
 class AgentPayoutMarkPaid(BaseModel):

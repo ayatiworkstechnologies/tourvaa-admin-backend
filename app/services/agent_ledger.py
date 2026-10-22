@@ -251,7 +251,15 @@ def _select_payout_ledgers(db: Session, agent_id: int, data: AgentPayoutCreate) 
         ledger_rows = query.filter(
             AgentLedger.status.in_(("pending", "partial")),
             AgentLedger.amount_pending > 0,
-        ).order_by(AgentLedger.id.asc()).with_for_update().all()
+        )
+        # A payout represents a real transfer. Select one currency at a time
+        # so INR and USD commissions can never be combined into one amount.
+        if data.currency:
+            ledger_rows = ledger_rows.filter(AgentLedger.currency == data.currency)
+        ledger_rows = ledger_rows.order_by(AgentLedger.id.asc()).with_for_update().all()
+        if not data.currency and ledger_rows:
+            first_currency = ledger_rows[0].currency
+            ledger_rows = [row for row in ledger_rows if row.currency == first_currency]
         if data.amount is not None:
             requested = money(data.amount)
             selected: list[AgentLedger] = []
@@ -264,6 +272,11 @@ def _select_payout_ledgers(db: Session, agent_id: int, data: AgentPayoutCreate) 
             ledger_rows = selected
     if not ledger_rows:
         raise HTTPException(status_code=404, detail="No payable ledger entries found for this agent")
+    currencies = {(row.currency or "USD").upper() for row in ledger_rows}
+    if len(currencies) > 1:
+        raise HTTPException(status_code=400, detail=f"Selected ledger entries span multiple currencies ({', '.join(sorted(currencies))}); a payout must be in a single currency")
+    if data.currency and data.currency not in currencies:
+        raise HTTPException(status_code=400, detail=f"Requested payout currency {data.currency} does not match selected ledger currency {next(iter(currencies))}")
     return ledger_rows
 
 

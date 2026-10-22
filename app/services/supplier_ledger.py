@@ -338,9 +338,11 @@ def _select_payout_ledgers(db: Session, supplier_id: int, data: SupplierPayoutCr
             ledger_rows = selected
     if not ledger_rows:
         raise HTTPException(status_code=404, detail="No payable ledger entries found for this supplier")
-    currencies = {r.currency for r in ledger_rows}
+    currencies = {(r.currency or "USD").upper() for r in ledger_rows}
     if len(currencies) > 1:
         raise HTTPException(status_code=400, detail=f"Selected ledger entries span multiple currencies ({', '.join(sorted(currencies))}); a payout must be in a single currency")
+    if data.currency and data.currency not in currencies:
+        raise HTTPException(status_code=400, detail=f"Requested payout currency {data.currency} does not match selected ledger currency {next(iter(currencies))}")
     return ledger_rows
 
 

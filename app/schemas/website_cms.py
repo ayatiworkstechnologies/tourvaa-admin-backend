@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field, model_validator
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class BannerPayload(BaseModel):
@@ -85,18 +85,44 @@ class ContentBlockPayload(BaseModel):
 
 
 class BlogPayload(BaseModel):
-    title: str
-    slug: Optional[str] = None
-    excerpt: Optional[str] = None
+    """The editorial contract shared by the admin studio and public blog.
+
+    Keep topic taxonomy as a simple JSON list for now: it is portable across
+    deployments while the API normalises it into stable, searchable values.
+    """
+    title: str = Field(min_length=3, max_length=200)
+    slug: Optional[str] = Field(default=None, max_length=220)
+    excerpt: Optional[str] = Field(default=None, max_length=600)
     content: Optional[str] = None
-    featured_image: Optional[str] = None
-    banner_title: Optional[str] = None
-    banner_alt: Optional[str] = None
-    author: Optional[str] = None
-    tags: Optional[List[str]] = None
-    seo_title: Optional[str] = None
-    seo_description: Optional[str] = None
-    status: str = "draft"
+    featured_image: Optional[str] = Field(default=None, max_length=255)
+    banner_title: Optional[str] = Field(default=None, max_length=200)
+    banner_alt: Optional[str] = Field(default=None, max_length=300)
+    author: Optional[str] = Field(default=None, max_length=120)
+    tags: Optional[List[str]] = Field(default=None, max_length=12)
+    seo_title: Optional[str] = Field(default=None, max_length=200)
+    seo_description: Optional[str] = Field(default=None, max_length=400)
+    status: Literal["draft", "published"] = "draft"
+
+    @field_validator("title", "slug", "excerpt", "featured_image", "banner_title", "banner_alt", "author", "seo_title", "seo_description", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("tags")
+    @classmethod
+    def normalise_tags(cls, tags: Optional[List[str]]) -> Optional[List[str]]:
+        if tags is None:
+            return None
+        cleaned: list[str] = []
+        for tag in tags:
+            value = tag.strip()
+            if not value:
+                continue
+            if len(value) > 60:
+                raise ValueError("Each topic must be 60 characters or fewer")
+            if value.casefold() not in {item.casefold() for item in cleaned}:
+                cleaned.append(value)
+        return cleaned
 
 
 class CmsPagePayload(BaseModel):

@@ -200,10 +200,10 @@ def upsert_content_block(key: str, data: ContentBlockPayload, db: Session = Depe
 # blogs
 
 @router.get("/blogs")
-def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(default=False), slug: str = Query(default=""), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+def list_blogs(pagination=Depends(pagination_params), active_only: bool = Query(default=False), slug: str = Query(default="", max_length=220), search: str = Query(default="", max_length=120), tag: str = Query(default="", max_length=60), db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
     if not active_only and not user_has_any_permission(db, current_user, *BLOG_VIEW_PERMS):
         raise HTTPException(status_code=403, detail="blogs.view permission required to view drafts")
-    return {"status": "success", **service.list_blogs(db, pagination["page"], pagination["limit"], active_only, slug)}
+    return {"status": "success", **service.list_blogs(db, pagination["page"], pagination["limit"], active_only, slug, search, tag)}
 
 @router.get("/blogs/{item_id}")
 def get_blog(item_id: int, db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):

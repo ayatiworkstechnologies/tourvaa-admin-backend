@@ -121,6 +121,62 @@ def _paginate(items: list, page: int = 1, limit: int = 20) -> dict:
         "total_pages": max(1, ceil(total / limit)) if total else 1,
     }
 
+
+_UPCOMING_BOOKING_STATUSES = {"confirmed", "pending_supplier_acceptance", "payment_authorized"}
+_CANCELLED_BOOKING_STATUSES = {"cancelled", "declined"}
+
+
+def _live_customer_summaries(db: Session, customer_ids: list[int]) -> dict[int, dict]:
+    """Build authoritative, lifetime booking totals for the customer list.
+
+    The stored Customer fields are write-side caches. They cannot reliably
+    include every booking channel or express balances in multiple currencies,
+    so the admin list derives its financial display from booking snapshots.
+    """
+    if not customer_ids:
+        return {}
+
+    summaries: dict[int, dict] = {}
+    rows = db.query(Booking).filter(Booking.customer_id.in_(customer_ids)).all()
+    for booking in rows:
+        if booking.customer_id is None:
+            continue
+        summary = summaries.setdefault(booking.customer_id, {
+            "total_bookings": 0,
+            "completed_tours": 0,
+            "cancelled_tours": 0,
+            "upcoming_tours": 0,
+            "amounts_by_currency": {},
+        })
+        status = (booking.booking_status or "").lower()
+        summary["total_bookings"] += 1
+        if status == "completed":
+            summary["completed_tours"] += 1
+        elif status in _CANCELLED_BOOKING_STATUSES:
+            summary["cancelled_tours"] += 1
+        elif status in _UPCOMING_BOOKING_STATUSES:
+            summary["upcoming_tours"] += 1
+
+        currency = (booking.currency or "USD").upper()
+        amounts = summary["amounts_by_currency"].setdefault(currency, {"currency": currency, "paid": 0.0, "pending": 0.0})
+        amounts["paid"] += float(booking.amount_paid or 0)
+        if status not in _CANCELLED_BOOKING_STATUSES:
+            amounts["pending"] += float(booking.amount_pending or 0)
+
+    for summary in summaries.values():
+        totals = sorted(summary.pop("amounts_by_currency").values(), key=lambda item: item["currency"])
+        summary["amounts_by_currency"] = totals
+        summary["has_mixed_currencies"] = len(totals) > 1
+        if len(totals) == 1:
+            summary["currency"] = totals[0]["currency"]
+            summary["amount_paid"] = totals[0]["paid"]
+            summary["amount_pending"] = totals[0]["pending"]
+        else:
+            summary["currency"] = None
+            summary["amount_paid"] = 0.0
+            summary["amount_pending"] = 0.0
+    return summaries
+
 def serialize_communication(item: CustomerCommunication):
     return {
         "id": item.id,
@@ -205,11 +261,15 @@ def get_customers(
             )
         )
 
-    if start_date:
-        query = query.filter(Customer.created_at >= start_date)
-
-    if end_date:
-        query = query.filter(Customer.created_at <= f"{end_date} 23:59:59")
+    # The UI calls this a booking date range, so never apply it to the
+    # unrelated date on which the customer account was created.
+    if start_date or end_date:
+        booking_date_query = db.query(Booking.customer_id).filter(Booking.customer_id.isnot(None))
+        if start_date:
+            booking_date_query = booking_date_query.filter(Booking.created_at >= start_date)
+        if end_date:
+            booking_date_query = booking_date_query.filter(Booking.created_at <= f"{end_date} 23:59:59")
+        query = query.filter(Customer.id.in_(booking_date_query.distinct()))
 
     sort_key = sort_by.strip().lower()
     direction_desc = sort_order.strip().lower() != "asc"
@@ -223,7 +283,32 @@ def get_customers(
 
     total = query.count()
     customers = query.offset((page - 1) * limit).limit(limit).all()
-    items = [serialize_customer(customer) for customer in customers]
+    live_summaries = _live_customer_summaries(db, [customer.id for customer in customers])
+    items = []
+    for customer in customers:
+        item = serialize_customer(customer)
+        summary = live_summaries.get(customer.id)
+        if summary is not None:
+            item.update(summary)
+            item["total_bookings_count"] = summary["total_bookings"]
+            item["completed_bookings"] = summary["completed_tours"]
+            item["cancelled_bookings"] = summary["cancelled_tours"]
+            item["upcoming_bookings"] = summary["upcoming_tours"]
+            item["total_amount_paid"] = summary["amount_paid"]
+            item["total_amount_pending"] = summary["amount_pending"]
+        else:
+            item.update({
+                "total_bookings": 0,
+                "completed_tours": 0,
+                "cancelled_tours": 0,
+                "upcoming_tours": 0,
+                "amount_paid": 0.0,
+                "amount_pending": 0.0,
+                "currency": None,
+                "amounts_by_currency": [],
+                "has_mixed_currencies": False,
+            })
+        items.append(item)
 
     if sort_key == "highest_amount_paid":
         items.sort(key=lambda item: item["amount_paid"], reverse=direction_desc)

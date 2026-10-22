@@ -296,26 +296,62 @@ def _slugify(title: str) -> str:
     import re
     return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
 
-def list_blogs(db, page, limit, active_only=False, slug=""):
+def list_blogs(db, page, limit, active_only=False, slug="", search="", tag=""):
     q = db.query(Blog)
     if active_only:
         q = q.filter(Blog.status == "published")
     if slug:
         q = q.filter(Blog.slug == slug)
-    q = q.order_by(Blog.id.desc())
+    if search:
+        term = f"%{search.strip()}%"
+        q = q.filter(
+            (Blog.title.ilike(term))
+            | (Blog.excerpt.ilike(term))
+            | (Blog.content.ilike(term))
+            | (Blog.author.ilike(term))
+        )
+    # JSON containment behaves differently across SQLite/PostgreSQL. Filter
+    # the small editorial result set portably rather than exposing drafts or
+    # using database-specific JSON operators here.
+    if tag:
+        requested_tag = tag.strip().casefold()
+        matching_ids = [
+            row.id for row in q.all()
+            if any(str(item).strip().casefold() == requested_tag for item in (row.tags or []))
+        ]
+        q = q.filter(Blog.id.in_(matching_ids))
+    q = q.order_by(Blog.published_at.desc(), Blog.created_at.desc(), Blog.id.desc())
     return _paginate(q, page, limit, _s_blog)
+
+def _prepare_blog_payload(db: Session, payload: dict, *, item_id: int | None = None) -> dict:
+    if "content" in payload:
+        payload["content"] = _sanitize_html(payload.get("content"))
+    title = (payload.get("title") or "").strip()
+    slug = _slugify(payload.get("slug") or title)
+    if not slug:
+        raise HTTPException(status_code=422, detail="A valid title or URL slug is required")
+    payload["slug"] = slug
+    existing = db.query(Blog).filter(Blog.slug == slug)
+    if item_id is not None:
+        existing = existing.filter(Blog.id != item_id)
+    if existing.first():
+        raise HTTPException(status_code=409, detail="An article already uses this URL slug")
+    return payload
 
 def create_blog(db, data: BlogPayload):
     d = data.model_dump()
-    d["content"] = _sanitize_html(d.get("content"))
-    if not d.get("slug"):
-        d["slug"] = _slugify(data.title)
+    d = _prepare_blog_payload(db, d)
     if data.status == "published" and not d.get("published_at"):
         d["published_at"] = utcnow()
     return _create(db, Blog, d, _s_blog)
 
 def update_blog(db, item_id, data: BlogPayload):
     d = data.model_dump(exclude_unset=True)
+    current = _get_or_404(db, Blog, item_id, "Blog")
+    # A partial update still needs a stable slug and title when either changes.
+    if "title" in d or "slug" in d:
+        draft = {"title": d.get("title", current.title), "slug": d.get("slug", current.slug)}
+        d.update(_prepare_blog_payload(db, draft, item_id=item_id))
     if "content" in d:
         d["content"] = _sanitize_html(d.get("content"))
     if d.get("status") == "published":
