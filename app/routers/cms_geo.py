@@ -32,6 +32,7 @@ def geo_countries(db: Session = Depends(get_db)):
             {
                 "id": r.id,
                 "name": r.country_name,
+                "slug": r.slug,
                 "code": r.country_code,
                 "phone_code": r.phone_code,
                 "currency_code": r.currency_code,

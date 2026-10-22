@@ -4,8 +4,11 @@ import logging
 import secrets
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from fastapi import WebSocket
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 from app.utils.redis_client import get_redis_async, get_redis_sync
 
@@ -14,6 +17,32 @@ logger = logging.getLogger(__name__)
 TICKET_TTL_SECONDS = 30
 WS_PUBSUB_CHANNEL = "ws:messages"
 PRESENCE_TTL_SECONDS = 75
+SOCKET_SEND_TIMEOUT_SECONDS = 5
+MAX_SOCKETS_PER_USER = 5
+_PENDING_NOTIFICATION_KEY = "tourvaa_pending_ws_notifications"
+
+
+def _event_envelope(event: dict) -> dict:
+    """Add transport metadata while preserving the established event payload.
+
+    The database/API remains authoritative; this envelope is only a compact
+    invalidation hint and never carries a payment secret or private reason.
+    """
+    event.setdefault("id", secrets.token_urlsafe(16))
+    event.setdefault("schema_version", "1")
+    event.setdefault("occurred_at", datetime.now(timezone.utc).isoformat())
+    # Keep legacy top-level fields during the staged frontend migration, but
+    # every frame also has the canonical envelope data object.
+    event.setdefault("data", {
+        key: value for key, value in event.items()
+        if key not in {"id", "type", "schema_version", "occurred_at", "data"}
+    })
+    return event
+
+
+def queue_notification_after_commit(db: Session, user_id: int | None, notification_id: int | None) -> None:
+    if user_id and notification_id:
+        db.info.setdefault(_PENDING_NOTIFICATION_KEY, set()).add((int(user_id), int(notification_id)))
 
 
 class _TicketStore:
@@ -109,17 +138,25 @@ class MessagingConnectionManager:
                 logger.warning("WS admin presence refresh failed (%s)", exc)
 
     async def connect_admin(self, websocket: WebSocket, user_id: int):
+        if len(self._admin_sockets_by_user[user_id]) >= MAX_SOCKETS_PER_USER:
+            await websocket.close(code=4429)
+            return False
         await websocket.accept()
         self._loop = asyncio.get_running_loop()
         self._admin_sockets.add(websocket)
         self._admin_sockets_by_user[user_id].add(websocket)
         await self.refresh_admin_presence()
+        return True
 
     async def connect_participant(self, websocket: WebSocket, user_id: int):
+        if len(self._user_sockets[user_id]) >= MAX_SOCKETS_PER_USER:
+            await websocket.close(code=4429)
+            return False
         await websocket.accept()
         self._loop = asyncio.get_running_loop()
         self._user_sockets[user_id].add(websocket)
         await self.refresh_participant_presence(user_id)
+        return True
 
     def is_user_online(self, user_id: int | None) -> bool:
         """Whether this API worker currently has a live participant socket."""
@@ -205,7 +242,7 @@ class MessagingConnectionManager:
 
     async def notify_presence(self, user_id: int, online: bool):
         """Push participant presence to every connected admin console."""
-        event = {"type": "participant_presence", "user_id": user_id, "online": online}
+        event = _event_envelope({"type": "participant_presence", "user_id": user_id, "online": online})
         await self._deliver_locally(event, user_id)
         redis = await get_redis_async()
         if redis is not None:
@@ -216,7 +253,7 @@ class MessagingConnectionManager:
 
     async def notify_admin_presence(self, online: bool):
         """Push aggregate Tourvaa Admin availability to every portal socket."""
-        event = {"type": "admin_presence", "online": online}
+        event = _event_envelope({"type": "admin_presence", "online": online})
         await self._deliver_locally(
             event,
             None,
@@ -250,7 +287,7 @@ class MessagingConnectionManager:
             dead: list[WebSocket] = []
             for socket in self._admin_sockets:
                 try:
-                    await socket.send_json(event)
+                    await asyncio.wait_for(socket.send_json(event), timeout=SOCKET_SEND_TIMEOUT_SECONDS)
                 except Exception:
                     dead.append(socket)
             for socket in dead:
@@ -261,13 +298,14 @@ class MessagingConnectionManager:
             dead = []
             for socket in self._user_sockets.get(user_id, set()):
                 try:
-                    await socket.send_json(event)
+                    await asyncio.wait_for(socket.send_json(event), timeout=SOCKET_SEND_TIMEOUT_SECONDS)
                 except Exception:
                     dead.append(socket)
             for socket in dead:
                 self.disconnect_participant(socket, user_id)
 
     async def notify_new_message(self, event: dict, participant_user_id: int):
+        _event_envelope(event)
         await self._deliver_locally(event, participant_user_id)
         redis = await get_redis_async()
         if redis is not None:
@@ -287,7 +325,7 @@ class MessagingConnectionManager:
                 self.disconnect_admin(socket, user_id)
 
     async def notify_notification(self, user_id: int, notification_id: int) -> None:
-        event = {"type": "new_notification", "notification_id": notification_id}
+        event = _event_envelope({"type": "new_notification", "notification_id": notification_id})
         await self._deliver_notification_locally(user_id, event)
         redis = await get_redis_async()
         if redis is not None:
@@ -307,12 +345,13 @@ class MessagingConnectionManager:
         redis = get_redis_sync()
         if redis is not None:
             try:
-                redis.publish(WS_PUBSUB_CHANNEL, json.dumps({"notification_user_id": user_id, "event": {"type": "new_notification", "notification_id": notification_id}}))
+                redis.publish(WS_PUBSUB_CHANNEL, json.dumps({"notification_user_id": user_id, "event": _event_envelope({"type": "new_notification", "notification_id": notification_id})}))
             except Exception as exc:
                 logger.warning("WS pub/sub: notification publish failed (%s)", exc)
 
     async def notify_typing(self, event: dict, participant_user_id: int | None, *, deliver_to_participant: bool) -> None:
         """Relay an ephemeral typing state without persisting message text."""
+        _event_envelope(event)
         await self._deliver_locally(event, participant_user_id if deliver_to_participant else None)
         redis = await get_redis_async()
         if redis is not None:
@@ -326,6 +365,17 @@ class MessagingConnectionManager:
 
 
 ws_manager = MessagingConnectionManager()
+
+
+@event.listens_for(Session, "after_commit")
+def _publish_committed_notifications(session: Session) -> None:
+    for user_id, notification_id in session.info.pop(_PENDING_NOTIFICATION_KEY, set()):
+        ws_manager.request_notification(user_id, notification_id)
+
+
+@event.listens_for(Session, "after_rollback")
+def _drop_rolled_back_notifications(session: Session) -> None:
+    session.info.pop(_PENDING_NOTIFICATION_KEY, None)
 
 
 async def start_redis_subscriber():

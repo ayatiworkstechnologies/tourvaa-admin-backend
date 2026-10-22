@@ -1,5 +1,7 @@
 import json
 import logging
+import asyncio
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -13,6 +15,7 @@ from app.models.users import User
 from app.models.messaging import BookingConversation, Conversation
 from app.services import messaging as messaging_service
 from app.services.messaging_ws import ticket_store, ws_manager
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +234,11 @@ def _has_messages_permission(user: User) -> bool:
 
 @ws_router.websocket("/ws/messages")
 async def messages_socket(websocket: WebSocket):
+    origin = websocket.headers.get("origin")
+    allowed_origins = settings.cors_origins
+    if (settings.is_production and not origin) or (origin and allowed_origins != ["*"] and origin not in allowed_origins):
+        await websocket.close(code=4403)
+        return
     user = _ws_user(websocket)
     if not user:
         await websocket.close(code=4401)
@@ -238,6 +246,22 @@ async def messages_socket(websocket: WebSocket):
 
     participant_type = messaging_service.participant_type_for_user(user)
     is_admin_listener = _has_messages_permission(user)
+
+    received_at: list[float] = []
+
+    async def receive_frame() -> str:
+        # A socket is a live convenience channel, not an unbounded resource.
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=90)
+        if len(raw.encode("utf-8")) > 4096:
+            await websocket.close(code=1009)
+            raise WebSocketDisconnect
+        now = time.monotonic()
+        received_at[:] = [point for point in received_at if now - point < 60]
+        received_at.append(now)
+        if len(received_at) > 120:
+            await websocket.close(code=4429)
+            raise WebSocketDisconnect
+        return raw
 
     async def relay_typing(raw: str) -> None:
         """Validate transient typing events against the same conversation
@@ -294,15 +318,16 @@ async def messages_socket(websocket: WebSocket):
             db.close()
 
     if is_admin_listener:
-        await ws_manager.connect_admin(websocket, user.id)
+        if not await ws_manager.connect_admin(websocket, user.id):
+            return
         await ws_manager.notify_admin_presence(True)
         try:
             while True:
-                raw = await websocket.receive_text()
+                raw = await receive_frame()
                 if raw != "ping":
                     await relay_typing(raw)
                 await ws_manager.refresh_admin_presence()
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, asyncio.TimeoutError):
             pass
         finally:
             ws_manager.disconnect_admin(websocket, user.id)
@@ -313,15 +338,16 @@ async def messages_socket(websocket: WebSocket):
         await websocket.close(code=4403)
         return
 
-    await ws_manager.connect_participant(websocket, user.id)
+    if not await ws_manager.connect_participant(websocket, user.id):
+        return
     await ws_manager.notify_presence(user.id, True)
     try:
         while True:
-            raw = await websocket.receive_text()
+            raw = await receive_frame()
             if raw != "ping":
                 await relay_typing(raw)
             await ws_manager.refresh_participant_presence(user.id)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, asyncio.TimeoutError):
         pass
     finally:
         ws_manager.disconnect_participant(websocket, user.id)

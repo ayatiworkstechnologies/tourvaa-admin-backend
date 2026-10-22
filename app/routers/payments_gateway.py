@@ -56,6 +56,10 @@ def _record_webhook_receipt(db: Session, payment: Payment, *, event_id: str, eve
     ))
 
 
+def _webhook_receipt_exists(db: Session, event_id: str) -> bool:
+    return bool(event_id and db.query(PaymentTransaction.id).filter(PaymentTransaction.gateway_reference == event_id).first())
+
+
 def _require_paypal_amount(amount_container: dict, context: str) -> Decimal:
     """PayPal always includes resource.amount.value on real capture/refund
     events - a missing or unparseable value means a malformed payload, which
@@ -67,6 +71,22 @@ def _require_paypal_amount(amount_container: dict, context: str) -> Decimal:
         return money(Decimal(str(amount_value)))
     except (ArithmeticError, ValueError, TypeError) as error:
         raise HTTPException(status_code=400, detail=f"PayPal {context} event has an unparseable amount.value") from error
+
+
+def _require_payment_currency(payment: Payment, received_currency: str | None, gateway: str) -> None:
+    """Reject a signed event if it is for the right identifier but wrong money.
+
+    Gateway identifiers alone are not an amount/currency authorization.  The
+    booking stores the immutable currency for this payment attempt.
+    """
+    expected = ((payment.booking.currency if payment.booking else None) or "USD").upper()
+    received = (received_currency or "").upper()
+    if not received or received != expected:
+        logger.error(
+            "%s currency mismatch for payment %s: expected %s, received %s",
+            gateway, payment.id, expected, received or "<missing>",
+        )
+        raise HTTPException(status_code=409, detail=f"{gateway} currency does not match the pending payment")
 
 
 def _require_captured_amount_matches_pending(payment: Payment, captured_amount: Decimal, gateway: str) -> Decimal:
@@ -476,40 +496,53 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
         session_obj = event["data"]["object"]
         order_id = session_obj.get("id")
         payment_intent = session_obj.get("payment_intent")
-        payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).first()
+        payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).with_for_update().first()
+        if payment and _webhook_receipt_exists(db, event_id):
+            return {"status": "success", "received": True}
         if payment and payment.payment_status == "pending":
+            _require_payment_currency(payment, session_obj.get("currency"), "Stripe")
+            _require_captured_amount_matches_pending(
+                payment, money(Decimal(session_obj.get("amount_total", 0)) / 100), "Stripe"
+            )
             # Development can accept an unsigned webhook, where ``stripe_gw``
             # was not created in the signature-verification branch.
             intent = get_stripe(db).retrieve_payment_intent(payment_intent)
             if intent.get("status") == "requires_capture":
                 capture_before = intent.get("charges", {}).get("data", [{}])[0].get("payment_method_details", {}).get("card", {}).get("capture_before")
                 expires_at = datetime.fromtimestamp(capture_before, tz=timezone.utc) if capture_before else None
-                record_gateway_authorization(db, payment, gateway_reference=payment_intent, expires_at=expires_at)
+                # This receipt is committed by record_gateway_authorization,
+                # atomically with the local authorization state.
                 _record_webhook_receipt(db, payment, event_id=event_id, event_type=event_type)
-                db.commit()
+                record_gateway_authorization(db, payment, gateway_reference=payment_intent, expires_at=expires_at)
 
     elif event_type == "payment_intent.succeeded":
         intent = event["data"]["object"]
         intent_id = intent.get("id")
-        payment = db.query(Payment).filter(Payment.gateway_payment_id == intent_id).first()
+        payment = db.query(Payment).filter(Payment.gateway_payment_id == intent_id).with_for_update().first()
+        if payment and _webhook_receipt_exists(db, event_id):
+            return {"status": "success", "received": True}
         if payment and payment.payment_status == "authorized":
+            _require_payment_currency(payment, intent.get("currency"), "Stripe")
             captured_amount = _require_captured_amount_matches_pending(
                 payment, money(Decimal(intent.get("amount_received", 0)) / 100), "Stripe"
             )
             from app.schemas.payments import PaymentCapture
             from app.services.payments import capture_payment
-            capture_payment(db, payment.id, PaymentCapture(amount=captured_amount, transaction_id=intent_id, notes="Stripe webhook capture"))
+            # capture_payment commits.  Record the receipt first so the
+            # provider retry cannot produce a second capture/notification.
             _record_webhook_receipt(db, payment, event_id=event_id, event_type=event_type, amount=captured_amount)
-            db.commit()
+            capture_payment(db, payment.id, PaymentCapture(amount=captured_amount, transaction_id=intent_id, notes="Stripe webhook capture"))
 
     elif event_type in ("payment_intent.payment_failed", "checkout.session.expired"):
         obj = event["data"]["object"]
         object_id = obj.get("id")
         payment = (
-            db.query(Payment).filter(Payment.gateway_payment_id == object_id).first()
+            db.query(Payment).filter(Payment.gateway_payment_id == object_id).with_for_update().first()
             if event_type == "payment_intent.payment_failed"
-            else db.query(Payment).filter(Payment.gateway_order_id == object_id).first()
+            else db.query(Payment).filter(Payment.gateway_order_id == object_id).with_for_update().first()
         )
+        if payment and _webhook_receipt_exists(db, event_id):
+            return {"status": "success", "received": True}
         if payment and payment.payment_status == "pending":
             payment.payment_status = "failed"
             payment.failure_reason = obj.get("last_payment_error", {}).get("message", "Payment failed") if event_type == "payment_intent.payment_failed" else "Session expired"
@@ -522,14 +555,19 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(defaul
         charge = event["data"]["object"]
         payment_intent = charge.get("payment_intent")
         refund_amount = money(Decimal(charge.get("amount_refunded", 0)) / 100)
-        payment = db.query(Payment).filter(Payment.gateway_payment_id == payment_intent).first()
+        payment = db.query(Payment).filter(Payment.gateway_payment_id == payment_intent).with_for_update().first()
+        if payment and _webhook_receipt_exists(db, event_id):
+            return {"status": "success", "received": True}
         if payment:
+            _require_payment_currency(payment, charge.get("currency"), "Stripe")
             previous_refunded = money(payment.refunded_amount)
+            # Stripe reports a running total.  Late events must never reduce
+            # the refund recorded by a newer event.
+            refund_amount = max(previous_refunded, refund_amount)
             payment.refunded_amount = refund_amount
             payment.payment_status = "refunded" if refund_amount >= payment.captured_amount else "partially_refunded"
             if payment.booking:
                 _sync_booking_payment_fields(db, payment.booking)
-            db.commit()
             if refund_amount > previous_refunded:
                 from app.services.payments import _email_customer_refund_processed, _email_admin_payment_event
                 completed_amount = refund_amount - previous_refunded
@@ -732,15 +770,19 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
 
         payment = None
         if order_id:
-            payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).first()
+            payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).with_for_update().first()
+        if payment and _webhook_receipt_exists(db, event_id):
+            return {"status": "success", "received": True}
         if payment and payment.payment_status == "pending":
+            _require_payment_currency(payment, resource.get("amount", {}).get("currency_code"), "PayPal")
             captured_amt = _require_captured_amount_matches_pending(payment, captured_amt, "PayPal")
             payment.captured_amount = captured_amt
             payment.paid_amount = captured_amt
             payment.pending_amount = Decimal("0")
             payment.payment_status = "paid"
             payment.gateway_payment_id = capture_id
-            db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=event_id or capture_id, metadata_json={"event_type": event_type, "capture_id": capture_id}))
+            db.add(PaymentTransaction(payment_id=payment.id, booking_id=payment.booking_id, transaction_type="capture", amount=captured_amt, status="success", gateway_reference=capture_id, metadata_json={"event_type": event_type, "capture_id": capture_id}))
+            _record_webhook_receipt(db, payment, event_id=event_id, event_type=event_type, amount=captured_amt)
             _sync_booking_payment_fields(db, payment.booking)
             db.commit()
             _ensure_payment_invoice(db, payment, request=request)
@@ -753,8 +795,11 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
         capture_id = capture_href.rstrip("/").split("/")[-1] if capture_href else None
 
         if capture_id:
-            payment = db.query(Payment).filter(Payment.gateway_payment_id == capture_id).first()
+            payment = db.query(Payment).filter(Payment.gateway_payment_id == capture_id).with_for_update().first()
+            if payment and _webhook_receipt_exists(db, event_id):
+                return {"status": "success", "received": True}
             if payment:
+                _require_payment_currency(payment, resource.get("amount", {}).get("currency_code"), "PayPal")
                 # Unlike Stripe's charge.amount_refunded (a running total),
                 # PAYMENT.CAPTURE.REFUNDED's resource.amount is only the
                 # amount of THIS refund - it must be added to what's already
@@ -764,12 +809,29 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
                 payment.payment_status = "refunded" if payment.refunded_amount >= payment.captured_amount else "partially_refunded"
                 if payment.booking:
                     _sync_booking_payment_fields(db, payment.booking)
-                db.commit()
                 from app.services.payments import _email_customer_refund_processed, _email_admin_payment_event
                 _email_customer_refund_processed(db, payment, refunded_amt)
                 _email_admin_payment_event(db, payment, "Refund completed", f"Provider confirmed a refund of {refunded_amt} for {payment.payment_code}.", "refund_completed")
                 _record_webhook_receipt(db, payment, event_id=event_id, event_type=event_type, amount=refunded_amt)
                 db.commit()
+
+    elif event_type in {"PAYMENT.CAPTURE.DENIED", "CHECKOUT.PAYMENT-APPROVAL.REVERSED", "PAYMENT.AUTHORIZATION.VOIDED"}:
+        resource = event.get("resource", {})
+        related_ids = resource.get("supplementary_data", {}).get("related_ids", {})
+        order_id = related_ids.get("order_id") or resource.get("order_id")
+        if not order_id and event_type == "CHECKOUT.PAYMENT-APPROVAL.REVERSED":
+            order_id = resource.get("id")
+        payment = db.query(Payment).filter(Payment.gateway_order_id == order_id).with_for_update().first() if order_id else None
+        if payment and _webhook_receipt_exists(db, event_id):
+            return {"status": "success", "received": True}
+        if payment and payment.payment_status in {"pending", "authorized"}:
+            reason = resource.get("status_details", {}).get("reason") or "PayPal payment was declined or reversed"
+            payment.payment_status = "failed"
+            payment.failure_reason = reason
+            from app.services.payments import notify_payment_failed
+            notify_payment_failed(db, payment, reason)
+            _record_webhook_receipt(db, payment, event_id=event_id, event_type=event_type)
+            db.commit()
 
     return {"status": "success", "received": True}
 

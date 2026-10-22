@@ -13,7 +13,7 @@ from app.models.users import User
 
 
 def _country(item: Country):
-    return {"id": item.id, "country_name": item.country_name, "country_code": item.country_code, "phone_code": item.phone_code, "currency_code": item.currency_code, "flag_emoji": item.flag_emoji, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
+    return {"id": item.id, "country_name": item.country_name, "slug": item.slug, "country_code": item.country_code, "phone_code": item.phone_code, "currency_code": item.currency_code, "flag_emoji": item.flag_emoji, "status": item.status, "created_at": item.created_at, "updated_at": item.updated_at}
 
 
 def _currency(item: Currency):
@@ -237,6 +237,10 @@ def save_country(db: Session, data: CountryPayload, actor: User, request: Reques
         payload["flag_emoji"] = _flag_from_iso2(payload.get("country_code", ""))
     for key, value in payload.items():
         setattr(item, key, value)
+    # A country rename changes only its display name.  Never silently change
+    # the canonical public URL for an existing country.
+    if not item.slug:
+        item.slug = _unique_slug(db, Country, item.country_name, item.id)
     db.add(item)
     db.flush()
     log_audit(db, actor=actor, action="update_country" if country_id else "create_country", entity_type="country", entity_id=item.id, old_values=old, new_values=_country(item), request=request)

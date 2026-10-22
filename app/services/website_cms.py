@@ -180,12 +180,8 @@ def _s_handpicked(r: HandpickedTour, db: Session | None = None):
     return {"id": r.id, "tour_id": r.tour_id, **tour, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_favourite_country(r: FavouriteCountryEntry): return {"id": r.id, "country_id": r.country_id, "title": r.title, "snippet": r.snippet, "image": r.image, "href": r.href, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_content_block(r: HomepageContentBlock | None, key: str): return {"key": key, "data": r.data if r else {}, "updated_at": r.updated_at if r else None}
-def _s_country_page(r: CountryPage, db: Session | None = None):
-    country_name = None
-    if db is not None:
-        country = db.query(Country).filter(Country.id == r.country_id).first()
-        country_name = country.country_name if country else None
-    return {"id": r.id, "country_id": r.country_id, "country_name": country_name, "hero_title": r.hero_title, "hero_description": r.hero_description, "hero_image": r.hero_image, "showcase_title": r.showcase_title, "showcase_description": r.showcase_description, "showcase_image": r.showcase_image, "seo_title": r.seo_title, "seo_description": r.seo_description, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
+def _s_country_page(r: CountryPage, country: Country | None = None):
+    return {"id": r.id, "country_id": r.country_id, "country_name": country.country_name if country else None, "country_slug": country.slug if country else None, "hero_title": r.hero_title, "hero_description": r.hero_description, "hero_image": r.hero_image, "showcase_title": r.showcase_title, "showcase_description": r.showcase_description, "showcase_image": r.showcase_image, "seo_title": r.seo_title, "seo_description": r.seo_description, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
 
 
 # generic crud factory
@@ -584,11 +580,12 @@ def delete_favourite_country(db, item_id): _delete(db, FavouriteCountryEntry, it
 # country landing pages (/tours/{country})
 
 def list_country_pages(db, page, limit, active_only=False):
-    q = db.query(CountryPage)
+    # Join once instead of resolving Country separately for each CMS row.
+    q = db.query(CountryPage, Country).join(Country, Country.id == CountryPage.country_id)
     if active_only:
         q = q.filter(CountryPage.is_active == True)  # noqa: E712
     q = q.order_by(CountryPage.id.desc())
-    return _paginate(q, page, limit, lambda row: _s_country_page(row, db))
+    return _paginate(q, page, limit, lambda row: _s_country_page(row[0], row[1]))
 def create_country_page(db, data: CountryPagePayload):
     if not db.query(Country).filter(Country.id == data.country_id).first():
         raise HTTPException(status_code=400, detail="Selected country does not exist")
@@ -600,8 +597,21 @@ def create_country_page(db, data: CountryPagePayload):
         db.rollback()
         raise HTTPException(status_code=400, detail="This country already has a landing page")
     db.refresh(obj)
-    return _s_country_page(obj, db)
-def update_country_page(db, item_id, data: CountryPagePayload): return _update(db, CountryPage, item_id, data.model_dump(exclude_unset=True), lambda row: _s_country_page(row, db), "Country Page")
+    return _s_country_page(obj, db.query(Country).filter(Country.id == obj.country_id).first())
+def update_country_page(db, item_id, data: CountryPagePayload):
+    obj = _get_or_404(db, CountryPage, item_id, "Country Page")
+    country = db.query(Country).filter(Country.id == data.country_id).first()
+    if not country:
+        raise HTTPException(status_code=400, detail="Selected country does not exist")
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(obj, key, value)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="This country already has a landing page")
+    db.refresh(obj)
+    return _s_country_page(obj, country)
 def delete_country_page(db, item_id): _delete(db, CountryPage, item_id, "Country Page")
 
 def list_active_country_pages_public(db):
@@ -610,14 +620,14 @@ def list_active_country_pages_public(db):
     # CountryTourListing), so this returns country_name alongside each row
     # rather than requiring a second lookup.
     rows = (
-        db.query(CountryPage, Country.country_name)
+        db.query(CountryPage, Country)
         .join(Country, Country.id == CountryPage.country_id)
         .filter(CountryPage.is_active == True)  # noqa: E712
         .all()
     )
     return [
-        {**_s_country_page(row), "country_name": country_name}
-        for row, country_name in rows
+        _s_country_page(row, country)
+        for row, country in rows
     ]
 
 # generic homepage content blocks (see ALLOWED_CONTENT_BLOCK_KEYS above)

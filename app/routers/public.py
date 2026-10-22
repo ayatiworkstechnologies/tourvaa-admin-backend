@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models.cms import City, Country, Tour, TourCategory, TourSubcategory
+from app.models.website_cms import CountryPage
 from app.models.cancellations import RefundRule
 from app.models.public_leads import ContactMessage, NewsletterSubscriber
 from app.services.cms import _category, _city, _country, _subcategory, _tour
@@ -1075,6 +1076,28 @@ def public_country_pages(db: Session = Depends(get_db)):
     # country's name so the frontend can match it against the slug in the
     # URL the same way it already resolves /public/countries.
     return {"status": "success", "items": list_active_country_pages_public(db)}
+
+
+@router.get("/country-pages/{slug}")
+def public_country_page_by_slug(slug: str, db: Session = Depends(get_db)):
+    """Return only the active public fields for one canonical country slug."""
+    row = (
+        db.query(CountryPage, Country)
+        .join(Country, Country.id == CountryPage.country_id)
+        .filter(Country.slug == slugify(slug), CountryPage.is_active == True, Country.status == "active")  # noqa: E712
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Country page not found")
+    page, country = row
+    return {"status": "success", "data": {
+        "id": page.id, "country_id": page.country_id, "country_name": country.country_name,
+        "country_slug": country.slug, "hero_title": page.hero_title,
+        "hero_description": page.hero_description, "hero_image": page.hero_image,
+        "showcase_title": page.showcase_title, "showcase_description": page.showcase_description,
+        "showcase_image": page.showcase_image, "seo_title": page.seo_title,
+        "seo_description": page.seo_description,
+    }}
 
 
 @router.get("/destination-guides")

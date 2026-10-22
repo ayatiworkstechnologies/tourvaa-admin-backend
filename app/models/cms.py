@@ -11,6 +11,10 @@ class Country(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     country_name = Column(String(120), nullable=False, unique=True)
+    # The public URL is intentionally separate from the editable display name.
+    # It is assigned once when the country is created and is never regenerated
+    # during a rename, so published /tours/{country} links remain stable.
+    slug = Column(String(150), nullable=False, unique=True, index=True)
     country_code = Column(String(10), nullable=False, unique=True)
     phone_code = Column(String(10), default="", nullable=False)
     currency_code = Column(String(10), default="", nullable=False)

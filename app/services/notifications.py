@@ -247,10 +247,11 @@ def enqueue_notification(db: Session, *, user_id: int | None, notification_type:
     db.flush()
     db.add(NotificationLog(notification_id=n.id, channel=channel, status=n.status, response="queued"))
     if channel == "in_app":
-        # The persisted row remains the source of truth; the socket carries
-        # only its id and prompts the signed-in recipient to refresh.
-        from app.services.messaging_ws import ws_manager
-        ws_manager.request_notification(user_id, n.id)
+        # The persisted row remains the source of truth; publish its id only
+        # after this caller's transaction commits. A rolled-back booking or
+        # payment operation must never produce a live notification.
+        from app.services.messaging_ws import queue_notification_after_commit
+        queue_notification_after_commit(db, user_id, n.id)
         # Also shown as a browser push, once the caller's transaction commits.
         from app.services.notifications_push import queue_push
         queue_push(db, notification_id=n.id, user_id=user_id, title=title, body=message, url=details.get("action_url") or "/")
