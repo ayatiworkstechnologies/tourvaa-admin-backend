@@ -12,6 +12,23 @@ from app.utils.pagination import pagination_params
 from app.models.users import User
 
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_TOUR_AUDIT_FIELDS = {"created_at", "updated_at"}
+
+
+def _tour_for_actor(data: dict, actor: User) -> dict:
+    """Expose lifecycle dates only to Tourvaa administrators."""
+    role_slugs = {
+        role.role.slug.lower()
+        for role in (actor.user_roles or [])
+        if role.role and role.role.slug
+    }
+    if actor.role and actor.role.slug:
+        role_slugs.add(actor.role.slug.lower())
+    is_admin = (
+        str(getattr(actor, "user_type", "") or "").lower() == "admin"
+        or bool({"admin", "super-admin"} & role_slugs)
+    )
+    return data if is_admin else {key: value for key, value in data.items() if key not in _TOUR_AUDIT_FIELDS}
 
 
 def _get_actor_supplier_id(db: Session, user: User) -> int | None:
@@ -214,7 +231,8 @@ def tours(params: dict = Depends(pagination_params), country_id: str = Query(def
     # Suppliers only see their own tours; admins can filter by any supplier_id or see all
     actor_supplier_id = _get_actor_supplier_id(db, current_user)
     effective_supplier_id = str(actor_supplier_id) if actor_supplier_id else supplier_id
-    return {"status": "success", **list_tours(db, params["page"], params["limit"], params["search"], country_id, city_id, category_id, status, effective_supplier_id)}
+    result = list_tours(db, params["page"], params["limit"], params["search"], country_id, city_id, category_id, status, effective_supplier_id)
+    return {"status": "success", **result, "items": [_tour_for_actor(item, current_user) for item in result["items"]]}
 
 
 @router.post("/tours")
@@ -291,7 +309,7 @@ def tour_detail(tour_id: int, db: Session = Depends(get_db), current_user: User 
     actor_supplier_id = _get_actor_supplier_id(db, current_user)
     if actor_supplier_id and tour.supplier_id != actor_supplier_id:
         raise HTTPException(status_code=403, detail="Access denied: this tour belongs to another supplier")
-    return {"status": "success", "data": _tour(tour)}
+    return {"status": "success", "data": _tour_for_actor(_tour(tour), current_user)}
 
 
 @router.get("/tours/{tour_id}/export")

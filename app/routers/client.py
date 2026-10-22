@@ -75,12 +75,27 @@ def public_tours(
     category_id: str = Query(default=""),
     db: Session = Depends(get_db)
 ):
+    result = list_tours(db, page, limit, search, country_id, city_id, category_id, status="published")
     return {
         "status": "success",
-        **list_tours(db, page, limit, search, country_id, city_id, category_id, status="published")
+        **result,
+        "items": [_public_tour_data(item) for item in result["items"]],
     }
 
-_CLIENT_INTERNAL_FIELDS = ("commission_percentage", "created_by", "updated_by")
+# Public endpoints reuse the operations serializer for consistent tour data.
+# Keep staff audit metadata (and the identities behind it) in the authenticated
+# admin/supplier APIs only.
+_CLIENT_INTERNAL_FIELDS = (
+    "commission_percentage",
+    "created_by",
+    "updated_by",
+    "created_at",
+    "updated_at",
+)
+
+
+def _public_tour_data(data: dict) -> dict:
+    return {key: value for key, value in data.items() if key not in _CLIENT_INTERNAL_FIELDS}
 
 
 @router.get("/tours/{tour_id}")
@@ -90,9 +105,9 @@ def public_tour_detail(tour_id: int, db: Session = Depends(get_db)):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Tour not found")
     # _tour() is the admin CMS serializer and includes internal fields
-    # (commission rate, audit user ids) that must not reach an unauthenticated
+    # (commission rate and audit metadata) that must not reach an unauthenticated
     # caller -- strip them here rather than changing the shared serializer.
-    data = {k: v for k, v in _tour(tour).items() if k not in _CLIENT_INTERNAL_FIELDS}
+    data = _public_tour_data(_tour(tour))
     return {"status": "success", "data": data}
 
 @router.get("/tours/{tour_id}/overview")
