@@ -55,3 +55,13 @@ def test_unknown_content_block_remains_rejected():
     with pytest.raises(HTTPException) as error:
         get_content_block(FakeSession(), "partner_privacy_unknown")
     assert error.value.status_code == 404
+
+
+def test_travel_advice_categories_reject_more_than_eight_cards():
+    payload = ContentBlockPayload(data={"items": [{"title": f"Card {index}"} for index in range(9)]})
+
+    with pytest.raises(HTTPException) as error:
+        upsert_content_block(FakeSession(), "travel_advice_categories", payload)
+
+    assert error.value.status_code == 422
+    assert error.value.detail == "items accepts at most 8 cards"

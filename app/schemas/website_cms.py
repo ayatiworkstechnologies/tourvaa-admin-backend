@@ -154,7 +154,7 @@ class CmsPagePayload(BaseModel):
 class ReviewPayload(BaseModel):
     reviewer_name: str
     reviewer_image: Optional[str] = None
-    rating: int = 5
+    rating: int = Field(default=5, ge=1, le=5)
     review_text: str
     tour_name: Optional[str] = None
     country: Optional[str] = None

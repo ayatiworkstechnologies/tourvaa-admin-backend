@@ -72,6 +72,13 @@ ALLOWED_CONTENT_BLOCK_KEYS = {
     "affiliate_portal_hero", "affiliate_portal_stats", "affiliate_portal_perks", "affiliate_portal_ideal_for", "affiliate_portal_cta", "affiliate_portal_footer",
 }
 
+# Content blocks are intentionally generic, but repeated card sections still
+# need server-side bounds. This prevents direct API clients and stale editor
+# sessions from persisting cards that the public layout cannot display.
+CONTENT_BLOCK_RECORD_LIMITS = {
+    "travel_advice_categories": ("items", 8),
+}
+
 # Per-country destination guide content (best time to visit, monsoon/season
 # info, temperature, best places, why-visit, travel info) - one block per
 # country, keyed dynamically by slug rather than a fixed key, so this can't
@@ -648,6 +655,15 @@ def get_public_destination_guide(db, slug: str):
 def upsert_content_block(db, key: str, data: ContentBlockPayload):
     if not _is_allowed_content_block_key(key):
         raise HTTPException(status_code=404, detail="Unknown content block")
+    limit = CONTENT_BLOCK_RECORD_LIMITS.get(key)
+    if limit:
+        field, maximum = limit
+        records = data.data.get(field)
+        if isinstance(records, list) and len(records) > maximum:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field} accepts at most {maximum} cards",
+            )
     obj = db.query(HomepageContentBlock).filter(HomepageContentBlock.key == key).first()
     if obj:
         obj.data = data.data
