@@ -163,6 +163,12 @@ def customer_profile(db: Session = Depends(get_db), current_user: User = Depends
 def update_customer_profile(data: CustomerProfileUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     customer = _current_customer(db, current_user)
     payload = data.model_dump(exclude_unset=True)
+    # The API schema represents a blank optional email as None, while the
+    # legacy database column stores "not provided" as a non-null empty string.
+    # Translate at the persistence boundary instead of writing NULL and
+    # turning an otherwise valid profile update into a database 500.
+    if "emergency_email" in payload and payload["emergency_email"] is None:
+        payload["emergency_email"] = ""
     if "date_of_birth" in payload:
         payload["date_of_birth"] = _parse_optional_dt(payload["date_of_birth"])
     for field, value in payload.items():

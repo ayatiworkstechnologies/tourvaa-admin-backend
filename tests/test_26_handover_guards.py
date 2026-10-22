@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.auth import RegisterSchema, ResetPasswordSchema
+from tests.conftest import unique_email
 from app.schemas.users import UserCreate
 from app.services.auth import verify_email
 from app.auth.security import hash_reset_token
@@ -15,7 +16,7 @@ from app.utils.money import utcnow
 
 VALID_USER = {
     "name": "QA User",
-    "email": "qa-strong@example.com",
+    "email": unique_email("qa_strong"),
     "phone": "+919876543210",
     "password": "Strong@123",
 }

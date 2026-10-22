@@ -51,9 +51,24 @@ def unique(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+def unique_email(prefix: str = "qa") -> str:
+    """Return a collision-free, validation-safe address for test accounts.
+
+    Registration correctly rejects reserved placeholder domains such as
+    example.com. Keep valid account fixtures on a Tourvaa-owned test
+    subdomain so policy tests exercise their intended rule instead.
+    """
+    return f"{unique(prefix)}@qa.tourvaa.com"
+
+
 def unique_phone(country_code: str = "+91") -> str:
     """A syntactically valid, collision-free phone number for test fixtures."""
-    digits = str(uuid.uuid4().int)[:9]
+    # Indian national numbers are 10 digits and begin with 6-9. Several HTTP
+    # registration tests strip the +91 prefix before submitting this value.
+    if country_code == "+91":
+        digits = "9" + str(uuid.uuid4().int)[:9]
+    else:
+        digits = str(uuid.uuid4().int)[:10]
     return f"{country_code}{digits}"
 
 

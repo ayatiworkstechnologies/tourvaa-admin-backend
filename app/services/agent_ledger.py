@@ -100,7 +100,11 @@ def create_ledger_entry(
         net_payable=commission_amount,
         amount_paid=Decimal("0"),
         amount_pending=commission_amount,
-        currency=booking.currency or "USD",
+        # Agent commission is part of the supplier/platform settlement
+        # snapshot, not the customer's/agent's gateway charge. A portal user
+        # may pay in a header-selected currency while this ledger continues in
+        # the tour's authoritative source currency.
+        currency=booking.supplier_currency or booking.currency or "USD",
         status="pending",
     )
     db.add(entry)

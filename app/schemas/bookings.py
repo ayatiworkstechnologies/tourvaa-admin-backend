@@ -99,9 +99,9 @@ class BookingCreate(BaseModel):
     adults_count: Optional[int] = Field(default=None, ge=0)
     children_count: Optional[int] = Field(default=None, ge=0)
     currency: str = "USD"
-    # Customer checkout may request the storefront currency currently shown
-    # in the browser. The server validates and rate-locks this value; tour and
-    # supplier pricing remain authoritative in their original currency.
+    # Customer and agent checkout may request the storefront currency currently
+    # shown in the browser. The server validates and rate-locks this value;
+    # tour and supplier pricing remain authoritative in their original currency.
     display_currency: Optional[str] = Field(default=None, min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
     payment_type: str = "full"
     # Deprecated: agents are commission-only now (see services.bookings.

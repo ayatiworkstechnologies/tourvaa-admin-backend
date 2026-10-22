@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import asyncio
 import os
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
@@ -162,6 +163,38 @@ def validate_pdf_rendering_dependencies() -> None:
 validate_worker_concurrency()
 validate_production_config()
 validate_pdf_rendering_dependencies()
+
+
+def database_migration_heads() -> tuple[frozenset[str], frozenset[str]]:
+    """Return (database heads, code heads) using Alembic's own metadata."""
+    from alembic.config import Config
+    from alembic.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    backend_root = Path(__file__).resolve().parents[1]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("path_separator", "os")
+    # Do not depend on the process working directory used by uvicorn/systemd.
+    config.set_main_option("script_location", str(backend_root / "alembic"))
+    code_heads = frozenset(ScriptDirectory.from_config(config).get_heads())
+    with engine.connect() as connection:
+        database_heads = frozenset(MigrationContext.configure(connection).get_current_heads())
+    return database_heads, code_heads
+
+
+def validate_database_migration_head() -> None:
+    """Fail startup clearly when deployed code and database schema diverge."""
+    database_heads, code_heads = database_migration_heads()
+    if database_heads == code_heads:
+        return
+
+    current = ", ".join(sorted(database_heads)) if database_heads else "<none>"
+    expected = ", ".join(sorted(code_heads)) if code_heads else "<none>"
+    raise RuntimeError(
+        "Database migration mismatch: "
+        f"database head(s) [{current}], application head(s) [{expected}]. "
+        "Run `python -m alembic upgrade head` before starting the API."
+    )
 
 
 def schema_is_ready():
@@ -646,6 +679,7 @@ async def stop_background_jobs():
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    validate_database_migration_head()
     warn_if_redis_unconfigured()
     run_seed()
     await start_background_jobs()

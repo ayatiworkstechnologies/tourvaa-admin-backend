@@ -2,14 +2,14 @@
 import pytest
 import requests
 
-from tests.conftest import BASE_URL, unique, unique_phone, skip_if_readonly, login_with_retry, create_active_account
+from tests.conftest import BASE_URL, unique, unique_email, unique_phone, skip_if_readonly, login_with_retry, create_active_account
 
 
 def _register_supplier():
     """Real self-registration via HTTP - stays PENDING_EMAIL_VERIFICATION,
     used by the one test that specifically checks that gate."""
     name = f"Portal Test Supplier {unique('n')}"
-    email = f"{unique('sup')}@example.com"
+    email = unique_email("sup")
     password = "Supp@1234"
     resp = requests.post(f"{BASE_URL}/auth/register/supplier", json={
         "account_type": "SUPPLIER", "first_name": name, "email": email,
@@ -41,7 +41,7 @@ def supplier_ctx(headers):
     then exercises the real POST /suppliers/{id}/approve endpoint below.
     """
     name = f"Portal Test Supplier {unique('n')}"
-    email = f"{unique('sup')}@example.com"
+    email = unique_email("sup")
     password = "Supp@1234"
     create_active_account("supplier", "SUPPLIER", name, email, unique_phone(), password)
 

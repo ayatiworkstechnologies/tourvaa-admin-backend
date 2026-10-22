@@ -2,11 +2,11 @@
 import pytest
 import requests
 
-from tests.conftest import BASE_URL, unique, unique_phone, skip_if_readonly, create_active_account, login_with_retry
+from tests.conftest import BASE_URL, unique, unique_email, unique_phone, skip_if_readonly, create_active_account, login_with_retry
 
 
 def _register_and_login_customer():
-    email = f"{unique('cust')}@example.com"
+    email = unique_email("cust")
     password = "Cust@1234"
     # Real self-registration requires clicking an emailed verification link
     # before a password exists - can't be driven by a black-box HTTP test.
@@ -70,6 +70,22 @@ def test_customer_profile_update(customer_headers):
     }, headers=customer_headers, timeout=10)
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["first_name"] == "Portal"
+
+
+def test_customer_profile_update_normalizes_blank_emergency_email(customer_headers):
+    resp = requests.put(f"{BASE_URL}/customer/profile", json={
+        "first_name": "Portal", "emergency_email": "   ",
+    }, headers=customer_headers, timeout=10)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"].get("emergency_email") in (None, "")
+    assert resp.json()["data"]["first_name"] == "Portal"
+
+
+def test_customer_profile_update_rejects_legacy_alias(customer_headers):
+    resp = requests.put(f"{BASE_URL}/customer/profile", json={
+        "passport_no": "LEGACY-PASSPORT",
+    }, headers=customer_headers, timeout=10)
+    assert resp.status_code == 422, resp.text
 
 
 def test_customer_profile_requires_auth():

@@ -1069,6 +1069,24 @@ def supplier_booking_currency(booking: Booking) -> str:
     return getattr(booking, "supplier_currency", None) or getattr(booking, "currency", None) or "USD"
 
 
+def supplier_amount_in_booking_currency(booking: Booking, amount) -> Decimal:
+    """Convert a locked supplier-currency snapshot into the payer currency.
+
+    This uses the immutable rate captured when the booking was created. It is
+    intentionally separate from live FX conversion so historical agent
+    commission arithmetic cannot move when today's exchange rate changes.
+    """
+    value = money(amount or 0)
+    source = str(supplier_booking_currency(booking)).strip().upper()
+    target = str(getattr(booking, "currency", None) or source).strip().upper()
+    if source == target:
+        return value
+    rate = Decimal(str(getattr(booking, "exchange_rate", None) or 0))
+    if rate <= 0:
+        raise HTTPException(status_code=409, detail="Booking exchange-rate snapshot is unavailable")
+    return money(value * rate)
+
+
 def _is_booking_fully_paid(booking: Booking) -> bool:
     """Whether a supplier may be asked to action the booking.
 
@@ -1240,14 +1258,20 @@ def _agent_payment_summary(db: Session, booking: Booking) -> dict | None:
     reserved = (booking.agent_payment_method or "").lower() in {"pay_later", "credit", "bank_transfer"}
     total_booking_amount = money(booking.final_amount)
     commission_amount = money(ledger.commission_amount if ledger else booking.agent_commission_amount)
+    commission_currency = str(
+        ledger.currency if ledger and ledger.currency else supplier_booking_currency(booking)
+    ).upper()
+    commission_in_booking_currency = supplier_amount_in_booking_currency(booking, commission_amount)
     # The amount an agent owes Tourvaa is the booking total less the
     # commission that Tourvaa pays the agent.  Do not reuse agent_net_price:
     # it is a legacy price snapshot and is not this settlement amount.
-    agent_price_after_commission = max(money(0), total_booking_amount - commission_amount)
+    agent_price_after_commission = max(money(0), total_booking_amount - commission_in_booking_currency)
 
     return {
         "transaction_type": "Booking Reserved" if reserved else "Full Payment",
         "is_reserved": reserved,
+        "currency": str(booking.currency or "USD").upper(),
+        "commission_currency": commission_currency,
         "amount_paid": money_str(booking.amount_paid),
         "total_booking_amount": money_str(total_booking_amount),
         # Booking snapshot is the approved agent rate. Ledger rows created
@@ -2151,13 +2175,14 @@ def _apply_customer_checkout_currency(
     source_currency: str,
     addon_rows: list,
 ) -> None:
-    """Rate-lock customer checkout into the storefront currency.
+    """Rate-lock customer or agent checkout into the storefront currency.
 
     Supplier and Tourvaa settlement snapshot fields have already been locked
     in the source currency by _apply_commission_snapshot and are left
-    untouched. Only customer-facing booking amounts and add-on line items are
+    untouched. Only payer-facing booking amounts and add-on line items are
     converted, so the gateway can charge exactly the currency shown at
-    checkout without relabelling supplier-priced numbers.
+    checkout without relabelling supplier-priced numbers. Agent commission
+    ledger rows also remain in the supplier/source currency.
     """
     from app.services.currency import convert_amount, normalize_currency
 
@@ -2353,10 +2378,10 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         db.add(booking_row)
 
     # Lock supplier/platform settlement in the tour currency first. Customer
-    # checkout can then be converted independently without changing what the
-    # supplier priced or is owed.
+    # or agent checkout can then be converted independently without changing
+    # what the supplier priced or is owed.
     _apply_commission_snapshot(db, booking, pricing_details)
-    if data.booking_source == "customer":
+    if data.booking_source in {"customer", "agent"}:
         _apply_customer_checkout_currency(
             booking,
             data.display_currency,
@@ -2544,7 +2569,7 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
         db.add(booking_row)
 
     _apply_commission_snapshot(db, booking, pricing_details)
-    if booking.booking_source == "customer":
+    if booking.booking_source in {"customer", "agent"}:
         _apply_customer_checkout_currency(
             booking,
             booking.display_currency,
@@ -2559,6 +2584,7 @@ def _recalculate_booking_price(db: Session, booking: Booking, data: BookingUpdat
             new_commission = money(booking.agent_commission_amount or 0)
             entry.gross_amount = customer_selling_price
             entry.commission_amount = new_commission
+            entry.currency = booking.supplier_currency or currency or "USD"
             entry.commission_percentage = money(
                 booking.agent_commission_percentage
                 if booking.agent_commission_percentage is not None

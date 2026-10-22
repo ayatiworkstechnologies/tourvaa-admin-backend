@@ -21,6 +21,7 @@ from app.models.cms import Tour, Country
 from app.models.bookings import Booking
 from app.models.payments import Payment
 from app.models.customers import Customer
+from app.services.bookings import supplier_amount_in_booking_currency
 
 logger = logging.getLogger(__name__)
 
@@ -541,9 +542,16 @@ def dashboard_summary(
         # booking at creation (services.bookings._apply_commission_snapshot),
         # never today's agent rate. Older bookings without a snapshot fall
         # back to the legacy aggregate estimate (rate x completed gross).
-        snapshot_commission = float(completed_query.filter(Booking.agent_commission_amount.isnot(None)).with_entities(
-            sqlfunc.coalesce(sqlfunc.sum(Booking.agent_commission_amount), 0)
-        ).scalar() or 0)
+        snapshot_rows = completed_query.filter(Booking.agent_commission_amount.isnot(None)).with_entities(
+            Booking.agent_commission_amount,
+            Booking.supplier_currency,
+            Booking.currency,
+            Booking.exchange_rate,
+        ).all()
+        snapshot_commission = sum(
+            float(supplier_amount_in_booking_currency(row, row.agent_commission_amount))
+            for row in snapshot_rows
+        )
         legacy_query = completed_query.filter(Booking.agent_commission_amount.is_(None))
         legacy_gross_value = float(legacy_query.with_entities(
             sqlfunc.coalesce(sqlfunc.sum(Booking.final_amount), 0)

@@ -21,6 +21,7 @@ from app.services.bookings import (
     _validate_supplier_lifecycle_transition,
     create_booking,
     notify_booking_received_after_payment,
+    supplier_amount_in_booking_currency,
     _has_secured_booking_funds,
 )
 from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
@@ -736,8 +737,8 @@ def test_customer_checkout_locks_selected_currency_without_converting_supplier_s
         service_fee_amount=Decimal("0"),
         gateway_fee_amount=Decimal("0"),
         final_amount=Decimal("100"),
-        agent_net_price=Decimal("0"),
-        agent_markup=Decimal("0"),
+        agent_net_price=Decimal("90"),
+        agent_markup=Decimal("10"),
         customer_selling_price=Decimal("100"),
         amount_paid=Decimal("0"),
         amount_pending=Decimal("100"),
@@ -745,6 +746,7 @@ def test_customer_checkout_locks_selected_currency_without_converting_supplier_s
         supplier_net_payable=Decimal("65"),
         commission_base_amount=Decimal("30"),
         tourvaa_commission_amount=Decimal("5"),
+        agent_commission_amount=Decimal("3"),
     )
     addon = SimpleNamespace(unit_price=Decimal("10"), total_price=Decimal("20"))
 
@@ -755,11 +757,69 @@ def test_customer_checkout_locks_selected_currency_without_converting_supplier_s
     assert booking_row.exchange_rate == Decimal("95.000000")
     assert booking_row.exchange_rate_source == "unit_test_rates"
     assert booking_row.final_amount == Decimal("9500.00")
+    assert booking_row.agent_net_price == Decimal("8550.00")
+    assert booking_row.agent_markup == Decimal("950.00")
     assert booking_row.amount_pending == Decimal("9500.00")
     assert addon.unit_price == Decimal("950.00")
     assert addon.total_price == Decimal("1900.00")
     assert booking_row.supplier_net_payable == Decimal("65")
     assert booking_row.tourvaa_commission_amount == Decimal("5")
+    assert booking_row.agent_commission_amount == Decimal("3")
+
+
+def test_agent_booking_accepts_selected_display_currency():
+    payload = BookingCreate(
+        booking_source="agent",
+        display_currency="INR",
+        agreed_terms=True,
+        agreed_cancellation_policy=True,
+    )
+
+    assert payload.display_currency == "INR"
+
+
+def test_agent_commission_snapshot_uses_locked_rate_for_booking_currency():
+    from decimal import Decimal
+
+    booking_row = SimpleNamespace(
+        supplier_currency="CHF",
+        currency="INR",
+        exchange_rate=Decimal("95"),
+    )
+
+    assert supplier_amount_in_booking_currency(booking_row, Decimal("3")) == Decimal("285.00")
+
+
+def test_agent_ledger_keeps_supplier_currency_when_gateway_currency_differs():
+    from decimal import Decimal
+    from app.services.agent_ledger import create_ledger_entry
+
+    class FakeDb:
+        def __init__(self):
+            self.added = []
+
+        def add(self, row):
+            self.added.append(row)
+
+    booking_row = SimpleNamespace(
+        id=7,
+        supplier_currency="CHF",
+        currency="INR",
+    )
+    db = FakeDb()
+
+    entry = create_ledger_entry(
+        db,
+        booking=booking_row,
+        agent_id=4,
+        gross_amount=Decimal("100"),
+        commission_amount=Decimal("3"),
+        commission_percentage=Decimal("3"),
+    )
+
+    assert entry.currency == "CHF"
+    assert entry.commission_amount == Decimal("3.00")
+    assert db.added == [entry]
 
 
 def test_fixed_supplier_deposit_is_converted_to_locked_booking_currency():
