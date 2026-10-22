@@ -421,7 +421,7 @@ def resend_verification(request: Request, data: ResendVerificationSchema, db: Se
 @router.post("/change-registration-email")
 def change_email(request: Request, data: ChangeRegistrationEmailSchema, db: Session = Depends(get_db)):
     check_rate_limit(request, "change-registration-email", max_calls=3, window_seconds=300)
-    user = change_registration_email(db, data.change_token, str(data.email), data.redirect)
+    user = change_registration_email(db, data.change_token, str(data.email), data.redirect, data.country_id)
     return {"status": "success", "message": "Email updated and verification link sent.", "data": {"email": user.email}}
 
 

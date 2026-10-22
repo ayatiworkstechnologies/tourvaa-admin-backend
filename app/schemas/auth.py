@@ -299,6 +299,7 @@ class ResendVerificationSchema(BaseModel):
 class ChangeRegistrationEmailSchema(BaseModel):
     change_token: str = Field(min_length=1)
     email: EmailStr
+    country_id: Optional[int] = Field(default=None, gt=0)
     redirect: Optional[str] = None
 
     @field_validator("email")

@@ -303,6 +303,9 @@ class TourCalendar(Base):
     id = Column(Integer, primary_key=True, index=True)
     tour_id = Column(Integer, ForeignKey("tours.id"), nullable=False, index=True)
     tour_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    # The UI selects one departure per calendar day. Keep that date separate
+    # from the timestamp so the database can enforce that invariant.
+    tour_date_day = Column(Date, nullable=False, index=True)
     start_date = Column(DateTime(timezone=True), nullable=True)
     end_date = Column(DateTime(timezone=True), nullable=True)
     available_seats = Column(Integer, default=0, nullable=False)

@@ -134,6 +134,13 @@ def serialize_agent(item: Agent, *, mask_bank_details: bool = False):
 def get_agent_activity(db: Session, agent_id: int, recent_limit: int = 10):
     """Return the operational data shown on the admin agent detail screen."""
     get_agent(db, agent_id)
+    # A cancelled, declined, or refunded reservation remains in the activity
+    # history, but is not a sale and must not inflate the commercial cards.
+    sales_statuses_excluded = ("cancelled", "declined", "refunded")
+    sales_query = db.query(Booking).filter(
+        Booking.agent_id == agent_id,
+        Booking.booking_status.notin_(sales_statuses_excluded),
+    )
     totals = (
         db.query(
             func.count(Booking.id),
@@ -145,9 +152,18 @@ def get_agent_activity(db: Session, agent_id: int, recent_limit: int = 10):
         .filter(Booking.agent_id == agent_id)
         .one()
     )
+    sales_totals = sales_query.with_entities(
+        func.coalesce(func.sum(Booking.final_amount), 0),
+        func.coalesce(func.sum(Booking.amount_paid), 0),
+        func.coalesce(func.sum(Booking.amount_pending), 0),
+    ).one()
+    sales_currencies = sorted({
+        str(currency or "USD").upper()
+        for (currency,) in sales_query.with_entities(Booking.currency).distinct().all()
+    })
     status_counts = dict(
         db.query(Booking.booking_status, func.count(Booking.id))
-        .filter(Booking.agent_id == agent_id)
+        .filter(Booking.agent_id == agent_id, Booking.booking_status.notin_(sales_statuses_excluded))
         .group_by(Booking.booking_status)
         .all()
     )
@@ -172,9 +188,13 @@ def get_agent_activity(db: Session, agent_id: int, recent_limit: int = 10):
         "summary": {
             "total_bookings": totals[0],
             "total_customers": totals[1],
-            "total_booking_value": str(totals[2]),
-            "amount_paid": str(totals[3]),
-            "amount_pending": str(totals[4]),
+            "sales_booking_value": str(sales_totals[0]),
+            "amount_paid": str(sales_totals[1]),
+            "amount_pending": str(sales_totals[2]),
+            "reconciliation_difference": str((sales_totals[0] or 0) - (sales_totals[1] or 0) - (sales_totals[2] or 0)),
+            "currency": sales_currencies[0] if len(sales_currencies) == 1 else None,
+            "currencies": sales_currencies,
+            "has_mixed_currencies": len(sales_currencies) > 1,
             "confirmed_bookings": status_counts.get("confirmed", 0),
             "completed_bookings": status_counts.get("completed", 0),
             "cancelled_bookings": status_counts.get("cancelled", 0),

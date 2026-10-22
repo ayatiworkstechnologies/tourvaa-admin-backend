@@ -1,7 +1,7 @@
 import re
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from app.schemas.validation import normalize_e164_phone, normalize_optional_email
 
 PHONE_PATTERN = re.compile(r"^\+[1-9]\d{7,19}$")
@@ -231,6 +231,10 @@ CANCELLATION_STATUSES = {
 
 
 class CustomerProfileUpdate(BaseModel):
+    # Reject misspelled or legacy payload keys instead of silently discarding
+    # customer profile data at the API boundary.
+    model_config = ConfigDict(extra="forbid")
+
     first_name: Optional[str] = Field(default=None, max_length=75)
     last_name: Optional[str] = Field(default=None, max_length=75)
     full_name: Optional[str] = Field(default=None, max_length=150)
@@ -258,6 +262,11 @@ class CustomerProfileUpdate(BaseModel):
     emergency_relation: Optional[str] = Field(default=None, max_length=100)
     emergency_phone: Optional[str] = Field(default=None, max_length=30)
     emergency_email: Optional[EmailStr] = None
+
+    @field_validator("emergency_email", mode="before")
+    @classmethod
+    def blank_emergency_email_to_none(cls, value):
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator(
         "first_name",

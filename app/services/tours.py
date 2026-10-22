@@ -721,9 +721,34 @@ def list_calendar(db: Session, tour_id: int) -> list[dict]:
     return [_ser_calendar(o) for o in db.query(TourCalendar).filter(TourCalendar.tour_id == tour_id).order_by(TourCalendar.tour_date).all()]
 
 
+def _assert_calendar_date_is_unique(
+    db: Session,
+    tour_id: int,
+    tour_date: datetime,
+    *,
+    exclude_calendar_id: int | None = None,
+) -> None:
+    """Keep one departure per tour and calendar day.
+
+    The customer and admin booking flows select a departure by ``YYYY-MM-DD``.
+    Allowing two TourCalendar rows for that same day makes a reschedule select
+    an arbitrary row and makes the displayed capacity ambiguous. ``start_date``
+    remains available for the departure's time of day.
+    """
+    query = db.query(TourCalendar).filter(
+        TourCalendar.tour_id == tour_id,
+        TourCalendar.tour_date_day == tour_date.date(),
+    )
+    if exclude_calendar_id is not None:
+        query = query.filter(TourCalendar.id != exclude_calendar_id)
+    if query.first():
+        raise HTTPException(status_code=409, detail="A departure already exists for this tour on that date")
+
+
 def create_calendar_entry(db: Session, tour_id: int, data: CalendarPayload, actor: User, request: Request | None = None) -> dict:
     _require_tour(db, tour_id)
-    o = TourCalendar(tour_id=tour_id, **data.model_dump())
+    _assert_calendar_date_is_unique(db, tour_id, data.tour_date)
+    o = TourCalendar(tour_id=tour_id, tour_date_day=data.tour_date.date(), **data.model_dump())
     db.add(o)
     log_audit(db, actor=actor, action="create_calendar_entry", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
@@ -734,8 +759,10 @@ def create_calendar_entry(db: Session, tour_id: int, data: CalendarPayload, acto
 
 def update_calendar_entry(db: Session, tour_id: int, cal_id: int, data: CalendarPayload, actor: User, request: Request | None = None) -> dict:
     o = _child_or_404(db, TourCalendar, cal_id, tour_id, "Calendar entry")
+    _assert_calendar_date_is_unique(db, tour_id, data.tour_date, exclude_calendar_id=cal_id)
     for key, value in data.model_dump().items():
         setattr(o, key, value)
+    o.tour_date_day = data.tour_date.date()
     log_audit(db, actor=actor, action="update_calendar_entry", entity_type="tour", entity_id=tour_id, request=request)
     maybe_resubmit_for_review(db, tour_id, actor)
     db.commit()

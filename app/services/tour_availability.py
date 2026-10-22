@@ -156,7 +156,7 @@ def save_availability_config(db: Session, tour_id: int, data: AvailabilityConfig
 
             entry_dt = datetime.combine(candidate, datetime.min.time())
             db.add(TourCalendar(
-                tour_id=tour_id, tour_date=entry_dt, start_date=entry_dt, end_date=entry_dt,
+                tour_id=tour_id, tour_date=entry_dt, tour_date_day=candidate, start_date=entry_dt, end_date=entry_dt,
                 available_seats=o.seats_per_occurrence, booked_seats=0, status="available",
             ))
             created_count += 1

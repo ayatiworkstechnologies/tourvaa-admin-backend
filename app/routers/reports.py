@@ -89,6 +89,28 @@ def _money(value):
     return money_str(value or 0)
 
 
+NON_SALES_BOOKING_STATUSES = ("cancelled", "declined", "refunded")
+
+
+def _sales_reconciliation(gross, settled, outstanding) -> dict[str, Decimal]:
+    """Return one booking-period sales reconciliation.
+
+    A financial month must be reconciled from a single set of bookings:
+    gross booking value = settled amount + outstanding amount.  Invoice rows
+    are documents (and may be generated per payment), so their total is kept
+    separate and must never be added to outstanding balances.
+    """
+    gross_value = Decimal(str(gross or 0))
+    settled_value = Decimal(str(settled or 0))
+    outstanding_value = Decimal(str(outstanding or 0))
+    return {
+        "gross_sales": gross_value,
+        "settled_amount": settled_value,
+        "outstanding_amount": outstanding_value,
+        "reconciliation_difference": gross_value - settled_value - outstanding_value,
+    }
+
+
 def _supplier_booking_value(b: Booking):
     """What a booking is worth at the supplier's own prices (the locked
     snapshot's supplier gross), for supplier-facing reports -- the customer
@@ -182,28 +204,42 @@ def _period_params(
 def summary(params: dict = Depends(_period_params), db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.view"))):
     start, end = params["start"], params["end"]
     bookings_q = _scope_bookings(_apply_range(db.query(Booking), Booking.created_at, start, end), db, current_user)
-    payments_q = _apply_range(db.query(Payment).filter(Payment.payment_status.notin_(["voided", "failed"])), Payment.created_at, start, end)
-    if _report_role(current_user) != "admin":
-        payments_q = payments_q.join(Booking, Payment.booking_id == Booking.id)
-        payments_q = _scope_bookings(payments_q, db, current_user)
+    sales_bookings_q = bookings_q.filter(Booking.booking_status.notin_(NON_SALES_BOOKING_STATUSES))
 
     total_bookings = bookings_q.with_entities(func.count(Booking.id)).scalar() or 0
     confirmed = bookings_q.filter(Booking.booking_status == "confirmed").with_entities(func.count(Booking.id)).scalar() or 0
     cancelled = bookings_q.filter(Booking.booking_status == "cancelled").with_entities(func.count(Booking.id)).scalar() or 0
-    # Net of refunds - captured_amount is left unchanged by a refund (only
-    # refunded_amount and payment_status change, see services/payments.py
-    # process_refund), so it must be subtracted here or a refunded booking's
-    # original charge keeps counting as revenue.
-    captured = payments_q.with_entities(func.coalesce(func.sum(Payment.captured_amount), 0)).scalar() or 0
-    refunded = payments_q.with_entities(func.coalesce(func.sum(Payment.refunded_amount), 0)).scalar() or 0
-    revenue = max(0, captured - refunded)
-    pending = bookings_q.with_entities(func.coalesce(func.sum(Booking.amount_pending), 0)).scalar() or 0
-    invoice_q = _apply_range(db.query(Invoice), Invoice.created_at, start, end)
-    if _report_role(current_user) != "admin":
-        invoice_q = invoice_q.join(Booking, Invoice.booking_id == Booking.id)
-        invoice_q = _scope_bookings(invoice_q, db, current_user)
+    reconciliation = _sales_reconciliation(
+        sales_bookings_q.with_entities(func.coalesce(func.sum(Booking.final_amount), 0)).scalar(),
+        sales_bookings_q.with_entities(func.coalesce(func.sum(Booking.amount_paid), 0)).scalar(),
+        sales_bookings_q.with_entities(func.coalesce(func.sum(Booking.amount_pending), 0)).scalar(),
+    )
+    # Scope invoice documents through the same booking period. An invoice may
+    # represent a deposit or balance installment, so this is audit metadata,
+    # not a component of gross sales and is intentionally not reconciled.
+    invoice_q = _scope_bookings(
+        _apply_range(db.query(Invoice).join(Booking, Invoice.booking_id == Booking.id), Booking.created_at, start, end),
+        db,
+        current_user,
+    )
     invoice_total = invoice_q.with_entities(func.coalesce(func.sum(Invoice.total_amount), 0)).scalar() or 0
-    return {"status": "success", "data": {"total_bookings": total_bookings, "confirmed_bookings": confirmed, "cancelled_bookings": cancelled, "captured_revenue": _money(revenue), "pending_payments": _money(pending), "invoice_total": _money(invoice_total)}}
+    return {
+        "status": "success",
+        "data": {
+            "total_bookings": total_bookings,
+            "confirmed_bookings": confirmed,
+            "cancelled_bookings": cancelled,
+            # Retained for existing API consumers; these values now share the
+            # gross-sales booking scope instead of payment-created-at scope.
+            "captured_revenue": _money(reconciliation["settled_amount"]),
+            "pending_payments": _money(reconciliation["outstanding_amount"]),
+            "gross_sales": _money(reconciliation["gross_sales"]),
+            "settled_amount": _money(reconciliation["settled_amount"]),
+            "outstanding_amount": _money(reconciliation["outstanding_amount"]),
+            "reconciliation_difference": _money(reconciliation["reconciliation_difference"]),
+            "invoice_total": _money(invoice_total),
+        },
+    }
 
 
 @router.get("/bookings")

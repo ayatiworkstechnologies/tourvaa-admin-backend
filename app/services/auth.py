@@ -506,7 +506,13 @@ def resend_registration_verification(db: Session, email: str, redirect: str | No
     return True
 
 
-def change_registration_email(db: Session, change_token: str, email: str, redirect: str | None = None):
+def change_registration_email(
+    db: Session,
+    change_token: str,
+    email: str,
+    redirect: str | None = None,
+    country_id: int | None = None,
+):
     try:
         payload = decode_auth_token(change_token)
     except HTTPException:
@@ -525,6 +531,12 @@ def change_registration_email(db: Session, change_token: str, email: str, redire
     customer = db.query(Customer).filter(Customer.user_id == user.id).first()
     if customer:
         customer.email = normalized
+        if country_id is not None:
+            country = db.query(Country).filter(Country.id == country_id).first()
+            if not country:
+                raise HTTPException(status_code=422, detail="Select a valid country")
+            customer.country_id = country.id
+            customer.country = country.country_name
     token, token_hash = create_password_reset_token()
     user.account_status = "PENDING_EMAIL_VERIFICATION"
     user.email_verification_token = token_hash

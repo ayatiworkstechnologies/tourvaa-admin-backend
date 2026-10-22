@@ -169,13 +169,9 @@ DEFAULT_SETTINGS = [
     # would leave Tourvaa with nothing).
     {"key": "agent_default_commission_percentage", "label": "Default Agent Commission (%)", "value": "3", "group": "pricing", "is_public": True},
     # Whether an agent may additionally set their own retail markup on top
-    # of the storefront price (see services.bookings.create_booking /
-    # calculate_booking_price, where agent_markup is currently always forced
-    # to 0). Recommended/default OFF -- agents already earn a platform-paid
-    # commission; combining both requires deliberate admin opt-in so
-    # agent_markup_amount and agent_commission_amount are never silently
-    # mixed. Turning this ON without also updating create_booking/
-    # calculate_booking_price to read it is a no-op; see the TODO there.
+    # of the storefront price. Recommended/default OFF -- agents already earn
+    # a platform-paid commission, so enabling both requires deliberate admin
+    # opt-in to keep markup and commission amounts distinct.
     {"key": "allow_agent_markup", "label": "Allow Agent Markup", "value": "false", "group": "pricing", "is_public": False},
     # Whether the SAME booking may pay commission to both an agent and an
     # affiliate. Recommended/default OFF: an agent booking should only ever
