@@ -533,7 +533,36 @@ def capture_gateway_authorized_payment(db: Session, payment: Payment, actor: Opt
         return serialize_payment(payment, detail=True)
     if payment.gateway == "stripe":
         from app.services.payments_gateway import get_stripe
-        get_stripe(db).capture_payment_intent(payment.gateway_payment_id, to_minor_units(amount), f"capture:{payment.id}")
+        if not payment.gateway_payment_id:
+            raise HTTPException(status_code=400, detail="Stripe authorization has no PaymentIntent reference")
+        stripe = get_stripe(db)
+
+        def reconcile_succeeded_intent(intent: dict) -> bool:
+            if intent.get("status") != "succeeded":
+                return False
+            expected_currency = ((payment.booking.currency if payment.booking else None) or "USD").lower()
+            if str(intent.get("currency") or "").lower() != expected_currency:
+                raise HTTPException(status_code=409, detail="Stripe capture currency does not match the booking currency")
+            received = money(Decimal(str(intent.get("amount_received") or 0)) / 100)
+            if received != amount:
+                raise HTTPException(status_code=409, detail="Stripe captured amount does not match the remaining authorization")
+            return True
+
+        # A webhook may have been delayed/lost after Stripe captured the
+        # intent. Query Stripe before capture so an operator retry reconciles
+        # the local row instead of treating an already-successful charge as a
+        # 502 gateway failure.
+        intent = stripe.retrieve_payment_intent(payment.gateway_payment_id)
+        if not reconcile_succeeded_intent(intent):
+            try:
+                intent = stripe.capture_payment_intent(payment.gateway_payment_id, to_minor_units(amount), f"capture:{payment.id}")
+            except HTTPException:
+                # A concurrent capture can complete after the preflight read.
+                # Re-read the provider state once and reconcile only a fully
+                # verified successful capture.
+                intent = stripe.retrieve_payment_intent(payment.gateway_payment_id)
+                if not reconcile_succeeded_intent(intent):
+                    raise
     elif payment.gateway == "paypal":
         from app.services.payments_gateway import get_paypal
         currency = (payment.booking.currency if payment.booking else None) or "USD"
