@@ -69,4 +69,4 @@ def geo_cities(
         return {"data": []}
 
     rows = query.order_by(City.city_name.asc()).all()
-    return {"data": [{"id": r.id, "name": r.city_name} for r in rows]}
+    return {"data": [{"id": r.id, "name": r.city_name, "state_id": r.state_id} for r in rows]}

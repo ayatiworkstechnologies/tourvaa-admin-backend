@@ -36,36 +36,35 @@ def test_discount_applies_to_storefront_price():
     assert rows[0]["original_price_per_person"] == 105 and rows[0]["price_per_person"] == 94.5
 
 
-def test_supplier_discount_does_not_change_storefront_price():
-    # Supplier discounts affect supplier settlement only. A 10% supplier
-    # discount must not lower the customer price; only the 20% Tourvaa offer
-    # is visible to customers.
+def test_supplier_discount_is_visible_before_tourvaa_discount():
+    # A supplier offer is applied before markup/storefront pricing and the
+    # Tourvaa offer is then applied to that customer price.
     rows = _public_pricing_rows(
         [_slab(1, 4, 100, 0, 150, 0)],
         [],
         {"supplier_discount_percentage": 10, "tourvaa_discount_percentage": 20},
     )
-    assert rows[0]["original_price_per_person"] == 150
+    assert rows[0]["original_price_per_person"] == 135
     assert rows[0]["storefront_original_price_per_person"] == 150
-    assert rows[0]["supplier_discounted_price_per_person"] == 150
-    assert rows[0]["price_per_person"] == 120
+    assert rows[0]["supplier_discounted_price_per_person"] == 135
+    assert rows[0]["price_per_person"] == 108
 
 
-def test_supplier_only_discount_does_not_change_public_rows():
+def test_supplier_only_discount_changes_public_rows():
     rows = _public_pricing_rows(
         [_slab(1, 4, 100, 0, 150, 0)],
         [],
         {"supplier_discount_percentage": 10, "tourvaa_discount_percentage": None},
     )
-    assert rows[0]["price_per_person"] == 150
+    assert rows[0]["price_per_person"] == 135
 
 
 def test_stacked_discount_badge_uses_the_effective_saving():
     assert combined_discount_percent(10, 15) == 23.5
 
 
-def test_supplier_discount_is_not_advertised_to_customers():
-    assert _advertised_discount_percent(10, 15) == 15
+def test_supplier_discount_is_advertised_to_customers():
+    assert _advertised_discount_percent(10, 15) == 25
 
 
 def test_public_departure_slots_use_total_calendar_capacity_not_per_booking_limit():

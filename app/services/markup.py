@@ -45,9 +45,9 @@ def effective_markup_percentage(db: Session, slab: TourPricing | None, default: 
 def storefront_price(db: Session, slab: TourPricing, supplier_amount, default: Decimal | None = None) -> Decimal:
     """Customer price from the published supplier rate plus Tourvaa markup.
 
-    Supplier commission and supplier-funded discounts affect settlement, not
-    the advertised unit price.  Keeping the customer calculation independent
-    of commission makes the saved slab, public tour, quote and checkout agree.
+    Supplier commission affects settlement, while any eligible supplier offer
+    is applied to ``supplier_amount`` before this function is called.  Keeping
+    markup in one place makes the public tour, quote and checkout agree.
     """
     base_price = max(Decimal("0"), Decimal(str(supplier_amount or 0)))
     return apply_markup(base_price, effective_markup_percentage(db, slab, default))

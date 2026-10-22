@@ -69,7 +69,7 @@ ALLOWED_CONTENT_BLOCK_KEYS = {
     "agent_portal_hero", "agent_portal_metrics", "agent_portal_tools", "agent_portal_steps",
     "agent_portal_documents", "agent_portal_expectations", "agent_portal_faqs", "agent_portal_cta",
     "agent_portal_footer",
-    "affiliate_portal_hero", "affiliate_portal_stats", "affiliate_portal_perks", "affiliate_portal_ideal_for", "affiliate_portal_cta",
+    "affiliate_portal_hero", "affiliate_portal_stats", "affiliate_portal_perks", "affiliate_portal_ideal_for", "affiliate_portal_cta", "affiliate_portal_footer",
 }
 
 # Per-country destination guide content (best time to visit, monsoon/season

@@ -189,13 +189,14 @@ def _ser_overview(o: TourOverview):
 
 
 def _advertised_discount_percent(_supplier_pct: float, tourvaa_pct: float) -> float:
-    """Return the customer-facing Tourvaa offer percentage.
+    """Return the customer-facing offer label percentage.
 
-    Supplier offers reduce supplier settlement only and are not a customer
-    promotion, so they must never reduce an advertised storefront price or
-    inflate a customer-facing discount badge.
+    Supplier offers reduce the supplier rate before markup and Tourvaa offers
+    reduce the resulting storefront rate.  The label intentionally shows the
+    two advertised components (for example, ``10% + 15%`` is ``25%``), while
+    the price is still calculated sequentially below.
     """
-    return round(max(0.0, min(100.0, tourvaa_pct)), 2)
+    return round(max(0.0, min(100.0, _supplier_pct + tourvaa_pct)), 2)
 
 
 def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime | None = None) -> dict[int, dict]:
@@ -223,16 +224,18 @@ def _active_discount_map(db: Session, tours: list[Tour], effective_at: datetime 
             continue
         best[tour.id] = {
             "discount_percentage": display_pct,
-            "supplier_discount_percentage": None,
+            "supplier_discount_percentage": supplier_pct or None,
             "tourvaa_discount_percentage": tourvaa_pct or None,
-            "supplier_discount_name": None,
+            "supplier_discount_name": supplier_row.discount_name if supplier_row else None,
             "tourvaa_discount_name": tourvaa_row.discount_name if tourvaa_row else None,
-            # Only Tourvaa-funded offers change customer prices. Supplier
-            # offers are intentionally excluded from public price stages.
+            # A supplier offer is applied before the storefront markup and a
+            # Tourvaa offer afterwards.  ``price_start_per_person`` is the
+            # existing storefront price, so applying the supplier percentage
+            # here preserves that same order for the list/card price.
             "storefront_original_price_per_person": base_price,
-            "supplier_discounted_price_per_person": base_price,
-            "original_price_per_person": base_price,
-            "discounted_price_per_person": round(base_price * (1 - tourvaa_pct / 100), 2),
+            "supplier_discounted_price_per_person": round(base_price * (1 - supplier_pct / 100), 2),
+            "original_price_per_person": round(base_price * (1 - supplier_pct / 100), 2),
+            "discounted_price_per_person": round(base_price * (1 - supplier_pct / 100) * (1 - tourvaa_pct / 100), 2),
         }
     return best
 
@@ -310,10 +313,12 @@ def _public_pricing_rows(
                 "currency": base.currency,
             })
 
-    # A Tourvaa-funded discount applies to every pax-range row. Supplier
-    # discounts are settlement-only and do not alter public prices.
+    # Supplier-funded offers apply to the supplier rate before markup and
+    # Tourvaa offers apply afterwards.  Price rows expose every stage so the
+    # tour detail can show the same customer price that checkout will quote.
+    supplier_pct = float((discount_info or {}).get("supplier_discount_percentage") or 0)
     tourvaa_pct = float((discount_info or {}).get("tourvaa_discount_percentage") or discount_percentage or 0)
-    if tourvaa_pct:
+    if supplier_pct or tourvaa_pct:
         for row in rows:
             raw_adult = row["price_per_person"]
             raw_child = row["child_price_per_person"]
@@ -321,12 +326,14 @@ def _public_pricing_rows(
             # a percentage (which can lose cents with fixed-value offers).
             row["storefront_original_price_per_person"] = round(raw_adult, 2)
             row["storefront_original_child_price_per_person"] = round(raw_child, 2)
-            row["supplier_discounted_price_per_person"] = round(raw_adult, 2)
-            row["supplier_discounted_child_price_per_person"] = round(raw_child, 2)
-            row["original_price_per_person"] = round(raw_adult, 2)
-            row["original_child_price_per_person"] = round(raw_child, 2)
-            row["price_per_person"] = round(max(0.0, raw_adult * (1 - tourvaa_pct / 100)), 2)
-            row["child_price_per_person"] = round(max(0.0, raw_child * (1 - tourvaa_pct / 100)), 2)
+            supplier_adult = max(0.0, raw_adult * (1 - supplier_pct / 100))
+            supplier_child = max(0.0, raw_child * (1 - supplier_pct / 100))
+            row["supplier_discounted_price_per_person"] = round(supplier_adult, 2)
+            row["supplier_discounted_child_price_per_person"] = round(supplier_child, 2)
+            row["original_price_per_person"] = round(supplier_adult, 2)
+            row["original_child_price_per_person"] = round(supplier_child, 2)
+            row["price_per_person"] = round(max(0.0, supplier_adult * (1 - tourvaa_pct / 100)), 2)
+            row["child_price_per_person"] = round(max(0.0, supplier_child * (1 - tourvaa_pct / 100)), 2)
     # ``max_group_size`` is a vehicle/allocation grouping. Do not hide price
     # tiers above it: a customer or agent may reserve the departure's full
     # remaining calendar capacity and operations can allocate multiple
@@ -476,6 +483,8 @@ def public_tours(
         ).first()
         if cat:
             query = query.filter(Tour.category_id == cat.id)
+        else:
+            query = query.filter(Tour.id == -1)
     if subcategory:
         sub = db.query(TourSubcategory).filter(
             or_(TourSubcategory.slug == subcategory, TourSubcategory.subcategory_name.ilike(subcategory))
@@ -484,6 +493,8 @@ def public_tours(
             from app.models.cms import TourSubcategoryMap
             tour_ids = [m.tour_id for m in db.query(TourSubcategoryMap).filter(TourSubcategoryMap.subcategory_id == sub.id).all()]
             query = query.filter(Tour.id.in_(tour_ids))
+        else:
+            query = query.filter(Tour.id == -1)
     if min_days:
         try:
             query = query.filter(Tour.number_of_days >= int(min_days))
@@ -567,6 +578,7 @@ def public_tours(
             "destination": destination,
             "min_rating": min_rating,
             "category": category,
+            "subcategory": subcategory,
             "min_days": min_days,
             "max_days": max_days,
             "min_price": min_price,
