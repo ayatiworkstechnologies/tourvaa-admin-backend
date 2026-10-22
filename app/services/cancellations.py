@@ -351,6 +351,18 @@ def approve_request(db: Session, request_id: int, data: CancellationApprove, act
         # seat when the booking is made, so release the exact same seat count.
         booking.calendar.booked_seats = max(0, (booking.calendar.booked_seats or 0) - _booking_seat_count(booking))
 
+    # Cancellation approval ends the customer's obligation immediately.  A
+    # refund, when one is due, remains a separate finance action and keeps its
+    # own paid/refund history; it must never leave the original tour price in
+    # the customer's outstanding balance.
+    pending_before_cancellation = money(booking.amount_pending)
+    booking.amount_pending = money(0)
+    if booking.customer:
+        booking.customer.total_amount_pending = max(
+            money(0),
+            money(booking.customer.total_amount_pending or 0) - pending_before_cancellation,
+        )
+
     from app.models.bookings import BookingStatusHistory
     db.add(BookingStatusHistory(
         booking_id=booking.id,

@@ -124,6 +124,10 @@ def _paginate(items: list, page: int = 1, limit: int = 20) -> dict:
 
 _UPCOMING_BOOKING_STATUSES = {"confirmed", "pending_supplier_acceptance", "payment_authorized"}
 _CANCELLED_BOOKING_STATUSES = {"cancelled", "declined"}
+# A cancellation in review is deliberately not payable: the customer must not
+# be prompted to pay while Operations decides the request.  Once a request is
+# rejected the booking returns to its previous payable lifecycle state.
+_NON_PAYABLE_BOOKING_STATUSES = _CANCELLED_BOOKING_STATUSES | {"refunded", "cancellation_requested"}
 
 
 def _live_customer_summaries(db: Session, customer_ids: list[int]) -> dict[int, dict]:
@@ -160,7 +164,7 @@ def _live_customer_summaries(db: Session, customer_ids: list[int]) -> dict[int, 
         currency = (booking.currency or "USD").upper()
         amounts = summary["amounts_by_currency"].setdefault(currency, {"currency": currency, "paid": 0.0, "pending": 0.0})
         amounts["paid"] += float(booking.amount_paid or 0)
-        if status not in _CANCELLED_BOOKING_STATUSES:
+        if status not in _NON_PAYABLE_BOOKING_STATUSES:
             amounts["pending"] += float(booking.amount_pending or 0)
 
     for summary in summaries.values():
@@ -343,25 +347,12 @@ def get_customer_detail(db: Session, customer_id: int, actor: User | None = None
         from app.models.payments import Payment as PaymentModel
         from app.services.bookings import serialize_booking
         from app.services.payments import serialize_payment
-        from sqlalchemy import func as sqlfunc
 
-        all_bookings = db.query(BookingModel).filter(BookingModel.customer_id == customer_id).all()
-        if all_bookings:
-            live_total = len(all_bookings)
-            live_completed = sum(1 for b in all_bookings if b.booking_status == "completed")
-            live_cancelled = sum(1 for b in all_bookings if b.booking_status in ("cancelled", "declined"))
-            live_upcoming = sum(1 for b in all_bookings if b.booking_status in ("confirmed", "pending_supplier_acceptance", "payment_authorized"))
-            live_paid = sum(float(b.amount_paid or 0) for b in all_bookings)
-            live_pending = sum(float(b.amount_pending or 0) for b in all_bookings if b.booking_status not in ("cancelled", "declined"))
-
-            data["total_bookings"] = live_total
-            data["completed_tours"] = live_completed
-            data["cancelled_tours"] = live_cancelled
-            data["upcoming_tours"] = live_upcoming
-            data["amount_paid"] = live_paid
-            data["amount_pending"] = live_pending
-            data["total_amount_paid"] = live_paid
-            data["total_amount_pending"] = live_pending
+        live_summary = _live_customer_summaries(db, [customer_id]).get(customer_id)
+        if live_summary:
+            data.update(live_summary)
+            data["total_amount_paid"] = data["amount_paid"]
+            data["total_amount_pending"] = data["amount_pending"]
 
         recent_bookings = (
             db.query(BookingModel)
