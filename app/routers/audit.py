@@ -35,10 +35,11 @@ def serialize_log(row: AuditLog) -> dict:
 
 @router.get("")
 @router.get("/")
-def activity_logs(params: dict = Depends(pagination_params), entity_type: str = Query(default=""), action: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("activity_logs.view"))):
+def activity_logs(params: dict = Depends(pagination_params), entity_type: str = Query(default=""), action: str = Query(default=""), actor_user_id: int = Query(default=0), db: Session = Depends(get_db), _=Depends(require_any_permission("activity_logs.view"))):
     query = db.query(AuditLog).options(joinedload(AuditLog.actor))
     if entity_type: query = query.filter(AuditLog.entity_type == entity_type)
     if action: query = query.filter(AuditLog.action == action)
+    if actor_user_id: query = query.filter(AuditLog.actor_user_id == actor_user_id)
     query = query.order_by(AuditLog.id.desc())
     total = query.count(); items = [serialize_log(row) for row in query.offset((params["page"] - 1) * params["limit"]).limit(params["limit"]).all()]
     return {"status": "success", "items": items, "total": total, "page": params["page"], "limit": params["limit"], "total_pages": max(1, ceil(total / params["limit"]))}

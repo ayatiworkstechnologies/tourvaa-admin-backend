@@ -179,15 +179,25 @@ def serialize_hold(row: PaymentHold) -> dict:
 
 
 def serialize_payment(payment: Payment, detail: bool = False) -> dict:
+    # Older payment rows may not have copied the booking's customer ID. The
+    # booking remains the source of truth; agent bookings legitimately have no
+    # direct customer and must not appear as a fictional customer.
+    booking = payment.booking
+    customer = payment.customer or (booking.customer if booking else None)
+    customer_id = payment.customer_id or (booking.customer_id if booking else None)
+    agent = booking.agent if booking else None
     data = {
         "id": payment.id,
         "payment_code": payment.payment_code or _payment_code(payment.id),
         "booking_id": payment.booking_id,
-        "booking_code": payment.booking.booking_code if payment.booking else None,
-        "currency": payment.booking.currency if payment.booking else "USD",
-        "customer_id": payment.customer_id,
-        "customer_name": payment.customer.full_name if payment.customer else None,
-        "customer_email": payment.customer.email if payment.customer else None,
+        "booking_code": booking.booking_code if booking else None,
+        "currency": booking.currency if booking else "USD",
+        "booking_source": booking.booking_source if booking else None,
+        "customer_id": customer_id,
+        "customer_name": customer.full_name if customer else None,
+        "customer_email": customer.email if customer else None,
+        "agent_id": booking.agent_id if booking else None,
+        "agent_name": agent.agent_name if agent else None,
         "payment_method": payment.payment_method,
         "payment_type": payment.payment_type,
         "gateway": payment.gateway,
@@ -351,7 +361,11 @@ def _ensure_payment_access(payment: Payment, actor: User | None) -> None:
 
 
 def get_payments(db: Session, page: int = 1, limit: int = 20, search: str = "", customer_id: Optional[int] = None, booking_id: Optional[int] = None, payment_status: str = "", payment_method: str = "", gateway: str = "", start_date: str = "", end_date: str = "", actor: Optional[User] = None) -> dict:
-    query = db.query(Payment).options(joinedload(Payment.booking), joinedload(Payment.customer))
+    query = db.query(Payment).options(
+        joinedload(Payment.booking).joinedload(Booking.customer),
+        joinedload(Payment.booking).joinedload(Booking.agent),
+        joinedload(Payment.customer),
+    )
     role = _user_role(actor)
     if role == "supplier":
         query = query.join(Payment.booking).join(Booking.supplier).filter_by(user_id=actor.id)
@@ -702,16 +716,16 @@ def void_payment(db: Session, payment_id: int, data: PaymentVoid, actor: Optiona
 
 def update_payment(db: Session, payment_id: int, data: PaymentUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
     payment = get_payment_by_id(db, payment_id)
+    if data.paid_amount is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Payment amounts and status are updated by gateway events or approved capture, void, and refund operations.",
+        )
     old_values = serialize_payment(payment)
     for field in ["payment_method", "payment_type", "transaction_id", "payment_date", "notes"]:
         value = getattr(data, field)
         if value is not None:
             setattr(payment, field, value.strip() if isinstance(value, str) else value)
-    if data.paid_amount is not None:
-        payment.paid_amount = money(data.paid_amount)
-        payment.captured_amount = money(data.paid_amount)
-        payment.pending_amount = max(money(0), money(payment.total_amount) - money(data.paid_amount))
-        payment.payment_status = _derive_booking_status(payment.paid_amount, payment.total_amount)
     if data.gst_amount is not None:
         payment.gst_amount = money(data.gst_amount)
     if data.surcharge_amount is not None:
@@ -725,15 +739,15 @@ def update_payment(db: Session, payment_id: int, data: PaymentUpdate, actor: Opt
 
 
 def update_payment_status(db: Session, payment_id: int, data: PaymentStatusUpdate, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
-    payment = get_payment_by_id(db, payment_id)
-    old_values = serialize_payment(payment)
-    payment.payment_status = data.payment_status
-    if payment.booking:
-        _sync_booking_payment_fields(db, payment.booking)
-    log_audit(db, actor=actor, action="update_payment_status", entity_type="payment", entity_id=payment.id, old_values=old_values, new_values=serialize_payment(payment), request=request)
-    db.commit()
-    db.refresh(payment)
-    return serialize_payment(payment, detail=True)
+    # A status is a derived record of a real financial event, not an editable
+    # admin field. Gateway webhooks, capture, void and refund operations are
+    # the only supported state-transition paths. Looking up first preserves
+    # the existing 404 response for an unknown payment.
+    get_payment_by_id(db, payment_id)
+    raise HTTPException(
+        status_code=409,
+        detail="Payment status is updated automatically from gateway events or approved capture, void, and refund operations.",
+    )
 
 
 def _issue_gateway_refund(db: Session, payment: Payment, amount, reason: str) -> tuple[Optional[str], Optional[str]]:

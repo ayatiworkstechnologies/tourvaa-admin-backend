@@ -2,6 +2,8 @@ import csv
 import io
 import json
 import logging
+import re
+from email.utils import parseaddr
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from xml.sax.saxutils import escape
@@ -30,7 +32,7 @@ from app.models.payments import Payment
 from app.models.reports import ReportSchedule
 from app.models.suppliers import Supplier
 from app.models.users import User
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -196,7 +198,15 @@ def _period_params(
 ):
     if period not in PERIODS:
         raise HTTPException(status_code=400, detail=f"period must be one of {sorted(PERIODS)}")
-    start, end = _period_range(period, start_date, end_date)
+    period = period.strip().lower()
+    if period == "custom" and (not start_date.strip() or not end_date.strip()):
+        raise HTTPException(status_code=400, detail="Custom reports require both start_date and end_date")
+    try:
+        start, end = _period_range(period, start_date, end_date)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Dates must use YYYY-MM-DD format") from error
+    if start is not None and end is not None and start > end:
+        raise HTTPException(status_code=400, detail="Start date must be on or before end date")
     return {"period": period, "start": start, "end": end}
 
 
@@ -1484,20 +1494,55 @@ def _serialize_schedule(row: ReportSchedule) -> dict:
     }
 
 
+SCHEDULE_CADENCES = {"daily", "weekly", "monthly"}
+_SCHEDULE_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
 class ReportScheduleCreate(BaseModel):
     report_type: str
     cadence: str = "weekly"
     recipient_emails: str
 
+    @field_validator("report_type")
+    @classmethod
+    def normalize_report_type(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("cadence")
+    @classmethod
+    def validate_cadence(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in SCHEDULE_CADENCES:
+            raise ValueError(f"cadence must be one of: {', '.join(sorted(SCHEDULE_CADENCES))}")
+        return normalized
+
+    @field_validator("recipient_emails")
+    @classmethod
+    def validate_recipient_emails(cls, value: str) -> str:
+        recipients = [email.strip().lower() for email in value.split(",") if email.strip()]
+        if not recipients:
+            raise ValueError("At least one recipient email is required")
+        if len(recipients) > 20:
+            raise ValueError("A schedule can have at most 20 recipients")
+        if len(set(recipients)) != len(recipients):
+            raise ValueError("Recipient emails must be unique")
+        for recipient in recipients:
+            _, parsed = parseaddr(recipient)
+            if parsed != recipient or not _SCHEDULE_EMAIL_RE.fullmatch(recipient):
+                raise ValueError(f"Invalid recipient email: {recipient}")
+        return ", ".join(recipients)
+
 
 @router.get("/schedule")
-def list_report_schedules(db: Session = Depends(get_db), _=Depends(require_any_permission("reports.view"))):
+def list_report_schedules(db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.export"))):
+    _require_admin_report(current_user)
     rows = db.query(ReportSchedule).order_by(ReportSchedule.id.desc()).all()
     return {"status": "success", "data": [_serialize_schedule(row) for row in rows]}
 
 
 @router.post("/schedule")
-def create_report_schedule(data: ReportScheduleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.export", "reports.view"))):
+def create_report_schedule(data: ReportScheduleCreate, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.export"))):
+    _require_admin_report(current_user)
     if data.report_type not in REPORT_FETCHERS:
         raise HTTPException(status_code=400, detail=f"Unknown report '{data.report_type}'. Valid options: {sorted(REPORT_FETCHERS)}")
     row = ReportSchedule(
@@ -1517,7 +1562,8 @@ def create_report_schedule(data: ReportScheduleCreate, db: Session = Depends(get
 
 
 @router.delete("/schedule/{schedule_id}")
-def delete_report_schedule(schedule_id: int, db: Session = Depends(get_db), _=Depends(require_any_permission("reports.export", "reports.view"))):
+def delete_report_schedule(schedule_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_any_permission("reports.export"))):
+    _require_admin_report(current_user)
     row = db.query(ReportSchedule).filter(ReportSchedule.id == schedule_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Schedule not found")

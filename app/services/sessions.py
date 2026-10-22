@@ -31,10 +31,18 @@ def create_session(db: Session, user: User, request: Request | None = None):
     return s
 
 
-def list_sessions(db: Session, page: int = 1, limit: int = 20, user_id: int | None = None):
+def list_sessions(
+    db: Session,
+    page: int = 1,
+    limit: int = 20,
+    user_id: int | None = None,
+    status: str = "",
+):
     query = db.query(UserSession).options(joinedload(UserSession.user))
     if user_id:
         query = query.filter(UserSession.user_id == user_id)
+    if status:
+        query = query.filter(UserSession.status == status)
     query = query.order_by(UserSession.id.desc())
     total = query.count()
     items = [serialize_session(session) for session in query.offset((page - 1) * limit).limit(limit).all()]

@@ -10,8 +10,8 @@ router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
 @router.get("")
 @router.get("/")
-def sessions(params: dict = Depends(pagination_params), user_id: int = Query(default=0), db: Session = Depends(get_db), _=Depends(require_any_permission("sessions.view"))):
-    return {"status": "success", **list_sessions(db, params["page"], params["limit"], user_id or None)}
+def sessions(params: dict = Depends(pagination_params), user_id: int = Query(default=0), status: str = Query(default=""), db: Session = Depends(get_db), _=Depends(require_any_permission("sessions.view"))):
+    return {"status": "success", **list_sessions(db, params["page"], params["limit"], user_id or None, status)}
 
 
 @router.get("/login-history")

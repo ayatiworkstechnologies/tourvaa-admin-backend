@@ -4,6 +4,7 @@ import pytest
 
 from app.routers.payments_gateway import gateways_status
 from app.schemas.payments import PaymentCreate, PaymentUpdate
+from app.services.payments import serialize_payment
 from pydantic import ValidationError
 
 
@@ -61,3 +62,33 @@ def test_payment_date_input_matches_legacy_database_limit():
         booking_id=1, customer_id=1, total_amount=1,
         payment_date="2026-10-22T18:20:24Z",
     ).payment_date == "2026-10-22T18:20:24Z"
+
+
+def test_payment_serializer_recovers_booking_customer_and_identifies_agent_booking():
+    customer = SimpleNamespace(id=7, full_name="Recovered customer", email="customer@example.test")
+    agent = SimpleNamespace(id=8, agent_name="Travel Agent")
+    booking = SimpleNamespace(
+        booking_code="TVAC-7", currency="USD", customer_id=7, customer=customer,
+        booking_source="customer", agent_id=None, agent=None,
+    )
+    payment = SimpleNamespace(
+        id=1, payment_code="1", booking_id=1, booking=booking, customer_id=None,
+        customer=None, payment_method="card", payment_type="full", gateway="stripe",
+        gateway_payment_id=None, gateway_order_id=None, idempotency_key=None,
+        total_amount=10, authorized_amount=0, captured_amount=0, paid_amount=0,
+        pending_amount=10, gst_amount=0, surcharge_amount=0, refunded_amount=0,
+        payment_status="pending", transaction_id=None, payment_date=None, notes=None,
+        failure_reason=None, created_at=None, updated_at=None,
+    )
+    result = serialize_payment(payment)
+    assert result["customer_name"] == "Recovered customer"
+    assert result["customer_id"] == 7
+
+    booking.booking_source = "agent"
+    booking.customer_id = None
+    booking.customer = None
+    booking.agent_id = agent.id
+    booking.agent = agent
+    result = serialize_payment(payment)
+    assert result["agent_name"] == "Travel Agent"
+    assert result["customer_id"] is None
