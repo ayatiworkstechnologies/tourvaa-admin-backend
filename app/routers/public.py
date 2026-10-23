@@ -1115,21 +1115,41 @@ def public_destination_guide(slug: str, db: Session = Depends(get_db)):
 
 
 @router.get("/cities")
-def public_cities(db: Session = Depends(get_db), country: str = Query(default="")):
-    q = db.query(City).filter(City.status == "active")
+def public_cities(
+    db: Session = Depends(get_db),
+    country: str = Query(default=""),
+    limit: int | None = Query(default=None, ge=1, le=1000),
+):
+    """Return active cities, ranked by published-tour count.
+
+    Public location selectors may still request the complete active set.  Pages
+    that only need a discovery directory can pass ``limit`` so the endpoint
+    does not serialize the full geographic catalogue (which can contain tens
+    of thousands of cities).
+    """
+    tour_counts = (
+        db.query(
+            Tour.city_id.label("city_id"),
+            func.count(Tour.id).label("tour_count"),
+        )
+        .filter(Tour.status == "published", Tour.city_id.isnot(None))
+        .group_by(Tour.city_id)
+        .subquery()
+    )
+    tour_count = func.coalesce(tour_counts.c.tour_count, 0)
+    q = (
+        db.query(City, tour_count.label("tour_count"))
+        .outerjoin(tour_counts, tour_counts.c.city_id == City.id)
+        .filter(City.status == "active")
+    )
     if country:
         c = db.query(Country).filter(Country.country_name.ilike(country)).first()
         if c:
             q = q.filter(City.country_id == c.id)
-    cities = q.order_by(City.city_name.asc()).all()
-    counts = dict(
-        db.query(Tour.city_id, func.count(Tour.id))
-        .filter(Tour.status == "published")
-        .group_by(Tour.city_id)
-        .all()
-    )
-    items = [{**_city(c), "tour_count": counts.get(c.id, 0)} for c in cities]
-    items.sort(key=lambda item: (-item["tour_count"], item["city_name"]))
+    q = q.order_by(tour_count.desc(), City.city_name.asc())
+    if limit is not None:
+        q = q.limit(limit)
+    items = [{**_city(city), "tour_count": count} for city, count in q.all()]
     return {"status": "success", "items": items}
 
 
