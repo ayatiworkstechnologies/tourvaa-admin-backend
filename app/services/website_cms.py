@@ -179,7 +179,7 @@ def _s_handpicked(r: HandpickedTour, db: Session | None = None):
     tour = _tour_label(db, r.tour_id) if db else {"tour_title": "", "tour_code": ""}
     return {"id": r.id, "tour_id": r.tour_id, **tour, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
 def _s_favourite_country(r: FavouriteCountryEntry): return {"id": r.id, "country_id": r.country_id, "title": r.title, "snippet": r.snippet, "image": r.image, "href": r.href, "sort_order": r.sort_order, "is_active": r.is_active, "created_at": r.created_at}
-def _s_content_block(r: HomepageContentBlock | None, key: str): return {"key": key, "data": r.data if r else {}, "updated_at": r.updated_at if r else None}
+def _s_content_block(r: HomepageContentBlock | None, key: str): return {"key": key, "data": r.data if r else {}, "version": getattr(r, "version", 0) if r else 0, "updated_at": r.updated_at if r else None}
 def _s_country_page(r: CountryPage, country: Country | None = None):
     return {"id": r.id, "country_id": r.country_id, "country_name": country.country_name if country else None, "country_slug": country.slug if country else None, "hero_title": r.hero_title, "hero_description": r.hero_description, "hero_image": r.hero_image, "showcase_title": r.showcase_title, "showcase_description": r.showcase_description, "showcase_image": r.showcase_image, "seo_title": r.seo_title, "seo_description": r.seo_description, "is_active": r.is_active, "created_at": r.created_at, "updated_at": r.updated_at}
 
@@ -686,9 +686,18 @@ def upsert_content_block(db, key: str, data: ContentBlockPayload):
             )
     obj = db.query(HomepageContentBlock).filter(HomepageContentBlock.key == key).first()
     if obj:
+        current_version = getattr(obj, "version", 1)
+        if data.expected_version is not None and data.expected_version != current_version:
+            raise HTTPException(
+                status_code=409,
+                detail="This CMS section was updated by another editor. Refresh it before saving again.",
+            )
         obj.data = data.data
+        obj.version = current_version + 1
     else:
-        obj = HomepageContentBlock(key=key, data=data.data)
+        if data.expected_version not in (None, 0):
+            raise HTTPException(status_code=409, detail="This CMS section already exists. Refresh it before saving.")
+        obj = HomepageContentBlock(key=key, data=data.data, version=1)
         db.add(obj)
     db.commit()
     db.refresh(obj)

@@ -474,6 +474,109 @@ def notify_agent_rejected(db: Session, *, agent_id: int, agent_name: str, reject
     db.flush()
 
 
+def notify_agent_commission_requested(
+    db: Session,
+    *,
+    agent_id: int,
+    agent_name: str,
+    request_type: str,
+    request_value: float | int,
+    event_version: str,
+) -> None:
+    """Notify operations that an agent has requested a commission change."""
+    from app.config import settings
+
+    request_label = f"{request_value}{'%' if request_type == 'percentage' else ''} {request_type}"
+    admin_url = f"{settings.FRONTEND_URL.rstrip('/')}/admin/agents/{agent_id}"
+    title = "Agent commission change requested"
+    message = f"Agent '{agent_name}' requested a {request_label} commission change."
+    notify_admins(
+        db,
+        notification_type="agent_commission_requested",
+        title=title,
+        message=message,
+        entity_type="agent",
+        entity_id=agent_id,
+        metadata={"action_url": admin_url, "action_label": "Review request"},
+        event_key="agent_commission_requested",
+        event_version=event_version,
+    )
+    email_admins(
+        db,
+        key="agent_commission_requested",
+        values={
+            "agent_name": agent_name,
+            "request_type": request_type,
+            "request_value": request_value,
+            "admin_url": admin_url,
+            "login_url": admin_url,
+        },
+        fallback_subject=f"Commission change request - {agent_name}",
+        fallback_html=(
+            f"<p>Agent <strong>{agent_name}</strong> requested a {request_label} commission change.</p>"
+            f"<p><a href=\"{admin_url}\">Review the request</a></p>"
+        ),
+        entity_type="agent",
+        entity_id=agent_id,
+        event_version=event_version,
+    )
+    db.flush()
+
+
+def notify_agent_commission_decision(
+    db: Session,
+    *,
+    agent_id: int,
+    agent_name: str,
+    user_id: int | None,
+    approved: bool,
+    request_type: str,
+    request_value: float | int,
+    event_version: str,
+) -> None:
+    """Tell the requesting agent the outcome in-app and by durable email."""
+    if not user_id:
+        return
+    from app.config import settings
+
+    decision = "approved" if approved else "rejected"
+    request_label = f"{request_value}{'%' if request_type == 'percentage' else ''} {request_type}"
+    portal_url = f"{settings.FRONTEND_URL.rstrip('/')}/agent/profile?tab=commission"
+    enqueue_notification(
+        db,
+        user_id=user_id,
+        notification_type=f"agent_commission_{decision}",
+        title=f"Commission change request {decision}",
+        message=f"Your requested {request_label} commission change was {decision}.",
+        entity_type="agent",
+        entity_id=agent_id,
+        event_key=f"agent_commission_{decision}",
+        event_version=event_version,
+    )
+    send_templated_email(
+        db,
+        _user_email(db, user_id),
+        f"agent_commission_{decision}",
+        {
+            "agent_name": agent_name,
+            "request_type": request_type,
+            "request_value": request_value,
+            "decision": decision,
+            "login_url": portal_url,
+        },
+        fallback_subject=f"Your commission change request was {decision}",
+        fallback_html=(
+            f"<p>Hi {agent_name},</p><p>Your requested {request_label} commission change was {decision}.</p>"
+            f"<p><a href=\"{portal_url}\">View your commission agreement</a></p>"
+        ),
+        entity_type="agent",
+        entity_id=agent_id,
+        recipient_type="agent",
+        event_version=event_version,
+    )
+    db.flush()
+
+
 def notify_affiliate_approved(db: Session, *, affiliate_id: int, affiliate_name: str, user_id: int | None = None, background_tasks: "BackgroundTasks | None" = None):
     notify_admins(db, notification_type="affiliate_approved", title="Affiliate Approved", message=f"Affiliate '{affiliate_name}' has been approved.", entity_type="affiliate", entity_id=affiliate_id)
     if user_id:

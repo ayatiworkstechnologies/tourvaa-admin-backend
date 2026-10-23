@@ -13,6 +13,7 @@ class AgentCreate(BaseModel):
     user_id: int | None = None
     country_id: int | None = None
     city_id: int | None = None
+    currency: str | None = Field(default=None, max_length=10)
     years_in_operation: int = Field(default=0, ge=0)
     status: str = Field(default="inactive", max_length=20)
     approval_status: str = Field(default="pending", max_length=30)
@@ -21,6 +22,11 @@ class AgentCreate(BaseModel):
     @classmethod
     def trim_text(cls, value: str):
         return value.strip()
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None):
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator("status")
     @classmethod
@@ -91,6 +97,11 @@ class AgentBusinessInfoUpdate(BaseModel):
     website_url: str | None = Field(default=None, max_length=255)
     business_registration_number: str | None = Field(default=None, max_length=100)
 
+    @field_validator("business_email", mode="before")
+    @classmethod
+    def blank_business_email_is_none(cls, value: str | None):
+        return None if isinstance(value, str) and not value.strip() else value
+
     @field_validator("certificate_of_incorporation", "target_market", "destinations_sold", "iata_registration_number", "gst_tax_number", "trading_name", "business_email", "website_url", "business_registration_number")
     @classmethod
     def trim_optional_text(cls, value: str | None):
@@ -109,6 +120,7 @@ class AgentInvoicingUpdate(BaseModel):
     swift_code: str | None = Field(default=None, max_length=50)
     iban: str | None = Field(default=None, max_length=100)
     country_id: int | None = None
+    bank_country_id: int | None = None
     tax_number: str | None = Field(default=None, max_length=100)
     billing_address: str | None = Field(default=None, max_length=500)
     billing_city: str | None = Field(default=None, max_length=100)
@@ -131,6 +143,7 @@ class AgentUpdate(BaseModel):
     agent_type: str | None = Field(default=None, max_length=75)
     country_id: int | None = None
     city_id: int | None = None
+    currency: str | None = Field(default=None, max_length=10)
     years_in_operation: int | None = Field(default=None, ge=0)
     status: str | None = Field(default=None, max_length=20)
     admin_comments: str | None = Field(default=None, max_length=5000)
@@ -142,6 +155,11 @@ class AgentUpdate(BaseModel):
     @classmethod
     def trim_optional_text(cls, value: str | None):
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None):
+        return value.strip().upper() if isinstance(value, str) else value
 
     @field_validator("status")
     @classmethod

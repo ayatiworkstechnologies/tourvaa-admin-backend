@@ -1,4 +1,5 @@
 from datetime import datetime
+from math import isfinite
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -81,7 +82,41 @@ class CountryPagePayload(BaseModel):
 
 
 class ContentBlockPayload(BaseModel):
-    data: Dict[str, Any] = {}
+    # Content blocks are intentionally flexible, but they must remain bounded
+    # JSON documents.  The individual editor owns its field-level UX rules.
+    data: Dict[str, Any] = Field(default_factory=dict, max_length=100)
+    expected_version: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("data")
+    @classmethod
+    def validate_json_document(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        def visit(item: Any, depth: int = 0) -> None:
+            if depth > 8:
+                raise ValueError("CMS content cannot be nested more than 8 levels")
+            if item is None or isinstance(item, (str, bool, int)):
+                return
+            if isinstance(item, float):
+                if not isfinite(item):
+                    raise ValueError("CMS content cannot contain non-finite numbers")
+                return
+            if isinstance(item, list):
+                if len(item) > 100:
+                    raise ValueError("CMS content lists accept at most 100 items")
+                for child in item:
+                    visit(child, depth + 1)
+                return
+            if isinstance(item, dict):
+                if len(item) > 100:
+                    raise ValueError("CMS content objects accept at most 100 fields")
+                if any(not isinstance(key, str) for key in item):
+                    raise ValueError("CMS content object keys must be strings")
+                for child in item.values():
+                    visit(child, depth + 1)
+                return
+            raise ValueError("CMS content must contain JSON-compatible values only")
+
+        visit(value)
+        return value
 
 
 class BlogFaqPayload(BaseModel):

@@ -64,6 +64,15 @@ def _mask_bank_identifier(value: str | None) -> str:
     return f"{'*' * max(0, len(value) - 4)}{value[-4:]}" if value else ""
 
 
+def _derive_currency_for_country(db: Session, country_id: int | None) -> str | None:
+    """Best-effort default for a new/relocated agent's operating currency."""
+    if not country_id:
+        return None
+    from app.models.cms import Country
+    country = db.query(Country).filter(Country.id == country_id).first()
+    return country.currency_code or None if country else None
+
+
 def serialize_agent(item: Agent, *, mask_bank_details: bool = False):
     data = serialize_common_review(item, "agent_name", "agent_code")
     # Company logo, address and initial sign-up contact live on the linked
@@ -71,6 +80,7 @@ def serialize_agent(item: Agent, *, mask_bank_details: bool = False):
     account = item.user
     data.update({
         "agent_type": item.agent_type,
+        "currency": item.currency,
         "business_logo": account.profile_image if account else "",
         "business_address": account.address if account else "",
         "registration_contact": {
@@ -118,6 +128,7 @@ def serialize_agent(item: Agent, *, mask_bank_details: bool = False):
             "swift_code": _mask_bank_identifier(item.invoicing.swift_code) if mask_bank_details else item.invoicing.swift_code,
             "iban": _mask_bank_identifier(item.invoicing.iban) if mask_bank_details else item.invoicing.iban,
             "country_id": item.invoicing.country_id,
+            "bank_country_id": item.invoicing.bank_country_id,
             "bank_details_locked": any(getattr(item.invoicing, field, None) for field in ("preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban")),
             "bank_edit_request_pending": bool(item.invoicing.bank_edit_requested_at),
             "bank_edit_unlocked": bool(item.invoicing.bank_edit_unlocked_at),
@@ -331,6 +342,8 @@ def bulk_reject_agents(db: Session, agent_ids: list[int], data: RejectRequest, a
 
 def create_agent(db: Session, data: AgentCreate, actor: User, request: Request | None = None):
     agent_data = data.model_dump(exclude={"email", "password"})
+    if not agent_data.get("currency"):
+        agent_data["currency"] = _derive_currency_for_country(db, agent_data.get("country_id"))
     if data.user_id is not None:
         linked_user = db.query(User).filter(User.id == data.user_id).first()
         if not linked_user or linked_user.user_type != "AGENT":
@@ -380,9 +393,28 @@ def update_agent(db: Session, agent_id: int, data: AgentUpdate, actor: User, req
     business_data = update_data.pop("business_info", None)
     invoicing_data = update_data.pop("invoicing", None)
 
+    # Keep the historic business-info field and the canonical agent field in
+    # sync. Older admin detail views read the former, while the agent profile
+    # writes the latter. One source of truth prevents a saved value appearing
+    # as a dash in the admin portal.
+    if "years_in_operation" in update_data:
+        business_data = {
+            **(business_data or {}),
+            "years_in_business": update_data["years_in_operation"],
+        }
+    elif business_data and "years_in_business" in business_data:
+        update_data["years_in_operation"] = business_data["years_in_business"]
+
+    # Like suppliers, a country change gets that country's currency unless an
+    # administrator deliberately included a currency in the same update.
+    if "country_id" in update_data and "currency" not in update_data:
+        derived = _derive_currency_for_country(db, update_data["country_id"])
+        if derived:
+            update_data["currency"] = derived
+
     # country_id is the invoicing/billing country and must remain editable
     # after payment credentials are locked.
-    bank_fields = {"preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban"}
+    bank_fields = {"preferred_payment_method", "account_name", "account_number", "bank_name", "bank_branch", "swift_code", "iban", "bank_country_id"}
     existing_invoicing = getattr(item, "invoicing", None)
     if actor.id == item.user_id and existing_invoicing and invoicing_data:
         bank_is_locked = any(getattr(existing_invoicing, key, None) for key in bank_fields)
@@ -514,6 +546,10 @@ def partial_approve_agent(db: Session, agent_id: int, data: PartialApprovalReque
 def update_agent_discount(db: Session, agent_id: int, data: AgentDiscountRequest, actor: User, request: Request | None = None):
     item = get_agent(db, agent_id)
     old = serialize_agent(item)
+    pending_request = item.commission_request_status == "pending"
+    requested_type = item.commission_request_type or data.discount_type
+    requested_value = item.commission_request_value if item.commission_request_value is not None else data.discount_value
+    request_version = item.commission_requested_at.isoformat() if item.commission_requested_at else str(item.id)
     if data.discount_type == "percentage":
         from app.services.settings import get_agent_commission_max
         from decimal import Decimal
@@ -522,9 +558,20 @@ def update_agent_discount(db: Session, agent_id: int, data: AgentDiscountRequest
             raise HTTPException(status_code=400, detail=f"Agent commission cannot exceed the platform maximum of {maximum}%")
     item.discount_type = data.discount_type
     item.discount_value = data.discount_value
-    if item.commission_request_status == "pending":
+    if pending_request:
         item.commission_request_status = "approved"
         item.commission_reviewed_at = utcnow()
+        from app.utils.notification_triggers import notify_agent_commission_decision
+        notify_agent_commission_decision(
+            db,
+            agent_id=item.id,
+            agent_name=item.agent_name,
+            user_id=item.user_id,
+            approved=True,
+            request_type=requested_type,
+            request_value=requested_value,
+            event_version=request_version,
+        )
     log_audit(db, actor=actor, action="update_agent_discount", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)
@@ -536,8 +583,22 @@ def reject_agent_commission_request(db: Session, agent_id: int, actor: User, req
     if item.commission_request_status != "pending":
         raise HTTPException(status_code=409, detail="No pending commission request to reject")
     old = serialize_agent(item)
+    requested_type = item.commission_request_type or "percentage"
+    requested_value = item.commission_request_value if item.commission_request_value is not None else 0
+    request_version = item.commission_requested_at.isoformat() if item.commission_requested_at else str(item.id)
     item.commission_request_status = "rejected"
     item.commission_reviewed_at = utcnow()
+    from app.utils.notification_triggers import notify_agent_commission_decision
+    notify_agent_commission_decision(
+        db,
+        agent_id=item.id,
+        agent_name=item.agent_name,
+        user_id=item.user_id,
+        approved=False,
+        request_type=requested_type,
+        request_value=requested_value,
+        event_version=request_version,
+    )
     log_audit(db, actor=actor, action="reject_agent_commission_request", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)
@@ -556,6 +617,15 @@ def request_agent_commission(db: Session, user: User, data: AgentDiscountRequest
     item.commission_request_status = "pending"
     item.commission_requested_at = utcnow()
     item.commission_reviewed_at = None
+    from app.utils.notification_triggers import notify_agent_commission_requested
+    notify_agent_commission_requested(
+        db,
+        agent_id=item.id,
+        agent_name=item.agent_name,
+        request_type=item.commission_request_type,
+        request_value=item.commission_request_value,
+        event_version=item.commission_requested_at.isoformat(),
+    )
     log_audit(db, actor=user, action="request_agent_commission", entity_type="agent", entity_id=item.id, old_values=old, new_values=serialize_agent(item), request=request)
     db.commit()
     db.refresh(item)

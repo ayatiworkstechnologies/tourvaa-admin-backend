@@ -38,9 +38,10 @@ def test_partner_legal_blocks_can_be_read_and_saved(key, monkeypatch):
     class FakeBlock:
         key = "key"
 
-        def __init__(self, key, data):
+        def __init__(self, key, data, version=1):
             self.key = key
             self.data = data
+            self.version = 1
             self.updated_at = None
 
     monkeypatch.setattr(cms, "HomepageContentBlock", FakeBlock)
@@ -65,3 +66,37 @@ def test_travel_advice_categories_reject_more_than_eight_cards():
 
     assert error.value.status_code == 422
     assert error.value.detail == "items accepts at most 8 cards"
+
+
+def test_content_block_rejects_outdated_editor_save(monkeypatch):
+    class FakeBlock:
+        key = "partner_terms_hero"
+
+        def __init__(self, key, data, version=1):
+            self.key = key
+            self.data = data
+            self.version = version
+            self.updated_at = None
+
+    monkeypatch.setattr(cms, "HomepageContentBlock", FakeBlock)
+    db = FakeSession()
+    db.row = FakeBlock("partner_terms_hero", {"title": "Current"}, version=3)
+
+    with pytest.raises(HTTPException) as error:
+        upsert_content_block(
+            db,
+            "partner_terms_hero",
+            ContentBlockPayload(data={"title": "Outdated"}, expected_version=2),
+        )
+
+    assert error.value.status_code == 409
+    assert db.row.data == {"title": "Current"}
+
+
+def test_content_block_rejects_excessive_nesting():
+    nested = "value"
+    for _ in range(9):
+        nested = {"child": nested}
+
+    with pytest.raises(ValueError, match="nested"):
+        ContentBlockPayload(data={"root": nested})

@@ -15,6 +15,9 @@ class Agent(Base):
     agent_type = Column(String(75), default="", nullable=False)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True, index=True)
     city_id = Column(Integer, ForeignKey("cities.id"), nullable=True, index=True)
+    # The agency's accounting/settlement currency. This can differ from its
+    # country default when an administrator explicitly selects one.
+    currency = Column(String(10), nullable=True)
     years_in_operation = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="inactive", nullable=False, index=True)
     approval_status = Column(String(30), default="pending", nullable=False, index=True)
@@ -109,6 +112,7 @@ class AgentInvoicing(Base):
     swift_code = Column(String(50), default="", nullable=False)
     iban = Column(String(100), default="", nullable=False)
     country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)
+    bank_country_id = Column(Integer, ForeignKey("countries.id"), nullable=True)
     tax_number = Column(String(100), default="", nullable=False)
     billing_address = Column(Text, nullable=True)
     billing_city = Column(String(100), default="", nullable=False)

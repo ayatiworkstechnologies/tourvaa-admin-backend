@@ -252,8 +252,6 @@ def _booking_status_label(status: str | None, portal: str = "admin") -> str:
     labels = {
         "draft": "Payment Required" if booking_party else "Draft",
         "pending_payment": "Payment Required" if booking_party else "Awaiting Payment",
-        "pending_credit_approval": "Credit Approval in Progress" if booking_party else "Credit Approval Pending",
-        "bank_transfer_pending": "Bank Transfer Pending" if booking_party else "Awaiting Bank Transfer",
         "pending_supplier_assignment": "Booking Successful — Awaiting Tourvaa Confirmation" if booking_party else "Awaiting Supplier Assignment",
         "payment_authorized": "Booking Successful — Awaiting Tourvaa Confirmation" if booking_party else "Payment Authorized",
         "pending_supplier_acceptance": "Booking Successful — Awaiting Tourvaa Confirmation" if booking_party else ("Awaiting Your Decision" if portal == "supplier" else "Awaiting Supplier Acceptance"),
@@ -326,9 +324,8 @@ def _set_status(db: Session, booking: Booking, new_status: str, actor: User | No
 
 
 BOOKING_STATUS_TRANSITIONS = {
-    "draft": {"pending_payment", "pending_credit_approval", "pending_supplier_assignment", "cancelled"},
-    "pending_payment": {"pending_credit_approval", "payment_authorized", "pending_supplier_assignment", "pending_supplier_acceptance", "cancellation_requested", "cancelled", "declined"},
-    "pending_credit_approval": {"pending_payment", "payment_authorized", "pending_supplier_assignment", "cancellation_requested", "cancelled", "declined"},
+    "draft": {"pending_payment", "pending_supplier_assignment", "cancelled"},
+    "pending_payment": {"payment_authorized", "pending_supplier_assignment", "pending_supplier_acceptance", "cancellation_requested", "cancelled", "declined"},
     "pending_supplier_assignment": {"pending_payment", "payment_authorized", "pending_supplier_acceptance", "supplier_reassignment_required", "cancellation_requested", "cancelled", "declined"},
     "payment_authorized": {"pending_supplier_assignment", "pending_supplier_acceptance", "cancellation_requested", "cancelled", "declined"},
     "pending_supplier_acceptance": {"pending_supplier_assignment", "supplier_accepted", "supplier_reassignment_required", "postponed", "cancellation_requested", "cancelled", "declined"},
@@ -2018,6 +2015,12 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
         query = query.filter(Booking.created_at >= start_date)
     if end_date:
         query = query.filter(Booking.created_at <= f"{end_date} 23:59:59")
+    # This is a first-class supplier-dashboard metric. Keep it separate from
+    # the page's limited item set and from the optional status filter so a
+    # pending supplier decision can never disappear from the action count.
+    awaiting_action_count = query.filter(
+        Booking.booking_status.in_(("payment_authorized", "pending_supplier_acceptance"))
+    ).count()
     status_counts = {
         status: count
         for status, count in query.enable_eagerloads(False).with_entities(Booking.booking_status, func.count(Booking.id))
@@ -2037,7 +2040,7 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
     query = query.order_by(Booking.id.asc() if sort_by == "oldest" else Booking.id.desc())
     total = query.count()
     items = [serialize_booking_for_actor(db, b, actor, detail=False) for b in query.offset((page - 1) * limit).limit(limit).all()]
-    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit)), "status_counts": status_counts}
+    return {"items": items, "total": total, "page": page, "limit": limit, "total_pages": max(1, ceil(total / limit)), "status_counts": status_counts, "awaiting_action_count": awaiting_action_count}
 
 
 def get_booking_detail(db: Session, booking_id: int, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -2319,14 +2322,9 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     customer_selling_price = money(final + agent_markup) if data.booking_source == "agent" else final
     payment_status = "pending"
     booking_status = "pending_payment"
-    if data.booking_source == "agent" and data.agent_payment_method == "credit":
-        payment_status = "credit_approval_pending"
-        booking_status = "pending_credit_approval"
-    elif data.booking_source == "agent" and data.agent_payment_method == "pay_later":
-        payment_status = "credit_approval_pending"
-        booking_status = "pending_credit_approval"
-    elif data.booking_source == "agent" and data.agent_payment_method == "bank_transfer":
-        payment_status = "bank_transfer_pending"
+    # A reservation may be paid later, but that describes its payment method,
+    # not its payment outcome. Keep the status in the same canonical set used
+    # by customer, agent, supplier, and admin payment filters.
     booking = Booking(
         customer_id=data.customer_id, tour_id=data.tour_id, tour_calendar_id=data.tour_calendar_id, supplier_id=supplier_id, agent_id=data.agent_id, affiliate_id=resolved_affiliate_id, affiliate_ref_code=resolved_affiliate_ref_code, affiliate_attribution_id=resolved_attribution.id if resolved_attribution else None, created_by=actor.id if actor else None, booked_by_user_id=actor.id if actor else None, booking_source=data.booking_source, country_id=data.country_id or (tour.country_id if tour else None), city_id=data.city_id or (tour.city_id if tour else None),
         tour_name=(data.tour_name or (tour.title if tour else "")).strip(), tour_date=(data.tour_date or (calendar.tour_date.date().isoformat() if calendar and calendar.tour_date else "")).strip(), country=(data.country or (country.country_name if country else "")).strip(), supplier_name=(data.supplier_name or (supplier.supplier_name if supplier else "")).strip(), tour_start_date=_parse_dt(data.tour_start_date) or (calendar.tour_date if calendar else None), tour_end_date=_parse_dt(data.tour_end_date),
@@ -2424,7 +2422,7 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     db.commit()
     db.refresh(booking)
 
-    if booking.booking_source == "agent" and payment_status in {"credit_approval_pending", "bank_transfer_pending"}:
+    if booking.booking_source == "agent" and booking.agent_payment_method in {"credit", "bank_transfer", "pay_later"}:
         # Agent "Reserve Now" -- no deposit taken, so an invoice for the full
         # outstanding amount is generated and emailed immediately rather than
         # waiting on the on-demand Download Invoice action. The agent who
@@ -2908,8 +2906,8 @@ OFFLINE_PAYMENT_HOLD_DAYS = 7
 def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> list[int]:
     """Release the calendar hold on bookings that never got paid.
 
-    A booking that reaches pending_payment (or pending_credit_approval /
-    pending_supplier_assignment, all of which sit "before payment" per
+    A booking that reaches pending_payment (or pending_supplier_assignment,
+    both of which sit "before payment" per
     BOOKING_STATUS_TRANSITIONS) and is then abandoned would otherwise hold
     its TourCalendar seats forever - nothing else in the codebase ever
     revisits an unpaid booking. This is meant to be run periodically (see
@@ -2919,18 +2917,17 @@ def expire_stale_pending_bookings(db: Session, older_than_minutes: int = 60) -> 
     Returns the list of booking ids that were expired.
     """
     cutoff = utcnow() - timedelta(minutes=older_than_minutes)
-    stale_statuses = ("pending_payment", "pending_credit_approval", "pending_supplier_assignment")
-    # Agent credit / bank-transfer bookings wait on an offline step (admin
-    # credit approval, a wire landing), so the short online-payment hold would
-    # cancel them before that can happen. They get a much longer hold instead.
-    offline_payment_statuses = ("credit_approval_pending", "bank_transfer_pending")
+    stale_statuses = ("pending_payment", "pending_supplier_assignment")
+    # The reservation method controls the payment window; payment_status
+    # remains a real outcome shared by all portals.
+    offline_agent_methods = ("credit", "bank_transfer", "pay_later")
     offline_cutoff = utcnow() - timedelta(days=OFFLINE_PAYMENT_HOLD_DAYS)
     candidates = (
         db.query(Booking)
         .filter(Booking.booking_status.in_(stale_statuses))
         .filter(or_(
-            and_(Booking.payment_status.notin_(offline_payment_statuses), Booking.created_at < cutoff),
-            and_(Booking.payment_status.in_(offline_payment_statuses), Booking.created_at < offline_cutoff),
+            and_(or_(Booking.agent_payment_method.is_(None), Booking.agent_payment_method.notin_(offline_agent_methods)), Booking.created_at < cutoff),
+            and_(Booking.agent_payment_method.in_(offline_agent_methods), Booking.created_at < offline_cutoff),
         ))
         .with_for_update()
         .all()
@@ -3042,22 +3039,7 @@ def assign_supplier(db: Session, booking_id: int, data: AssignSupplierRequest, a
     log_audit(db, actor=actor, action="assign_supplier", entity_type="booking", entity_id=booking.id, old_values=old_values, new_values=serialize_booking(db, booking), request=request)
     db.commit(); db.refresh(booking)
 
-    if _has_secured_booking_funds(booking) and booking.supplier and booking.supplier.user and booking.supplier.user.email:
-        from app.utils.email_templates import supplier_booking_assigned_email
-        customer_name = booking.customer.full_name if booking.customer else "Customer"
-        portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
-        _send_booking_email(
-            db, "supplier_booking_assigned",
-            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code,
-             "tour_name": booking.tour_name, "tour_date": booking.tour_date or "",
-             "customer_name": customer_name, "adults": booking.adults_count,
-             "currency": supplier_booking_currency(booking), "total": supplier_booking_value(booking), "portal_url": portal_url,
-             "button_text": "View booking", "button_url": portal_url},
-            f"New booking assigned - {booking.booking_code}",
-            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, supplier_booking_currency(booking), money_str(supplier_booking_value(booking)), portal_url),
-            booking.supplier.user.email,
-            event="supplier_assigned", entity_id=booking.id, recipient_type="supplier",
-        )
+    if _has_secured_booking_funds(booking) and _notify_supplier_booking_assigned(db, booking, event="supplier_assigned"):
         db.commit()
 
     return serialize_booking_for_actor(db, booking, actor)
@@ -3069,36 +3051,6 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
     if not _start_supplier_decision(booking, "accepted"):
         return serialize_booking_for_actor(db, booking, actor)
     booking.supplier_acceptance_status = "accepted"
-
-    # The supplier can commit to operating an agent reservation before that
-    # agent's offline payment settles. Do not confirm the customer booking,
-    # capture funds, or send confirmation mail at this stage.
-    if booking.booking_source == "agent" and booking.payment_status in {
-        "credit_approval_pending",
-        "bank_transfer_pending",
-    }:
-        _history(
-            db,
-            booking,
-            booking.booking_status,
-            booking.booking_status,
-            actor,
-            "supplier",
-            data.reason or "Supplier accepted reserved booking",
-        )
-        from app.services.notifications import notify_admins
-
-        notify_admins(
-            db,
-            notification_type="supplier_accepted_booking",
-            title="Supplier accepted booking",
-            message=f"Supplier accepted {booking.booking_code}",
-            entity_type="booking",
-            entity_id=booking.id,
-        )
-        log_audit(db, actor=actor, action="supplier_accept_booking", entity_type="booking", entity_id=booking.id, request=request)
-        db.commit(); db.refresh(booking)
-        return serialize_booking_for_actor(db, booking, actor)
 
     # Supplier acceptance is an operational milestone.  Only Tourvaa can
     # issue the customer-facing final confirmation.
@@ -3181,6 +3133,16 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
         if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
             enqueue_notification(db, user_id=booking.customer.user_id, notification_type="supplier_accepted", title="Supplier accepted your booking", message=f"Booking {booking.booking_code} is awaiting Tourvaa confirmation", entity_type="booking", entity_id=booking.id)
+        if booking.agent and booking.agent.user_id:
+            enqueue_notification(
+                db,
+                user_id=booking.agent.user_id,
+                notification_type="supplier_accepted",
+                title="Supplier accepted booking",
+                message=f"Booking {booking.booking_code} was accepted and is awaiting Tourvaa confirmation",
+                entity_type="booking",
+                entity_id=booking.id,
+            )
 
         recipient = _booking_email_recipient(booking)
         if recipient:
@@ -3479,6 +3441,54 @@ def supplier_cancel_booking(db: Session, booking_id: int, reason: str, actor: Us
     return serialize_booking_for_actor(db, booking, actor)
 
 
+def _notify_supplier_booking_assigned(
+    db: Session,
+    booking: Booking,
+    *,
+    event: str,
+) -> bool:
+    """Create the supplier's actionable booking notification and email.
+
+    Automatic tour assignment and later Admin assignment must deliver the
+    same supplier-facing result. Keeping it here prevents an email-only
+    manual-assignment path from leaving the supplier bell empty.
+    """
+    supplier = booking.supplier
+    if not supplier or not supplier.user_id:
+        return False
+
+    from app.services.notifications import enqueue_notification
+    from app.utils.email_templates import supplier_booking_assigned_email
+
+    customer_name = booking.customer.full_name if booking.customer else "Customer"
+    portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
+    event_version = f"{event}:{supplier.id}"
+    enqueue_notification(
+        db,
+        user_id=supplier.user_id,
+        notification_type="supplier_booking_assigned",
+        title="New booking assigned",
+        message=f"Booking {booking.booking_code} is awaiting your acceptance",
+        entity_type="booking",
+        entity_id=booking.id,
+        event_key="supplier_booking_assigned",
+        event_version=event_version,
+    )
+    if supplier.user and supplier.user.email:
+        _send_booking_email(
+            db, "supplier_booking_assigned",
+            {"name": supplier.supplier_name, "supplier_name": supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": supplier_booking_currency(booking), "total": supplier_booking_value(booking), "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
+            f"New booking assigned - {booking.booking_code}",
+            supplier_booking_assigned_email(supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, supplier_booking_currency(booking), money_str(supplier_booking_value(booking)), portal_url),
+            supplier.user.email,
+            event=event,
+            entity_id=booking.id,
+            recipient_type="supplier",
+            event_version=event_version,
+        )
+    return True
+
+
 def notify_booking_received_after_payment(db: Session, booking: Booking) -> None:
     """Notify parties when a booking has secured funds and needs review.
 
@@ -3489,8 +3499,8 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
     """
     if booking.payment_status not in {"authorized", "partially_paid", "paid"}:
         return
-    from app.services.notifications import enqueue_notification, notify_admins
-    from app.utils.email_templates import new_booking_admin_email, supplier_booking_assigned_email
+    from app.services.notifications import notify_admins
+    from app.utils.email_templates import new_booking_admin_email
     from app.services.notification_delivery import dispatch_admin_lifecycle_emails
 
     customer_name = booking.customer.full_name if booking.customer else "Customer"
@@ -3539,19 +3549,7 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
         "Your booking has been received and is pending supplier review.",
         event="booking_created",
     )
-    if booking.supplier and booking.supplier.user and booking.supplier.user.email:
-        portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
-        enqueue_notification(db, user_id=booking.supplier.user_id, notification_type="supplier_booking_assigned", title="New booking assigned", message=f"Booking {booking.booking_code} is awaiting your acceptance", entity_type="booking", entity_id=booking.id)
-        _send_booking_email(
-            db, "supplier_booking_assigned",
-            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": supplier_booking_currency(booking), "total": supplier_booking_value(booking), "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
-            f"New booking assigned - {booking.booking_code}",
-            supplier_booking_assigned_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, supplier_booking_currency(booking), money_str(supplier_booking_value(booking)), portal_url),
-            booking.supplier.user.email,
-            event="booking_created",
-            entity_id=booking.id,
-            recipient_type="supplier",
-        )
+    _notify_supplier_booking_assigned(db, booking, event="booking_created")
 
 
 def update_booking_travel_date(db: Session, booking_id: int, data: BookingTravelDateUpdate, actor: User, request: Request | None = None) -> dict:

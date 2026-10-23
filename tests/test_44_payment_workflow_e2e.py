@@ -89,14 +89,14 @@ def test_stripe_create_session_returns_real_checkout_url(headers, first_tour_id)
 
 
 @skip_if_readonly()
-def test_agent_reserve_now_generates_invoice_without_payment(headers, first_tour_id):
+def test_agent_reserve_now_generates_invoice_with_pending_payment_status(headers, first_tour_id):
     agents = requests.get(f"{BASE_URL}/agents", headers=headers, params={"limit": 1}, timeout=10).json().get("items", [])
     if not agents:
         return
     booking = _booking_or_skip(headers, first_tour_id, "full", extra={
         "booking_source": "agent", "agent_id": agents[0]["id"], "agent_payment_method": "pay_later",
     })
-    assert booking["payment_status"] == "credit_approval_pending"
+    assert booking["payment_status"] == "pending"
     invoices = requests.get(f"{BASE_URL}/invoices", headers=headers, params={"booking_id": booking["id"]}, timeout=10).json().get("items", [])
     assert len(invoices) > 0
 

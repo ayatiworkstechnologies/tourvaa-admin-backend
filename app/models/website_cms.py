@@ -101,6 +101,9 @@ class HomepageContentBlock(Base):
     id = Column(Integer, primary_key=True, index=True)
     key = Column(String(60), unique=True, nullable=False, index=True)
     data = Column(JSON, nullable=False, default=dict)
+    # Incremented for every write so editors can reject an outdated save
+    # instead of silently replacing another editor's changes.
+    version = Column(Integer, nullable=False, default=1, server_default="1")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
