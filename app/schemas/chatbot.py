@@ -18,6 +18,9 @@ class ChatMessageResponse(BaseModel):
 
 class ChatFeedbackCreate(BaseModel):
     message_id: int
+    # A message id alone is enumerable. Requiring the opaque chat-session key
+    # makes sure a visitor can rate only replies in their own conversation.
+    session_key: str = Field(min_length=32, max_length=64)
     rating: int
     comment: Optional[str] = Field(default=None, max_length=1000)
 
@@ -39,12 +42,20 @@ class ChatFeedbackResponse(BaseModel):
 
 
 class FAQBase(BaseModel):
-    question: str
-    answer: str
+    question: str = Field(min_length=1, max_length=500)
+    answer: str = Field(min_length=1)
     category: str = "general"
     sort_order: int = 0
     is_active: bool = True
     is_public: bool = True
+
+    @field_validator("question", "answer")
+    @classmethod
+    def text_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
 
 
 class FAQCreate(FAQBase):
@@ -58,6 +69,16 @@ class FAQUpdate(BaseModel):
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
     is_public: Optional[bool] = None
+
+    @field_validator("question", "answer")
+    @classmethod
+    def updated_text_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
 
 
 class FAQResponse(FAQBase):

@@ -83,7 +83,9 @@ def chatbot_health(db: Session = Depends(get_db)):
 @router.post("/feedback", response_model=ChatFeedbackResponse)
 def submit_chat_feedback(payload: ChatFeedbackCreate, request: Request, db: Session = Depends(get_db)):
     check_rate_limit(request, "chatbot-feedback", max_calls=30, window_seconds=60)
-    feedback = service.submit_feedback(db, payload.message_id, payload.rating, payload.comment)
+    feedback = service.submit_feedback(
+        db, payload.message_id, payload.session_key, payload.rating, payload.comment,
+    )
     if not feedback:
         raise HTTPException(status_code=404, detail="Message not found")
     return feedback
@@ -128,7 +130,10 @@ def admin_create_faq(
     db: Session = Depends(get_db),
     _: object = Depends(require_any_permission("chatbot.create", "create-chatbot")),
 ):
-    return service.create_faq(db, payload)
+    try:
+        return service.create_faq(db, payload)
+    except service.DuplicateFAQError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.put("/admin/faqs/{faq_id}", response_model=FAQResponse)
@@ -138,7 +143,10 @@ def admin_update_faq(
     db: Session = Depends(get_db),
     _: object = Depends(require_any_permission("chatbot.edit", "update-chatbot")),
 ):
-    faq = service.update_faq(db, faq_id, payload)
+    try:
+        faq = service.update_faq(db, faq_id, payload)
+    except service.DuplicateFAQError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not faq:
         raise HTTPException(status_code=404, detail="FAQ not found")
     return faq

@@ -46,9 +46,6 @@ _STOPWORDS = frozenset(
     "please tell about need want know get give show any some more much many".split()
 )
 
-_TOUR_PAGE_URL_RE = re.compile(r"/tours/(\d+)")
-
-
 def _stem(word: str) -> str:
     if len(word) > 4:
         for suffix, repl in (("ies", "y"), ("ing", ""), ("ed", ""), ("es", ""), ("s", "")):
@@ -157,7 +154,17 @@ def _build_index(db: Session) -> _Index:
 
     chunks: list[Chunk] = []
 
-    for faq in db.query(ChatFAQ).filter(ChatFAQ.is_active == True).all():  # noqa: E712
+    seen_faq_questions: set[str] = set()
+    for faq in (  # noqa: E712
+        db.query(ChatFAQ)
+        .filter(ChatFAQ.is_active == True)
+        .order_by(ChatFAQ.sort_order, ChatFAQ.id.asc())
+        .all()
+    ):
+        faq_key = " ".join((faq.question or "").lower().split())
+        if not faq_key or faq_key in seen_faq_questions:
+            continue
+        seen_faq_questions.add(faq_key)
         chunks.append(_make_chunk("faq", faq.id, faq.question, f"{faq.question} {faq.answer} {faq.category or ''}", answer=faq.answer))
 
     for art in db.query(HelpCentreArticle).filter(HelpCentreArticle.is_active == True).all():  # noqa: E712
@@ -176,8 +183,14 @@ def _build_index(db: Session) -> _Index:
             f"Starting from {tour.currency} {tour.price_start_per_person:,.0f} per person." if tour.price_start_per_person else "",
         ]))
         body = " ".join(filter(None, [_plain(tour.subtitle), _plain(tour.short_description), _plain(tour.long_description), facts]))
+        country = getattr(tour, "country", None)
+        tour_url = (
+            f"/tours/{country.slug}/{tour.slug}"
+            if country and country.slug and tour.slug
+            else f"/tours/{tour.id}"
+        )
         for piece in _split_words(body) or [tour.title]:
-            chunks.append(_make_chunk("tour", tour.id, tour.title, piece, f"/tours/{tour.id}"))
+            chunks.append(_make_chunk("tour", tour.id, tour.title, piece, tour_url))
 
     logger.info("Chatbot RAG index built: %d chunks", len(chunks))
     return _Index(chunks)
@@ -259,13 +272,8 @@ def _best_sentences(text: str, query_terms: set[str], limit: int = 2) -> str:
     return " ".join(sentences[i] for i in chosen)
 
 
-def answer(db: Session, query: str, page_url: str | None = None) -> dict | None:
+def answer(db: Session, query: str, page_tour_id: int | None = None) -> dict | None:
     """Return {"text": str, "tour_ids": [int]} or None when nothing relevant was found."""
-    page_tour_id = None
-    if page_url:
-        m = _TOUR_PAGE_URL_RE.search(page_url)
-        page_tour_id = int(m.group(1)) if m else None
-
     hits = retrieve(db, query, page_tour_id)
     if not hits:
         return None

@@ -1,6 +1,9 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from app.services import bookings, messaging
 from app.services.messaging import (
     _booking_message_email,
@@ -14,20 +17,44 @@ from app.services.messaging import (
 )
 
 
-def test_booking_message_email_uses_authenticated_chat_without_message_body(monkeypatch):
+def test_booking_message_email_offers_a_secure_reply_without_booking_data(monkeypatch):
     monkeypatch.setattr(messaging.settings, "FRONTEND_URL", "https://tourvaa.example/")
 
     customer_url = _booking_message_url(booking_id=43, recipient_role="customer")
     admin_url = _booking_message_url(booking_id=43, recipient_role="admin")
-    html = _booking_message_email(sender_label="Tourvaa Admin", message_url=customer_url)
+    html = _booking_message_email(
+        sender_label="Tourvaa Admin",
+        message_url=customer_url,
+        body="Please review the updated departure time.",
+    )
 
     assert customer_url == "https://tourvaa.example/customer/bookings/43#booking-messages"
     assert admin_url == "https://tourvaa.example/admin/bookings/43?tab=communications#booking-messages"
-    assert "Open booking chat" in html
+    assert "View message &amp; reply" in html
     assert customer_url in html
-    assert "secure booking chat" in html
-    assert "Schedule updated" not in html
-    assert "without signing in" not in html
+    assert "Please review the updated departure time." in html
+    assert "Booking, traveller, and payment details are not included" in html
+    assert "reply securely without signing in" in html
+
+
+def test_booking_message_email_escapes_chat_content():
+    html = _booking_message_email(
+        sender_label="Tourvaa Admin",
+        message_url="https://tourvaa.example/message-reply?token=test",
+        body="<script>alert('unsafe')</script>",
+    )
+
+    assert "&lt;script&gt;alert(&#x27;unsafe&#x27;)&lt;/script&gt;" in html
+    assert "<script>" not in html
+
+
+def test_message_email_templates_support_the_signed_reply_flow():
+    from app.services.email_templates import DEFAULT_EMAIL_TEMPLATES
+
+    templates = {template["key"]: template for template in DEFAULT_EMAIL_TEMPLATES}
+    for key in ("support_message_received", "booking_message_received"):
+        assert "{{message_body}}" in templates[key]["body"]
+        assert "{{sender_name}}" in templates[key]["subject"]
 
 
 def test_support_message_email_links_to_the_correct_secure_inbox(monkeypatch):
@@ -220,15 +247,17 @@ def test_customer_or_agent_booking_message_stays_in_portal_conversation(monkeypa
         pass
 
     monkeypatch.setattr(messaging, "get_or_create_booking_conversation", lambda _db, _booking_id, _actor: conversation)
-    monkeypatch.setattr(messaging, "notify_admins", lambda _db, **payload: notifications.append(payload))
+    monkeypatch.setattr(messaging, "enqueue_notification", lambda _db, **payload: notifications.append(payload))
+    monkeypatch.setattr(messaging, "_email_booking_message_recipient", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(messaging.ws_manager, "notify_new_message", notify_ws)
-    monkeypatch.setattr(messaging, "BookingMessage", lambda **values: SimpleNamespace(**values, id=23, sender=None, recipient_role=None, is_deleted=False, created_at=None))
+    monkeypatch.setattr(messaging, "BookingMessage", lambda **values: SimpleNamespace(**values, id=23, sender=None, is_deleted=False, created_at=None))
     asyncio.run(messaging.send_booking_message_as_initiator(Db(), 42, SimpleNamespace(id=9), "Is the tour confirmed?"))
 
     assert len(added) == 1
     assert getattr(added[0], "conversation_id", None) == 17
     assert not any(getattr(row, "message_type", None) == "portal_message" for row in added)
-    assert notifications[0]["title"] == "New agent booking message"
+    assert notifications[0]["user_id"] == 12
+    assert added[0].recipient_role == "supplier"
 
 
 def test_supplier_booking_response_hides_agent_and_customer_admin_messages(monkeypatch):
@@ -250,8 +279,8 @@ def test_supplier_booking_response_hides_agent_and_customer_admin_messages(monke
     assert [row["id"] for row in filtered["communications"]] == [3, 4]
 
 
-def test_agent_thread_excludes_admin_reply_addressed_to_supplier():
-    """A shared booking row cannot leak an Admin-to-Supplier reply to Agent."""
+def test_direct_booking_thread_contains_both_participant_messages():
+    """Initiator and supplier see the same direct booking history."""
     def message(message_id, sender_role, recipient_role=None):
         return SimpleNamespace(
             id=message_id,
@@ -288,18 +317,14 @@ def test_agent_thread_excludes_admin_reply_addressed_to_supplier():
         ],
     )
 
-    serialized = _serialize_booking_conversation(
-        conversation,
-        with_messages=True,
-        hide_supplier_identity=True,
-        viewer_role="agent",
-    )
+    serialized = _serialize_booking_conversation(conversation, with_messages=True)
 
-    assert [row["id"] for row in serialized["messages"]] == [1, 3]
+    assert [row["id"] for row in serialized["messages"]] == [1, 2, 3, 4]
+    assert serialized["supplier_name"] == "Supplier Name"
 
 
-def test_supplier_booking_message_is_delivered_to_admin_not_booking_initiator(monkeypatch):
-    """Supplier booking chat is a private channel with Tourvaa Admin."""
+def test_supplier_booking_message_is_delivered_to_booking_initiator(monkeypatch):
+    """Supplier replies go directly to the booking initiator, not Admin."""
     conversation = SimpleNamespace(
         id=17,
         booking_id=42,
@@ -333,78 +358,19 @@ def test_supplier_booking_message_is_delivered_to_admin_not_booking_initiator(mo
         websocket_recipients.append(participant_user_id)
 
     monkeypatch.setattr(messaging, "_get_booking_conversation_for_supplier", lambda _db, _conversation_id, _user: conversation)
-    monkeypatch.setattr(messaging, "notify_admins", lambda _db, **payload: notifications.append(payload))
+    monkeypatch.setattr(messaging, "enqueue_notification", lambda _db, **payload: notifications.append(payload))
+    monkeypatch.setattr(messaging, "_email_booking_message_recipient", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(messaging.ws_manager, "notify_new_message", notify_ws)
-    monkeypatch.setattr(messaging, "BookingMessage", lambda **values: SimpleNamespace(**values, id=24, sender=None, recipient_role=None, is_deleted=False, created_at=None))
+    monkeypatch.setattr(messaging, "BookingMessage", lambda **values: SimpleNamespace(**values, id=24, sender=None, is_deleted=False, created_at=None))
 
     asyncio.run(messaging.send_booking_message_as_supplier(Db(), 17, SimpleNamespace(id=8), "Need help with this booking"))
 
-    assert notifications[0]["title"] == "New supplier booking message"
-    assert websocket_recipients == [8]
-    assert conversation.initiator_unread_count == 0
+    assert notifications[0]["user_id"] == 7
+    assert websocket_recipients == [7]
+    assert conversation.initiator_unread_count == 1
 
 
-def test_admin_booking_reply_increments_recipient_unread_and_emails_chat_notification(monkeypatch):
-    conversation = SimpleNamespace(
-        id=17,
-        booking_id=42,
-        initiator_role="agent",
-        initiator_user_id=7,
-        supplier_user_id=8,
-        initiator_unread_count=0,
-        supplier_unread_count=0,
-        booking=SimpleNamespace(booking_code="TVAA-42", tour_name="Test tour"),
-        initiator_user=SimpleNamespace(name="Agent Name"),
-        supplier_user=SimpleNamespace(name="Supplier Name"),
-        status="open",
-        last_message_at=None,
-        last_message_preview=None,
-        created_at=None,
-    )
-    emails = []
-
-    class Query:
-        def filter(self, *_args):
-            return self
-
-        def first(self):
-            return conversation
-
-    class Db:
-        def query(self, _model):
-            return Query()
-
-        def add(self, _row):
-            pass
-
-        def commit(self):
-            pass
-
-        def refresh(self, _row):
-            pass
-
-    async def notify_ws(_event, participant_user_id):
-        assert participant_user_id == 8
-
-    monkeypatch.setattr(messaging, "BookingMessage", lambda **values: SimpleNamespace(**values, id=25, sender=None, is_deleted=False, created_at=None))
-    monkeypatch.setattr(messaging, "enqueue_notification", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(messaging, "_email_booking_message_recipient", lambda *args, **kwargs: emails.append(kwargs))
-    monkeypatch.setattr(messaging.ws_manager, "notify_new_message", notify_ws)
-
-    asyncio.run(messaging.send_booking_message_as_admin(
-        Db(),
-        17,
-        SimpleNamespace(id=1),
-        "Please review the update",
-        "supplier",
-    ))
-
-    assert conversation.supplier_unread_count == 1
-    assert conversation.initiator_unread_count == 0
-    assert emails == [{
-        "sender_label": "Tourvaa Admin",
-        "booking_id": 42,
-        "recipient_role": "supplier",
-        "conversation_id": 17,
-        "message_id": 25,
-    }]
+def test_admin_booking_reply_is_rejected_for_direct_participant_thread():
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(messaging.send_booking_message_as_admin(None, 17, SimpleNamespace(id=1), "Please review", "supplier"))
+    assert error.value.status_code == 403

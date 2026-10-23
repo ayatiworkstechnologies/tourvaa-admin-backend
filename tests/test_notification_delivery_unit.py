@@ -307,3 +307,23 @@ def test_every_runtime_rendered_auth_template_has_a_seed_default():
         "account_approved",
         "account_reactivated",
     }.issubset(template_keys)
+
+
+def test_agent_commission_emails_have_editable_plain_language_templates():
+    """Commission decisions must not fall back to ad-hoc HTML outside the CMS."""
+    from app.services.email_templates import DEFAULT_EMAIL_TEMPLATES
+
+    templates = {template["key"]: template for template in DEFAULT_EMAIL_TEMPLATES}
+    assert {
+        "agent_commission_requested",
+        "agent_commission_approved",
+        "agent_commission_rejected",
+    }.issubset(templates)
+    for key in (
+        "agent_commission_requested",
+        "agent_commission_approved",
+        "agent_commission_rejected",
+    ):
+        assert templates[key]["subject"].strip()
+        assert templates[key]["body"].strip()
+        assert "{{agent_name}}" in templates[key]["body"]

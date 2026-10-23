@@ -222,9 +222,10 @@ DEFAULT_EMAIL_TEMPLATES = [
         "name": "Support Message Received",
         "subject": "New message from {{sender_name}}",
         "body": (
-            "A new support message from {{sender_name}} is waiting in your secure Tourvaa portal.\n\n"
-            "Open the conversation to read it and reply. For privacy, the message content is not included "
-            "in this email. Replies sent directly to this notification email are not added to the conversation."
+            "You have a new support message from {{sender_name}}.\n\n"
+            "Message:\n{{message_body}}\n\n"
+            "Use the secure link below to reply without signing in. For security, the link expires after 7 days. "
+            "Replies sent directly to this email are not added to the conversation."
         ),
     },
     {
@@ -396,6 +397,38 @@ DEFAULT_EMAIL_TEMPLATES = [
         "body": "Hi {{agent_name}}, your agent profile is approved. You can now manage bookings from the agent portal: {{login_url}}",
     },
     {
+        "key": "agent_commission_requested",
+        "name": "Agent Commission Change Requested (Admin)",
+        "subject": "Commission change request from {{agent_name}}",
+        "body": (
+            "Hi team,\n\n"
+            "{{agent_name}} has requested a commission change.\n\n"
+            "Requested rate: {{request_value}}%\n"
+            "Request type: {{request_type}}\n\n"
+            "Please review the request in the admin portal: {{admin_url}}"
+        ),
+    },
+    {
+        "key": "agent_commission_approved",
+        "name": "Agent Commission Change Approved",
+        "subject": "Your commission change request was approved",
+        "body": (
+            "Hi {{agent_name}},\n\n"
+            "Your request to change your commission to {{request_value}}% has been approved.\n\n"
+            "You can view your current commission agreement here: {{login_url}}"
+        ),
+    },
+    {
+        "key": "agent_commission_rejected",
+        "name": "Agent Commission Change Not Approved",
+        "subject": "Your commission change request was not approved",
+        "body": (
+            "Hi {{agent_name}},\n\n"
+            "Your request to change your commission to {{request_value}}% was not approved at this time.\n\n"
+            "You can review your current commission agreement here: {{login_url}}"
+        ),
+    },
+    {
         "key": "affiliate_approved",
         "name": "Affiliate Approved",
         "subject": "Your Tourvaa affiliate profile is approved",
@@ -514,7 +547,13 @@ DEFAULT_EMAIL_TEMPLATES = [
         "key": "booking_message_received",
         "name": "Booking Message Received",
         "subject": "New booking message from {{sender_name}}",
-        "body": "A new booking message from {{sender_name}} is waiting in your secure Tourvaa portal.",
+        "body": (
+            "You have a new booking message from {{sender_name}}.\n\n"
+            "Message:\n{{message_body}}\n\n"
+            "Use the secure link below to reply without signing in. For security, the link expires after 7 days. "
+            "Booking, traveller, and payment details are not included in this email. "
+            "Replies sent directly to this email are not added to the conversation."
+        ),
     },
     {
         "key": "wishlist_reminder",
@@ -599,6 +638,19 @@ def seed_email_templates(db: Session):
             corrected_confirm_copy = "We will notify you as soon as your booking is confirmed."
             if legacy_confirm_copy in template.body:
                 template.body = template.body.replace(legacy_confirm_copy, corrected_confirm_copy)
+        elif template.key in {"support_message_received", "booking_message_received"} and template.body:
+            # Upgrade only the old stock notifications.  CMS-authored copy is
+            # retained, including its own privacy and reply-link wording.
+            legacy_bodies = {
+                "support_message_received": (
+                    "A new support message from {{sender_name}} is waiting in your secure Tourvaa portal.\n\n"
+                    "Open the conversation to read it and reply. For privacy, the message content is not included "
+                    "in this email. Replies sent directly to this notification email are not added to the conversation."
+                ),
+                "booking_message_received": "A new booking message from {{sender_name}} is waiting in your secure Tourvaa portal.",
+            }
+            if template.body == legacy_bodies[template.key]:
+                template.body = next(item["body"] for item in DEFAULT_EMAIL_TEMPLATES if item["key"] == template.key)
 
     db.commit()
 

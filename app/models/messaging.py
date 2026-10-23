@@ -51,10 +51,9 @@ class Message(Base):
 
 
 class BookingConversation(Base):
-    """Persistence container for role-isolated, booking-specific Admin chat.
+    """One direct, booking-specific conversation between initiator and supplier.
 
-    The initiator and supplier share the booking reference, but serializers
-    expose only their own messages and Admin replies addressed to their role.
+    Admin users may audit the thread, but are not a message recipient.
     """
     __tablename__ = "booking_conversations"
     __table_args__ = (UniqueConstraint("booking_id", "initiator_user_id", "supplier_user_id", name="uq_booking_conv_parties"),)
@@ -85,8 +84,8 @@ class BookingMessage(Base):
     conversation_id = Column(Integer, ForeignKey("booking_conversations.id"), nullable=False, index=True)
     sender_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     sender_role = Column(String(20), nullable=False)  # customer | agent | supplier | admin
-    # Admin replies are addressed to one booking party so the Admin console
-    # can keep Supplier and Agent/Customer threads distinct.
+    # Direct messages record their intended portal recipient.  This keeps
+    # delivery/read state unambiguous while Admin remains an observer.
     recipient_role = Column(String(20), nullable=True)  # supplier | customer | agent
     body = Column(Text, nullable=False)
     is_deleted = Column(Boolean, default=False, nullable=False)

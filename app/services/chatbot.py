@@ -1,6 +1,7 @@
 import logging
 import re
 import secrets
+from urllib.parse import unquote, urlparse
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 CHAT_RETENTION_DAYS = 90
 # The scripted reply used when nothing matched - also how "unanswered" questions are found.
 NO_ANSWER_REPLY = "I can help with Tourvaa tours, booking steps, pricing, cancellations, payments, and destinations. Could you share a little more detail?"
+
+
+class DuplicateFAQError(ValueError):
+    """Raised when a training answer would duplicate an existing question."""
 
 BOOKING_INFO_PHRASES = (
     "my booking", "my bookings", "my trip", "my order", "my reservation",
@@ -104,26 +109,61 @@ def _get_customer_bookings_context(db: Session, customer_id: int) -> str:
     return "\n".join(lines)
 
 
-_TOUR_PAGE_URL_RE = re.compile(r"/tours/(\d+)")
+_TOUR_PAGE_ID_RE = re.compile(r"^/tours/(\d+)(?:/|$)")
 
 
-def _page_context(db: Session, page_url: str | None) -> str | None:
-    """Best-effort: if the visitor is currently on a tour detail page, surface
-    that tour so the assistant can answer page-specific questions ("is
-    breakfast included?") without the customer having to name the tour."""
+def _tour_from_page_url(db: Session, page_url: str | None) -> Tour | None:
+    """Resolve both legacy ``/tours/{id}`` and the public canonical
+    ``/tours/{country}/{tour-slug}`` URLs.
+
+    Chat is supplied a browser URL, not a trusted database key, so the lookup
+    is deliberately limited to a published tour.  A country listing URL such
+    as ``/tours/new-zealand`` does not identify a product and returns None.
+    """
     if not page_url:
         return None
-    match = _TOUR_PAGE_URL_RE.search(page_url)
-    if not match:
+    path = unquote(urlparse(page_url).path).rstrip("/")
+    id_match = _TOUR_PAGE_ID_RE.match(path)
+    if id_match:
+        return (
+            db.query(Tour)
+            .filter(Tour.id == int(id_match.group(1)), Tour.status == "published")
+            .first()
+        )
+    parts = [part for part in path.split("/") if part]
+    if len(parts) != 3 or parts[0] != "tours":
         return None
-    tour = db.query(Tour).filter(Tour.id == int(match.group(1)), Tour.status == "published").first()
-    if not tour:
-        return None
-    price = f"{tour.currency} {tour.price_start_per_person:,.0f}" if tour.price_start_per_person else "price on request"
+    country_slug, tour_slug = parts[1:]
     return (
-        f"{tour.title} ({tour.number_of_days} day(s), starting from {price}). "
-        f"{tour.short_description or ''}".strip()
+        db.query(Tour)
+        .join(Country, Tour.country_id == Country.id)
+        .filter(
+            Tour.slug == tour_slug,
+            Tour.status == "published",
+            Country.slug == country_slug,
+        )
+        .first()
     )
+
+
+def _tour_public_path(tour: Tour) -> str:
+    """Return the canonical product URL, retaining a legacy fallback only
+    for incomplete records that cannot form a public country URL."""
+    country = getattr(tour, "country", None)
+    if country and country.slug and tour.slug:
+        return f"/tours/{country.slug}/{tour.slug}"
+    return f"/tours/{tour.id}"
+
+
+def _page_tour_id(db: Session, page_url: str | None) -> int | None:
+    """Identify the published tour shown on the current browser page.
+
+    The RAG ranker uses this as a preference, rather than treating browser
+    input as a fact, so page-specific questions resolve against the product
+    the visitor is actually viewing.
+    """
+    tour = _tour_from_page_url(db, page_url)
+    return tour.id if tour else None
 
 
 def _faq_fallback(user_message: str, faqs: list[ChatFAQ]) -> str | None:
@@ -173,6 +213,7 @@ def _tour_cards(tours: list[Tour]) -> list[dict]:
             "currency": t.currency or "USD",
             "cover_image": t.banner_image or None,
             "slug": t.slug or str(t.id),
+            "url": _tour_public_path(t),
         })
     return cards
 
@@ -205,7 +246,7 @@ def _tour_fallback(db: Session, user_message: str) -> str | None:
     for tour in tours:
         price = f"{tour.currency} {tour.price_start_per_person:,.0f}" if tour.price_start_per_person else "price on request"
         duration = f"{tour.number_of_days} day" + ("s" if tour.number_of_days != 1 else "")
-        lines.append(f"- {tour.title}: {duration}, starting from {price}. Open /tours/{tour.id} to view details or book.")
+        lines.append(f"- {tour.title}: {duration}, starting from {price}. Open {_tour_public_path(tour)} to view details or book.")
     lines.append("Share your destination, travel date, and traveller count if you want a narrower suggestion.")
     return "\n".join(lines)
 
@@ -275,8 +316,8 @@ def _why_tourvaa_text(db: Session) -> str:
 
     base = (
         "Why Tourvaa? We handpick and vet every tour, offer transparent pricing with no hidden fees, "
-        "flexible booking with instant confirmation, secure payments, and dedicated support before, during, "
-        "and after your trip."
+        "secure payments, and dedicated support before, during, and after your trip. A booking is confirmed "
+        "only after the supplier accepts it and Tourvaa completes final confirmation."
     )
 
     if reviews:
@@ -527,12 +568,23 @@ def get_or_create_session(db: Session, session_key: str | None) -> ChatSession:
 
 
 def get_active_faqs(db: Session) -> list[ChatFAQ]:
-    return (
+    rows = (
         db.query(ChatFAQ)
         .filter(ChatFAQ.is_active == True)
-        .order_by(ChatFAQ.sort_order, ChatFAQ.id)
+        .order_by(ChatFAQ.sort_order, ChatFAQ.id.asc())
         .all()
     )
+    # Historical rows may pre-date duplicate prevention. Keep one deterministic
+    # answer per normalized question so a duplicated CMS row cannot make the
+    # chatbot repeat or overweight the same instruction.
+    seen: set[str] = set()
+    unique: list[ChatFAQ] = []
+    for faq in rows:
+        key = _normalise(faq.question)
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(faq)
+    return unique
 
 
 _SMALLTALK_WORDS = frozenset("hello hi hey thanks thank you ok okay good morning afternoon evening bye goodbye cheers great".split())
@@ -573,7 +625,12 @@ def _answer_with_rag(
     from app.services import rag_answer
 
     try:
-        result = rag_answer.answer(db, user_message, page_url)
+        page_tour_id = _page_tour_id(db, page_url)
+        result = rag_answer.answer(
+            db,
+            user_message,
+            page_tour_id=page_tour_id,
+        )
     except Exception:
         logger.exception("RAG retrieval failed; using scripted fallback")
         result = None
@@ -653,10 +710,26 @@ def stream_chat_reply(
     }
 
 
-def submit_feedback(db: Session, message_id: int, rating: int, comment: str | None) -> ChatFeedback | None:
+def submit_feedback(
+    db: Session,
+    message_id: int,
+    session_key: str,
+    rating: int,
+    comment: str | None,
+) -> ChatFeedback | None:
     """Record (or update) a thumbs up/down on an assistant message. Returns
-    None if the message doesn't exist or isn't an assistant reply."""
-    msg = db.query(ChatMessage).filter(ChatMessage.id == message_id, ChatMessage.role == "assistant").first()
+    None if the message doesn't exist, isn't an assistant reply, or belongs
+    to another chat session."""
+    msg = (
+        db.query(ChatMessage)
+        .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+        .filter(
+            ChatMessage.id == message_id,
+            ChatMessage.role == "assistant",
+            ChatSession.session_key == session_key,
+        )
+        .first()
+    )
     if not msg:
         return None
 
@@ -717,7 +790,25 @@ def _reindex_faq(db: Session, faq: ChatFAQ | None, faq_id: int | None = None) ->
         logger.warning("FAQ vector re-index failed", exc_info=True)
 
 
+def _assert_unique_faq_question(db: Session, question: str, exclude_id: int | None = None) -> None:
+    """Enforce human-friendly, case- and whitespace-insensitive uniqueness.
+
+    A database unique index cannot reliably normalize whitespace across MySQL
+    and SQLite, so the business rule lives here and covers both create and
+    edit. Existing historical duplicates stay readable but are de-weighted by
+    ``get_active_faqs`` and the RAG index below.
+    """
+    target = _normalise(question)
+    query = db.query(ChatFAQ.id, ChatFAQ.question)
+    if exclude_id is not None:
+        query = query.filter(ChatFAQ.id != exclude_id)
+    for existing_id, existing_question in query.all():
+        if _normalise(existing_question) == target:
+            raise DuplicateFAQError(f"A matching chatbot Q&A already exists (ID {existing_id}).")
+
+
 def create_faq(db: Session, data: FAQCreate) -> ChatFAQ:
+    _assert_unique_faq_question(db, data.question)
     faq = ChatFAQ(**data.model_dump())
     db.add(faq)
     db.commit()
@@ -730,6 +821,8 @@ def update_faq(db: Session, faq_id: int, data: FAQUpdate) -> ChatFAQ | None:
     faq = db.query(ChatFAQ).filter(ChatFAQ.id == faq_id).first()
     if not faq:
         return None
+    if data.question is not None:
+        _assert_unique_faq_question(db, data.question, exclude_id=faq.id)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(faq, field, value)
     db.commit()
