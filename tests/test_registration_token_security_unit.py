@@ -32,8 +32,11 @@ def db_returning(user):
 def test_expired_verification_token_is_rejected(monkeypatch):
     user = token_user(email_verification_expires_at=utcnow() - timedelta(seconds=1))
     monkeypatch.setattr(auth, "hash_reset_token", lambda _token: "old-hash")
+    expired_notice = MagicMock()
+    monkeypatch.setattr(auth, "send_verification_link_expired", expired_notice)
     with pytest.raises(HTTPException, match="Invalid or expired verification link"):
         auth._registration_token_user(db_returning(user), "raw-token")
+    expired_notice.assert_called_once()
 
 
 def test_used_verification_token_cannot_be_reused(monkeypatch):

@@ -232,6 +232,47 @@ def send_email_verification(db: Session, user: User, token: str, redirect: str |
     )
 
 
+def send_verification_link_expired(db: Session, user: User) -> bool:
+    """Queue one expiry notice for a known, expired registration token.
+
+    The expiry timestamp is the event version, so repeatedly opening the same
+    expired link cannot create duplicate emails. Invalid tokens deliberately
+    receive no mail: they must not be usable for account enumeration.
+    """
+    if not user.email or not user.email_verification_expires_at:
+        return False
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    expires_at = as_aware_utc(user.email_verification_expires_at)
+    try:
+        queued = dispatch_lifecycle_email(
+            db,
+            event="verification_link_expired",
+            entity_type="user",
+            entity_id=user.id,
+            recipient_type="user",
+            recipient_email=user.email,
+            template_key="verification_link_expired",
+            values={"name": user.name, "email": user.email},
+            fallback_subject="Your Tourvaa verification link expired",
+            fallback_html=(
+                f"<p>Hi {user.name},</p>"
+                "<p>Your email verification link has expired. Request a new link from the Tourvaa registration page.</p>"
+            ),
+            event_version=expires_at.isoformat(),
+        )
+        if queued:
+            # The expiry request ends in an HTTP error. Commit the durable
+            # delivery before raising so the existing after-commit dispatcher
+            # can process it.
+            db.commit()
+        return queued
+    except Exception:
+        db.rollback()
+        logger.exception("Could not queue expired verification-link notice for user_id=%s", user.id)
+        return False
+
+
 def register_unified_user(db: Session, data):
     email = str(data.email).strip().lower()
     phone = f"{data.country_code}{data.mobile_number}"
@@ -366,6 +407,7 @@ def _registration_token_user(db: Session, token: str):
     if expires_at.tzinfo is None:
         now = now.replace(tzinfo=None)
     if expires_at < now:
+        send_verification_link_expired(db, user)
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
     if user.account_status not in {"PENDING_EMAIL_VERIFICATION", "PENDING_PASSWORD_CREATION"}:
         raise HTTPException(status_code=400, detail="Verification link has already been used")
@@ -999,6 +1041,7 @@ def verify_email(db: Session, token: str | None = ""):
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
     if as_aware_utc(user.email_verification_expires_at) < utcnow():
+        send_verification_link_expired(db, user)
         raise HTTPException(status_code=400, detail="Invalid or expired verification link")
 
     user.email_verified_at = utcnow()

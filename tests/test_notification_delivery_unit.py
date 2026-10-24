@@ -353,6 +353,9 @@ def test_legacy_affiliate_payout_reserves_a_durable_affiliate_delivery(monkeypat
         "dispatch_lifecycle_email",
         lambda *_args, **kwargs: scheduled.update(kwargs),
     )
+    # This test covers delivery reservation rather than payout eligibility;
+    # model the selected conversion as already eligible for payment.
+    monkeypatch.setattr(affiliate_tracking, "is_booking_payout_eligible", lambda _booking: True)
 
     class Db:
         def query(self, model):
@@ -363,6 +366,7 @@ def test_legacy_affiliate_payout_reserves_a_durable_affiliate_delivery(monkeypat
                     commission_amount=Decimal("12.50"),
                     final_commission=None,
                     currency="USD",
+                    booking=SimpleNamespace(),
                 )
                 locked = SimpleNamespace(all=lambda: [conversion])
                 filtered = SimpleNamespace(with_for_update=lambda: locked)

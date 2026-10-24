@@ -774,7 +774,12 @@ def notify_email_changed(
     login_url: str,
     background_tasks: "BackgroundTasks | None" = None,
 ):
-    """Send security notification when a user's email address is changed."""
+    """Compatibility trigger using the canonical email-change template.
+
+    ``email_changed`` remains the lifecycle event for callers that already
+    use it, but its delivery now shares the security-reviewed
+    ``account_email_changed`` content with the user-update path.
+    """
     from app.services.notification_delivery import dispatch_lifecycle_email
 
     dispatch_lifecycle_email(
@@ -784,7 +789,7 @@ def notify_email_changed(
         entity_id=user_id,
         recipient_type="user",
         recipient_email=new_email,
-        template_key="email_changed",
+        template_key="account_email_changed",
         values={
             "name": user_name,
             "old_email": old_email,
