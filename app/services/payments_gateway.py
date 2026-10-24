@@ -15,6 +15,21 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 
+def _gateway_error_code(response) -> str:
+    """Return safe provider diagnostics without logging response URLs or data."""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict) and error.get("code"):
+                return str(error["code"])
+            if payload.get("name"):
+                return str(payload["name"])
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return "unknown"
+
+
 def normalize_paypal_mode(mode: str | None) -> str:
     """Return PayPal's two supported environment names.
 
@@ -80,7 +95,7 @@ class StripeGateway:
 
         resp = http_requests.post(f"{self.base_url}/checkout/sessions", data=payload, headers=headers, timeout=15)
         if resp.status_code not in (200, 201):
-            logger.error("Stripe create_checkout_session error: %s", resp.text)
+            logger.error("Stripe create_checkout_session failed: status=%s code=%s", resp.status_code, _gateway_error_code(resp))
             raise HTTPException(status_code=502, detail=f"Stripe error: {resp.json().get('error', {}).get('message', 'Unknown error')}")
         return resp.json()
 
@@ -209,7 +224,7 @@ class PayPalGateway:
         }
         resp = http_requests.post(f"{self.base_url}/v2/checkout/orders", json=payload, headers=self._headers(idempotency_key), timeout=15)
         if resp.status_code not in (200, 201):
-            logger.error("PayPal create_order error: %s", resp.text)
+            logger.error("PayPal create_order failed: status=%s code=%s", resp.status_code, _gateway_error_code(resp))
             raise HTTPException(status_code=502, detail=f"PayPal error: {resp.json().get('message', 'Unknown')}")
         return resp.json()
 

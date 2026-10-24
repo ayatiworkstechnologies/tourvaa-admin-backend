@@ -28,12 +28,29 @@ from app.auth.permissions import get_current_user
 from app.utils.money import as_aware_utc, money, to_minor_units, utcnow
 from app.utils.ratelimit import check_rate_limit
 from app.services.payments_gateway import get_paypal, get_stripe
+from app.services.currency import convert_amount
 from app.services.settings import get_default_deposit_cutoff_days, get_default_deposit_percentage
 from app.models.payments import Payment, PaymentTransaction
 from app.services.payments import _payment_code, _sync_booking_payment_fields, record_gateway_authorization
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/payments", tags=["Payment Gateways"])
+
+# PayPal's Orders API supports a smaller set of payment currencies than the
+# storefront. Keep this list at the payment boundary so an unsupported booking
+# currency is rejected before an external order is attempted.
+PAYPAL_SUPPORTED_PAYMENT_CURRENCIES = frozenset({
+    "AUD", "BRL", "CAD", "CNY", "CZK", "DKK", "EUR", "HKD", "HUF",
+    "ILS", "JPY", "MYR", "MXN", "TWD", "NZD", "NOK", "PHP", "PLN",
+    "GBP", "SGD", "SEK", "CHF", "THB", "USD",
+})
+
+# This Stripe account settles in USD. Stripe requires non-USD presentment
+# amounts to meet the USD-equivalent minimum after conversion. Do this check
+# locally so a customer receives an actionable validation response rather than
+# a provider 502 after attempting checkout.
+STRIPE_SETTLEMENT_CURRENCY = "USD"
+STRIPE_MINIMUM_SETTLEMENT_AMOUNT = Decimal("0.50")
 
 
 def _record_webhook_receipt(db: Session, payment: Payment, *, event_id: str, event_type: str, amount: Decimal = Decimal("0")) -> None:
@@ -384,6 +401,40 @@ def _validate_payment_currency(booking: Booking, requested_currency: str) -> str
     return booking_currency
 
 
+def _validate_stripe_minimum_charge(amount: Decimal, currency: str) -> None:
+    """Reject charges below Stripe's USD settlement minimum before checkout.
+
+    The booking currency remains immutable; this is a gateway capability
+    check, never a silent conversion or price change.
+    """
+    try:
+        settlement_amount, _, _ = convert_amount(amount, currency, STRIPE_SETTLEMENT_CURRENCY)
+        minimum_in_charge_currency, _, _ = convert_amount(
+            STRIPE_MINIMUM_SETTLEMENT_AMOUNT,
+            STRIPE_SETTLEMENT_CURRENCY,
+            currency,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Stripe cannot validate this booking currency. Please choose another payment method.") from error
+
+    if settlement_amount < STRIPE_MINIMUM_SETTLEMENT_AMOUNT:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Stripe cannot process {currency} {amount:.2f}: this account requires at least "
+                f"{currency} {minimum_in_charge_currency:.2f}. Please choose another payment method or contact Tourvaa support."
+            ),
+        )
+
+
+def _validate_paypal_payment_currency(currency: str) -> None:
+    if currency not in PAYPAL_SUPPORTED_PAYMENT_CURRENCIES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"PayPal is not available for {currency} payments. Please choose another payment method.",
+        )
+
+
 def _record_pending_payment(db: Session, booking: Booking, amount: Decimal, gateway: str, gateway_order_id: str, idempotency_key: Optional[str], current_user, payment_type: str) -> Payment:
     customer_id = booking.customer_id
     p = Payment(
@@ -419,6 +470,7 @@ def stripe_create_session(body: StripeSessionRequest, request: Request, db: Sess
     booking = _booking_or_404(db, body.booking_id, for_update=True)
     amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id), payment_type=body.payment_type)
     currency = _validate_payment_currency(booking, body.currency)
+    _validate_stripe_minimum_charge(amount, currency)
     stripe = get_stripe(db)
     if body.test_only and not stripe.secret_key.startswith(("sk_test_", "rk_test_")):
         raise HTTPException(status_code=400, detail="Stripe test credentials are required")
@@ -644,6 +696,7 @@ def paypal_create_order(body: PayPalOrderRequest, request: Request, db: Session 
     booking = _booking_or_404(db, body.booking_id, for_update=True)
     amount = _validate_payment_request(db, booking, body.amount, current_user, already_pending=_pending_gateway_payments_total(db, booking.id), payment_type=body.payment_type)
     currency = _validate_payment_currency(booking, body.currency)
+    _validate_paypal_payment_currency(currency)
     paypal = get_paypal(db)
     if getattr(body, "test_only", False) and "sandbox" not in paypal.base_url:
         raise HTTPException(status_code=400, detail="PayPal sandbox credentials are required")

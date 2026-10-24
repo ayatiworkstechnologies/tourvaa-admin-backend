@@ -30,7 +30,7 @@ from app.services.bookings import (
 )
 from app.services.payments import FINAL_BOOKING_CONFIRMATION_STATUSES, _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
 from app.services.discounts import find_active_discount_stack
-from app.routers.payments_gateway import _ensure_booking_payment_access, _minimum_deposit_amount, _require_captured_amount_matches_pending, _validate_payment_currency, _validate_payment_request
+from app.routers.payments_gateway import _ensure_booking_payment_access, _minimum_deposit_amount, _require_captured_amount_matches_pending, _validate_payment_currency, _validate_payment_request, _validate_paypal_payment_currency, _validate_stripe_minimum_charge
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
 from app.schemas.checkout import CheckoutConfirm
 from app.schemas.tours import AccommodationExtraPayload
@@ -70,6 +70,30 @@ def booking(**overrides):
 def test_gateway_authorization_capture_waits_for_final_booking_confirmation():
     assert FINAL_BOOKING_CONFIRMATION_STATUSES == {"confirmed", "ready_to_travel", "ongoing", "completed"}
     assert "supplier_accepted" not in FINAL_BOOKING_CONFIRMATION_STATUSES
+
+
+def test_gateway_rejects_charge_below_stripe_settlement_minimum(monkeypatch):
+    from app.routers import payments_gateway
+
+    monkeypatch.setattr(
+        payments_gateway,
+        "convert_amount",
+        lambda amount, source, target: (Decimal("0.30") if source == "INR" else Decimal("26.00"), Decimal("1"), {}),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        _validate_stripe_minimum_charge(Decimal("16.00"), "INR")
+
+    assert error.value.status_code == 422
+    assert "at least INR 26.00" in error.value.detail
+
+
+def test_gateway_rejects_paypal_unsupported_booking_currency_before_request():
+    with pytest.raises(HTTPException) as error:
+        _validate_paypal_payment_currency("INR")
+
+    assert error.value.status_code == 422
+    assert "PayPal is not available for INR" in error.value.detail
 
 
 def test_automatic_discount_uses_booking_date_not_future_departure_date():
