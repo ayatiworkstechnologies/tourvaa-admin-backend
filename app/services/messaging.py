@@ -394,14 +394,17 @@ async def send_message_as_participant(db: Session, user: User, body: str) -> dic
         entity_type="conversation",
         entity_id=conv.id,
     )
-    db.commit()
-    db.refresh(msg)
-    db.refresh(conv)
+    # Reserve the email while this transaction is still open.  Reserving it
+    # after commit registers an after_commit hook too late, leaving the
+    # delivery permanently pending until the recovery sweep finds it.
     _email_support_message_admins(
         db,
         participant_type=conv.participant_type,
         conversation_id=conv.id,
     )
+    db.commit()
+    db.refresh(msg)
+    db.refresh(conv)
 
     serialized = _serialize_message(msg)
     await ws_manager.notify_new_message(
@@ -434,9 +437,8 @@ async def send_message_as_admin(db: Session, conversation_id: int, admin_user: U
         entity_type="conversation",
         entity_id=conv.id,
     )
-    db.commit()
-    db.refresh(msg)
-    db.refresh(conv)
+    # See send_message_as_participant: the outbox reservation must happen
+    # before this commit so its post-commit SMTP job is actually scheduled.
     _email_support_message_recipient(
         db,
         conv.participant_user_id,
@@ -444,6 +446,9 @@ async def send_message_as_admin(db: Session, conversation_id: int, admin_user: U
         conversation_id=conv.id,
         body=body,
     )
+    db.commit()
+    db.refresh(msg)
+    db.refresh(conv)
 
     serialized = _serialize_message(msg)
     await ws_manager.notify_new_message(

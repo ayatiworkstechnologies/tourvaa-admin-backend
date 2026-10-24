@@ -311,11 +311,16 @@ def submit_affiliate_verification(db: Session, user: User, request: Request | No
     db.commit()
     db.refresh(item)
     try:
-        from app.services.notifications import notify_admins
-        notify_admins(db, notification_type="affiliate_submitted", title="Affiliate Submitted for Review", message=f"Affiliate '{item.name}' submitted their profile for review.", entity_type="affiliate", entity_id=item.id)
+        from app.utils.notification_triggers import notify_affiliate_submitted_verification
+
+        notify_affiliate_submitted_verification(
+            db,
+            affiliate_id=item.id,
+            affiliate_name=item.name,
+        )
         db.commit()
     except Exception:
-        pass
+        db.rollback()
     return serialize_affiliate(item)
 
 

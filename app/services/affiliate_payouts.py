@@ -26,7 +26,7 @@ from app.models.affiliates import Affiliate
 from app.models.bookings import Booking
 from app.models.users import User
 from app.schemas.affiliate_tracking import AffiliatePayoutMethodCreate, AffiliatePayoutMethodUpdate, AffiliatePayoutRequestCreate
-from app.services.affiliate_tracking import _payout_code, _s_payout, _wallet_entry
+from app.services.affiliate_tracking import _payout_code, _s_payout, _wallet_entry, is_booking_payout_eligible
 from app.services.audit import log_audit
 from app.services.notifications import enqueue_notification, notify_admins
 from app.utils.money import money, utcnow
@@ -110,7 +110,11 @@ def get_available_balance(db: Session, affiliate_id: int) -> Decimal:
         )
         .all()
     )
-    return money(sum((r.final_commission if r.final_commission is not None else r.commission_amount) for r in rows if r.id not in held_conversion_ids))
+    return money(sum(
+        (r.final_commission if r.final_commission is not None else r.commission_amount)
+        for r in rows
+        if r.id not in held_conversion_ids and is_booking_payout_eligible(r.booking)
+    ))
 
 
 def get_wallet_summary(db: Session, affiliate_id: int) -> dict:
@@ -130,12 +134,7 @@ def get_wallet_summary(db: Session, affiliate_id: int) -> dict:
     def amt(c):
         return c.final_commission if c.final_commission is not None else c.commission_amount
 
-    completed_conversions = {
-        c.id for c in db.query(AffiliateConversion.id)
-        .join(Booking, AffiliateConversion.booking_id == Booking.id)
-        .filter(Booking.booking_status == "completed")
-        .all()
-    }
+    completed_conversions = {c.id for c in conversions if is_booking_payout_eligible(c.booking)}
     pending = money(sum(amt(c) for c in conversions if c.id in completed_conversions and c.status in payable_statuses and c.id not in held_conversion_ids))
     held = money(sum(amt(c) for c in conversions if c.id in held_conversion_ids))
     paid = money(sum(amt(c) for c in conversions if c.status == "paid"))
@@ -198,7 +197,10 @@ def request_payout(db: Session, affiliate: Affiliate, data: AffiliatePayoutReque
         .with_for_update()
         .all()
     )
-    candidates = [c for c in candidates if c.id not in held_conversion_ids]
+    candidates = [
+        c for c in candidates
+        if c.id not in held_conversion_ids and is_booking_payout_eligible(c.booking)
+    ]
 
     available = money(sum((c.final_commission if c.final_commission is not None else c.commission_amount) for c in candidates))
     if amount > available:
@@ -364,13 +366,22 @@ def _notify_affiliate(db: Session, payout: AffiliatePayout, notification_type: s
         user = db.query(User).filter(User.id == aff.user_id).first()
         portal_url = f"{settings.FRONTEND_URL.rstrip('/')}/affiliate/payouts"
         if user and user.email:
+            completed = notification_type == "affiliate_payout_paid"
             dispatch_lifecycle_email(
                 db, event=notification_type, entity_type="affiliate_payout", entity_id=payout.id,
-                recipient_type="affiliate", recipient_email=user.email, template_key="partner_payout_event",
-                values={"title": title, "name": aff.name or user.name, "detail": message,
-                        "payout_code": payout.payout_code, "currency": payout.currency,
-                        "amount": payout.total_amount, "reference_number": payout.reference_number or "Pending",
-                        "portal_url": portal_url},
+                recipient_type="affiliate", recipient_email=user.email,
+                template_key="affiliate_payout_completed" if completed else "partner_payout_event",
+                values=(
+                    {"affiliate_name": aff.name or user.name, "payout_code": payout.payout_code,
+                     "currency": payout.currency, "amount": payout.total_amount,
+                     "reference_number": payout.reference_number or "Not available", "portal_url": portal_url,
+                     "button_text": "View payouts", "button_url": portal_url}
+                    if completed else
+                    {"title": title, "name": aff.name or user.name, "detail": message,
+                     "payout_code": payout.payout_code, "currency": payout.currency,
+                     "amount": payout.total_amount, "reference_number": payout.reference_number or "Pending",
+                     "portal_url": portal_url, "button_text": "View payouts", "button_url": portal_url}
+                ),
                 fallback_subject=f"{title} - {payout.payout_code}",
                 fallback_html=f"<p>{message}</p><p><a href='{portal_url}'>View payouts</a></p>",
                 event_version=notification_type,

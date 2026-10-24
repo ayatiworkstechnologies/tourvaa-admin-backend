@@ -356,7 +356,11 @@ def check_availability_end_date_reminders(db: Session) -> None:
                 f"<p>Extend the Tour End Date in the tour's Calendar tab if you'd like to keep taking bookings beyond that date.</p>"
             )
             for recipient_type, recipient in recipients:
-                portal_url = f"{settings.FRONTEND_URL}/supplier/tours/{tour.id}"
+                portal_url = (
+                    f"{settings.FRONTEND_URL}/supplier/tours/{tour.id}"
+                    if recipient_type == "supplier"
+                    else f"{settings.FRONTEND_URL}/admin/tours/{tour.id}"
+                )
                 dispatch_lifecycle_email(
                     db,
                     event="tour_availability_ending_soon",

@@ -321,6 +321,8 @@ def update_user(
 ):
     user = get_user_by_id(db, user_id)
     old_values = serialize_user(user)
+    previous_email = user.email
+    email_changed = False
 
     if data.name is not None:
         user.name = data.name.strip()
@@ -337,6 +339,7 @@ def update_user(
             raise HTTPException(status_code=400, detail="Email already exists")
 
         user.email = email
+        email_changed = email != previous_email
 
     for field in [
         "phone",
@@ -372,6 +375,39 @@ def update_user(
         new_values=serialize_user(user),
         request=request,
     )
+    if email_changed:
+        from app.services.notification_delivery import dispatch_lifecycle_email
+
+        values = {
+            "name": user.name,
+            "old_email": previous_email,
+            "new_email": user.email,
+        }
+        subject = "Your Tourvaa account email was changed"
+        body = base_email(
+            subject,
+            "Your Tourvaa account email address was changed.",
+            f"<p>Hi {esc(user.name)},</p><p>Your account email was changed from "
+            f"<strong>{esc(previous_email)}</strong> to <strong>{esc(user.email)}</strong>.</p>"
+            "<p>If you did not make this change, contact Tourvaa support immediately.</p>",
+        )
+        for recipient_type, recipient_email in (
+            ("user_previous_email", previous_email),
+            ("user_current_email", user.email),
+        ):
+            dispatch_lifecycle_email(
+                db,
+                event="account_email_changed",
+                entity_type="user",
+                entity_id=user.id,
+                recipient_type=recipient_type,
+                recipient_email=recipient_email,
+                template_key="account_email_changed",
+                values=values,
+                fallback_subject=subject,
+                fallback_html=body,
+                event_version=f"{previous_email}:{user.email}",
+            )
     db.commit()
     db.refresh(user)
 

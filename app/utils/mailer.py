@@ -2,7 +2,7 @@ import logging
 import re
 import smtplib
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from html import unescape
@@ -81,8 +81,22 @@ class _SmtpConfig:
     timeout_seconds: int
 
 
+def _normalise_smtp_transport(config: _SmtpConfig) -> _SmtpConfig:
+    """Keep implicit TLS and STARTTLS mutually exclusive.
+
+    SMTP over implicit TLS (the normal port-465 setup) is already encrypted
+    when the connection opens. Retaining a STARTTLS setting alongside it is
+    misleading and could become a delivery failure if this transport changes.
+    Prefer SSL because it is the configured port-465 mode.
+    """
+    if config.use_ssl and config.use_starttls:
+        logger.warning("SMTP has both SSL and STARTTLS enabled; using SSL only")
+        return replace(config, use_starttls=False)
+    return config
+
+
 def _env_smtp_config() -> _SmtpConfig:
-    return _SmtpConfig(
+    return _normalise_smtp_transport(_SmtpConfig(
         host=settings.SMTP_HOST,
         port=settings.SMTP_PORT,
         username=settings.SMTP_USERNAME or settings.SMTP_USER,
@@ -93,7 +107,7 @@ def _env_smtp_config() -> _SmtpConfig:
         use_ssl=settings.SMTP_USE_SSL,
         use_starttls=settings.SMTP_STARTTLS,
         timeout_seconds=settings.SMTP_TIMEOUT_SECONDS,
-    )
+    ))
 
 
 def _effective_smtp_config() -> _SmtpConfig:
@@ -111,7 +125,7 @@ def _effective_smtp_config() -> _SmtpConfig:
         try:
             row = db.query(SmtpSetting).first()
             if row and row.is_enabled and row.host:
-                return _SmtpConfig(
+                return _normalise_smtp_transport(_SmtpConfig(
                     host=row.host,
                     port=row.port,
                     username=row.username or None,
@@ -122,7 +136,7 @@ def _effective_smtp_config() -> _SmtpConfig:
                     use_ssl=row.use_ssl,
                     use_starttls=row.use_starttls,
                     timeout_seconds=row.timeout_seconds,
-                )
+                ))
             if row and not (row.is_enabled and row.host):
                 # A row exists (someone opened Settings > Email/SMTP and saved
                 # something) but it's disabled or missing a host, so we're

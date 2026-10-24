@@ -121,13 +121,12 @@ def find_active_discount_stack(session: Session, tour, lock: bool = False, effec
     result: dict[str, TourDiscount | None] = {"supplier": None, "tourvaa": None}
     if not tour or not tour.id:
         return result
-    # Automatic tour offers are seasonal travel offers: their validity is
-    # evaluated against the selected departure when one is known. Falling
-    # back to now preserves the behaviour for tour-listing pages with no
-    # departure selected.
-    now = effective_at or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+    # Promotion windows apply to the booking date, not the departure date.
+    # A traveller who books before the offer ends keeps that price even when
+    # their tour departs after the offer window. Retain ``effective_at`` in
+    # the signature only for compatibility with existing callers.
+    del effective_at
+    now = datetime.now(timezone.utc)
     query = session.query(TourDiscount).filter(
         TourDiscount.status == "active",
         TourDiscount.discount_code.is_(None),

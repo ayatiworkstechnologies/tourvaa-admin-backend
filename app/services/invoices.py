@@ -341,7 +341,8 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
         recipient_url = f"{settings.FRONTEND_URL}/customer/invoices"
     invoice_values = {"name": recipient_name or "Traveller", "invoice_number": inv.invoice_number,
                       "booking_code": booking.booking_code or booking.id, "currency": inv.currency,
-                      "total": money_str(inv.total_amount), "login_url": recipient_url or ""}
+                      "total": money_str(inv.total_amount), "login_url": recipient_url or "",
+                      "button_text": "View invoice", "button_url": recipient_url or ""}
     dispatch_lifecycle_email(
         db, event="invoice_generated", entity_type="invoice", entity_id=inv.id,
         recipient_type=recipient_type or "booking_owner", recipient_email=recipient_email,

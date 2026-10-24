@@ -73,7 +73,14 @@ def _send_booking_email(
     entity_id: int | None = None,
     recipient_type: str = "customer",
     event_version: str = "1",
+    attachments: list[tuple[str, bytes, str]] | None = None,
 ):
+    # Database-managed booking status templates include this optional field.
+    # Supplying a blank value keeps administrator-authored older templates and
+    # non-financial supplier messages safe while the customer/agent flows add
+    # the authoritative payment summary below.
+    values.setdefault("payment_summary", "")
+
     # Booking success must never depend on (or wait on) email delivery - the
     # actual send is scheduled via BackgroundTasks (or a daemon thread when
     # none is available) rather than run inline. See
@@ -93,10 +100,45 @@ def _send_booking_email(
             fallback_html=fallback_html,
             event_version=event_version,
             background_tasks=background_tasks,
+            attachments=attachments,
         )
 
     from app.utils.mailer import dispatch_email_task
     dispatch_email_task(background_tasks, db, _do_send_booking_email, key, values, fallback_subject, fallback_html, to_email)
+
+
+def _booking_payment_email_summary(booking: Booking) -> str:
+    """Return a recipient-safe payment statement for customer/agent emails.
+
+    A supplier decision does not change the financial facts of a booking. The
+    summary therefore comes from recorded payment amounts and deliberately
+    distinguishes a captured deposit from an authorization. Supplier emails
+    pass an empty value and never expose this information.
+    """
+    currency = str(getattr(booking, "currency", "") or "").upper()
+    total = money(getattr(booking, "final_amount", None) or getattr(booking, "total_cost", 0) or 0)
+    paid = money(getattr(booking, "amount_paid", 0) or 0)
+    pending = max(money(0), total - paid)
+    status = str(getattr(booking, "payment_status", "") or "").strip().lower()
+    payment_type = str(getattr(booking, "payment_type", "") or "").strip().lower()
+
+    def amount(value):
+        return f"{currency} {money_str(value)}".strip()
+
+    if paid > money(0):
+        if pending > money(0):
+            is_deposit = status == "partially_paid" or payment_type in {"partial", "deposit"}
+            paid_label = "Deposit paid" if is_deposit else "Payment received"
+            return f"{paid_label}: {amount(paid)}\nRemaining balance: {amount(pending)}"
+        return f"Payment received in full: {amount(paid)}"
+
+    if status == "authorized":
+        return "Payment authorised: no payment has been captured yet. Tourvaa will capture it only after booking confirmation."
+    if getattr(booking, "booking_source", None) == "agent" and pending > money(0):
+        return f"Outstanding balance: {amount(pending)}"
+    if status in {"credit_approval_pending", "bank_transfer_pending", "pending", "unpaid"}:
+        return "Payment status: awaiting payment confirmation."
+    return ""
 
 
 def _do_email_admins_booking_event(db, event_title: str, detail: str, booking_id: int, booking_code: str, tour_name: str | None) -> None:
@@ -156,22 +198,68 @@ def _email_agent_booking_status(
 ) -> None:
     if not (booking.agent and booking.agent.user and booking.agent.user.email):
         return
-    from app.utils.email_templates import booking_status_update_email
+    from app.utils.email_templates import booking_confirmed_email, booking_status_update_email
     portal_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
     is_final_confirmation = new_status.strip().lower() in {"confirmed", "booking confirmed"}
+    policy = _cancellation_policy_summary(db, booking) if is_final_confirmation else ""
+    payment_summary = _booking_payment_email_summary(booking)
     _send_booking_email(
-        db, "booking_status_update",
+        db, "booking_confirmed" if is_final_confirmation else "booking_status_update",
         {"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
          "new_status": new_status.replace("_", " ").title(), "reason": reason or "", "login_url": portal_url,
-         "button_text": "View booking", "button_url": portal_url},
+         "button_text": "View booking", "button_url": portal_url, "tour_date": booking.tour_date or "",
+         "adults": booking.adults_count, "currency": booking.currency, "total": booking.final_amount,
+         "cancellation_policy": policy, "payment_summary": payment_summary},
         f"Your Tourvaa Booking Is Confirmed - {booking.booking_code}" if is_final_confirmation else f"Booking update - {booking.booking_code}",
-        booking_status_update_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, new_status, reason or "", portal_url),
+        booking_confirmed_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, portal_url, policy, payment_summary) if is_final_confirmation else booking_status_update_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, new_status, reason or "", portal_url, payment_summary),
         booking.agent.user.email,
         event=event,
         entity_id=booking.id if event else None,
         recipient_type="agent",
         event_version=event_version,
+        attachments=_confirmation_receipt_attachment(db, booking) if is_final_confirmation else None,
     )
+
+
+def _cancellation_policy_summary(db: Session, booking: Booking) -> str:
+    """Return the booked tour's policy as concise, email-safe plain text."""
+    from app.models.cancellations import RefundRule
+
+    rules = (
+        db.query(RefundRule)
+        .filter(RefundRule.tour_id == booking.tour_id)
+        .order_by(RefundRule.days_before_tour_min.desc(), RefundRule.id.asc())
+        .all()
+    )
+    if not rules:
+        rules = (
+            db.query(RefundRule)
+            .filter(RefundRule.tour_id.is_(None))
+            .order_by(RefundRule.days_before_tour_min.desc(), RefundRule.id.asc())
+            .all()
+        )
+    if not rules:
+        return "See your booking for the applicable cancellation and refund terms."
+
+    parts = []
+    for rule in rules:
+        if rule.description:
+            parts.append(rule.description.strip())
+            continue
+        lower = f"{rule.days_before_tour_min}+ days" if rule.days_before_tour_max is None else f"{rule.days_before_tour_min}-{rule.days_before_tour_max} days"
+        parts.append(f"{lower} before departure: {money_str(rule.refund_percentage)}% refund")
+    return "; ".join(part for part in parts if part) or "See your booking for the applicable cancellation and refund terms."
+
+
+def _confirmation_receipt_attachment(db: Session, booking: Booking) -> list[tuple[str, bytes, str]]:
+    """Build the private receipt for the two booking-party confirmation emails."""
+    try:
+        from app.services.confirmation_receipts import generate_confirmation_receipt
+        path, filename = generate_confirmation_receipt(db, booking.id)
+        return [(filename, path.read_bytes(), "pdf")]
+    except Exception:
+        logger.exception("Could not generate confirmation receipt for booking %s", booking.id)
+        return []
 
 
 def _booking_code(db: Session, booking_id: int, source: str = "customer") -> str:
@@ -240,7 +328,7 @@ def _user_role(user: User | None) -> str:
     return "admin"
 
 
-def _booking_status_label(status: str | None, portal: str = "admin") -> str:
+def _booking_status_label(status: str | None, portal: str = "admin", cancellation_source: str | None = None) -> str:
     """Return portal-safe copy for a persisted booking status.
 
     Status values are workflow data.  Customer and agent messages must not
@@ -248,26 +336,28 @@ def _booking_status_label(status: str | None, portal: str = "admin") -> str:
     recipients need the operational meaning.
     """
     value = (status or "").strip().lower()
-    booking_party = portal in {"customer", "agent"}
+    cancellation_by_customer = (cancellation_source or "").strip().lower() in {
+        "customer_request", "customer_unpaid_removed",
+    }
     labels = {
-        "draft": "Payment Required" if booking_party else "Draft",
-        "pending_payment": "Payment Required" if booking_party else "Awaiting Payment",
-        "pending_supplier_assignment": "Booking Successful — Awaiting Tourvaa Confirmation" if booking_party else "Awaiting Supplier Assignment",
-        "payment_authorized": "Booking Successful — Awaiting Tourvaa Confirmation" if booking_party else "Payment Authorized",
-        "pending_supplier_acceptance": "Booking Successful — Awaiting Tourvaa Confirmation" if booking_party else ("Awaiting Your Decision" if portal == "supplier" else "Awaiting Supplier Acceptance"),
-        "supplier_reassignment_required": "Supplier Reassignment in Progress" if booking_party else "Supplier Reassignment Required",
-        "supplier_accepted": "Acceptance Recorded" if portal == "supplier" else ("Booking Successful — Awaiting Tourvaa Confirmation" if booking_party else "Supplier Accepted"),
+        "draft": "Booking Request Received",
+        "pending_payment": "Booking Request Received",
+        "pending_supplier_assignment": "Booking Request Received",
+        "payment_authorized": "Booking Request Received",
+        "pending_supplier_acceptance": "Booking Request Received",
+        "supplier_reassignment_required": "Booking Request Received",
+        "supplier_accepted": "Booking Request Received",
         "confirmed": "Booking Confirmed",
         "ready_to_travel": "Booking Confirmed",
         "upcoming": "Booking Confirmed",
         "postponed": "Travel Date Updated" if portal != "customer" else "Booking Confirmed",
-        "ongoing": "Tour In Progress",
-        "completed": "Tour Completed",
-        "cancellation_requested": "Cancellation Requested",
-        "declined": "Booking Declined" if portal == "supplier" else "Booking Cancelled",
-        "cancelled": "Booking Cancelled",
-        "refunded": "Refund Completed",
-        "partially_refunded": "Partially Refunded",
+        "ongoing": "Ongoing",
+        "completed": "Completed",
+        "cancellation_requested": "Booking Request Received",
+        "declined": "Cancelled by Tourvaa",
+        "cancelled": "Cancelled by Customer" if cancellation_by_customer else "Cancelled by Tourvaa",
+        "refunded": "Cancelled by Customer" if cancellation_by_customer else "Cancelled by Tourvaa",
+        "partially_refunded": "Cancelled by Customer" if cancellation_by_customer else "Cancelled by Tourvaa",
     }
     return labels.get(value, value.replace("_", " ").title() if value else "Booking Updated")
 
@@ -1428,7 +1518,10 @@ def _resolve_discount(db: Session, promo_code: str | None, tour, subtotal, consu
         # Supplier discounts have already reduced the supplier units before
         # markup in _price_booking. Only Tourvaa's own discount belongs here,
         # after markup, against the publishable/storefront subtotal.
-        row = find_active_discount_stack(db, tour, lock=consume, effective_at=travel_date)["tourvaa"]
+        # Discount validity is assessed when the reservation is made. The
+        # travel date remains relevant to availability and date pricing, but
+        # never makes a live promotion expire for a future departure.
+        row = find_active_discount_stack(db, tour, lock=consume)["tourvaa"]
         if not row or money(subtotal) < money(row.minimum_booking_amount or 0):
             return money(0), None
         if row.usage_limit is not None and (row.used_count or 0) >= row.usage_limit:
@@ -1622,6 +1715,11 @@ def _bookable_calendar_capacity(tour: Tour | None, calendar: TourCalendar) -> in
     return int(calendar.available_seats or 0)
 
 
+def _is_day_tour(tour: Tour | None) -> bool:
+    """Whether a tour is explicitly configured without an overnight stay."""
+    return tour is not None and getattr(tour, "number_of_nights", None) == 0
+
+
 def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False, pricing_details: dict | None = None):
     """Price a booking. When pricing_details (a dict) is passed it is filled
     with the resolved price source, unit prices and group-discount base so
@@ -1710,10 +1808,9 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         price_source = "DATE_OVERRIDE"
     supplier_adult_original_unit = supplier_adult_unit
     supplier_child_original_unit = supplier_child_unit
-    discount_travel_date = calendar.tour_date if calendar and calendar.tour_date else _parse_dt(data.tour_start_date)
     if slab and tour:
         from app.services.discounts import find_active_discount_stack, discount_amount_for
-        supplier_discount = find_active_discount_stack(db, tour, lock=consume_discount, effective_at=discount_travel_date)["supplier"]
+        supplier_discount = find_active_discount_stack(db, tour, lock=consume_discount)["supplier"]
         raw_supplier_total = money(supplier_adult_unit * adults + supplier_child_unit * children)
         if supplier_discount and raw_supplier_total >= money(supplier_discount.minimum_booking_amount or 0):
             supplier_discount_amount = min(
@@ -1837,6 +1934,12 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
 
     accommodation_rows = []
     accommodation_total = money(0)
+    # A tour explicitly configured with zero nights is a day tour. Do not
+    # accept an accommodation extra from an old UI, crafted API request, or
+    # stale checkout session, because it would create a charge for a stay
+    # that is not part of the tour.
+    if _is_day_tour(tour) and data.accommodations:
+        raise HTTPException(status_code=400, detail="Accommodation options are not available for day tours")
     for item in data.accommodations:
         row = db.query(TourAccommodationExtra).filter(TourAccommodationExtra.id == item.id, TourAccommodationExtra.status == "active").first() if item.id else None
         if not row or (data.tour_id and row.tour_id != data.tour_id):
@@ -1861,6 +1964,8 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         row = db.query(TourExtension).filter(TourExtension.id == item.id, TourExtension.status == "active").first() if item.id else None
         if not row or (data.tour_id and row.tour_id != data.tour_id):
             raise HTTPException(status_code=400, detail="Invalid tour extension")
+        if _is_day_tour(tour) and row.category in {"room_upgrade", "additional_night"}:
+            raise HTTPException(status_code=400, detail="Accommodation options are not available for day tours")
         unit = money(row.extra_price)
         qty = _addon_quantity(row.price_type, item.quantity, label=f"Extension '{row.extension_title}'")
         total = money(unit * qty)
@@ -1884,7 +1989,6 @@ def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False
         tour,
         discounted_tour_amount,
         consume=consume_discount,
-        travel_date=discount_travel_date,
         redemption_rows=discount_redemptions,
     )
     if pricing_details is not None:
@@ -2002,7 +2106,11 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
     if supplier_acceptance_status:
         query = query.filter(Booking.supplier_acceptance_status == supplier_acceptance_status.strip().lower())
     if cancellation_source:
-        query = query.filter(Booking.cancellation_source == cancellation_source.strip().lower())
+        requested_sources = [value.strip().lower() for value in cancellation_source.split(",") if value.strip()]
+        if len(requested_sources) == 1:
+            query = query.filter(Booking.cancellation_source == requested_sources[0])
+        elif requested_sources:
+            query = query.filter(Booking.cancellation_source.in_(requested_sources))
     if country_id:
         query = query.filter(Booking.country_id == country_id)
     if supplier_id:
@@ -2447,6 +2555,45 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         except Exception:
             logger.warning("Reservation invoice generation/email failed for booking %s", booking.id, exc_info=True)
 
+        # Reserve Now has no captured deposit, so it never reaches the
+        # payment-receipt trigger. Give the agent a durable acknowledgement
+        # of the reservation and its outstanding balance instead.
+        if booking.agent and booking.agent.user and booking.agent.user.email:
+            from app.services.notification_delivery import dispatch_lifecycle_email
+
+            agent_url = f"{settings.FRONTEND_URL}/agent/bookings/{booking.id}"
+            dispatch_lifecycle_email(
+                db,
+                event="reserve_now_created",
+                entity_type="booking",
+                entity_id=booking.id,
+                recipient_type="agent",
+                recipient_email=booking.agent.user.email,
+                template_key="booking_confirmation",
+                values={
+                    "name": booking.agent.agent_name,
+                    "booking_code": booking.booking_code,
+                    "tour_name": booking.tour_name,
+                    "tour_date": booking.tour_date or "",
+                    "adults": booking.adults_count,
+                    "currency": booking.currency,
+                    "total": booking.final_amount,
+                    "login_url": agent_url,
+                    "button_text": "View reservation",
+                    "button_url": agent_url,
+                    "payment_summary": _booking_payment_email_summary(booking),
+                },
+                fallback_subject=f"Reservation received - {booking.booking_code}",
+                fallback_html=(
+                    f"<p>Your Reserve Now booking {booking.booking_code} was received. "
+                    f"Outstanding balance: {booking.currency} {money_str(booking.amount_pending)}.</p>"
+                    f"<p><a href='{agent_url}'>View reservation</a></p>"
+                ),
+            )
+            # This call happens after the booking commit above; commit the
+            # outbox reservation so the post-commit delivery hook can run.
+            db.commit()
+
     return serialize_booking_for_actor(db, booking, actor)
 
 
@@ -2679,9 +2826,11 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
     db.commit(); db.refresh(booking)
 
     from app.services.notifications import enqueue_notification, notify_admins
-    customer_label = _booking_status_label(data.booking_status, "customer")
-    agent_label = _booking_status_label(data.booking_status, "agent")
+    customer_label = _booking_status_label(data.booking_status, "customer", booking.cancellation_source)
+    agent_label = _booking_status_label(data.booking_status, "agent", booking.cancellation_source)
     is_final_confirmation = data.booking_status == "confirmed"
+    cancellation_policy = _cancellation_policy_summary(db, booking) if is_final_confirmation else ""
+    payment_summary = _booking_payment_email_summary(booking)
     notification_title = "Your Tourvaa Booking Is Confirmed" if is_final_confirmation else "Booking updated"
     notification_event = "booking_confirmed" if is_final_confirmation else "booking_status_changed"
     notify_admins(
@@ -2717,11 +2866,13 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
                 db, "booking_confirmed",
                 {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
                  "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
-                 "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
+                 "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url,
+                 "cancellation_policy": cancellation_policy, "payment_summary": payment_summary},
                 f"Your booking is confirmed - {booking.booking_code}",
-                booking_confirmed_email(booking.customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
+                booking_confirmed_email(booking.customer.full_name, booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url, cancellation_policy, payment_summary),
                 booking.customer.email,
                 event=notification_event, entity_id=booking.id, recipient_type="customer", event_version=event_version,
+                attachments=_confirmation_receipt_attachment(db, booking),
             )
         else:
             from app.utils.email_templates import booking_status_update_email
@@ -2729,9 +2880,9 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
                 db, "booking_status_update",
                 {"name": booking.customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
                  "new_status": customer_label, "reason": data.reason or "", "login_url": login_url,
-                 "button_text": "View booking", "button_url": login_url},
+                 "button_text": "View booking", "button_url": login_url, "payment_summary": payment_summary},
                 f"Booking update - {booking.booking_code}",
-                booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, customer_label, data.reason or "", login_url),
+                booking_status_update_email(booking.customer.full_name, booking.booking_code, booking.tour_name, customer_label, data.reason or "", login_url, payment_summary),
                 booking.customer.email,
                 event=notification_event, entity_id=booking.id, recipient_type="customer", event_version=event_version,
             )
@@ -2741,15 +2892,15 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
         customer_name = booking.customer.full_name if booking.customer else "Customer"
         _send_booking_email(
             db, "supplier_booking_confirmed",
-            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": supplier_booking_currency(booking), "total": supplier_booking_value(booking), "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url},
+            {"name": booking.supplier.supplier_name, "supplier_name": booking.supplier.supplier_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "tour_date": booking.tour_date or "", "customer_name": customer_name, "adults": booking.adults_count, "currency": supplier_booking_currency(booking), "total": supplier_booking_value(booking), "portal_url": portal_url, "button_text": "View booking", "button_url": portal_url, "cancellation_policy": cancellation_policy},
             f"Booking confirmed - {booking.booking_code}",
-            supplier_booking_confirmed_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, supplier_booking_currency(booking), money_str(supplier_booking_value(booking)), portal_url),
+            supplier_booking_confirmed_email(booking.supplier.supplier_name, booking.booking_code, booking.tour_name, booking.tour_date or "", customer_name, booking.adults_count, supplier_booking_currency(booking), money_str(supplier_booking_value(booking)), portal_url, cancellation_policy),
             booking.supplier.user.email,
             event=notification_event, entity_id=booking.id, recipient_type="supplier", event_version=event_version,
         )
     elif booking.supplier and booking.supplier.user and booking.supplier.user.email:
         from app.utils.email_templates import booking_status_update_email
-        supplier_label = _booking_status_label(data.booking_status, "supplier")
+        supplier_label = _booking_status_label(data.booking_status, "supplier", booking.cancellation_source)
         portal_url = f"{settings.FRONTEND_URL}/supplier/bookings/{booking.id}"
         _send_booking_email(
             db, "booking_status_update",
@@ -2768,6 +2919,8 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
     from app.utils.email_templates import admin_booking_event_email
     admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
     admin_detail = f"Booking {booking.booking_code} is now: {data.booking_status.replace('_', ' ').title()}."
+    if is_final_confirmation:
+        admin_detail += f" Cancellation & refund policy: {cancellation_policy}"
     dispatch_admin_lifecycle_emails(
         db,
         event=notification_event,
@@ -2776,7 +2929,7 @@ def update_booking_status(db: Session, booking_id: int, data: BookingStatusUpdat
         template_key="admin_booking_event",
         values={"event_title": "Booking confirmed" if is_final_confirmation else "Booking status updated", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "View booking", "button_url": admin_url},
         fallback_subject=f"Booking update - {booking.booking_code}",
-        fallback_html=admin_booking_event_email("Booking confirmed" if is_final_confirmation else "Booking status updated", admin_detail, booking.booking_code, booking.tour_name, admin_url),
+        fallback_html=admin_booking_event_email("Booking confirmed" if is_final_confirmation else "Booking status updated", admin_detail, booking.booking_code, booking.tour_name, admin_url, cancellation_policy or "Not applicable to this status update."),
         event_version=event_version,
     )
     # Persist reservations before the asynchronous sender sees them.
@@ -2857,8 +3010,14 @@ def cancel_booking(db: Session, booking_id: int, data: BookingCancelRequest, act
     _ensure_booking_access(booking, actor)
     if booking.booking_status == "cancelled":
         raise HTTPException(status_code=400, detail="Booking is already cancelled")
+    actor_role = _user_role(actor)
+    cancellation_source = {
+        "customer": "customer_request",
+        "agent": "agent_request",
+        "supplier": "supplier_request",
+    }.get(actor_role, "tourvaa_admin")
     booking = _cancel_booking_core(
-        db, booking, actor, request, data.reason, "admin", _user_role(actor),
+        db, booking, actor, request, data.reason, cancellation_source, actor_role,
         "cancel_booking", include_new_values=True,
         settle_reason=data.reason or "Cancelled by admin",
     )
@@ -3052,9 +3211,11 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
         return serialize_booking_for_actor(db, booking, actor)
     booking.supplier_acceptance_status = "accepted"
 
-    # Supplier acceptance is an operational milestone.  Only Tourvaa can
-    # issue the customer-facing final confirmation.
+    # Record the supplier decision for audit, then automatically issue the
+    # final confirmation. Admin intervention is required only when a supplier
+    # declines/cancels and the booking needs reassignment or cancellation work.
     _set_status(db, booking, "supplier_accepted", actor, "supplier", data.reason or "Supplier accepted booking")
+    _set_status(db, booking, "confirmed", actor, "supplier", "Automatically confirmed after supplier acceptance")
 
     # Persist the supplier's operational decision before any gateway, ledger,
     # notification or email work.  Those integrations must not turn a valid
@@ -3130,48 +3291,51 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
                 logger.warning("Affiliate conversion recording failed for booking %s: %s", booking.id, error)
 
     try:
-        notify_admins(db, notification_type="supplier_accepted_booking", title="Supplier accepted booking", message=f"Supplier accepted {booking.booking_code}", entity_type="booking", entity_id=booking.id)
+        notify_admins(db, notification_type="booking_confirmed", title="Booking confirmed", message=f"Supplier accepted and confirmed {booking.booking_code}", entity_type="booking", entity_id=booking.id)
         if booking.booking_source != "agent" and booking.customer and booking.customer.user_id:
-            enqueue_notification(db, user_id=booking.customer.user_id, notification_type="supplier_accepted", title="Supplier accepted your booking", message=f"Booking {booking.booking_code} is awaiting Tourvaa confirmation", entity_type="booking", entity_id=booking.id)
+            enqueue_notification(db, user_id=booking.customer.user_id, notification_type="booking_confirmed", title="Your Tourvaa Booking Is Confirmed", message=f"Booking {booking.booking_code} is confirmed.", entity_type="booking", entity_id=booking.id)
         if booking.agent and booking.agent.user_id:
             enqueue_notification(
                 db,
                 user_id=booking.agent.user_id,
-                notification_type="supplier_accepted",
-                title="Supplier accepted booking",
-                message=f"Booking {booking.booking_code} was accepted and is awaiting Tourvaa confirmation",
+                notification_type="booking_confirmed",
+                title="Your Tourvaa Booking Is Confirmed",
+                message=f"Booking {booking.booking_code} is confirmed.",
                 entity_type="booking",
                 entity_id=booking.id,
             )
 
         recipient = _booking_email_recipient(booking)
-        if recipient:
-            from app.utils.email_templates import booking_status_update_email
+        if recipient and booking.booking_source != "agent":
+            from app.utils.email_templates import booking_confirmed_email
             login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
             _send_booking_email(
-                db, "booking_status_update",
+                db, "booking_confirmed",
                 {"name": recipient[0], "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-                 "new_status": "Supplier Accepted — Awaiting Tourvaa Confirmation", "reason": "", "login_url": login_url,
-                 "button_text": "View booking", "button_url": login_url},
-                f"Supplier accepted your booking - {booking.booking_code}",
-                booking_status_update_email(recipient[0], booking.booking_code, booking.tour_name, "supplier_accepted", "Awaiting Tourvaa confirmation.", login_url),
-                recipient[1], event="supplier_accepted", entity_id=booking.id, recipient_type="customer",
+                 "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
+                 "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url,
+                 "cancellation_policy": _cancellation_policy_summary(db, booking),
+                 "payment_summary": _booking_payment_email_summary(booking)},
+                f"Your booking is confirmed - {booking.booking_code}",
+                booking_confirmed_email(recipient[0], booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url, _cancellation_policy_summary(db, booking), _booking_payment_email_summary(booking)),
+                recipient[1], event="booking_confirmed", entity_id=booking.id, recipient_type="customer",
+                attachments=_confirmation_receipt_attachment(db, booking),
             )
 
         _email_agent_booking_status(
-            db, booking, "supplier_accepted", "Supplier accepted the booking. It is awaiting Tourvaa confirmation.", event="supplier_accepted",
+            db, booking, "confirmed", "", event="booking_confirmed",
         )
 
         from app.services.notification_delivery import dispatch_admin_lifecycle_emails
         from app.utils.email_templates import admin_booking_event_email
         admin_url = f"{settings.FRONTEND_URL}/admin/bookings/{booking.id}"
-        admin_detail = f"Supplier accepted booking {booking.booking_code}. It awaits Tourvaa final confirmation."
+        admin_detail = f"Supplier accepted booking {booking.booking_code}; it was confirmed automatically."
         dispatch_admin_lifecycle_emails(
-            db, event="supplier_accepted", entity_type="booking", entity_id=booking.id,
+            db, event="booking_confirmed", entity_type="booking", entity_id=booking.id,
             template_key="admin_booking_event",
-            values={"event_title": "Supplier accepted booking", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "Review and confirm booking", "button_url": admin_url},
-            fallback_subject=f"Supplier accepted booking - {booking.booking_code}",
-            fallback_html=admin_booking_event_email("Supplier accepted booking", admin_detail, booking.booking_code, booking.tour_name, admin_url),
+            values={"event_title": "Booking confirmed", "detail": admin_detail, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "admin_url": admin_url, "button_text": "View booking", "button_url": admin_url},
+            fallback_subject=f"Booking confirmed - {booking.booking_code}",
+            fallback_html=admin_booking_event_email("Booking confirmed", admin_detail, booking.booking_code, booking.tour_name, admin_url),
         )
         db.commit()
     except Exception:
@@ -3530,13 +3694,15 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
         )
     recipient = _booking_email_recipient(booking)
     if recipient:
+        payment_summary = _booking_payment_email_summary(booking)
         _send_booking_email(
             db, "booking_confirmation",
             {"name": recipient[0], "booking_code": booking.booking_code, "tour_name": booking.tour_name,
              "tour_date": booking.tour_date or "", "adults": booking.adults_count, "currency": booking.currency,
-             "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url},
+             "total": booking.final_amount, "login_url": login_url, "button_text": "View booking", "button_url": login_url,
+             "payment_summary": payment_summary},
             f"Booking received - {booking.booking_code}",
-            booking_confirmation_email(recipient[0], booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url),
+            booking_confirmation_email(recipient[0], booking.booking_code, booking.tour_name, booking.tour_date or "", booking.adults_count, booking.currency, booking.final_amount, login_url, payment_summary),
             recipient[1],
             event="booking_created",
             entity_id=booking.id,

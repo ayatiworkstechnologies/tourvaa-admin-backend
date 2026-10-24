@@ -11,6 +11,7 @@ from app.utils.operations import (
     RejectRequest,
     filter_review_query,
     get_or_404,
+    reject_item,
     relationship_list,
     serialize_common_review,
     simple_paginate,
@@ -584,19 +585,11 @@ def approve_supplier(
 
 
 def reject_supplier(db: Session, supplier_id: int, data: RejectRequest, actor: User, request: Request | None = None):
-    # Legacy compatibility: the corrected status model has no terminal
-    # supplier "rejected" approval state. Route old rejection requests through
-    # the actionable information-required state instead.
-    return partial_approve_supplier(
-        db,
-        supplier_id,
-        PartialApprovalRequest(
-            admin_comments=data.admin_comments,
-            pending_requirements=data.rejection_reason,
-        ),
-        actor,
-        request,
-    )
+    # Rejection is terminal and must not be conflated with the actionable
+    # "more information required" workflow.  The shared operation records the
+    # rejection history, disables operational access, and reserves the
+    # supplier_rejected lifecycle email without making SMTP a business blocker.
+    return reject_item(db, get_supplier(db, supplier_id), data, actor, "supplier", serialize_supplier, request)
 
 
 def bulk_approve_suppliers(

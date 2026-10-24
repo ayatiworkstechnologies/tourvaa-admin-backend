@@ -29,6 +29,7 @@ from app.services.customers import serialize_customer
 from app.services import messaging as messaging_service
 from app.services.invoices import list_invoices
 from app.services.itinerary import download_itinerary_pdf
+from app.services.confirmation_receipts import download_confirmation_receipt
 from app.schemas.payments import PaymentCreate
 from app.services.payments import create_payment, get_customer_payments
 from app.models.users import User
@@ -249,6 +250,12 @@ def customer_booking_detail(booking_id: int, request: Request, db: Session = Dep
 @router.get("/bookings/{booking_id}/itinerary")
 def customer_booking_itinerary(booking_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     fs_path, filename = download_itinerary_pdf(db, booking_id, current_user)
+    return FileResponse(path=fs_path, filename=filename, media_type="application/pdf")
+
+
+@router.get("/bookings/{booking_id}/confirmation-receipt")
+def customer_booking_confirmation_receipt(booking_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    fs_path, filename = download_confirmation_receipt(db, booking_id, current_user)
     return FileResponse(path=fs_path, filename=filename, media_type="application/pdf")
 
 

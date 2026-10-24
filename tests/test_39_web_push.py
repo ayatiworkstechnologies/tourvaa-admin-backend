@@ -72,6 +72,26 @@ def test_generic_entity_notification_keeps_reference_and_safe_action():
         db.close()
 
 
+def test_absolute_metadata_action_is_replaced_with_verified_internal_route():
+    db = SessionLocal()
+    try:
+        notification = enqueue_notification(
+            db,
+            user_id=1,
+            notification_type="push_agent_route_test",
+            title="Commission request",
+            message="M",
+            entity_type="agent",
+            entity_id=987654,
+            metadata={"action_url": "https://untrusted.example.test/admin/agents/987654", "action_label": "Review request"},
+        )
+        assert notification.metadata_json["action_url"] == "/admin/agents/987654"
+        assert notification.metadata_json["action_label"] == "Review request"
+    finally:
+        db.rollback()
+        db.close()
+
+
 def test_gone_subscriptions_are_deactivated_others_kept(monkeypatch):
     db = SessionLocal()
     gone = push.save_subscription(db, endpoint="https://push.example.test/gone-" + "x" * 600, p256dh="k", auth="a")

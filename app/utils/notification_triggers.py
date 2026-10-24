@@ -56,17 +56,18 @@ def send_templated_email(
 
 
 def admin_notification_recipients(db: Session) -> set[str]:
-    """Resolve configured operational admin mailboxes without hardcoding."""
-    from app.models.users import User
-    from app.models.roles import Role
-    admins = db.query(User).join(Role, User.role_id == Role.id).filter(Role.slug.in_(["super-admin", "admin"])).all()
-    recipients = {admin.email.strip().lower() for admin in admins if admin.email}
-    # System Settings may add operational mailboxes that are not user
-    # accounts. BCC is delivered independently so recipient addresses never
-    # appear in another recipient's message headers.
+    """Return only the mailboxes explicitly saved in Admin Settings.
+
+    Being an Admin/Super Admin portal user must not automatically subscribe a
+    personal login email to operational lifecycle mail.  Administrators choose
+    the recipients in Settings → Admin Notification Recipients instead.
+    """
     from app.models.settings import SmtpSetting
     setting = db.query(SmtpSetting).first()
+    recipients: set[str] = set()
     if setting:
+        # Each address is delivered independently; BCC addresses are never
+        # exposed in another recipient's message headers.
         for field in ("admin_notification_to", "admin_notification_cc", "admin_notification_bcc"):
             recipients.update(email.strip().lower() for email in (getattr(setting, field) or "").split(",") if email.strip())
     return recipients
@@ -166,7 +167,14 @@ def notify_bank_detail_edit_decision(db: Session, *, partner_type: str, partner_
         db, event=f"{partner_type}_bank_edit_{'approved' if approved else 'rejected'}",
         entity_type=partner_type, entity_id=partner_id, recipient_type=partner_type,
         recipient_email=_user_email(db, user_id), template_key="bank_detail_edit_decision",
-        values={"partner_name": partner_name, "decision": decision, "reason": reason or "", "login_url": portal_url},
+        values={
+            "partner_name": partner_name,
+            "decision": decision,
+            "reason": reason or "No additional details were provided.",
+            "login_url": portal_url,
+            "button_text": "Open payout settings",
+            "button_url": portal_url,
+        },
         fallback_subject=f"Bank-detail edit {decision}",
         fallback_html=f"<p>Hi {partner_name},</p><p>Your bank-detail edit request was {decision}. {reason}</p>",
     )
@@ -218,7 +226,13 @@ def notify_supplier_submitted_verification(db: Session, *, supplier_id: int, sup
     from app.services.notification_delivery import dispatch_admin_lifecycle_emails
     dispatch_admin_lifecycle_emails(
         db, event="supplier_submitted_verification", entity_type="supplier", entity_id=supplier_id,
-        template_key="supplier_submitted_verification", values={"supplier_name": supplier_name},
+        template_key="supplier_submitted_verification",
+        values={
+            "supplier_name": supplier_name,
+            "admin_url": f"{settings.FRONTEND_URL}/admin/suppliers/{supplier_id}",
+            "button_text": "Review supplier profile",
+            "button_url": f"{settings.FRONTEND_URL}/admin/suppliers/{supplier_id}",
+        },
         fallback_subject="Supplier profile submitted for review",
         fallback_html=supplier_submitted_verification_email(supplier_name),
     )
@@ -410,11 +424,18 @@ def notify_agent_registered(
 
 def notify_agent_submitted_verification(db: Session, *, agent_id: int, agent_name: str, user_id: int | None = None):
     notify_admins(db, notification_type="agent_submitted_verification", title="Agent Submitted for Review", message=f"Agent '{agent_name}' has submitted their profile for admin review.", entity_type="agent", entity_id=agent_id)
+    from app.config import settings
     from app.utils.email_templates import agent_submitted_verification_email
     from app.services.notification_delivery import dispatch_admin_lifecycle_emails
     dispatch_admin_lifecycle_emails(
         db, event="agent_submitted_verification", entity_type="agent", entity_id=agent_id,
-        template_key="agent_submitted_verification", values={"agent_name": agent_name},
+        template_key="agent_submitted_verification",
+        values={
+            "agent_name": agent_name,
+            "admin_url": f"{settings.FRONTEND_URL}/admin/agents/{agent_id}",
+            "button_text": "Review agent profile",
+            "button_url": f"{settings.FRONTEND_URL}/admin/agents/{agent_id}",
+        },
         fallback_subject="Agent profile submitted for review",
         fallback_html=agent_submitted_verification_email(agent_name),
     )
@@ -487,7 +508,11 @@ def notify_agent_commission_requested(
     from app.config import settings
 
     request_label = f"{request_value}{'%' if request_type == 'percentage' else ''} {request_type}"
-    admin_url = f"{settings.FRONTEND_URL.rstrip('/')}/admin/agents/{agent_id}"
+    # In-app notifications use a same-portal route. Email needs the absolute
+    # URL below, but an absolute URL is intentionally not navigated by the
+    # browser inbox to prevent an open redirect.
+    admin_path = f"/admin/agents/{agent_id}"
+    admin_url = f"{settings.FRONTEND_URL.rstrip('/')}{admin_path}"
     title = "Agent commission change requested"
     message = f"Agent '{agent_name}' requested a {request_label} commission change."
     notify_admins(
@@ -497,7 +522,7 @@ def notify_agent_commission_requested(
         message=message,
         entity_type="agent",
         entity_id=agent_id,
-        metadata={"action_url": admin_url, "action_label": "Review request"},
+        metadata={"action_url": admin_path, "action_label": "Review request"},
         event_key="agent_commission_requested",
         event_version=event_version,
     )
@@ -608,6 +633,415 @@ def notify_affiliate_registered(db: Session, *, affiliate_id: int, affiliate_nam
         background_tasks=background_tasks,
     )
     db.flush()
+
+
+def notify_affiliate_submitted_verification(
+    db: Session,
+    *,
+    affiliate_id: int,
+    affiliate_name: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Alert Tourvaa operations when an affiliate submits for review."""
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+    from app.utils.email_templates import base_email, esc
+
+    notify_admins(
+        db,
+        notification_type="affiliate_submitted",
+        title="Affiliate Submitted for Review",
+        message=f"Affiliate '{affiliate_name}' submitted their profile for review.",
+        entity_type="affiliate",
+        entity_id=affiliate_id,
+    )
+    admin_url = f"{settings.FRONTEND_URL}/admin/affiliates/{affiliate_id}"
+    dispatch_admin_lifecycle_emails(
+        db,
+        event="affiliate_submitted_verification",
+        entity_type="affiliate",
+        entity_id=affiliate_id,
+        template_key="affiliate_submitted_verification",
+        values={"affiliate_name": affiliate_name, "admin_url": admin_url},
+        fallback_subject=f"Affiliate profile submitted for review - {affiliate_name}",
+        fallback_html=base_email(
+            "Affiliate profile submitted for review",
+            f"{affiliate_name} submitted their affiliate profile for review.",
+            f"<p><strong>{esc(affiliate_name)}</strong> submitted their affiliate profile for review.</p>",
+            "Review affiliate profile",
+            admin_url,
+        ),
+        background_tasks=background_tasks,
+    )
+    db.flush()
+
+
+def notify_registration_pending_admin(
+    db: Session,
+    *,
+    user_id: int,
+    user_name: str,
+    user_email: str,
+    role_name: str,
+    phone: str = "",
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Alert Tourvaa operations that a new registration is pending admin approval."""
+    from app.config import settings
+    from app.services.notification_delivery import dispatch_admin_lifecycle_emails
+
+    notify_admins(
+        db,
+        notification_type="registration_pending",
+        title="New Registration Pending Approval",
+        message=f"New {role_name} registration from {user_name} ({user_email}) is awaiting admin approval.",
+        entity_type="user",
+        entity_id=user_id,
+    )
+    admin_url = f"{settings.FRONTEND_URL}/admin/users/{user_id}"
+    dispatch_admin_lifecycle_emails(
+        db,
+        event="registration_pending",
+        entity_type="user",
+        entity_id=user_id,
+        template_key="registration_pending",
+        values={
+            "name": user_name,
+            "email": user_email,
+            "phone": phone or "",
+            "role_name": role_name,
+            "admin_url": admin_url,
+            "button_text": "Review registration",
+            "button_url": admin_url,
+        },
+        fallback_subject="Tourvaa registration received",
+        fallback_body=(
+            f"Your Tourvaa registration is received and waiting for admin approval.\n\n"
+            f"Name: {user_name}\nEmail: {user_email}\nPhone: {phone or ''}\nRequested role: {role_name}"
+        ),
+        background_tasks=background_tasks,
+    )
+    db.flush()
+
+
+def notify_payment_pending(
+    db: Session,
+    *,
+    payment_id: int,
+    booking_code: str,
+    tour_name: str,
+    customer_name: str,
+    customer_email: str,
+    currency: str,
+    amount,
+    login_url: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Notify customer that payment is pending (not yet confirmed)."""
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    dispatch_lifecycle_email(
+        db,
+        event="payment_pending",
+        entity_type="payment",
+        entity_id=payment_id,
+        recipient_type="customer",
+        recipient_email=customer_email,
+        template_key="payment_pending",
+        values={
+            "name": customer_name,
+            "booking_code": booking_code,
+            "tour_name": tour_name,
+            "currency": currency,
+            "amount": amount,
+            "login_url": login_url,
+            "button_text": "View booking",
+            "button_url": login_url,
+        },
+        fallback_subject=f"Payment pending - {booking_code}",
+        fallback_html=f"<p>Hi {customer_name}, your payment for booking {booking_code} ({tour_name}) is pending. Amount: {currency} {amount}. We will notify you once the payment is confirmed.</p>",
+        background_tasks=background_tasks,
+    )
+
+
+def notify_email_changed(
+    db: Session,
+    *,
+    user_id: int,
+    user_name: str,
+    old_email: str,
+    new_email: str,
+    login_url: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Send security notification when a user's email address is changed."""
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    dispatch_lifecycle_email(
+        db,
+        event="email_changed",
+        entity_type="user",
+        entity_id=user_id,
+        recipient_type="user",
+        recipient_email=new_email,
+        template_key="email_changed",
+        values={
+            "name": user_name,
+            "old_email": old_email,
+            "new_email": new_email,
+            "login_url": login_url,
+            "button_text": "View account",
+            "button_url": login_url,
+        },
+        fallback_subject="Your Tourvaa email address was changed",
+        fallback_html=f"<p>Hi {user_name}, your Tourvaa account email address was changed from {old_email} to {new_email}. If you did not make this change, please contact Tourvaa support immediately.</p>",
+        background_tasks=background_tasks,
+    )
+
+
+def notify_bank_transfer_initiated(
+    db: Session,
+    *,
+    payment_id: int,
+    booking_code: str,
+    tour_name: str,
+    customer_name: str,
+    customer_email: str,
+    currency: str,
+    amount,
+    reference_number: str,
+    login_url: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Notify customer that a bank transfer has been initiated."""
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    dispatch_lifecycle_email(
+        db,
+        event="bank_transfer_initiated",
+        entity_type="payment",
+        entity_id=payment_id,
+        recipient_type="customer",
+        recipient_email=customer_email,
+        template_key="bank_transfer_initiated",
+        values={
+            "name": customer_name,
+            "booking_code": booking_code,
+            "tour_name": tour_name,
+            "currency": currency,
+            "amount": amount,
+            "reference_number": reference_number,
+            "login_url": login_url,
+            "button_text": "View booking",
+            "button_url": login_url,
+        },
+        fallback_subject=f"Bank transfer initiated - {booking_code}",
+        fallback_html=f"<p>Hi {customer_name}, a bank transfer of {currency} {amount} has been initiated for booking {booking_code} ({tour_name}). Reference: {reference_number}.</p>",
+        background_tasks=background_tasks,
+    )
+
+
+def notify_bank_transfer_verified(
+    db: Session,
+    *,
+    payment_id: int,
+    booking_code: str,
+    tour_name: str,
+    customer_name: str,
+    customer_email: str,
+    currency: str,
+    amount,
+    login_url: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Notify customer that a bank transfer has been verified."""
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    dispatch_lifecycle_email(
+        db,
+        event="bank_transfer_verified",
+        entity_type="payment",
+        entity_id=payment_id,
+        recipient_type="customer",
+        recipient_email=customer_email,
+        template_key="bank_transfer_verified",
+        values={
+            "name": customer_name,
+            "booking_code": booking_code,
+            "tour_name": tour_name,
+            "currency": currency,
+            "amount": amount,
+            "login_url": login_url,
+            "button_text": "View booking",
+            "button_url": login_url,
+        },
+        fallback_subject=f"Bank transfer verified - {booking_code}",
+        fallback_html=f"<p>Hi {customer_name}, your bank transfer of {currency} {amount} for booking {booking_code} ({tour_name}) has been verified.</p>",
+        background_tasks=background_tasks,
+    )
+
+
+def notify_credit_approval_pending(
+    db: Session,
+    *,
+    payment_id: int,
+    booking_code: str,
+    tour_name: str,
+    customer_name: str,
+    customer_email: str,
+    currency: str,
+    amount,
+    login_url: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Notify customer that credit approval is pending."""
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    dispatch_lifecycle_email(
+        db,
+        event="credit_approval_pending",
+        entity_type="payment",
+        entity_id=payment_id,
+        recipient_type="customer",
+        recipient_email=customer_email,
+        template_key="credit_approval_pending",
+        values={
+            "name": customer_name,
+            "booking_code": booking_code,
+            "tour_name": tour_name,
+            "currency": currency,
+            "amount": amount,
+            "login_url": login_url,
+            "button_text": "View booking",
+            "button_url": login_url,
+        },
+        fallback_subject=f"Credit approval pending - {booking_code}",
+        fallback_html=f"<p>Hi {customer_name}, your credit approval request for booking {booking_code} ({tour_name}) is pending review. Amount: {currency} {amount}.</p>",
+        background_tasks=background_tasks,
+    )
+
+
+def notify_credit_approval_approved(
+    db: Session,
+    *,
+    payment_id: int,
+    booking_code: str,
+    tour_name: str,
+    customer_name: str,
+    customer_email: str,
+    currency: str,
+    amount,
+    login_url: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Notify customer that credit approval was approved."""
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    dispatch_lifecycle_email(
+        db,
+        event="credit_approval_approved",
+        entity_type="payment",
+        entity_id=payment_id,
+        recipient_type="customer",
+        recipient_email=customer_email,
+        template_key="credit_approval_approved",
+        values={
+            "name": customer_name,
+            "booking_code": booking_code,
+            "tour_name": tour_name,
+            "currency": currency,
+            "amount": amount,
+            "login_url": login_url,
+            "button_text": "View booking",
+            "button_url": login_url,
+        },
+        fallback_subject=f"Credit approval approved - {booking_code}",
+        fallback_html=f"<p>Hi {customer_name}, your credit approval for booking {booking_code} ({tour_name}) has been approved. Amount: {currency} {amount}.</p>",
+        background_tasks=background_tasks,
+    )
+
+
+def notify_credit_approval_rejected(
+    db: Session,
+    *,
+    payment_id: int,
+    booking_code: str,
+    tour_name: str,
+    customer_name: str,
+    customer_email: str,
+    currency: str,
+    amount,
+    reason: str,
+    login_url: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Notify customer that credit approval was rejected."""
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    dispatch_lifecycle_email(
+        db,
+        event="credit_approval_rejected",
+        entity_type="payment",
+        entity_id=payment_id,
+        recipient_type="customer",
+        recipient_email=customer_email,
+        template_key="credit_approval_rejected",
+        values={
+            "name": customer_name,
+            "booking_code": booking_code,
+            "tour_name": tour_name,
+            "currency": currency,
+            "amount": amount,
+            "reason": reason,
+            "login_url": login_url,
+            "button_text": "View booking",
+            "button_url": login_url,
+        },
+        fallback_subject=f"Credit approval rejected - {booking_code}",
+        fallback_html=f"<p>Hi {customer_name}, your credit approval request for booking {booking_code} ({tour_name}) was not approved. Reason: {reason}.</p>",
+        background_tasks=background_tasks,
+    )
+
+
+def notify_affiliate_payout_completed(
+    db: Session,
+    *,
+    payout_id: int,
+    payout_code: str,
+    affiliate_id: int,
+    affiliate_name: str,
+    affiliate_email: str,
+    currency: str,
+    amount,
+    reference_number: str,
+    portal_url: str,
+    background_tasks: "BackgroundTasks | None" = None,
+):
+    """Notify affiliate that their payout has been completed."""
+    from app.services.notification_delivery import dispatch_lifecycle_email
+
+    dispatch_lifecycle_email(
+        db,
+        event="affiliate_payout_completed",
+        entity_type="affiliate_payout",
+        entity_id=payout_id,
+        recipient_type="affiliate",
+        recipient_email=affiliate_email,
+        template_key="affiliate_payout_completed",
+        values={
+            "affiliate_name": affiliate_name,
+            "payout_code": payout_code,
+            "currency": currency,
+            "amount": amount,
+            "reference_number": reference_number,
+            "portal_url": portal_url,
+            "button_text": "View payouts",
+            "button_url": portal_url,
+        },
+        fallback_subject=f"Affiliate payout completed - {payout_code}",
+        fallback_html=f"<p>Hi {affiliate_name}, your affiliate payout {payout_code} for {currency} {amount} has been completed. Reference: {reference_number}.</p>",
+        background_tasks=background_tasks,
+    )
 
 
 def notify_affiliate_rejected(db: Session, *, affiliate_id: int, affiliate_name: str, rejection_reason: str = "", user_id: int | None = None, background_tasks: "BackgroundTasks | None" = None):

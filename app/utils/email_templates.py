@@ -336,7 +336,7 @@ def _booking_rows(booking_code: str, tour_name: str, tour_date: str, adults: int
     return rows
 
 
-def booking_confirmation_email(name: str, booking_code: str, tour_name: str, tour_date: str, adults: int | str, currency: str, total: str | float, login_url: str):
+def booking_confirmation_email(name: str, booking_code: str, tour_name: str, tour_date: str, adults: int | str, currency: str, total: str | float, login_url: str, payment_summary: str = ""):
     summary = _summary_card(_booking_rows(booking_code, tour_name, tour_date, adults, currency, total))
     return base_email(
         "Booking received",
@@ -344,14 +344,15 @@ def booking_confirmation_email(name: str, booking_code: str, tour_name: str, tou
         (
             f"Thank you for booking with Tourvaa! {status_badge('Pending confirmation', 'warning')}<br /><br />"
             f"{summary}<br />"
-            "We will notify you as soon as your booking is confirmed."
+            + (f"<strong>Payment summary</strong><br />{esc(payment_summary).replace(chr(10), '<br />')}<br /><br />" if payment_summary else "")
+            + "We will notify you as soon as your booking is confirmed."
         ),
         "View booking",
         login_url,
     )
 
 
-def booking_confirmed_email(name: str, booking_code: str, tour_name: str, tour_date: str, adults: int | str, currency: str, total: str | float, login_url: str):
+def booking_confirmed_email(name: str, booking_code: str, tour_name: str, tour_date: str, adults: int | str, currency: str, total: str | float, login_url: str, cancellation_policy: str = "See your booking for the applicable policy.", payment_summary: str = ""):
     summary = _summary_card(_booking_rows(booking_code, tour_name, tour_date, adults, currency, total))
     return base_email(
         "Booking confirmed",
@@ -359,7 +360,9 @@ def booking_confirmed_email(name: str, booking_code: str, tour_name: str, tour_d
         (
             f"Great news! Your Tourvaa booking is now confirmed. {status_badge('Confirmed', 'success')}<br /><br />"
             f"{summary}<br />"
-            "Get ready for your trip! You can view your full booking details using the button below."
+            + (f"<strong>Payment summary</strong><br />{esc(payment_summary).replace(chr(10), '<br />')}<br /><br />" if payment_summary else "")
+            + f"Cancellation &amp; refund policy: {esc(cancellation_policy)}<br /><br />"
+            + "Get ready for your trip! You can view your full booking details using the button below."
         ),
         "View booking",
         login_url,
@@ -389,11 +392,11 @@ def booking_declined_email(name: str, booking_code: str, tour_name: str, reason:
         )
         similar_html = f'<br /><br /><strong>You might also like:</strong><ul style="margin:8px 0 0;padding-left:20px;">{rows}</ul>'
     return base_email(
-        "Booking declined by supplier",
+        "Booking request could not be confirmed",
         f"Hi {esc(name)},",
         (
-            f"Unfortunately your booking <strong>{esc(booking_code)}</strong> for <strong>{esc(tour_name)}</strong> was declined by the supplier.<br /><br />"
-            f"Reason: {esc(reason) or 'Declined by supplier'}<br /><br />"
+            f"Unfortunately, your booking request <strong>{esc(booking_code)}</strong> for <strong>{esc(tour_name)}</strong> could not be confirmed.<br /><br />"
+            f"Reason: {esc(reason) or 'No further details were provided'}<br /><br />"
             "Any authorized payment has been released. Please browse other available tours or contact our support team."
             f"{similar_html}"
         ),
@@ -402,7 +405,7 @@ def booking_declined_email(name: str, booking_code: str, tour_name: str, reason:
     )
 
 
-def booking_status_update_email(name: str, booking_code: str, tour_name: str, new_status: str, reason: str, login_url: str):
+def booking_status_update_email(name: str, booking_code: str, tour_name: str, new_status: str, reason: str, login_url: str, payment_summary: str = ""):
     readable_status = esc(new_status.replace('_', ' ').title())
     return base_email(
         f"Booking update: {readable_status}",
@@ -411,6 +414,7 @@ def booking_status_update_email(name: str, booking_code: str, tour_name: str, ne
             f"Your booking <strong>{esc(booking_code)}</strong> for <strong>{esc(tour_name)}</strong> status has been updated.<br /><br />"
             f"New status: <strong>{readable_status}</strong><br />"
             + (f"Reason: {esc(reason)}<br />" if reason else "")
+            + (f"<br /><strong>Payment summary</strong><br />{esc(payment_summary).replace(chr(10), '<br />')}" if payment_summary else "")
         ),
         "View booking",
         login_url,
@@ -460,7 +464,7 @@ def review_request_email(name: str, booking_code: str, tour_name: str, login_url
     )
 
 
-def supplier_booking_confirmed_email(supplier_name: str, booking_code: str, tour_name: str, tour_date: str, customer_name: str, adults: int | str, currency: str, total: str | float, portal_url: str):
+def supplier_booking_confirmed_email(supplier_name: str, booking_code: str, tour_name: str, tour_date: str, customer_name: str, adults: int | str, currency: str, total: str | float, portal_url: str, cancellation_policy: str = "See the booking for the applicable policy."):
     summary = _summary_card(_booking_rows(booking_code, tour_name, tour_date, adults, currency, total, extra=[("Customer", esc(customer_name))]))
     return base_email(
         "Booking confirmed",
@@ -468,6 +472,7 @@ def supplier_booking_confirmed_email(supplier_name: str, booking_code: str, tour
         (
             f"The booking you accepted is now confirmed. {status_badge('Confirmed', 'success')}<br /><br />"
             f"{summary}<br />"
+            f"Cancellation &amp; refund policy: {esc(cancellation_policy)}<br /><br />"
             "You can review the booking details and prepare for the tour in your supplier portal."
         ),
         "View booking",
@@ -493,7 +498,7 @@ def new_booking_admin_email(booking_code: str, tour_name: str, tour_date: str, c
     )
 
 
-def admin_booking_event_email(event_title: str, detail: str, booking_code: str, tour_name: str, admin_url: str):
+def admin_booking_event_email(event_title: str, detail: str, booking_code: str, tour_name: str, admin_url: str, cancellation_policy: str = "See the booking for the applicable policy."):
     """Generic admin notifier shared by every booking-lifecycle event (supplier
     accept/decline/cancel/start/complete/postpone, cancellation requests) so we
     don't hand-write a near-identical template per event."""
@@ -501,7 +506,7 @@ def admin_booking_event_email(event_title: str, detail: str, booking_code: str, 
     return base_email(
         event_title,
         "Hi team,",
-        f"{esc(detail)}<br /><br />{summary}",
+        f"{esc(detail)}<br /><br />{summary}<br />Cancellation &amp; refund policy: {esc(cancellation_policy)}",
         "View booking",
         admin_url,
     )
@@ -602,7 +607,7 @@ def cancellation_rejected_email(name: str, booking_code: str, tour_name: str, re
     )
 
 
-def payment_received_email(name: str, booking_code: str, tour_name: str, currency: str, amount: str | float, login_url: str):
+def payment_received_email(name: str, booking_code: str, tour_name: str, currency: str, amount: str | float, login_url: str, payment_summary: str = ""):
     return base_email(
         "Payment received",
         f"Hi {esc(name)},",
@@ -610,7 +615,8 @@ def payment_received_email(name: str, booking_code: str, tour_name: str, currenc
             f"We have received your payment for booking <strong>{esc(booking_code)}</strong>.<br /><br />"
             f"Tour: <strong>{esc(tour_name)}</strong><br />"
             f"Amount paid: <strong>{esc(currency)} {esc(amount)}</strong><br /><br />"
-            "Your payment has been captured. You can view your invoice in the customer portal."
+            + (f"<strong>{esc(payment_summary)}</strong><br /><br />" if payment_summary else "")
+            + "Your payment has been captured. You can view your invoice in the customer portal."
         ),
         "View booking",
         login_url,

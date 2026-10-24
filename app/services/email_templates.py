@@ -12,9 +12,9 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "registration_pending",
         "name": "Registration Pending",
-        "subject": "Tourvaa registration received",
+        "subject": "New registration pending review - {{role_name}}",
         "body": (
-            "Your Tourvaa registration is received and waiting for admin approval.\n\n"
+            "A new Tourvaa registration requires review.\n\n"
             "Name: {{name}}\n"
             "Email: {{email}}\n"
             "Phone: {{phone}}\n"
@@ -76,10 +76,16 @@ DEFAULT_EMAIL_TEMPLATES = [
         "body": "Hi {{name}}, your email verification link expired. Request a new link from the Tourvaa registration page.",
     },
     {
+        "key": "account_email_changed",
+        "name": "Account Email Changed",
+        "subject": "Your Tourvaa account email was changed",
+        "body": "Hi {{name}}, the email address for your Tourvaa account was changed from {{old_email}} to {{new_email}}. If you did not make this change, contact Tourvaa support immediately.",
+    },
+    {
         "key": "supplier_approval_pending",
         "name": "Supplier Approval Pending",
         "subject": "Your Tourvaa supplier profile is pending approval",
-        "body": "Hi {{supplier_name}}, your account is active and your supplier profile is pending review. You can sign in to complete your profile and upload verification documents.",
+        "body": "Hi {{supplier_name}}, your supplier profile is awaiting Tourvaa review. Complete any requested profile or verification details in your supplier portal. We will email you when a decision is made.",
     },
     {
         "key": "supplier_approved",
@@ -110,6 +116,7 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Date: {{tour_date}}\n"
             "Adults: {{adults}}\n"
             "Total: {{currency}} {{total}}\n\n"
+            "{{payment_summary}}\n\n"
             "We will notify you as soon as your booking is confirmed.\n\n"
             "View your booking: {{login_url}}"
         ),
@@ -125,6 +132,8 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Date: {{tour_date}}\n"
             "Adults: {{adults}}\n"
             "Total: {{currency}} {{total}}\n\n"
+            "{{payment_summary}}\n\n"
+            "Cancellation & refund policy: {{cancellation_policy}}\n\n"
             "Get ready for your trip!\n\nView your booking: {{login_url}}"
         ),
     },
@@ -140,10 +149,10 @@ DEFAULT_EMAIL_TEMPLATES = [
     },
     {
         "key": "booking_declined",
-        "name": "Booking Declined by Supplier",
-        "subject": "Booking declined - {{booking_code}}",
+        "name": "Booking Request Not Confirmed",
+        "subject": "Booking request could not be confirmed - {{booking_code}}",
         "body": (
-            "Unfortunately your booking {{booking_code}} for {{tour_name}} was declined by the supplier.\n\n"
+            "Unfortunately, your booking request {{booking_code}} for {{tour_name}} could not be confirmed.\n\n"
             "Reason: {{reason}}\n\n"
             "Any authorized payment has been released. Please browse other available tours or contact our support team.\n\nBrowse tours: {{login_url}}"
         ),
@@ -156,6 +165,7 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Your booking {{booking_code}} for {{tour_name}} status has been updated.\n\n"
             "New status: {{new_status}}\n"
             "Reason: {{reason}}\n\n"
+            "{{payment_summary}}\n\n"
             "View your booking: {{login_url}}"
         ),
     },
@@ -186,6 +196,7 @@ DEFAULT_EMAIL_TEMPLATES = [
             "Customer: {{customer_name}}\n"
             "Adults: {{adults}}\n"
             "Total: {{currency}} {{total}}\n\n"
+            "Cancellation & refund policy: {{cancellation_policy}}\n\n"
             "Review the booking details and prepare for the tour.\n\nView booking: {{portal_url}}"
         ),
     },
@@ -340,7 +351,7 @@ DEFAULT_EMAIL_TEMPLATES = [
         "key": "supplier_submitted_verification",
         "name": "Supplier Submitted Verification",
         "subject": "Supplier profile submitted for review",
-        "body": "Supplier {{supplier_name}} has submitted their profile for admin review.",
+        "body": "Supplier {{supplier_name}} has submitted their profile for admin review. Use the button below to review the supplier profile.",
     },
     {
         "key": "supplier_registered",
@@ -364,7 +375,7 @@ DEFAULT_EMAIL_TEMPLATES = [
         "key": "agent_submitted_verification",
         "name": "Agent Submitted Verification",
         "subject": "Agent profile submitted for review",
-        "body": "Agent {{agent_name}} has submitted their profile for admin review.",
+        "body": "Agent {{agent_name}} has submitted their profile for admin review. Use the button below to review the agent profile.",
     },
     {
         "key": "partner_verification_received",
@@ -376,7 +387,7 @@ DEFAULT_EMAIL_TEMPLATES = [
         "key": "bank_detail_edit_decision",
         "name": "Bank Detail Edit Decision",
         "subject": "Bank-detail edit {{decision}}",
-        "body": "Hi {{partner_name}}, your bank-detail edit request was {{decision}}. {{reason}} {{login_url}}",
+        "body": "Hi {{partner_name}}, your bank-detail edit request was {{decision}}.\n\n{{reason}}\n\nUse the button below to review your payout settings.",
     },
     {
         "key": "agent_registered",
@@ -441,6 +452,12 @@ DEFAULT_EMAIL_TEMPLATES = [
         "body": "{{affiliate_name}} has completed registration and is ready for review. Review the application in the authenticated admin portal: {{admin_url}}",
     },
     {
+        "key": "affiliate_submitted_verification",
+        "name": "Affiliate Submitted Verification (Admin)",
+        "subject": "Affiliate profile submitted for review - {{affiliate_name}}",
+        "body": "{{affiliate_name}} has submitted their affiliate profile for review. Review the profile in the authenticated admin portal: {{admin_url}}",
+    },
+    {
         "key": "affiliate_rejected",
         "name": "Affiliate Rejected",
         "subject": "Your Tourvaa affiliate application needs attention",
@@ -472,7 +489,7 @@ DEFAULT_EMAIL_TEMPLATES = [
             "We have received your payment for booking {{booking_code}}.\n\n"
             "Tour: {{tour_name}}\n"
             "Amount paid: {{currency}} {{amount}}\n\n"
-            "You can view your invoice in the customer portal.\n\nView booking: {{login_url}}"
+            "Use the button below to view your booking and invoice."
         ),
     },
     {
@@ -481,7 +498,8 @@ DEFAULT_EMAIL_TEMPLATES = [
         "subject": "Deposit received - {{booking_code}}",
         "body": (
             "We received your deposit for booking {{booking_code}}.\n\n"
-            "Tour: {{tour_name}}\nAmount received: {{currency}} {{amount}}\n\n"
+            "Tour: {{tour_name}}\nAmount received: {{currency}} {{amount}}\n"
+            "Remaining balance: {{currency}} {{amount_pending}}\n\n"
             "Your booking remains subject to the Tourvaa confirmation workflow.\n\nView booking: {{login_url}}"
         ),
     },
@@ -505,19 +523,19 @@ DEFAULT_EMAIL_TEMPLATES = [
         "key": "invoice_generated",
         "name": "Invoice Generated",
         "subject": "Invoice available - {{invoice_number}}",
-        "body": "Hi {{name}}, invoice {{invoice_number}} for booking {{booking_code}} is available. Total: {{currency}} {{total}}. View your booking: {{login_url}}",
+        "body": "Hi {{name}}, invoice {{invoice_number}} for booking {{booking_code}} is available. Total: {{currency}} {{total}}. Use the button below to view your invoice.",
     },
     {
         "key": "tour_submitted",
         "name": "Tour Submitted for Review",
         "subject": "Tour submitted for review - {{tour_name}}",
-        "body": "Your tour {{tour_name}} (version {{version}}) has been submitted to Tourvaa for review. {{login_url}}",
+        "body": "Your tour {{tour_name}} (version {{version}}) has been submitted to Tourvaa for review. Use the button below to view its current status.",
     },
     {
         "key": "tour_reviewed",
         "name": "Tour Review Decision",
         "subject": "Tour review update - {{tour_name}}",
-        "body": "Your tour {{tour_name}} (version {{version}}) was {{decision}}. {{reason}} {{login_url}}",
+        "body": "Your tour {{tour_name}} (version {{version}}) was {{decision}}.\n\n{{reason}}\n\nUse the button below to view the tour and any required next steps.",
     },
     {
         "key": "booking_modification_requested",
@@ -590,12 +608,60 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "contact_enquiry", "name": "Contact Enquiry",
         "subject": "New enquiry: {{subject}}",
-        "body": "Name: {{name}}\nEmail: {{email}}\nPhone: {{phone}}\nMessage: {{message}}",
+        "body": "Name: {{name}}\nEmail: {{email}}\nPhone: {{phone}}\nAudience: {{audience}}\nEnquiry type: {{enquiry_type}}\nMessage: {{message}}",
     },
     {
         "key": "newsletter_signup", "name": "Newsletter Signup",
         "subject": "New newsletter signup",
         "body": "{{email}} subscribed to the Tourvaa newsletter.",
+    },
+    {
+        "key": "payment_pending",
+        "name": "Payment Pending",
+        "subject": "Payment pending - {{booking_code}}",
+        "body": "Hi {{name}}, your payment for booking {{booking_code}} ({{tour_name}}) is pending. Amount: {{currency}} {{amount}}. We will notify you once the payment is confirmed. View booking: {{login_url}}",
+    },
+    {
+        "key": "bank_transfer_initiated",
+        "name": "Bank Transfer Initiated",
+        "subject": "Bank transfer initiated - {{booking_code}}",
+        "body": "Hi {{name}}, a bank transfer of {{currency}} {{amount}} has been initiated for booking {{booking_code}} ({{tour_name}}). Reference: {{reference_number}}. We will notify you once the transfer is verified. View booking: {{login_url}}",
+    },
+    {
+        "key": "bank_transfer_verified",
+        "name": "Bank Transfer Verified",
+        "subject": "Bank transfer verified - {{booking_code}}",
+        "body": "Hi {{name}}, your bank transfer of {{currency}} {{amount}} for booking {{booking_code}} ({{tour_name}}) has been verified. Your payment is now confirmed. View booking: {{login_url}}",
+    },
+    {
+        "key": "credit_approval_pending",
+        "name": "Credit Approval Pending",
+        "subject": "Credit approval pending - {{booking_code}}",
+        "body": "Hi {{name}}, your credit approval request for booking {{booking_code}} ({{tour_name}}) is pending review. Amount: {{currency}} {{amount}}. We will notify you of the decision. View booking: {{login_url}}",
+    },
+    {
+        "key": "credit_approval_approved",
+        "name": "Credit Approval Approved",
+        "subject": "Credit approval approved - {{booking_code}}",
+        "body": "Hi {{name}}, your credit approval for booking {{booking_code}} ({{tour_name}}) has been approved. Amount: {{currency}} {{amount}}. View booking: {{login_url}}",
+    },
+    {
+        "key": "credit_approval_rejected",
+        "name": "Credit Approval Rejected",
+        "subject": "Credit approval rejected - {{booking_code}}",
+        "body": "Hi {{name}}, your credit approval request for booking {{booking_code}} ({{tour_name}}) was not approved. Reason: {{reason}}. You can use an alternative payment method. View booking: {{login_url}}",
+    },
+    {
+        "key": "affiliate_payout_completed",
+        "name": "Affiliate Payout Completed",
+        "subject": "Affiliate payout completed - {{payout_code}}",
+        "body": "Hi {{affiliate_name}}, your affiliate payout {{payout_code}} for {{currency}} {{amount}} has been completed. Reference: {{reference_number}}. View payouts: {{portal_url}}",
+    },
+    {
+        "key": "email_changed",
+        "name": "Email Changed (Security)",
+        "subject": "Your Tourvaa email address was changed",
+        "body": "Hi {{name}}, your Tourvaa account email address was changed from {{old_email}} to {{new_email}}. If you did not make this change, please contact Tourvaa support immediately. View account: {{login_url}}",
     },
 ]
 
@@ -625,19 +691,30 @@ def seed_email_templates(db: Session):
 
         if not template:
             db.add(EmailTemplate(**item, is_active=True))
-        elif template.key == "booking_confirmed" and template.body:
+        elif template.key in {"booking_confirmed", "supplier_booking_confirmed"} and template.body:
             # Upgrade only the obsolete supplier-attribution sentence shown
             # in older installations. Do not overwrite any other admin-edited
             # subject/body content when seeding defaults.
             legacy_copy = "Great news! Your Tourvaa booking has been confirmed by the supplier."
             corrected_copy = "Great news! Your Tourvaa booking is now confirmed."
-            if legacy_copy in template.body:
+            if template.key == "booking_confirmed" and legacy_copy in template.body:
                 template.body = template.body.replace(legacy_copy, corrected_copy)
+            if "{{cancellation_policy}}" not in template.body:
+                template.body = template.body.rstrip() + "\n\nCancellation & refund policy: {{cancellation_policy}}"
         elif template.key == "booking_confirmation" and template.body:
             legacy_confirm_copy = "We will notify you as soon as your booking is confirmed by the supplier."
             corrected_confirm_copy = "We will notify you as soon as your booking is confirmed."
             if legacy_confirm_copy in template.body:
                 template.body = template.body.replace(legacy_confirm_copy, corrected_confirm_copy)
+            if "{{payment_summary}}" not in template.body:
+                updated_body = template.body.replace(
+                    "\n\nWe will notify you as soon as your booking is confirmed.",
+                    "\n\n{{payment_summary}}\n\nWe will notify you as soon as your booking is confirmed.",
+                )
+                template.body = updated_body if updated_body != template.body else template.body.rstrip() + "\n\n{{payment_summary}}"
+        elif template.key in {"booking_confirmed", "booking_status_update"} and template.body:
+            if "{{payment_summary}}" not in template.body:
+                template.body = template.body.rstrip() + "\n\n{{payment_summary}}"
         elif template.key in {"support_message_received", "booking_message_received"} and template.body:
             # Upgrade only the old stock notifications.  CMS-authored copy is
             # retained, including its own privacy and reply-link wording.
@@ -744,6 +821,8 @@ SAMPLE_VALUES = {
     "currency": "USD",
     "total": "1,249.00",
     "amount": "1,249.00",
+    "amount_pending": "999.20",
+    "payment_summary": "Deposit paid: USD 249.80\nRemaining balance: USD 999.20",
     "reason": "Requested by customer",
     "new_status": "Confirmed",
     "customer_name": "Jordan Smith",

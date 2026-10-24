@@ -1,6 +1,6 @@
 import pytest
 
-from app.utils.mailer import _SmtpConfig, _build_message
+from app.utils.mailer import _SmtpConfig, _build_message, _normalise_smtp_transport
 
 
 def _config(**overrides):
@@ -35,6 +35,13 @@ def test_message_has_aligned_transactional_headers_and_both_body_formats():
     assert message_id.endswith("@example.com>")
     assert message.get_body(preferencelist=("plain",)).get_content().strip() == "Your booking is confirmed."
     assert message.get_body(preferencelist=("html",)).get_content_subtype() == "html"
+
+
+def test_ssl_transport_disables_conflicting_starttls_setting():
+    normalized = _normalise_smtp_transport(_config(use_ssl=True, use_starttls=True))
+
+    assert normalized.use_ssl is True
+    assert normalized.use_starttls is False
 
 
 @pytest.mark.parametrize(

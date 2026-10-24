@@ -18,6 +18,11 @@ from app.models.users import User
 
 logger = logging.getLogger(__name__)
 
+# A payment authorization is not a receipt and supplier acceptance is not the
+# customer-facing final confirmation. Automated captures start only after the
+# booking enters one of these confirmed lifecycle states.
+FINAL_BOOKING_CONFIRMATION_STATUSES = frozenset({"confirmed", "ready_to_travel", "ongoing", "completed"})
+
 
 def _payment_code(payment_id: int) -> str:
     return str(payment_id)
@@ -53,8 +58,14 @@ def _email_customer_payment_received(db: Session, payment: Payment, amount) -> N
     from app.utils.email_templates import payment_received_email
     from app.services.notification_delivery import dispatch_lifecycle_email
     prior_paid = max(money(0), money(booking.amount_paid or 0) - money(amount))
+    amount_pending = max(money(0), money(booking.final_amount or booking.total_cost or 0) - money(booking.amount_paid or 0))
     event = "deposit_payment_received" if payment.payment_type == "partial" else "balance_payment_received" if prior_paid > 0 else "payment_success"
     template_key = event if event in {"deposit_payment_received", "balance_payment_received"} else "payment_received"
+    payment_summary = (
+        f"Deposit paid: {booking.currency} {money_str(amount)}. Remaining balance: {booking.currency} {money_str(amount_pending)}"
+        if event == "deposit_payment_received"
+        else f"Payment received: {booking.currency} {money_str(amount)}"
+    )
     if booking.booking_source != "agent" and customer and customer.email:
         login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
         dispatch_lifecycle_email(
@@ -62,10 +73,10 @@ def _email_customer_payment_received(db: Session, payment: Payment, amount) -> N
             recipient_type="customer", recipient_email=customer.email,
             template_key=template_key,
             values={"name": customer.full_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name,
-                    "currency": booking.currency, "amount": amount, "login_url": login_url,
+                    "currency": booking.currency, "amount": amount, "amount_pending": amount_pending, "login_url": login_url,
                     "button_text": "View booking", "button_url": login_url},
             fallback_subject=f"Payment received - {booking.booking_code}",
-            fallback_html=payment_received_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url),
+            fallback_html=payment_received_email(customer.full_name, booking.booking_code, booking.tour_name, booking.currency, amount, login_url, payment_summary),
             event_version=str(payment.id),
         )
     # An agent who made the reservation is a booking party too: they need the
@@ -79,9 +90,9 @@ def _email_customer_payment_received(db: Session, payment: Payment, amount) -> N
                 db, event=event, entity_type="payment", entity_id=payment.id,
                 recipient_type="agent", recipient_email=booking.agent.user.email,
                 template_key=template_key,
-                values={"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "currency": booking.currency, "amount": amount, "login_url": agent_url, "button_text": "View booking", "button_url": agent_url},
+                values={"name": booking.agent.agent_name, "booking_code": booking.booking_code, "tour_name": booking.tour_name, "currency": booking.currency, "amount": amount, "amount_pending": amount_pending, "login_url": agent_url, "button_text": "View booking", "button_url": agent_url},
                 fallback_subject=f"Payment received - {booking.booking_code}",
-                fallback_html=payment_received_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, agent_url),
+                fallback_html=payment_received_email(booking.agent.agent_name, booking.booking_code, booking.tour_name, booking.currency, amount, agent_url, payment_summary),
                 event_version=str(payment.id),
             )
     notify_admins(db, notification_type="payment_received", title="Payment received", message=f"Payment of {booking.currency} {amount} was received for booking {booking.booking_code}.", entity_type="payment", entity_id=payment.id)
@@ -525,7 +536,7 @@ def record_gateway_authorization(db: Session, payment: Payment, *, gateway_refer
 
 
 def capture_gateway_authorized_payment(db: Session, payment: Payment, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
-    """Capture a verified Stripe/PayPal authorization after supplier acceptance."""
+    """Capture a verified Stripe/PayPal authorization after final booking confirmation."""
     if payment.payment_status != "authorized":
         return serialize_payment(payment, detail=True)
     amount = money(payment.authorized_amount) - money(payment.captured_amount)
@@ -567,7 +578,7 @@ def capture_gateway_authorized_payment(db: Session, payment: Payment, actor: Opt
         from app.services.payments_gateway import get_paypal
         currency = (payment.booking.currency if payment.booking else None) or "USD"
         get_paypal(db).capture_authorization(payment.gateway_payment_id, str(amount), currency, f"capture:{payment.id}")
-    return capture_payment(db, payment.id, PaymentCapture(amount=amount, transaction_id=payment.gateway_payment_id, notes="Captured after supplier acceptance"), actor=actor, request=request)
+    return capture_payment(db, payment.id, PaymentCapture(amount=amount, transaction_id=payment.gateway_payment_id, notes="Captured after booking confirmation"), actor=actor, request=request)
 
 
 def capture_authorized_payment_for_operator(db: Session, payment_id: int, data: PaymentCapture, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
@@ -619,7 +630,7 @@ def record_gateway_capture_failure(db: Session, payment_id: int, error: Exceptio
 
 
 def retry_authorized_gateway_captures(db: Session) -> list[int]:
-    """Retry capture only for accepted supplier bookings with an active hold.
+    """Retry capture only for finally confirmed bookings with an active hold.
 
     The provider idempotency key is stable per payment, and capture_payment
     atomically changes the local row to paid. Repeated workers therefore cannot
@@ -633,7 +644,7 @@ def retry_authorized_gateway_captures(db: Session) -> list[int]:
             Payment.payment_status == "authorized",
             Payment.gateway.in_(["stripe", "paypal"]),
             Booking.supplier_acceptance_status == "accepted",
-            Booking.booking_status.in_(["supplier_accepted", "confirmed", "ready_to_travel", "ongoing", "completed"]),
+            Booking.booking_status.in_(FINAL_BOOKING_CONFIRMATION_STATUSES),
         )
         .all()
     )
@@ -676,7 +687,7 @@ def release_expired_gateway_holds(db: Session) -> list[int]:
         if not payment or payment.payment_status != "authorized":
             continue
         try:
-            release_gateway_authorized_payment(db, payment, "Authorization expired before supplier acceptance")
+            release_gateway_authorized_payment(db, payment, "Authorization expired before booking confirmation")
             expired.append(payment.id)
         except Exception:
             logger.exception("Could not release expired gateway hold for payment %s", payment.id)

@@ -664,6 +664,29 @@ def _finalize_login(db: Session, user: User, data, request=None):
             "user": auth_user,
         }
 
+    # Customer and Agent accounts are deliberately single-device accounts.
+    # Bumping token_version invalidates legacy tokens without a session claim;
+    # revoking the rows invalidates all current access/refresh tokens and
+    # makes the previous-device logout immediate on its next API request.
+    # Supplier, affiliate and back-office accounts retain their existing
+    # multi-device behaviour.
+    single_device_account = user.user_type in {"CUSTOMER", "AGENT"} or portal in {"customer", "agent"}
+    revoked_session_count = 0
+    if single_device_account:
+        now = utcnow()
+        revoked_session_count = (
+            db.query(UserSession)
+            .filter(UserSession.user_id == user.id, UserSession.status == "active")
+            .update({"status": "revoked", "revoked_at": now}, synchronize_session=False)
+        )
+        user.token_version = (user.token_version or 0) + 1
+        try:
+            from app.services.messaging_ws import ws_manager
+            ws_manager.request_close_user(user.id)
+        except Exception:
+            # WebSocket cleanup must never prevent an authenticated login.
+            logger.exception("Could not close prior sockets for single-device login user_id=%s", user.id)
+
     # Session is created before the tokens so its session_id can be embedded
     # as a token claim - that's what lets a single "revoke this session"
     # action (see services/sessions.revoke_session) actually invalidate the
@@ -717,6 +740,8 @@ def _finalize_login(db: Session, user: User, data, request=None):
             "client_type": data.client_type or "web",
             "device_id": data.device_id,
             "device_name": data.device_name,
+            "previous_sessions_revoked": revoked_session_count,
+            "single_device_policy": single_device_account,
         },
     )
     user.last_login_at = utcnow()

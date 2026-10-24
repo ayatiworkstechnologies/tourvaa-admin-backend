@@ -785,7 +785,7 @@ def send_customer_message(
         fallback_html=base_email(
             data.subject,
             f"Hi {esc(customer.full_name or customer.first_name or 'Customer')},",
-            f"<p style=\"white-space:pre-wrap\">{esc(data.message)}</p>",
+            f"<p>You have a new message from {esc(actor.name if actor else 'Tourvaa Admin')}.</p><p>Open the secure portal to read and reply to it.</p>",
             "View message",
             portal_url,
         ),

@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 import secrets
 from decimal import Decimal
 from math import ceil
@@ -18,10 +19,12 @@ from app.models.affiliate_tracking import (
 from app.schemas.affiliate_tracking import AffiliateLinkCreate, AffiliateLinkUpdate, AffiliatePayoutCreate
 from app.models.affiliates import Affiliate
 from app.models.bookings import Booking
-from app.utils.money import money, utcnow
+from app.utils.money import as_aware_utc, money, utcnow
 from app.services.affiliate_commission import compute_commission
 from app.services.audit import log_audit
 from app.services.notifications import enqueue_notification
+from app.services.notification_delivery import dispatch_lifecycle_email
+from app.config import settings
 from app.models.users import User
 
 
@@ -61,6 +64,41 @@ def ensure_affiliate_access(db: Session, affiliate_id: int, user: Optional[User]
         raise HTTPException(status_code=403, detail="Affiliate access denied")
 
 
+def _completed_booking_count(conversions) -> int:
+    """Count completed tours, not merely confirmed referral conversions.
+
+    Attribution is deliberately created when a booking is confirmed so its
+    commission and audit trail are available immediately.  The link-card
+    "bookings" statistic is a completed-tour performance metric, however,
+    and must not move until the traveller's tour is actually completed.
+    """
+    return sum(
+        1
+        for conversion in conversions
+        if (getattr(getattr(conversion, "booking", None), "booking_status", "") or "").lower() == "completed"
+    )
+
+
+PAYOUT_AVAILABILITY_DELAY = timedelta(hours=24)
+
+
+def is_booking_payout_eligible(booking: Booking, *, now=None) -> bool:
+    """Return whether a completed tour's commission may enter a payout.
+
+    A referral is recorded when a booking is confirmed for attribution and
+    auditability, but it is not payable until the tour has completed and the
+    24-hour post-tour window has passed. The explicit tour end timestamp is
+    required: falling back to ``updated_at`` would allow an unrelated edit to
+    make a commission payable early.
+    """
+    if not booking or (booking.booking_status or "").lower() != "completed":
+        return False
+    if not booking.tour_end_date:
+        return False
+    comparison_time = now or utcnow()
+    return as_aware_utc(booking.tour_end_date) + PAYOUT_AVAILABILITY_DELAY <= comparison_time
+
+
 def _s_link(r: AffiliateLink) -> dict:
     return {
         "id": r.id, "affiliate_id": r.affiliate_id, "ref_code": r.ref_code, "custom_alias": r.custom_alias,
@@ -74,7 +112,7 @@ def _s_link(r: AffiliateLink) -> dict:
         "attribution_model": r.attribution_model, "attribution_window_days": r.attribution_window_days,
         "valid_from": r.valid_from, "valid_until": r.valid_until,
         "status": r.status, "is_active": r.status == "active",
-        "total_clicks": len(r.clicks), "total_conversions": len(r.conversions),
+        "total_clicks": len(r.clicks), "total_conversions": _completed_booking_count(r.conversions),
         "created_by": r.created_by, "updated_by": r.updated_by,
         "created_at": r.created_at, "updated_at": r.updated_at,
     }
@@ -560,13 +598,7 @@ def reverse_conversion(db: Session, booking_id: int, *, refund_amount: Optional[
 
 def get_commissions(db: Session, affiliate_id: int) -> dict:
     rows = db.query(AffiliateConversion).filter(AffiliateConversion.affiliate_id == affiliate_id).all()
-    completed_ids = {
-        row[0]
-        for row in db.query(AffiliateConversion.id)
-        .join(Booking, AffiliateConversion.booking_id == Booking.id)
-        .filter(AffiliateConversion.affiliate_id == affiliate_id, Booking.booking_status == "completed")
-        .all()
-    }
+    completed_ids = {r.id for r in rows if is_booking_payout_eligible(r.booking)}
     live_rows = [r for r in rows if r.status not in ("void", "reversed")]
     total_commission = sum(money(r.commission_amount) for r in live_rows if r.id in completed_ids or r.status == "paid")
     pending = sum(money(r.commission_amount) for r in rows if r.id in completed_ids and r.status == "pending")
@@ -614,6 +646,10 @@ def create_payout(db: Session, data: AffiliatePayoutCreate, actor: User) -> dict
     if missing_ids:
         raise HTTPException(status_code=404, detail=f"Conversions not found for this affiliate: {missing_ids}")
 
+    unavailable_ids = sorted(c.id for c in conversions if not is_booking_payout_eligible(c.booking))
+    if unavailable_ids:
+        raise HTTPException(status_code=409, detail=f"Commissions are not yet available for payout: {unavailable_ids}")
+
     unpayable_ids = sorted(c.id for c in conversions if c.status not in ("pending", "confirmed"))
     if unpayable_ids:
         raise HTTPException(status_code=409, detail=f"Conversions already paid or reversed: {unpayable_ids}")
@@ -649,7 +685,40 @@ def create_payout(db: Session, data: AffiliatePayoutCreate, actor: User) -> dict
 
     aff = db.query(Affiliate).filter(Affiliate.id == data.affiliate_id).first()
     if aff and aff.user_id:
-        enqueue_notification(db, user_id=aff.user_id, notification_type="affiliate_payout", title="Payout Processed", message=f"Your affiliate payout of {total} {payout.currency} has been initiated.", entity_type="affiliate_payout", entity_id=payout.id)
+        message = f"Your affiliate payout of {total} {payout.currency} has been initiated."
+        enqueue_notification(
+            db,
+            user_id=aff.user_id,
+            notification_type="affiliate_payout_initiated",
+            title="Payout Initiated",
+            message=message,
+            entity_type="affiliate_payout",
+            entity_id=payout.id,
+        )
+        user = db.query(User).filter(User.id == aff.user_id).first()
+        if user and user.email:
+            portal_url = f"{settings.FRONTEND_URL.rstrip('/')}/affiliate/payouts"
+            dispatch_lifecycle_email(
+                db,
+                event="affiliate_payout_initiated",
+                entity_type="affiliate_payout",
+                entity_id=payout.id,
+                recipient_type="affiliate",
+                recipient_email=user.email,
+                template_key="partner_payout_event",
+                values={
+                    "title": "Payout Initiated",
+                    "name": aff.name or user.name,
+                    "detail": message,
+                    "payout_code": payout.payout_code,
+                    "currency": payout.currency,
+                    "amount": payout.total_amount,
+                    "reference_number": payout.reference_number or "Pending",
+                    "portal_url": portal_url,
+                },
+                fallback_subject=f"Payout initiated - {payout.payout_code}",
+                fallback_html=f"<p>{message}</p><p><a href='{portal_url}'>View payouts</a></p>",
+            )
         db.commit()
 
     return _s_payout(payout)

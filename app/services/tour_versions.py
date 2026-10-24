@@ -194,14 +194,14 @@ def submit_for_approval(db: Session, tour_id: int, actor: User, request=None) ->
     submitter_url = f"{settings.FRONTEND_URL}/supplier/tours/{tour.id}"
     dispatch_admin_lifecycle_emails(
         db, event="tour_submitted", entity_type="tour_version", entity_id=version.id,
-        template_key="tour_submitted", values={"tour_name": tour.title, "version": version.version_number, "login_url": admin_url},
+        template_key="tour_submitted", values={"tour_name": tour.title, "version": version.version_number, "login_url": admin_url, "button_text": "Review tour", "button_url": admin_url},
         fallback_subject=f"Tour submitted for review - {tour.title}", fallback_html=f"<p>{tour.title} (v{version.version_number}) is awaiting review.</p><p><a href='{admin_url}'>Review tour</a></p>", event_version=str(version.id),
     )
     if actor.email:
         dispatch_lifecycle_email(
             db, event="tour_submitted", entity_type="tour_version", entity_id=version.id,
             recipient_type="supplier", recipient_email=actor.email, template_key="tour_submitted",
-            values={"tour_name": tour.title, "version": version.version_number, "login_url": submitter_url},
+            values={"tour_name": tour.title, "version": version.version_number, "login_url": submitter_url, "button_text": "View tour", "button_url": submitter_url},
             fallback_subject=f"Tour submitted for review - {tour.title}", fallback_html=f"<p>Your tour {tour.title} is submitted for review.</p>", event_version=str(version.id),
         )
     db.commit()
@@ -319,18 +319,14 @@ def approve_version(db: Session, tour_id: int, version_id: int, actor: User, req
         enqueue_notification(db, user_id=version.submitted_by, notification_type="tour_approved", title="Tour Approved", message=f"Your tour '{tour.title}' (v{version.version_number}) has been approved and is ready to publish.", entity_type="tour", entity_id=tour_id)
         from app.config import settings
         from app.models.users import User as AccountUser
-        from app.services.notification_delivery import dispatch_admin_lifecycle_emails, dispatch_lifecycle_email
+        from app.services.notification_delivery import dispatch_lifecycle_email
         recipient = db.query(AccountUser).filter(AccountUser.id == version.submitted_by).first()
         supplier_url = f"{settings.FRONTEND_URL}/supplier/tours/{tour.id}"
         if recipient and recipient.email:
             dispatch_lifecycle_email(db, event="tour_approved", entity_type="tour_version", entity_id=version.id,
                 recipient_type="supplier", recipient_email=recipient.email, template_key="tour_reviewed",
-                values={"tour_name": tour.title, "version": version.version_number, "decision": "approved", "reason": "", "login_url": supplier_url},
+                values={"tour_name": tour.title, "version": version.version_number, "decision": "approved", "reason": "No further action is required.", "login_url": supplier_url, "button_text": "View tour", "button_url": supplier_url},
                 fallback_subject=f"Tour approved - {tour.title}", fallback_html=f"<p>Your tour {tour.title} was approved.</p>", event_version=str(version.id))
-        admin_url = f"{settings.FRONTEND_URL}/admin/tours/{tour.id}"
-        dispatch_admin_lifecycle_emails(db, event="tour_approved", entity_type="tour_version", entity_id=version.id,
-            template_key="tour_reviewed", values={"tour_name": tour.title, "version": version.version_number, "decision": "approved", "reason": "", "login_url": admin_url},
-            fallback_subject=f"Tour approved - {tour.title}", fallback_html=f"<p>Tour {tour.title} was approved.</p>", event_version=str(version.id))
         db.commit()
 
     log_audit(db, actor=actor, action="approve_tour_version", entity_type="tour_version", entity_id=version_id, old_values={"status": "pending_approval"}, new_values={"status": "approved"}, request=request)
@@ -463,11 +459,11 @@ def reject_version(db: Session, tour_id: int, version_id: int, data: TourVersion
         if recipient and recipient.email:
             dispatch_lifecycle_email(db, event="tour_rejected", entity_type="tour_version", entity_id=version.id,
                 recipient_type="supplier", recipient_email=recipient.email, template_key="tour_reviewed",
-                values={"tour_name": tour.title, "version": version.version_number, "decision": "not approved", "reason": data.rejection_reason or "", "login_url": supplier_url},
+                values={"tour_name": tour.title, "version": version.version_number, "decision": "not approved", "reason": data.rejection_reason or "See the tour record for the required changes.", "login_url": supplier_url, "button_text": "Update tour", "button_url": supplier_url},
                 fallback_subject=f"Tour review requires changes - {tour.title}", fallback_html=f"<p>Your tour {tour.title} requires changes: {data.rejection_reason or ''}</p>", event_version=str(version.id))
         admin_url = f"{settings.FRONTEND_URL}/admin/tours/{tour.id}"
         dispatch_admin_lifecycle_emails(db, event="tour_rejected", entity_type="tour_version", entity_id=version.id,
-            template_key="tour_reviewed", values={"tour_name": tour.title, "version": version.version_number, "decision": "rejected", "reason": data.rejection_reason or "", "login_url": admin_url},
+            template_key="tour_reviewed", values={"tour_name": tour.title, "version": version.version_number, "decision": "rejected", "reason": data.rejection_reason or "See the tour record for details.", "login_url": admin_url, "button_text": "View tour", "button_url": admin_url},
             fallback_subject=f"Tour rejected - {tour.title}", fallback_html=f"<p>Tour {tour.title} was rejected.</p>", event_version=str(version.id))
         db.commit()
 

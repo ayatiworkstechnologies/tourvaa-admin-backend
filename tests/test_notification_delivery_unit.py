@@ -131,6 +131,32 @@ def test_failed_claim_uses_backoff_then_exhausts(monkeypatch):
     assert "smtp unavailable" in row.error_message
 
 
+def test_recipient_rejection_is_not_retried(monkeypatch):
+    """A permanent SMTP recipient refusal must go to manual correction, not retry."""
+    import smtplib
+
+    db = _delivery_session()
+    row = NotificationDelivery(event_type="booking_created", entity_type="booking", entity_id=22,
+        recipient_type="customer", recipient_email="invalid@example.test", template_key="booking_confirmation",
+        payload_json={"values": {}, "fallback_subject": "Subject", "fallback_html": "<p>Body</p>"},
+        status="pending", attempt_count=0, idempotency_key="recipient-refused")
+    db.add(row); db.commit()
+    monkeypatch.setattr("app.utils.email_templates.render_database_email", lambda *_args: ("Subject", "<p>Body</p>"))
+    monkeypatch.setattr(
+        "app.utils.mailer.send_email",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            smtplib.SMTPRecipientsRefused({"invalid@example.test": (550, b"mailbox unavailable")})
+        ),
+    )
+
+    notification_delivery._deliver(db, row.id)
+    db.refresh(row)
+
+    assert row.status == "exhausted"
+    assert row.attempt_count == 1
+    assert row.next_attempt_at is None
+
+
 def test_legacy_stale_delivery_without_payload_requires_manual_review():
     from datetime import timedelta
     from app.utils.money import utcnow
@@ -290,6 +316,86 @@ def test_supplier_and_agent_registration_reserve_durable_admin_deliveries(monkey
     assert [event["event"] for event in scheduled] == ["supplier_registered", "agent_registered"]
     assert [event["recipient_email"] for event in scheduled] == ["ops@example.test", "ops@example.test"]
     assert all(event["background_tasks"] is background_tasks for event in scheduled)
+
+
+def test_affiliate_submission_reserves_a_durable_admin_delivery(monkeypatch):
+    """Affiliate verification must email operations as well as notify in-app."""
+    from app.services import notification_delivery
+    from app.utils import notification_triggers
+
+    scheduled = []
+    monkeypatch.setattr(notification_triggers, "notify_admins", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(notification_triggers, "admin_notification_recipients", lambda *_args: {"ops@example.test"})
+    monkeypatch.setattr(notification_delivery, "dispatch_lifecycle_email", lambda *args, **kwargs: scheduled.append(kwargs) or True)
+
+    background_tasks = object()
+    notification_triggers.notify_affiliate_submitted_verification(
+        SimpleNamespace(flush=lambda: None),
+        affiliate_id=33,
+        affiliate_name="Example Affiliate",
+        background_tasks=background_tasks,
+    )
+
+    assert len(scheduled) == 1
+    assert scheduled[0]["event"] == "affiliate_submitted_verification"
+    assert scheduled[0]["template_key"] == "affiliate_submitted_verification"
+    assert scheduled[0]["recipient_email"] == "ops@example.test"
+    assert scheduled[0]["background_tasks"] is background_tasks
+
+
+def test_legacy_affiliate_payout_reserves_a_durable_affiliate_delivery(monkeypatch):
+    """The admin-created legacy payout path must email the affected affiliate."""
+    from app.services import affiliate_tracking
+
+    scheduled = {}
+    monkeypatch.setattr(
+        affiliate_tracking,
+        "dispatch_lifecycle_email",
+        lambda *_args, **kwargs: scheduled.update(kwargs),
+    )
+
+    class Db:
+        def query(self, model):
+            if model is affiliate_tracking.AffiliateConversion:
+                conversion = SimpleNamespace(
+                    id=7,
+                    status="pending",
+                    commission_amount=Decimal("12.50"),
+                    final_commission=None,
+                    currency="USD",
+                )
+                locked = SimpleNamespace(all=lambda: [conversion])
+                filtered = SimpleNamespace(with_for_update=lambda: locked)
+                joined = SimpleNamespace(filter=lambda *_args: filtered)
+                return SimpleNamespace(join=lambda *_args: joined)
+            result = (
+                SimpleNamespace(id=9, user_id=22, name="Example Affiliate")
+                if model is affiliate_tracking.Affiliate
+                else SimpleNamespace(id=22, email="affiliate@example.test", name="Ava")
+            )
+            return SimpleNamespace(filter=lambda *_args: SimpleNamespace(first=lambda: result))
+        def add(self, *_args): pass
+        def flush(self): pass
+        def commit(self): pass
+        def refresh(self, *_args): pass
+
+    monkeypatch.setattr(
+        affiliate_tracking,
+        "AffiliatePayout",
+        lambda **kwargs: SimpleNamespace(id=44, rejection_reason=None, created_at=None, **kwargs),
+    )
+    monkeypatch.setattr(affiliate_tracking, "AffiliatePayoutItem", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(affiliate_tracking, "_wallet_entry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(affiliate_tracking, "enqueue_notification", lambda *_args, **_kwargs: None)
+    affiliate_tracking.create_payout(
+        Db(),
+        data=SimpleNamespace(conversion_ids=[7], affiliate_id=9, payment_method="bank", reference_number=None, notes=None),
+        actor=SimpleNamespace(id=1),
+    )
+
+    assert scheduled["event"] == "affiliate_payout_initiated"
+    assert scheduled["recipient_email"] == "affiliate@example.test"
+    assert scheduled["template_key"] == "partner_payout_event"
 
 
 def test_every_runtime_rendered_auth_template_has_a_seed_default():

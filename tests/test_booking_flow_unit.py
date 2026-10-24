@@ -1,4 +1,6 @@
 from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
@@ -9,10 +11,12 @@ from app.services.bookings import (
     _bookable_calendar_capacity,
     _booking_status_label,
     _booking_email_recipient,
+    _booking_payment_email_summary,
     _booking_seat_count,
     _ensure_booking_access,
     _hide_agent_reservation_payment_from_supplier,
     _hide_supplier_reassignment_from_external_partner,
+    _is_day_tour,
     _is_booking_fully_paid,
     _price_booking,
     _start_supplier_decision,
@@ -24,7 +28,8 @@ from app.services.bookings import (
     supplier_amount_in_booking_currency,
     _has_secured_booking_funds,
 )
-from app.services.payments import _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
+from app.services.payments import FINAL_BOOKING_CONFIRMATION_STATUSES, _derive_booking_status, _ensure_payment_access, _status_after_payment_sync
+from app.services.discounts import find_active_discount_stack
 from app.routers.payments_gateway import _ensure_booking_payment_access, _minimum_deposit_amount, _require_captured_amount_matches_pending, _validate_payment_currency, _validate_payment_request
 from app.schemas.bookings import BookingCreate, BookingTravellerPayload
 from app.schemas.checkout import CheckoutConfirm
@@ -62,12 +67,56 @@ def booking(**overrides):
     return SimpleNamespace(**values)
 
 
+def test_gateway_authorization_capture_waits_for_final_booking_confirmation():
+    assert FINAL_BOOKING_CONFIRMATION_STATUSES == {"confirmed", "ready_to_travel", "ongoing", "completed"}
+    assert "supplier_accepted" not in FINAL_BOOKING_CONFIRMATION_STATUSES
+
+
+def test_automatic_discount_uses_booking_date_not_future_departure_date():
+    now = datetime.now(timezone.utc)
+    discount = SimpleNamespace(
+        id=1,
+        status="active",
+        discount_code=None,
+        start_date=now - timedelta(days=1),
+        end_date=now + timedelta(days=1),
+        usage_limit=None,
+        used_count=0,
+        discount_type="percentage",
+        discount_value=20,
+        tour_id=7,
+        funded_by="TOURVAA",
+    )
+
+    class Query:
+        def filter(self, *_conditions):
+            return self
+
+        def with_for_update(self):
+            return self
+
+        def all(self):
+            return [discount]
+
+        def first(self):
+            return None
+
+    class Session:
+        def query(self, *_entities):
+            return Query()
+
+    tour = SimpleNamespace(id=7, category_id=None, country_id=None, price_start_per_person=100)
+    stack = find_active_discount_stack(Session(), tour, effective_at=now + timedelta(days=730))
+
+    assert stack["tourvaa"] is discount
+
+
 @pytest.mark.parametrize(
     "status",
     ["pending_supplier_assignment", "payment_authorized", "pending_supplier_acceptance", "supplier_accepted"],
 )
 def test_customer_and_agent_confirmation_pending_labels_match_the_status_standard(status):
-    expected = "Booking Successful — Awaiting Tourvaa Confirmation"
+    expected = "Booking Request Received"
 
     assert _booking_status_label(status, "customer") == expected
     assert _booking_status_label(status, "agent") == expected
@@ -366,6 +415,13 @@ def test_accommodation_addons_use_category_specific_price_types():
         AccommodationExtraPayload(accommodation_name="Airport pickup", category="pickup", price_type="per_person")
 
 
+def test_only_an_explicit_zero_night_tour_is_treated_as_a_day_tour():
+    assert _is_day_tour(SimpleNamespace(number_of_nights=0)) is True
+    assert _is_day_tour(SimpleNamespace(number_of_nights=2)) is False
+    assert _is_day_tour(SimpleNamespace(number_of_nights=None)) is False
+    assert _is_day_tour(None) is False
+
+
 def test_booking_capacity_is_not_limited_by_the_vehicle_group_size():
     """A 6-seat vehicle grouping must not prevent a 20-seat departure
     booking; operations can allocate multiple vehicles."""
@@ -660,6 +716,32 @@ def test_booking_received_email_requires_secured_funds(monkeypatch):
     assert sent[0][0][-1] == "paid@example.test"
     assert sent[1][0][1] == "booking_confirmation"
     assert sent[1][0][-1] == "authorized@example.test"
+
+
+def test_booking_payment_email_summary_distinguishes_deposit_authorization_and_full_payment():
+    deposit = SimpleNamespace(
+        currency="NZD", final_amount=Decimal("100"), total_cost=Decimal("100"),
+        amount_paid=Decimal("25"), payment_status="partially_paid", payment_type="partial",
+    )
+    authorized = SimpleNamespace(
+        currency="NZD", final_amount=Decimal("100"), total_cost=Decimal("100"),
+        amount_paid=Decimal("0"), payment_status="authorized", payment_type="full",
+    )
+    paid = SimpleNamespace(
+        currency="NZD", final_amount=Decimal("100"), total_cost=Decimal("100"),
+        amount_paid=Decimal("100"), payment_status="paid", payment_type="full",
+    )
+
+    assert _booking_payment_email_summary(deposit) == "Deposit paid: NZD 25.00\nRemaining balance: NZD 75.00"
+    assert "no payment has been captured" in _booking_payment_email_summary(authorized)
+    assert _booking_payment_email_summary(paid) == "Payment received in full: NZD 100.00"
+
+
+def test_booking_status_label_uses_cancellation_source_without_changing_legacy_calls():
+    assert _booking_status_label("cancelled", "customer") == "Cancelled by Tourvaa"
+    assert _booking_status_label("cancelled", "customer", "customer_request") == "Cancelled by Customer"
+    assert _booking_status_label("cancelled", "agent", "customer_unpaid_removed") == "Cancelled by Customer"
+    assert _booking_status_label("cancelled", "customer", "supplier") == "Cancelled by Tourvaa"
 
 
 def test_agent_booking_does_not_email_selected_customer_or_lead_traveller():

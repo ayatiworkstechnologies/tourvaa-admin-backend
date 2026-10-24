@@ -220,6 +220,11 @@ def _notification_action_label(entity_type: str | None, booking_id: int | None, 
     return "View booking" if booking_id or entity_type == "booking" else "View details"
 
 
+def _is_internal_notification_path(value: object) -> bool:
+    """Only relative application paths are safe to store for an in-app action."""
+    return isinstance(value, str) and value.startswith("/") and not value.startswith("//")
+
+
 def enqueue_notification(db: Session, *, user_id: int | None, notification_type: str, title: str, message: str, entity_type: str | None = None, entity_id: int | None = None, channel: str = "in_app", metadata: dict | None = None, event_key: str | None = None, event_version: str = "1"):
     event_key = event_key or (notification_type if notification_type in IDEMPOTENT_PUSH_EVENTS else None)
     key = None
@@ -240,7 +245,12 @@ def enqueue_notification(db: Session, *, user_id: int | None, notification_type:
     if entity_id:
         details.setdefault("entity_id", entity_id)
     action_url = _notification_url(db, user_id, entity_type, entity_id)
-    details.setdefault("action_url", action_url)
+    # Browser navigation must remain inside the signed-in portal. A few older
+    # producers supplied FRONTEND_URL-prefixed links; the inbox correctly
+    # rejects those absolute values, leaving the row readable but inert.
+    # Retain valid relative producer paths, otherwise use the verified route.
+    if not _is_internal_notification_path(details.get("action_url")):
+        details["action_url"] = action_url
     details.setdefault("action_label", _notification_action_label(entity_type, booking_id, action_url))
     n = Notification(user_id=user_id, notification_type=notification_type, title=title, message=message, channel=channel, entity_type=entity_type, entity_id=entity_id, metadata_json=details, event_key=event_key or notification_type, event_version=event_version, idempotency_key=key, status="sent" if channel == "in_app" else "pending", sent_at=utcnow() if channel == "in_app" else None)
     db.add(n)

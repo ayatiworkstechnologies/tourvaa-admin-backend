@@ -9,6 +9,7 @@ booking, payment, or cancellation.
 from __future__ import annotations
 
 import logging
+import smtplib
 import threading
 import uuid
 import base64
@@ -39,6 +40,17 @@ def _retry_delay(attempt_count: int) -> timedelta:
 
 def _event_value(event: str | StrEnum) -> str:
     return str(event.value if isinstance(event, StrEnum) else event)
+
+
+def _is_permanent_recipient_failure(error: Exception) -> bool:
+    """Return true only for SMTP's explicit recipient-rejection responses.
+
+    A rejected mailbox will not become valid because the worker retries it a
+    few minutes later.  Keep transient SMTP/auth/network failures retryable,
+    but stop retrying explicit recipient failures and expose them for a
+    deliberate address correction in Email Logs.
+    """
+    return isinstance(error, smtplib.SMTPRecipientsRefused)
 
 
 def _json_safe_payload(value):
@@ -290,7 +302,7 @@ def _deliver(
     except Exception as error:  # Mail must never break the domain operation.
         db.rollback()
         attempt_count = row.attempt_count or 1
-        exhausted = attempt_count >= MAX_EMAIL_DELIVERY_ATTEMPTS
+        exhausted = attempt_count >= MAX_EMAIL_DELIVERY_ATTEMPTS or _is_permanent_recipient_failure(error)
         failure_values = {
             NotificationDelivery.status: "exhausted" if exhausted else "failed",
             NotificationDelivery.error_message: str(error)[:4000],
