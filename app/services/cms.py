@@ -437,6 +437,16 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     if is_supplier_user(actor):
         payload["tax_percentage"] = item.tax_percentage if tour_id else 0
         payload["service_fee"] = item.service_fee if tour_id else 0
+        # Tourvaa owns tour taxonomy.  A supplier's shared form intentionally
+        # does not expose it, so preserve the current category and mappings
+        # on edits rather than treating omitted fields as a request to clear
+        # the classification.
+        if tour_id:
+            payload["category_id"] = item.category_id
+            subcategory_ids = [link.subcategory_id for link in item.subcategory_links]
+        else:
+            payload["category_id"] = None
+            subcategory_ids = []
         # Search metadata is administered centrally. Keep it unchanged for
         # supplier edits and avoid accepting it on supplier-created tours.
         for field in (
