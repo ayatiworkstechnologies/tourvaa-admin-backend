@@ -1716,8 +1716,18 @@ def _bookable_calendar_capacity(tour: Tour | None, calendar: TourCalendar) -> in
 
 
 def _is_day_tour(tour: Tour | None) -> bool:
-    """Whether a tour is explicitly configured without an overnight stay."""
-    return tour is not None and getattr(tour, "number_of_nights", None) == 0
+    """Whether a tour has no overnight stay and therefore no accommodation.
+
+    Legacy one-day tours can have a null ``number_of_nights`` value. Treat
+    those consistently with explicitly configured zero-night day tours so an
+    old UI or crafted request cannot add accommodation to them.
+    """
+    if tour is None:
+        return False
+    nights = getattr(tour, "number_of_nights", None)
+    if nights is not None:
+        return nights == 0
+    return getattr(tour, "number_of_days", None) == 1
 
 
 def _price_booking(db: Session, data: BookingCreate, lock_calendar: bool = False, consume_discount: bool = False, pricing_details: dict | None = None):

@@ -439,10 +439,11 @@ def test_accommodation_addons_use_category_specific_price_types():
         AccommodationExtraPayload(accommodation_name="Airport pickup", category="pickup", price_type="per_person")
 
 
-def test_only_an_explicit_zero_night_tour_is_treated_as_a_day_tour():
+def test_day_tours_without_an_overnight_stay_are_treated_as_day_tours():
     assert _is_day_tour(SimpleNamespace(number_of_nights=0)) is True
     assert _is_day_tour(SimpleNamespace(number_of_nights=2)) is False
-    assert _is_day_tour(SimpleNamespace(number_of_nights=None)) is False
+    assert _is_day_tour(SimpleNamespace(number_of_nights=None, number_of_days=1)) is True
+    assert _is_day_tour(SimpleNamespace(number_of_nights=None, number_of_days=2)) is False
     assert _is_day_tour(None) is False
 
 
