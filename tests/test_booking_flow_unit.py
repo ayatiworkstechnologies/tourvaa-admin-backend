@@ -173,6 +173,29 @@ def test_supplier_view_masks_agent_reservation_payment_and_enables_decision_stat
     assert result["status_history"] == []
 
 
+def test_supplier_view_masks_pay_later_agent_reservation_too():
+    row = booking(
+        booking_source="agent",
+        payment_status="pending",
+        agent_payment_method="pay_later",
+        supplier_acceptance_status="pending",
+    )
+    data = {
+        "booking_status": "pending_supplier_acceptance",
+        "payment_status": "pending",
+        "payment_type": "full",
+        "agent_payment_method": "pay_later",
+        "agent_reference": "PRIVATE-REF",
+        "status_history": [],
+    }
+
+    result = _hide_agent_reservation_payment_from_supplier(data, row)
+
+    assert result["booking_status"] == "pending_supplier_acceptance"
+    assert result["payment_status"] is None
+    assert result["agent_payment_method"] is None
+
+
 @pytest.mark.parametrize("role", ["customer", "agent"])
 def test_supplier_decline_reassignment_is_neutral_and_reason_free_for_external_partners(role):
     row = booking(
@@ -956,6 +979,16 @@ def test_checkout_confirm_accepts_selected_display_currency():
     payload = CheckoutConfirm(display_currency="INR", agreed_terms=True, agreed_cancellation_policy=True)
 
     assert payload.display_currency == "INR"
+
+
+def test_checkout_confirm_accepts_affiliate_ref_code():
+    payload = CheckoutConfirm(
+        affiliate_ref_code="AFF-TRACK-123",
+        agreed_terms=True,
+        agreed_cancellation_policy=True,
+    )
+
+    assert payload.affiliate_ref_code == "AFF-TRACK-123"
 
 
 def test_checkout_confirm_rejects_malformed_display_currency():

@@ -291,13 +291,22 @@ def _sync_booking_payment_fields(db: Session, booking: Booking) -> None:
     next_status = _status_after_payment_sync(booking, booking.payment_status)
     if next_status:
         booking.booking_status = next_status
-    if booking.booking_status == "confirmed" and booking.affiliate_ref_code:
-        try:
-            from app.services.affiliate_tracking import record_conversion
-            from app.services.bookings import affiliate_eligible_amount, supplier_booking_currency
-            record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=supplier_booking_currency(booking))
-        except Exception:
-            logger.warning("Affiliate conversion recording failed for booking %s", booking.id, exc_info=True)
+    # A successful customer payment is already a real attributed conversion,
+    # even while the booking waits for supplier acceptance. Record it now as
+    # pending so it appears in the affiliate portal; payout eligibility still
+    # remains gated by booking completion in affiliate_tracking.
+    if booking.payment_status in {"paid", "partially_paid"} and booking.affiliate_ref_code:
+        should_record_affiliate = booking.booking_source != "agent"
+        if not should_record_affiliate:
+            from app.services.settings import get_allow_agent_and_affiliate_same_booking
+            should_record_affiliate = get_allow_agent_and_affiliate_same_booking(db)
+        if should_record_affiliate:
+            try:
+                from app.services.affiliate_tracking import record_conversion
+                from app.services.bookings import affiliate_eligible_amount, supplier_booking_currency
+                record_conversion(db, ref_code=booking.affiliate_ref_code, booking_id=booking.id, booking_amount=affiliate_eligible_amount(booking), currency=supplier_booking_currency(booking))
+            except Exception:
+                logger.warning("Affiliate conversion recording failed for booking %s", booking.id, exc_info=True)
     if booking.payment_status in {"paid", "partially_paid"} and not was_funded:
         from app.services.bookings import notify_booking_received_after_payment
         notify_booking_received_after_payment(db, booking)

@@ -192,9 +192,15 @@ def _notification_url(db: Session, user_id: int | None, entity_type: str | None,
             return f"/admin/bookings/{booking_id}"
     portal_paths = {
         "supplier": {"conversation": "/supplier/messages", "supplier_payout": "/supplier/payouts", "payout": "/supplier/payouts", "invoice": "/supplier/invoices"},
-        "agent": {"conversation": "/agent/messages", "agent_payout": "/agent/payouts", "payout": "/agent/payouts", "invoice": "/agent/invoices"},
-        "affiliate": {"affiliate_payout": "/affiliate/payouts", "payout": "/affiliate/payouts"},
-        "customer": {"invoice": "/customer/invoices"},
+        "agent": {"conversation": "/agent/messages", "agent_payout": "/agent/payouts", "payout": "/agent/payouts", "invoice": "/agent/invoices", "payment": "/agent/bookings"},
+        "affiliate": {
+            "affiliate_conversion": "/affiliate/conversions",
+            "affiliate_commission": "/affiliate/commissions",
+            "affiliate_link": "/affiliate/referral-links",
+            "affiliate_payout": "/affiliate/payouts",
+            "payout": "/affiliate/payouts",
+        },
+        "customer": {"invoice": "/customer/invoices", "payment": "/customer/payments", "conversation": "/customer/support"},
     }
     for role_key, paths in portal_paths.items():
         if role_key in slug and entity_type in paths:

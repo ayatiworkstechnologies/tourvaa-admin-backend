@@ -33,3 +33,8 @@ class CheckoutConfirm(BaseModel):
     # Currency currently shown to the customer. It is converted and locked
     # server-side when the booking is created, never trusted as an amount.
     display_currency: Optional[str] = Field(default=None, min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
+    # Redundant with the HttpOnly attribution cookie on purpose: some browser
+    # and reverse-proxy configurations can omit that cookie on the final API
+    # request. The backend still validates this against an active link before
+    # attaching it to the booking.
+    affiliate_ref_code: Optional[str] = Field(default=None, max_length=60)

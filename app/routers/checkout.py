@@ -55,8 +55,9 @@ def update_checkout_session(session_key: str, body: CheckoutUpdate, db: Session 
 def confirm_checkout(
     session_key: str,
     body: CheckoutConfirm,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    result = service.confirm_session(db, session_key=session_key, body=body, current_user=current_user)
+    result = service.confirm_session(db, session_key=session_key, body=body, current_user=current_user, request=request)
     return {"status": "success", "message": "Booking created from checkout session", "data": result}

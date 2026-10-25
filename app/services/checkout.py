@@ -182,7 +182,7 @@ def update_session(db: Session, session_key: str, body: CheckoutUpdate, current_
     return _serialize(s)
 
 
-def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, current_user: User) -> dict:
+def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, current_user: User, request=None) -> dict:
     s = db.query(CheckoutSession).filter(CheckoutSession.session_key == session_key).with_for_update().first()
     if not s:
         raise HTTPException(status_code=404, detail="Active checkout session not found")
@@ -248,12 +248,16 @@ def confirm_session(db: Session, session_key: str, body: CheckoutConfirm, curren
         booking_source="customer",
         display_currency=body.display_currency,
         payment_type=body.payment_type,
+        affiliate_ref_code=body.affiliate_ref_code,
         agreed_terms=body.agreed_terms,
         agreed_cancellation_policy=body.agreed_cancellation_policy,
     )
 
     try:
-        booking = create_booking(db, booking_data, actor=current_user)
+        # Preserve server-side cookie attribution through the checkout-session
+        # boundary. Previously this request was dropped, so customer bookings
+        # could never use create_booking's attribution-cookie fallback.
+        booking = create_booking(db, booking_data, actor=current_user, request=request)
     except Exception:
         s.status = "active"
         db.commit()

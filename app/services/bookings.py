@@ -1277,9 +1277,8 @@ def serialize_booking_for_actor(db: Session, booking: Booking, actor: Optional[U
 
 def _hide_agent_reservation_payment_from_supplier(data: dict, booking: Booking) -> dict:
     """Keep an agent's offline settlement out of the supplier-facing view."""
-    if booking.booking_source != "agent" or booking.payment_status not in {
-        "credit_approval_pending",
-        "bank_transfer_pending",
+    if booking.booking_source != "agent" or (booking.agent_payment_method or "").lower() not in {
+        "credit", "bank_transfer", "pay_later",
     }:
         return data
 
@@ -2083,6 +2082,13 @@ def get_bookings(db: Session, page: int = 1, limit: int = 20, search: str = "", 
             or_(
                 Booking.booking_status != "pending_payment",
                 Booking.payment_status.notin_(("unpaid", "pending", "failed")),
+                # Compatibility for reservations created before offline agent
+                # methods were moved directly into supplier acceptance. These
+                # are real submitted bookings, not abandoned gateway rows.
+                and_(
+                    Booking.booking_source == "agent",
+                    Booking.agent_payment_method.in_(("credit", "bank_transfer", "pay_later")),
+                ),
             )
         )
     # A customer may discard a provisional unpaid checkout. Keep that audit
@@ -2440,6 +2446,21 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
     customer_selling_price = money(final + agent_markup) if data.booking_source == "agent" else final
     payment_status = "pending"
     booking_status = "pending_payment"
+    offline_agent_reservation = (
+        data.booking_source == "agent"
+        and data.agent_payment_method in {"credit", "bank_transfer", "pay_later"}
+    )
+    if offline_agent_reservation:
+        # This is a submitted operational reservation, not an abandoned
+        # gateway checkout. It must reach the assigned supplier immediately.
+        booking_status = "pending_supplier_acceptance" if supplier_id else "pending_supplier_assignment"
+        payment_status = (
+            "credit_approval_pending"
+            if data.agent_payment_method == "credit"
+            else "bank_transfer_pending"
+            if data.agent_payment_method == "bank_transfer"
+            else "pending"
+        )
     # A reservation may be paid later, but that describes its payment method,
     # not its payment outcome. Keep the status in the same canonical set used
     # by customer, agent, supplier, and admin payment filters.
@@ -2539,6 +2560,14 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
 
     db.commit()
     db.refresh(booking)
+
+    if offline_agent_reservation:
+        # There is deliberately no captured payment in Reserve Now, so the
+        # ordinary gateway callback cannot create the supplier/admin alerts.
+        # Send only the operational alerts here; the agent receives the
+        # dedicated reservation/invoice acknowledgement below.
+        notify_booking_received_after_payment(db, booking, notify_booking_party=False)
+        db.commit()
 
     if booking.booking_source == "agent" and booking.agent_payment_method in {"credit", "bank_transfer", "pay_later"}:
         # Agent "Reserve Now" -- no deposit taken, so an invoice for the full
@@ -3663,7 +3692,12 @@ def _notify_supplier_booking_assigned(
     return True
 
 
-def notify_booking_received_after_payment(db: Session, booking: Booking) -> None:
+def notify_booking_received_after_payment(
+    db: Session,
+    booking: Booking,
+    *,
+    notify_booking_party: bool = True,
+) -> None:
     """Notify parties when a booking has secured funds and needs review.
 
     Supplier acceptance, not payment settlement, is the event that confirms a
@@ -3671,7 +3705,11 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
     a pending-review booking and sends the supplier its assignment without
     falsely confirming the trip.
     """
-    if booking.payment_status not in {"authorized", "partially_paid", "paid"}:
+    is_offline_agent_reservation = (
+        getattr(booking, "booking_source", None) == "agent"
+        and (getattr(booking, "agent_payment_method", None) or "").lower() in {"credit", "bank_transfer", "pay_later"}
+    )
+    if booking.payment_status not in {"authorized", "partially_paid", "paid"} and not is_offline_agent_reservation:
         return
     from app.services.notifications import notify_admins
     from app.utils.email_templates import new_booking_admin_email
@@ -3694,7 +3732,7 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
     customer = booking.customer
     from app.utils.email_templates import booking_confirmation_email
     login_url = f"{settings.FRONTEND_URL}/customer/bookings/{booking.id}"
-    if getattr(booking, "booking_source", None) != "agent" and customer and customer.user_id:
+    if notify_booking_party and getattr(booking, "booking_source", None) != "agent" and customer and customer.user_id:
         from app.services.booking_notification_events import BookingNotificationEvent, emit_in_app_once
         emit_in_app_once(
             db, event=BookingNotificationEvent.BOOKING_CREATED,
@@ -3703,7 +3741,7 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
             message=f"Booking {booking.booking_code} is pending supplier review",
         )
     recipient = _booking_email_recipient(booking)
-    if recipient:
+    if notify_booking_party and recipient:
         payment_summary = _booking_payment_email_summary(booking)
         _send_booking_email(
             db, "booking_confirmation",
@@ -3718,13 +3756,14 @@ def notify_booking_received_after_payment(db: Session, booking: Booking) -> None
             entity_id=booking.id,
             recipient_type="customer",
         )
-    _email_agent_booking_status(
-        db,
-        booking,
-        "pending review",
-        "Your booking has been received and is pending supplier review.",
-        event="booking_created",
-    )
+    if notify_booking_party:
+        _email_agent_booking_status(
+            db,
+            booking,
+            "pending review",
+            "Your booking has been received and is pending supplier review.",
+            event="booking_created",
+        )
     _notify_supplier_booking_assigned(db, booking, event="booking_created")
 
 
