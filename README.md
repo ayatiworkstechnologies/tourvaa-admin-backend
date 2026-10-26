@@ -1,8 +1,8 @@
-# Tourvaa Backend
+# Project Name: Tourvaa Backend
 
-FastAPI backend for the Tourvaa travel-booking platform.
+**Tourvaa** is a travel-booking platform. This repository contains its FastAPI backend.
 
-## Core responsibilities
+## Project Core
 
 - Authentication, role-based access, and portal sessions for customers, suppliers, agents, affiliates, and administrators.
 - Tour catalogue, availability, pricing, checkout, bookings, cancellations, payments, invoices, and confirmation receipts.
@@ -11,7 +11,7 @@ FastAPI backend for the Tourvaa travel-booking platform.
 - Affiliate referral tracking, conversions, commissions, and currency-specific payout requests.
 - CMS, countries, destinations, discounts, reporting, and platform settings.
 
-## Run locally
+## How to Run
 
 ### 1. Create and activate a Python environment
 
