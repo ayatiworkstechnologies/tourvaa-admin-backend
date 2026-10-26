@@ -202,6 +202,8 @@ def _parse_cities(lines: list[str], codes: set) -> list[dict]:
 def _upsert_country(conn, name: str, iso2: str, phone: str, currency: str, flag: str = "") -> int | None:
     if not name or not iso2:
         return None
+    iso2 = iso2.strip().upper()
+    slug = iso2.lower()
     # Check first purely so the "added" tally is honest: with ON DUPLICATE
     # KEY UPDATE the driver reports matched (not changed) rows, so an
     # unchanged re-run still yields rowcount 1 and would inflate the count
@@ -212,13 +214,13 @@ def _upsert_country(conn, name: str, iso2: str, phone: str, currency: str, flag:
     # Single atomic statement - no SELECT+UPDATE race, no lock contention
     conn.execute(
         text(
-            "INSERT INTO countries (country_name, country_code, phone_code, currency_code, flag_emoji, status) "
-            "VALUES (:n, :c, :p, :cu, :fl, 'active') "
+            "INSERT INTO countries (country_name, country_code, slug, phone_code, currency_code, flag_emoji, status) "
+            "VALUES (:n, :c, :slug, :p, :cu, :fl, 'active') "
             "ON DUPLICATE KEY UPDATE country_name=VALUES(country_name), "
             "phone_code=VALUES(phone_code), currency_code=VALUES(currency_code), "
             "flag_emoji=VALUES(flag_emoji)"
         ),
-        {"n": name, "c": iso2, "p": phone, "cu": currency, "fl": flag},
+        {"n": name, "c": iso2, "slug": slug, "p": phone, "cu": currency, "fl": flag},
     )
     if existing:
         return existing[0]
