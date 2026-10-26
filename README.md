@@ -74,3 +74,9 @@ pip install -r requirements-dev.txt
 ```
 
 Use a local test database. Do not run write-enabled tests against production data.
+
+## Licence
+
+Copyright © 2026 Tourvaa. Developed by Ayatiworks — Rubankumar Sankar.
+
+All rights reserved. This software is proprietary and may not be copied, modified, distributed, or used without prior written permission from Tourvaa.
