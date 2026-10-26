@@ -13,24 +13,39 @@
 
 ## How to Run
 
-### 1. Create and activate a Python environment
+### Run Command
+
+After completing the one-time setup below, start the backend from the `tourvaa-admin-backend` folder with:
+
+```powershell
+.\venv\Scripts\python.exe -m scripts.dev_server
+```
+
+Open `http://127.0.0.1:8000/docs` to confirm the API is running.
+
+### Before you start
+
+Install Python and MySQL, then create an empty MySQL database for local development. Run every command below from the `tourvaa-admin-backend` folder.
+
+### 1. Create the virtual environment
 
 ```powershell
 python -m venv venv
-.\venv\Scripts\Activate.ps1
 ```
 
 ### 2. Install dependencies
 
 ```powershell
-pip install -r requirements.txt
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ### 3. Configure the environment
 
-Create `.env` in this repository. At minimum, configure:
+Create a file named `.env` directly inside `tourvaa-admin-backend` (next to `requirements.txt`). Use your own local MySQL credentials:
 
 ```env
+APP_ENV=development
+APP_DEBUG=true
 DATABASE_URL=mysql+pymysql://USER:PASSWORD@HOST:3306/DATABASE_NAME
 JWT_SECRET_KEY=replace-with-a-strong-secret
 ADMIN_JWT_SECRET_KEY=replace-with-a-different-strong-secret
@@ -39,37 +54,41 @@ FRONTEND_URL=http://localhost:3000
 ALLOWED_ORIGINS=http://localhost:3000
 ```
 
-Add SMTP and payment-provider values only when those integrations need to be tested. Never commit real credentials.
+`DATABASE_URL` and `JWT_SECRET_KEY` are required for startup. The two role-specific JWT secrets are recommended and must be different in production. Add SMTP and payment-provider values only when those integrations need local testing. Never commit `.env` or real credentials.
 
-### 4. Create the database and apply migrations
-
-```powershell
-python -m alembic upgrade head
-python -m alembic current
-```
-
-For local reference data and roles, run:
+### 4. Apply the database migrations
 
 ```powershell
-python seed.py
+.\venv\Scripts\python.exe -m alembic upgrade head
+.\venv\Scripts\python.exe -m alembic current
 ```
 
-### 5. Start the API
+### 5. Seed local roles and reference data
 
 ```powershell
-python -m scripts.dev_server
+.\venv\Scripts\python.exe seed.py
 ```
 
-The API runs at `http://127.0.0.1:8000`.
+This is safe to re-run for local setup. Do not use destructive seed options against a database that contains data you need to keep.
 
-- Swagger: `http://127.0.0.1:8000/docs`
-- OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
-- Health check: `http://127.0.0.1:8000/api/health`
+### 6. Start the backend
+
+```powershell
+.\venv\Scripts\python.exe -m scripts.dev_server
+```
+
+The backend starts with auto-reload at `http://127.0.0.1:8000`.
+
+Verify that it is running:
+
+- `http://127.0.0.1:8000/api/health` — health response
+- `http://127.0.0.1:8000/docs` — Swagger API documentation
+- `http://127.0.0.1:8000/openapi.json` — OpenAPI JSON
 
 ## Run tests
 
 ```powershell
-pip install -r requirements-dev.txt
+.\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\venv\Scripts\python.exe -m pytest tests -v
 ```
 
