@@ -13,36 +13,62 @@
 
 ## How to Run
 
-### Run Command
-
-After completing the one-time setup below, start the backend from the `tourvaa-admin-backend` folder with:
+### Step 1: Open the backend folder
 
 ```powershell
-uvicorn app.main:app --reload
+cd tourvaa-admin-backend
 ```
 
-Open `http://127.0.0.1:8000/docs` to confirm the API is running.
+Run the remaining commands from this folder.
 
-### Before you start
+### Step 2: Check Python
 
-Install Python and MySQL, then create an empty MySQL database for local development. Run every command below from the `tourvaa-admin-backend` folder.
+```powershell
+python --version
+```
 
-### 1. Create the virtual environment
+### Step 3: Create the virtual environment
 
 ```powershell
 python -m venv venv
+```
+
+### Step 4: Activate the virtual environment
+
+Windows PowerShell:
+
+```powershell
 .\venv\Scripts\Activate.ps1
 ```
 
-### 2. Install dependencies
+Windows Command Prompt:
+
+```bat
+venv\Scripts\activate.bat
+```
+
+Linux / Ubuntu:
+
+```bash
+source venv/bin/activate
+```
+
+If PowerShell blocks activation, run this once for the current terminal, then activate again:
 
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+### Step 5: Upgrade pip and install dependencies
+
+```powershell
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Configure the environment
+### Step 6: Configure `.env`
 
-Create a file named `.env` directly inside `tourvaa-admin-backend` (next to `requirements.txt`). Use your own local MySQL credentials:
+Create `.env` in this backend folder, next to `requirements.txt`. Create a local MySQL database first, then set its connection details:
 
 ```env
 APP_ENV=development
@@ -55,36 +81,61 @@ FRONTEND_URL=http://localhost:3000
 ALLOWED_ORIGINS=http://localhost:3000
 ```
 
-`DATABASE_URL` and `JWT_SECRET_KEY` are required for startup. The two role-specific JWT secrets are recommended and must be different in production. Add SMTP and payment-provider values only when those integrations need local testing. Never commit `.env` or real credentials.
+`DATABASE_URL` and `JWT_SECRET_KEY` are required. Never commit `.env` or real credentials.
 
-### 4. Apply the database migrations
+### Step 7: Apply migrations and seed local data
 
 ```powershell
 alembic upgrade head
-alembic current
-```
-
-### 5. Seed local roles and reference data
-
-```powershell
 python seed.py
 ```
 
-This is safe to re-run for local setup. Do not use destructive seed options against a database that contains data you need to keep.
+`seed.py` creates the required roles, permissions, reference data, and configured local bootstrap accounts. It is safe to re-run for normal local setup. Do not use destructive seed options against a database that contains data you need to keep.
 
-### 6. Start the backend
+### Step 8: Run the FastAPI server
+
+Tourvaa uses `app/main.py`, so run:
 
 ```powershell
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The backend starts with auto-reload at `http://127.0.0.1:8000`.
+### Step 9: Open the API
 
-Verify that it is running:
+- API: `http://localhost:8000`
+- Health: `http://localhost:8000/api/health`
+- Swagger documentation: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
 
-- `http://127.0.0.1:8000/api/health` — health response
-- `http://127.0.0.1:8000/docs` — Swagger API documentation
-- `http://127.0.0.1:8000/openapi.json` — OpenAPI JSON
+### Windows PowerShell quick start
+
+Run each command in order:
+
+```powershell
+cd tourvaa-admin-backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+# Create .env and a local MySQL database before continuing.
+alembic upgrade head
+python seed.py
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Ubuntu / Linux quick start
+
+```bash
+cd /var/www/tourvaa/tourvaa-admin-backend
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+# Create .env and a local MySQL database before continuing.
+alembic upgrade head
+python seed.py
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
 
 ## Run tests
 
