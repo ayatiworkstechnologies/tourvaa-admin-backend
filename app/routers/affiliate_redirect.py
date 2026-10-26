@@ -10,6 +10,7 @@ backend's real origin.
 import logging
 import secrets
 from datetime import timedelta
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
@@ -47,6 +48,20 @@ def _destination_for(link: AffiliateLink) -> str:
         country_slug = slugify(link.tour.country.country_name if link.tour.country else "worldwide")
         return f"/tours/{country_slug}/{link.tour.slug}"
     return link.destination_url or DEFAULT_FALLBACK
+
+
+def _destination_with_referral(destination: str, ref_code: str) -> str:
+    """Pass the verified short-link code into the public checkout flow.
+
+    The server-side attribution cookie remains the primary record, but a
+    same-site proxy or privacy setting can prevent it reaching the checkout
+    request.  Carrying the code to the client lets the public tracker persist
+    it and send it explicitly when the customer confirms their booking.
+    """
+    parts = urlsplit(destination)
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key not in {"ref", "affiliate_redirect"}]
+    query.extend((("ref", ref_code), ("affiliate_redirect", "1")))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 def _is_trackable(link: AffiliateLink) -> bool:
@@ -113,7 +128,10 @@ def redirect_affiliate_link(code: str, request: Request):
 
         db.commit()
 
-        response = RedirectResponse(url=destination, status_code=302)
+        response = RedirectResponse(
+            url=_destination_with_referral(destination, link.ref_code),
+            status_code=302,
+        )
         max_age = (link.attribution_window_days or 30) * 86400
         response.set_cookie(
             key=COOKIE_NAME,

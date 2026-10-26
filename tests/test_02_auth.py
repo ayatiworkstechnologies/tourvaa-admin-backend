@@ -12,16 +12,16 @@ from tests.conftest import (
 
 
 def test_login_valid_credentials():
-    resp = requests.post(f"{BASE_URL}/auth/login", json={
-        "email": ADMIN_EMAIL, "password": ADMIN_PASSWORD
-    }, timeout=10)
+    # The full suite makes many logins from one test IP. Use the shared
+    # helper so a correct login is retried only when the real rate limiter
+    # returns 429, rather than spuriously failing this contract test.
+    resp = login_with_retry(ADMIN_EMAIL, ADMIN_PASSWORD)
     assert resp.status_code == 200
 
 
 def test_login_returns_token():
-    resp = requests.post(f"{BASE_URL}/auth/login", json={
-        "email": ADMIN_EMAIL, "password": ADMIN_PASSWORD
-    }, timeout=10)
+    resp = login_with_retry(ADMIN_EMAIL, ADMIN_PASSWORD)
+    assert resp.status_code == 200, resp.text
     data = resp.json()
     token = data.get("data", {}).get("access_token") or data.get("access_token")
     assert token and len(token) > 20

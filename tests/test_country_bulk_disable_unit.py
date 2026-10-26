@@ -15,9 +15,9 @@ def test_bulk_disable_filters_and_audits(monkeypatch):
     monkeypatch.setattr("app.services.audit.log_audit", lambda *args, **kwargs: audit.append(kwargs))
     with Session(engine) as db:
         db.add_all([
-            Country(country_name="India", country_code="IN", status="active"),
-            Country(country_name="Indonesia", country_code="ID", status="active"),
-            Country(country_name="Canada", country_code="CA", status="active"),
+            Country(country_name="India", slug="india", country_code="IN", status="active"),
+            Country(country_name="Indonesia", slug="indonesia", country_code="ID", status="active"),
+            Country(country_name="Canada", slug="canada", country_code="CA", status="active"),
         ])
         db.commit()
         result = bulk_disable_countries(request=None, search="India", db=db, current_user=SimpleNamespace(id=1))

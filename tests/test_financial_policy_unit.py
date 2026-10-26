@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.routers import affiliate_payouts, payments
+from app.services import affiliate_payouts as affiliate_payout_service
 from app.schemas.tours import PricingPayload
 from app.services.discounts import find_best_discount_row
 from app.services.tours import _apply_pricing_computation, _ser_pricing
@@ -18,6 +19,13 @@ def test_affiliate_mark_paid_requires_dedicated_permission():
     source = inspect.getsource(affiliate_payouts.mark_paid)
     assert 'require_any_permission("affiliate_payouts.mark_paid")' in source
     assert '"affiliate_payouts.process",' not in source
+
+
+def test_affiliate_payout_requests_keep_each_settlement_currency_separate():
+    source = inspect.getsource(affiliate_payout_service.request_payout)
+    assert "Select the currency for this payout request" in source
+    assert "candidates = [c for c in candidates if (c.currency or \"USD\").upper() == requested_currency]" in source
+    assert "Partial commission payouts are not supported" in source
 
 
 def _pricing_row():

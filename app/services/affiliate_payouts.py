@@ -97,9 +97,20 @@ def delete_payout_method(db: Session, affiliate_id: int, method_id: int) -> None
 
 # payout request lifecycle
 
-def get_available_balance(db: Session, affiliate_id: int) -> Decimal:
+def _payable_conversions(db: Session, affiliate_id: int, *, currency: Optional[str] = None):
+    """Return payout-eligible commissions that are not already held.
+
+    A conversion keeps its booking settlement currency.  Payout math must
+    never add USD, INR, NZD, etc. together and then label the result as one
+    currency on a payout record.
+    """
     payable_statuses = ("pending", "confirmed")
-    held_conversion_ids = {row[0] for row in db.query(AffiliatePayoutItem.conversion_id).join(AffiliatePayout).filter(AffiliatePayout.affiliate_id == affiliate_id).all()}
+    held_conversion_ids = {
+        row[0] for row in db.query(AffiliatePayoutItem.conversion_id)
+        .join(AffiliatePayout)
+        .filter(AffiliatePayout.affiliate_id == affiliate_id, AffiliatePayout.status.in_(("requested", "approved", "processing")))
+        .all()
+    }
     rows = (
         db.query(AffiliateConversion)
         .join(Booking, AffiliateConversion.booking_id == Booking.id)
@@ -110,10 +121,28 @@ def get_available_balance(db: Session, affiliate_id: int) -> Decimal:
         )
         .all()
     )
+    return [
+        row for row in rows
+        if row.id not in held_conversion_ids
+        and is_booking_payout_eligible(row.booking)
+        and (not currency or (row.currency or "USD").upper() == currency.upper())
+    ]
+
+
+def get_available_balances(db: Session, affiliate_id: int) -> list[dict]:
+    totals: dict[str, Decimal] = {}
+    for row in _payable_conversions(db, affiliate_id):
+        code = (row.currency or "USD").upper()
+        amount = row.final_commission if row.final_commission is not None else row.commission_amount
+        totals[code] = money(totals.get(code, 0) + amount)
+    return [{"currency": code, "amount": str(amount)} for code, amount in sorted(totals.items())]
+
+
+def get_available_balance(db: Session, affiliate_id: int, *, currency: Optional[str] = None) -> Decimal:
+    """Compatibility helper for a caller that already knows the currency."""
     return money(sum(
-        (r.final_commission if r.final_commission is not None else r.commission_amount)
-        for r in rows
-        if r.id not in held_conversion_ids and is_booking_payout_eligible(r.booking)
+        row.final_commission if row.final_commission is not None else row.commission_amount
+        for row in _payable_conversions(db, affiliate_id, currency=currency)
     ))
 
 
@@ -150,6 +179,7 @@ def get_wallet_summary(db: Session, affiliate_id: int) -> dict:
         "paid_lifetime": str(paid),
         "lifetime_earnings": str(lifetime),
         "ledger_balance": str(ledger_balance),
+        "available_balances": get_available_balances(db, affiliate_id),
     }
 
 
@@ -184,7 +214,12 @@ def request_payout(db: Session, affiliate: Affiliate, data: AffiliatePayoutReque
     # concurrent requests from the same affiliate can't both draw on the
     # same commission (mirrors affiliate_tracking.create_payout's row-lock
     # pattern for the same reason).
-    held_conversion_ids = {row[0] for row in db.query(AffiliatePayoutItem.conversion_id).join(AffiliatePayout).filter(AffiliatePayout.affiliate_id == affiliate.id).all()}
+    held_conversion_ids = {
+        row[0] for row in db.query(AffiliatePayoutItem.conversion_id)
+        .join(AffiliatePayout)
+        .filter(AffiliatePayout.affiliate_id == affiliate.id, AffiliatePayout.status.in_(("requested", "approved", "processing")))
+        .all()
+    }
     candidates = (
         db.query(AffiliateConversion)
         .join(Booking, AffiliateConversion.booking_id == Booking.id)
@@ -202,23 +237,36 @@ def request_payout(db: Session, affiliate: Affiliate, data: AffiliatePayoutReque
         if c.id not in held_conversion_ids and is_booking_payout_eligible(c.booking)
     ]
 
-    available = money(sum((c.final_commission if c.final_commission is not None else c.commission_amount) for c in candidates))
-    if amount > available:
-        raise HTTPException(status_code=400, detail=f"Requested amount exceeds available balance ({available})")
+    currencies = sorted({(c.currency or "USD").upper() for c in candidates})
+    requested_currency = (data.currency or "").upper() or None
+    if requested_currency and requested_currency not in currencies:
+        raise HTTPException(status_code=400, detail=f"No payout-eligible commission is available in {requested_currency}")
+    if not requested_currency:
+        if len(currencies) > 1:
+            raise HTTPException(status_code=400, detail="Select the currency for this payout request")
+        requested_currency = currencies[0] if currencies else None
+    candidates = [c for c in candidates if (c.currency or "USD").upper() == requested_currency]
 
-    selected = []
-    running_total = money(0)
-    for c in candidates:
-        if running_total >= amount:
-            break
-        selected.append(c)
-        running_total += money(c.final_commission if c.final_commission is not None else c.commission_amount)
+    available = money(sum((c.final_commission if c.final_commission is not None else c.commission_amount) for c in candidates))
+    if not candidates:
+        raise HTTPException(status_code=400, detail="No payout-eligible commissions are available")
+    # A commission row is atomic: it can be held and paid once, not split
+    # across multiple payouts. Requiring the full balance prevents the old
+    # greedy loop from silently paying *more* than the amount entered.
+    if amount != available:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Request the full available balance of {available} {requested_currency or 'USD'} for one currency. Partial commission payouts are not supported.",
+        )
+
+    selected = candidates
+    running_total = available
 
     payout = AffiliatePayout(
         affiliate_id=affiliate.id,
         payout_method_id=method.id,
         total_amount=running_total,
-        currency=selected[0].currency if selected else "USD",
+        currency=requested_currency or "USD",
         payment_method=method.method_type,
         status="requested",
         notes=data.notes,

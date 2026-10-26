@@ -43,6 +43,7 @@ from app.services.supplier_scope import is_supplier_user, reject_supplier_review
 from app.services.suppliers import _mask_bank_identifier, update_supplier
 from app.services.agents import _mask_bank_identifier as mask_agent_bank_identifier, update_agent
 from app.services.affiliates import update_affiliate
+from app.routers.affiliate_redirect import _destination_with_referral
 # `_validate_payment_request` now takes (db, booking, amount, current_user)
 # and falls back to the admin-configured platform deposit defaults
 # (default_deposit_percentage / default_deposit_cutoff_days) when a tour has
@@ -989,6 +990,12 @@ def test_checkout_confirm_accepts_affiliate_ref_code():
     )
 
     assert payload.affiliate_ref_code == "AFF-TRACK-123"
+
+
+def test_affiliate_short_link_redirect_preserves_verified_referral_code():
+    assert _destination_with_referral("/tours/new-zealand/full-day?month=11", "AFF-TRACK-123") == (
+        "/tours/new-zealand/full-day?month=11&ref=AFF-TRACK-123&affiliate_redirect=1"
+    )
 
 
 def test_checkout_confirm_rejects_malformed_display_currency():

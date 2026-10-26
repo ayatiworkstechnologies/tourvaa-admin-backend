@@ -84,6 +84,10 @@ class AffiliatePayoutMethodUpdate(BaseModel):
 class AffiliatePayoutRequestCreate(BaseModel):
     amount: Decimal
     payout_method_id: int
+    # A payout settles commissions in exactly one source currency. This stays
+    # optional for existing single-currency accounts; the service requires it
+    # when more than one currency is available.
+    currency: Optional[str] = None
     notes: Optional[str] = None
 
 

@@ -133,6 +133,7 @@ def _s_conversion(r: AffiliateConversion) -> dict:
         "adjustment_amount": str(r.adjustment_amount), "final_commission": str(r.final_commission) if r.final_commission is not None else None,
         "currency": r.currency, "status": r.status,
         "approved_at": r.approved_at, "available_at": r.available_at, "converted_at": r.converted_at,
+        "created_at": r.converted_at,
     }
 
 

@@ -129,7 +129,7 @@ def test_redirect_active_link_tracks_and_sets_cookie(headers):
 
     resp = requests.get(f"{ORIGIN}/r/{link['ref_code']}", allow_redirects=False, timeout=10)
     assert resp.status_code in (301, 302, 307, 308), resp.text
-    assert resp.headers.get("location") == "/tours/demo-redirect"
+    assert resp.headers.get("location") == f"/tours/demo-redirect?ref={link['ref_code']}&affiliate_redirect=1"
     assert "tourvaa_affiliate_ref" in resp.cookies
 
 
