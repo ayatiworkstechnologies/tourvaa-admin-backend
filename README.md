@@ -18,7 +18,7 @@
 After completing the one-time setup below, start the backend from the `tourvaa-admin-backend` folder with:
 
 ```powershell
-.\venv\Scripts\python.exe -m scripts.dev_server
+uvicorn app.main:app --reload
 ```
 
 Open `http://127.0.0.1:8000/docs` to confirm the API is running.
@@ -31,12 +31,13 @@ Install Python and MySQL, then create an empty MySQL database for local developm
 
 ```powershell
 python -m venv venv
+.\venv\Scripts\Activate.ps1
 ```
 
 ### 2. Install dependencies
 
 ```powershell
-.\venv\Scripts\python.exe -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
 ### 3. Configure the environment
@@ -59,14 +60,14 @@ ALLOWED_ORIGINS=http://localhost:3000
 ### 4. Apply the database migrations
 
 ```powershell
-.\venv\Scripts\python.exe -m alembic upgrade head
-.\venv\Scripts\python.exe -m alembic current
+alembic upgrade head
+alembic current
 ```
 
 ### 5. Seed local roles and reference data
 
 ```powershell
-.\venv\Scripts\python.exe seed.py
+python seed.py
 ```
 
 This is safe to re-run for local setup. Do not use destructive seed options against a database that contains data you need to keep.
@@ -74,7 +75,7 @@ This is safe to re-run for local setup. Do not use destructive seed options agai
 ### 6. Start the backend
 
 ```powershell
-.\venv\Scripts\python.exe -m scripts.dev_server
+uvicorn app.main:app --reload
 ```
 
 The backend starts with auto-reload at `http://127.0.0.1:8000`.
@@ -88,8 +89,8 @@ Verify that it is running:
 ## Run tests
 
 ```powershell
-.\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\venv\Scripts\python.exe -m pytest tests -v
+pip install -r requirements-dev.txt
+pytest tests -v
 ```
 
 Use a local test database. Do not run write-enabled tests against production data.
