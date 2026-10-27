@@ -674,12 +674,42 @@ def retry_authorized_gateway_captures(db: Session) -> list[int]:
 
 
 def release_gateway_authorized_payment(db: Session, payment: Payment, reason: str, actor: Optional[User] = None, request: Optional[Request] = None) -> dict:
-    """Release an uncaptured hold at the provider, then update local state."""
+    """Release an uncaptured hold at the provider, then update local state.
+
+    Provider state is authoritative.  In particular, a delayed or missed
+    ``payment_intent.succeeded`` webhook must never make the expiry worker
+    attempt to void money that Stripe has already captured.
+    """
     if payment.payment_status != "authorized":
         return serialize_payment(payment, detail=True)
     if payment.gateway == "stripe":
         from app.services.payments_gateway import get_stripe
-        get_stripe(db).cancel_payment_intent(payment.gateway_payment_id, f"void:{payment.id}")
+        if not payment.gateway_payment_id:
+            raise HTTPException(status_code=400, detail="Stripe authorization has no PaymentIntent reference")
+        stripe = get_stripe(db)
+        intent = stripe.retrieve_payment_intent(payment.gateway_payment_id)
+        if intent.get("status") == "succeeded":
+            logger.warning(
+                "Stripe PaymentIntent %s already succeeded while releasing hold for payment %s; reconciling local payment instead of voiding it",
+                payment.gateway_payment_id,
+                payment.id,
+            )
+            return capture_gateway_authorized_payment(db, payment, actor=actor, request=request)
+        try:
+            stripe.cancel_payment_intent(payment.gateway_payment_id, f"void:{payment.id}")
+        except HTTPException:
+            # Capture may have completed after the preflight read.  Re-read
+            # once and reconcile only a verified successful intent; otherwise
+            # preserve the real gateway error for retry/operations.
+            intent = stripe.retrieve_payment_intent(payment.gateway_payment_id)
+            if intent.get("status") != "succeeded":
+                raise
+            logger.warning(
+                "Stripe PaymentIntent %s succeeded during hold release for payment %s; reconciling local payment instead of voiding it",
+                payment.gateway_payment_id,
+                payment.id,
+            )
+            return capture_gateway_authorized_payment(db, payment, actor=actor, request=request)
     elif payment.gateway == "paypal":
         from app.services.payments_gateway import get_paypal
         get_paypal(db).void_authorization(payment.gateway_payment_id, f"void:{payment.id}")
