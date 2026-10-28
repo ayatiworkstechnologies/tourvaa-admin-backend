@@ -13,6 +13,22 @@ class ReviewCreate(BaseModel):
         return value.strip() if value else value
 
 
+class ReviewUpdate(BaseModel):
+    """A customer may correct their own review before it is published.
+
+    We deliberately do not accept booking, tour, customer or moderation fields
+    here: those values are derived and owned by the backend.
+    """
+
+    rating: int = Field(ge=1, le=5)
+    review_text: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("review_text")
+    @classmethod
+    def trim_text(cls, value: Optional[str]):
+        return value.strip() if value else value
+
+
 class ReviewModerate(BaseModel):
     status: str
 

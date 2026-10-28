@@ -222,17 +222,17 @@ def approved_email(name: str, login_url: str):
     )
 
 
-def user_created_email(name: str, email: str, set_password_url: str):
+def user_created_email(name: str, email: str, login_url: str):
     return base_email(
         "Your Tourvaa account is ready",
         f"Hi {esc(name)},",
         (
             "An administrator created a Tourvaa account for you.<br /><br />"
             f"<strong>Email:</strong> {esc(email)}<br /><br />"
-            "For security, no password was set for you - use the button below to create your own password before signing in. This link expires in 30 minutes."
+            "Your administrator has set your initial password. Use the button below to sign in, then change it from your profile if needed."
         ),
-        "Set your password",
-        set_password_url,
+        "Sign in to Tourvaa",
+        login_url,
     )
 
 

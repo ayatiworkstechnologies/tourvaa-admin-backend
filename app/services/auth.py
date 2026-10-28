@@ -166,7 +166,7 @@ def get_auth_user_payload(db: Session, user: User):
             "super-admin": "/admin/dashboard",
             "admin": "/admin/dashboard",
             "sub-admin": "/admin/dashboard",
-        }.get(role_slug, f"/{role_slug}/dashboard" if role_slug else "/login"),
+        }.get(role_slug, "/admin/dashboard" if role_slug else "/login"),
     }
 
 
@@ -185,6 +185,8 @@ def build_email_verification_url(token: str, redirect: str | None = None):
 
 def build_portal_login_url(user: User):
     role_slug = user.role.slug if user.role else ""
+    if role_slug not in {"customer", "agent-reseller", "supplier", "affiliate"}:
+        return f"{settings.FRONTEND_URL}/admin/login"
     role_param = {
         "customer": "traveller",
         "agent-reseller": "agent",
@@ -1251,6 +1253,11 @@ def reset_password(db: Session, token: str, password: str, background_tasks=None
     user.password = hash_password(password)
     user.reset_password_token = None
     user.reset_password_expires_at = None
+    # A verified reset proves control of the account. Clear any lock caused
+    # by earlier failed guesses so the user can sign in with the new password
+    # immediately instead of waiting for the lockout timer to expire.
+    user.failed_login_attempts = 0
+    user.locked_until = None
     # Resetting a password invalidates all access/refresh tokens and records
     # every active device session as revoked.
     from app.services.sessions import force_logout_user as _revoke_sessions

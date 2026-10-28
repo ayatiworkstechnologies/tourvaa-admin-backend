@@ -21,7 +21,7 @@ from app.services.audit import AuditLog, log_audit
 from app.models.users import User, UserRole, UserStatusHistory
 from app.schemas.users import UserCreate, UserUpdate
 from app.auth.security import create_password_reset_token, hash_password
-from app.services.auth import build_password_reset_url
+from app.services.auth import build_password_reset_url, build_portal_login_url
 from app.utils.media import existing_storage_path
 
 
@@ -254,16 +254,10 @@ def create_user(
         if selected_role.slug == "super-admin" and not (actor and is_super_admin(actor)):
             raise HTTPException(status_code=403, detail="Only a super admin can grant the super admin role")
 
-    # This admin-created-user flow issues TWO independent tokens on purpose:
-    # `token`/`token_hash` below become the real reset_password_token the
-    # user must click to set their own password. The second, separate
-    # create_password_reset_token() call a few lines down is thrown away
-    # except for its raw value, which is hashed straight into `password` -
-    # i.e. the account's initial password is a random value nobody knows
-    # and nobody can log in with directly; the only way in is via the reset
-    # link. Do not "simplify" this to reuse `token` for both - that would
-    # make the initial password recoverable from the emailed reset link.
-    token, token_hash = create_password_reset_token()
+    # The Admin form explicitly collects and validates an initial password.
+    # Store that chosen value as a bcrypt hash; replacing it with a random
+    # value made every newly created account reject the password the Admin
+    # had just entered. Password-reset remains available as a separate flow.
     user = User(
         name=data.name.strip(),
         email=email,
@@ -274,12 +268,11 @@ def create_user(
         state=data.state.strip(),
         city=data.city.strip(),
         pincode=data.pincode.strip(),
-        password=hash_password(create_password_reset_token()[0]),
+        password=hash_password(data.password),
         role_id=data.role_id,
         is_active=True,
         approval_status="approved",
-        reset_password_token=token_hash,
-        reset_password_expires_at=utcnow() + timedelta(minutes=30),
+        password_created_at=utcnow(),
     )
 
     db.add(user)
@@ -296,15 +289,14 @@ def create_user(
         new_values=serialize_user(user),
         request=request,
     )
-    reset_url = build_password_reset_url(token)
     from app.services.notification_delivery import dispatch_lifecycle_email
     dispatch_lifecycle_email(
         db, event="user_created", entity_type="user", entity_id=user.id,
         recipient_type="user", recipient_email=user.email, template_key="user_created",
-        values={"name": user.name, "email": user.email, "set_password_url": reset_url},
+        values={"name": user.name, "email": user.email, "login_url": build_portal_login_url(user)},
         fallback_subject="Your Tourvaa account is ready",
-        fallback_html=user_created_email(user.name, user.email, reset_url),
-        event_version=token_hash,
+        fallback_html=user_created_email(user.name, user.email, build_portal_login_url(user)),
+        event_version=f"initial-password:{user.id}",
     )
     db.commit()
     db.refresh(user)

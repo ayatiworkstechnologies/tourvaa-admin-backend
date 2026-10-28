@@ -188,7 +188,14 @@ def _ws_user(websocket: WebSocket) -> User | None:
     ticket = websocket.query_params.get("ticket", "")
     if ticket:
         user_id = ticket_store.redeem(ticket)
-        return _ws_user_by_id(user_id) if user_id else None
+        if user_id:
+            return _ws_user_by_id(user_id)
+        # In local development (and any same-origin deployment), the browser
+        # also supplies the httpOnly access cookie. A ticket can be minted by
+        # one in-memory worker and upgraded on another when Redis is absent;
+        # fall through to that independently validated cookie rather than
+        # rejecting an otherwise authenticated socket. Cross-origin sockets
+        # have no such cookie and continue to require a valid one-time ticket.
 
     token = websocket.cookies.get(ACCESS_COOKIE_NAME, "")
     if not token:

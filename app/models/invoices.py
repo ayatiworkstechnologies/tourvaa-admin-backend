@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -14,6 +14,10 @@ class Invoice(Base):
     payment_id = Column(Integer, ForeignKey("payments.id"), nullable=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
     invoice_type = Column(String(30), default="tax_invoice", nullable=False)
+    recipient_type = Column(String(20), default="customer", nullable=False)
+    # Legal recipient, price/payment, and policy details are frozen when a
+    # document is issued. The PDF may be regenerated without changing history.
+    document_snapshot = Column(JSON, nullable=True)
     status = Column(String(30), default="generated", nullable=False, index=True)
     currency = Column(String(10), default="USD", nullable=False)
     subtotal_amount = Column(Numeric(12, 2), default=0, nullable=False)

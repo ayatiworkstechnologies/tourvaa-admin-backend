@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.services.audit import log_audit
@@ -10,7 +11,7 @@ from app.models.agents import Agent
 from app.models.suppliers import Supplier
 from app.models.reviews import TourReview
 from app.models.users import User
-from app.schemas.reviews import ReviewCreate, ReviewModerate
+from app.schemas.reviews import ReviewCreate, ReviewModerate, ReviewUpdate
 from app.utils.operations import simple_paginate
 
 
@@ -29,6 +30,31 @@ def _serialize(review: TourReview) -> dict:
         "status": review.status,
         "created_at": review.created_at,
         "updated_at": review.updated_at,
+    }
+
+
+def _public_reviewer_name(full_name: str) -> str:
+    """Show enough identity for trust without exposing a customer's full name."""
+    parts = [part for part in (full_name or "").strip().split() if part]
+    if not parts:
+        return "Verified traveller"
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]} {parts[-1][0]}."
+
+
+def _serialize_public(review: TourReview) -> dict:
+    data = _serialize(review)
+    # Public readers never need booking/customer identifiers or a full name.
+    return {
+        "id": data["id"],
+        "tour_id": data["tour_id"],
+        "tour_title": data["tour_title"],
+        "rating": data["rating"],
+        "review_text": data["review_text"],
+        "reviewer_name": _public_reviewer_name(data["customer_name"]),
+        "verified_booking": True,
+        "created_at": data["created_at"],
     }
 
 
@@ -56,7 +82,13 @@ def create_review(db: Session, data: ReviewCreate, actor: User, request=None) ->
         status="pending",
     )
     db.add(review)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # The pre-check above is friendly UX; this closes the race between two
+        # simultaneous submissions and leaves the session usable.
+        db.rollback()
+        raise HTTPException(status_code=409, detail="You have already reviewed this booking")
     log_audit(db, actor=actor, action="create_review", entity_type="tour_review", entity_id=review.id, request=request)
     notify_admins(db, notification_type="review_submitted", title="New review awaiting approval", message=f"A review for booking {booking.booking_code} is awaiting moderation", entity_type="tour_review", entity_id=review.id)
     db.commit()
@@ -72,7 +104,20 @@ def list_tour_reviews(db: Session, tour_id: int, limit: int = 20) -> list[dict]:
         .limit(limit)
         .all()
     )
-    return [_serialize(r) for r in reviews]
+    return [_serialize_public(r) for r in reviews]
+
+
+def list_public_tour_reviews(db: Session, tour_id: int, *, page: int, limit: int) -> dict:
+    query = db.query(TourReview).filter(TourReview.tour_id == tour_id, TourReview.status == "approved")
+    total = query.count()
+    reviews = query.order_by(TourReview.created_at.desc()).offset((page - 1) * limit).limit(limit).all()
+    return {
+        "items": [_serialize_public(review) for review in reviews],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, (total + limit - 1) // limit),
+    }
 
 
 def get_review_stats(db: Session, tour_ids: list[int]) -> dict[int, dict]:
@@ -85,6 +130,41 @@ def get_review_stats(db: Session, tour_ids: list[int]) -> dict[int, dict]:
         .all()
     )
     return {tour_id: {"average": round(float(avg), 1), "count": count} for tour_id, avg, count in rows}
+
+
+def get_tour_review_summary(db: Session, tour_id: int) -> dict:
+    rows = (
+        db.query(TourReview.rating, func.count(TourReview.id))
+        .filter(TourReview.tour_id == tour_id, TourReview.status == "approved")
+        .group_by(TourReview.rating)
+        .all()
+    )
+    distribution = {str(rating): count for rating, count in rows}
+    total = sum(distribution.values())
+    weighted_total = sum(int(rating) * count for rating, count in distribution.items())
+    return {
+        "average_rating": round(weighted_total / total, 1) if total else None,
+        "total_reviews": total,
+        "rating_distribution": {str(rating): distribution.get(str(rating), 0) for rating in range(5, 0, -1)},
+    }
+
+
+def review_eligibility(db: Session, booking_id: int, actor: User) -> dict:
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if not booking.customer or booking.customer.user_id != actor.id:
+        raise HTTPException(status_code=403, detail="Booking access denied")
+    existing = db.query(TourReview).filter(TourReview.booking_id == booking_id).first()
+    eligible = booking.booking_status == "completed" and bool(booking.tour_id) and not existing
+    return {
+        "booking_id": booking.id,
+        "eligible": eligible,
+        "reason": None if eligible else (
+            "A review has already been submitted" if existing else "Only completed Tourvaa bookings can be reviewed"
+        ),
+        "existing_review": _serialize(existing) if existing else None,
+    }
 
 
 def list_reviews(db: Session, page: int, limit: int, status: str = ""):
@@ -141,6 +221,26 @@ def list_portal_reviews(db: Session, actor: User) -> dict:
 
     reviews = query.order_by(TourReview.created_at.desc()).all()
     return {"role": portal_role, "reviews": [_serialize(review) for review in reviews], "eligible_bookings": []}
+
+
+def update_customer_review(db: Session, review_id: int, data: ReviewUpdate, actor: User, request=None) -> dict:
+    review = db.query(TourReview).filter(TourReview.id == review_id).first()
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    if not review.customer or review.customer.user_id != actor.id:
+        raise HTTPException(status_code=403, detail="Review access denied")
+    if review.status not in {"pending", "rejected"}:
+        raise HTTPException(status_code=409, detail="Published reviews cannot be edited")
+    old_values = {"rating": review.rating, "review_text": review.review_text, "status": review.status}
+    review.rating = data.rating
+    review.review_text = data.review_text
+    # A resubmitted rejected review is screened again, never silently shown.
+    review.status = "pending"
+    log_audit(db, actor=actor, action="update_review", entity_type="tour_review", entity_id=review.id,
+              old_values=old_values, new_values={"rating": review.rating, "review_text": review.review_text, "status": review.status}, request=request)
+    db.commit()
+    db.refresh(review)
+    return _serialize(review)
 
 
 def moderate_review(db: Session, review_id: int, data: ReviewModerate, actor: User, request=None) -> dict:

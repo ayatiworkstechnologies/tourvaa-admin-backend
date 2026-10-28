@@ -66,10 +66,14 @@ def test_customer_profile_get(customer_headers):
 
 def test_customer_profile_update(customer_headers):
     resp = requests.put(f"{BASE_URL}/customer/profile", json={
-        "first_name": "Portal", "last_name": "Tester",
+        "first_name": "Portal", "last_name": "Tester", "country": "India",
     }, headers=customer_headers, timeout=10)
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["first_name"] == "Portal"
+    assert resp.json()["data"]["country"] == "India"
+    # The serialized display value must follow the newly saved country, not a
+    # stale legacy country_id/nationality left on the customer record.
+    assert resp.json()["data"]["country_name"] == "India"
 
 
 def test_customer_profile_update_normalizes_blank_emergency_email(customer_headers):

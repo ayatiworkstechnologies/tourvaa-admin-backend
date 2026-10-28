@@ -14,7 +14,7 @@ from app.auth.permissions import get_current_user
 from app.utils.money import money, utcnow
 from app.utils.pagination import pagination_params
 from app.utils.ratelimit import check_rate_limit
-from app.models.cms import Tour
+from app.models.cms import Country, Tour
 from app.models.customers import Customer, CustomerSavedTraveller, CustomerWishlistItem
 from app.schemas.customers import (
     CustomerCancellationCreate,
@@ -175,6 +175,16 @@ def update_customer_profile(data: CustomerProfileUpdate, db: Session = Depends(g
     for field, value in payload.items():
         if hasattr(customer, field):
             setattr(customer, field, value)
+    # Keep the denormalized Country text and its foreign key consistent.  Older
+    # profiles may still carry a country_id for a different legacy nationality.
+    if "country" in payload and "country_id" not in payload:
+        country_name = (payload["country"] or "").strip()
+        matched_country = (
+            db.query(Country).filter(Country.country_name.ilike(country_name)).first()
+            if country_name
+            else None
+        )
+        customer.country_id = matched_country.id if matched_country else None
     if not customer.full_name:
         customer.full_name = f"{customer.first_name} {customer.last_name}".strip() or current_user.name
     current_user.name = customer.full_name

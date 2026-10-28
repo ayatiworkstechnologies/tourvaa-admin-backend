@@ -1288,11 +1288,15 @@ def _hide_agent_reservation_payment_from_supplier(data: dict, booking: Booking) 
     data["payment_type"] = None
     data["agent_payment_method"] = None
     data["agent_reference"] = None
-    data["booking_status"] = (
-        "pending_supplier_acceptance"
-        if booking.supplier_acceptance_status == "pending"
-        else "supplier_accepted"
-    )
+    # Do not hide the final lifecycle state on an agent reservation. A
+    # supplier's acceptance auto-confirms the booking, just as it does for a
+    # customer checkout. Only still-pending internal states are redacted.
+    if booking.booking_status not in {"confirmed", "ready_to_travel", "upcoming", "ongoing", "completed"}:
+        data["booking_status"] = (
+            "pending_supplier_acceptance"
+            if booking.supplier_acceptance_status == "pending"
+            else "supplier_accepted"
+        )
     if isinstance(data.get("status_history"), list):
         hidden_statuses = {"pending_payment", "pending_credit_approval", "payment_authorized"}
         data["status_history"] = [
@@ -2454,13 +2458,10 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         # This is a submitted operational reservation, not an abandoned
         # gateway checkout. It must reach the assigned supplier immediately.
         booking_status = "pending_supplier_acceptance" if supplier_id else "pending_supplier_assignment"
-        payment_status = (
-            "credit_approval_pending"
-            if data.agent_payment_method == "credit"
-            else "bank_transfer_pending"
-            if data.agent_payment_method == "bank_transfer"
-            else "pending"
-        )
+        # Credit approval and bank-transfer review describe the selected
+        # settlement method, not the payment outcome.  Payment status must
+        # remain in the canonical set exposed by the portal filters.
+        payment_status = "pending"
     # A reservation may be paid later, but that describes its payment method,
     # not its payment outcome. Keep the status in the same canonical set used
     # by customer, agent, supplier, and admin payment filters.
@@ -2483,6 +2484,9 @@ def create_booking(db: Session, data: BookingCreate, actor: Optional[User] = Non
         exchange_rate_captured_at=utcnow(),
         converted_customer_amount=customer_selling_price,
     )
+    # Freeze the exact cancellation terms available at booking time. This is
+    # later used by invoices, receipts, and confirmation documents.
+    booking.cancellation_policy_snapshot = _cancellation_policy_summary(db, booking)
     db.add(booking)
     db.flush()
     booking.booking_code = _booking_code(db, booking.id, booking.booking_source)
@@ -3296,6 +3300,24 @@ def supplier_accept_booking(db: Session, booking_id: int, data: SupplierDecision
                 generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id, payment_id=payment.id), actor, request)
             except Exception as error:
                 logger.warning("Invoice generation after supplier acceptance failed for booking %s and payment %s: %s", booking.id, payment.id, error)
+
+    # Captures can legitimately occur before a supplier accepts a booking.
+    # They were ineligible for a receipt at that point; now issue exactly one
+    # document per captured payment after confirmation. generate_invoice's
+    # booking/payment lookup makes this retry safe after webhook retries.
+    for payment in db.query(Payment).filter(Payment.booking_id == booking.id, Payment.payment_status == "paid").all():
+        try:
+            generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id, payment_id=payment.id), actor, request)
+        except Exception as error:
+            logger.warning("Invoice generation for captured payment after supplier acceptance failed for booking %s and payment %s: %s", booking.id, payment.id, error)
+
+    # Reserve Now agent bookings have no captured payment, but the approved
+    # booking invoice is issued when the supplier has confirmed the booking.
+    if booking.booking_source == "agent":
+        try:
+            generate_invoice(db, InvoiceGenerateRequest(booking_id=booking.id), actor, request)
+        except Exception as error:
+            logger.warning("Agent reservation invoice generation failed for booking %s: %s", booking.id, error)
 
     if booking.supplier_id:
         from app.models.supplier_ledger import SupplierLedger

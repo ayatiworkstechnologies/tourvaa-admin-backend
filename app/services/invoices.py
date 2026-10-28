@@ -77,10 +77,45 @@ def _invoice_due_date(booking: Booking, requested=None):
     return booking.tour_start_date
 
 
-def _invoice_type(requested: str, balance_due: Decimal) -> str:
+def _invoice_type(
+    requested: str = "auto",
+    balance_due: Decimal = Decimal("0"),
+    booking: Booking | None = None,
+    payment: Payment | None = None,
+) -> str:
     if requested != "auto":
         return requested
-    return "partial_payment" if balance_due > 0 else "full_payment"
+    if booking is not None:
+        if booking.booking_source == "agent" and payment is None:
+            return "agent_reservation_invoice"
+        if balance_due > 0:
+            return "deposit_receipt"
+        return "payment_receipt"
+    if balance_due > 0:
+        return "partial_payment"
+    return "full_payment"
+
+
+def _ensure_document_eligibility(booking: Booking, payment: Payment | None) -> None:
+    """Enforce the financial-document rules from the approved templates.
+
+    An authorization is not money received.  Customer receipts therefore
+    require a captured payment and every document waits for an accepted,
+    confirmed booking.  Agent Reserve Now is the deliberate exception: it is
+    a payment-request invoice with no captured payment, but still only after
+    the supplier has accepted the reservation.
+    """
+    accepted = booking.supplier_acceptance_status == "accepted" or booking.booking_status in {
+        "confirmed", "upcoming", "ongoing", "completed"
+    }
+    if not accepted:
+        raise HTTPException(status_code=409, detail="An invoice or receipt can be issued only after supplier acceptance and booking confirmation")
+    if payment is None:
+        if booking.booking_source != "agent":
+            raise HTTPException(status_code=409, detail="A customer financial document requires a successfully captured payment")
+        return
+    if payment.payment_status != "paid" or money(payment.captured_amount or payment.paid_amount or 0) <= 0:
+        raise HTTPException(status_code=409, detail="An invoice or receipt cannot be issued for an authorization or unpaid payment")
 
 
 def _traveller_names(booking: Booking) -> str:
@@ -107,6 +142,177 @@ def _payment_method_for(booking: Booking, payment: Payment | None) -> str:
         if p.payment_method:
             return p.payment_method.replace("_", " ").title()
     return "Not specified"
+
+
+def _recipient_snapshot(db: Session, booking: Booking) -> dict:
+    """Freeze the legal financial-document recipient at issue time.
+
+    Agent reservations are billed to the agent's invoicing/business profile,
+    never to the traveller. Customer bookings remain billed to the customer.
+    For each billing field, prefer Billing and Invoicing Details; if blank,
+    fallback to corresponding Agent profile/primary contact, then business details.
+    """
+    if booking.booking_source == "agent" and booking.agent:
+        from app.models.agents import AgentInvoicing
+
+        agent = booking.agent
+        invoicing = db.query(AgentInvoicing).filter(AgentInvoicing.agent_id == agent.id).first()
+        business = agent.business_info
+        primary = next((contact for contact in (agent.contacts or []) if contact.is_primary), None)
+        address_parts = [
+            invoicing.billing_address if invoicing and invoicing.billing_address else None,
+            invoicing.billing_city if invoicing and invoicing.billing_city else None,
+            invoicing.billing_state if invoicing and invoicing.billing_state else None,
+            invoicing.billing_postal_code if invoicing and invoicing.billing_postal_code else None,
+        ]
+        address = ", ".join(str(part).strip() for part in address_parts if part and str(part).strip())
+        if not address and business:
+            bus_addr = [getattr(business, "address_line_1", None), getattr(business, "city", None), getattr(business, "country", None)]
+            address = ", ".join(str(part).strip() for part in bus_addr if part and str(part).strip())
+
+        business_name = (
+            (business.trading_name if business and business.trading_name else None)
+            or (business.registered_company_name if business and hasattr(business, "registered_company_name") and business.registered_company_name else None)
+            or agent.agent_name
+            or "Agent Partner"
+        )
+        contact_name = (
+            (invoicing.contact_name if invoicing and invoicing.contact_name else None)
+            or (primary.contact_name if primary and getattr(primary, "contact_name", None) else None)
+            or (agent.user.name if agent.user else None)
+        )
+        email = (
+            (invoicing.email if invoicing and invoicing.email else None)
+            or (business.business_email if business and business.business_email else None)
+            or (primary.email if primary and primary.email else None)
+            or (agent.user.email if agent.user else None)
+        )
+        phone = (
+            (invoicing.phone if invoicing and invoicing.phone else None)
+            or (primary.phone if primary and primary.phone else None)
+        )
+        tax_number = (
+            (invoicing.tax_number if invoicing and invoicing.tax_number else None)
+            or (business.gst_tax_number if business and business.gst_tax_number else None)
+        )
+        return {
+            "type": "agent",
+            "label": "BILL TO",
+            "business_name": business_name,
+            "contact_name": contact_name,
+            "name": business_name,
+            "email": email or "",
+            "phone": phone or "",
+            "address": address or "",
+            "tax_number": tax_number or "",
+        }
+    customer = booking.customer
+    return {
+        "type": "customer",
+        "label": "BILL TO",
+        "business_name": "",
+        "contact_name": customer.full_name if customer else "",
+        "name": customer.full_name if customer else "",
+        "email": customer.email if customer else "",
+        "phone": customer.phone if customer else "",
+        "address": getattr(customer, "address", "") if customer else "",
+        "tax_number": "",
+    }
+
+
+def _document_snapshot(db: Session, booking: Booking, payment: Payment | None, balance_due: Decimal) -> dict:
+    """Create the immutable data used by every issued invoice/receipt PDF."""
+    booking_total = money(booking.final_amount or booking.total_cost or 0)
+    current_payment = money(payment.captured_amount or payment.paid_amount or 0) if payment else money(0)
+    payment_date = getattr(payment, "updated_at", None) or getattr(payment, "created_at", None) if payment else None
+    return {
+        "recipient": _recipient_snapshot(db, booking),
+        "booking": {
+            "code": booking.booking_code or str(booking.id),
+            "tour_name": booking.tour_name or "Tour",
+            "traveller_names": _traveller_names(booking),
+            "travel_date": str(booking.tour_start_date or booking.tour_date or ""),
+            "adult_count": int(booking.adults_count or booking.no_of_adults or 0),
+            "child_count": int(booking.children_count or booking.no_of_children or 0),
+            "lead_traveller": next((t.full_name or f"{t.first_name} {t.last_name}".strip() for t in (booking.travellers or []) if t.is_primary_contact), _traveller_names(booking)),
+            "pickup": next((t.pickup_location for t in (booking.travellers or []) if t.pickup_location), None) or booking.pickup_location or (booking.tour.start_time if booking.tour else ""),
+            "booking_status": booking.booking_status,
+            "payment_status": booking.payment_status,
+            "total": str(booking_total),
+            "tour_price": str(money(booking.base_amount or 0)),
+            "addons_total": str(money((booking.optional_activity_amount or 0) + (booking.accommodation_amount or 0) + (booking.extension_amount or 0))),
+            "discount_total": str(money((booking.discount_amount or 0) + (booking.group_discount_amount or 0))),
+            "tax_amount": str(money(booking.tax_amount or 0)),
+            "cumulative_paid": str(money(booking.amount_paid or 0)),
+            "balance_due": str(balance_due),
+            "balance_due_date": str(booking.payment_due_date or "") if booking.payment_due_date else "",
+            "cancellation_policy": booking.cancellation_policy_snapshot or "Cancellation policy recorded with this booking.",
+            "terms_url": f"{settings.FRONTEND_URL.rstrip('/')}/terms#cancellation-terms",
+            "payment_link": f"{settings.FRONTEND_URL.rstrip('/')}/payments?booking_id={booking.id}",
+        },
+        "payment": {
+            "amount": str(current_payment),
+            "method": _payment_method_for(booking, payment),
+            "transaction_id": (getattr(payment, "transaction_id", None) or getattr(payment, "gateway_transaction_id", None) or "") if payment else "",
+            "paid_at": payment_date.isoformat() if payment_date else "",
+        },
+    }
+
+
+def _document_line_items(booking: Booking, invoice_total: Decimal, subtotal: Decimal, gst: Decimal) -> list[dict]:
+    """Customer-facing price rows only; never expose supplier settlement data.
+    Format Quantity according to template requirements:
+    - Total Tour Price: count of travellers
+    - Add-ons / extras: count or 'Included'
+    - Discount: '%'
+    - Including Tax: 'Included (do not add tax amount or percentage)'
+    """
+    traveller_count = int(booking.adults_count or booking.no_of_adults or 1) + int(booking.children_count or booking.no_of_children or 0)
+    qty_str = f"{traveller_count} traveller{'s' if traveller_count > 1 else ''}"
+
+    rows = [{
+        "description": "Total Tour Price",
+        "quantity": qty_str,
+        "unit_price": money_str(booking.base_amount or 0),
+        "tax_amount": "0.00",
+        "total_price": money_str(booking.base_amount or 0),
+    }]
+    addons = money((booking.optional_activity_amount or 0) + (booking.accommodation_amount or 0) + (booking.extension_amount or 0))
+    if addons > 0:
+        rows.append({
+            "description": "Add-ons / extras",
+            "quantity": "Included",
+            "unit_price": money_str(addons),
+            "tax_amount": "0.00",
+            "total_price": money_str(addons),
+        })
+    discount = money((booking.discount_amount or 0) + (booking.group_discount_amount or 0))
+    if discount > 0:
+        rows.append({
+            "description": "Discount",
+            "quantity": "%",
+            "unit_price": money_str(-discount),
+            "tax_amount": "0.00",
+            "total_price": money_str(-discount),
+        })
+    tax_amt = money(booking.tax_amount or gst or 0)
+    if tax_amt > 0:
+        rows.append({
+            "description": "Including Tax",
+            "quantity": "Included (do not add tax amount or percentage)",
+            "unit_price": money_str(tax_amt),
+            "tax_amount": "0.00",
+            "total_price": money_str(tax_amt),
+        })
+    if not rows or money(booking.base_amount or 0) <= 0:
+        rows = [{
+            "description": f"Booking {booking.booking_code or booking.id} - {booking.tour_name or 'Tour'}",
+            "quantity": "1",
+            "unit_price": money_str(subtotal),
+            "tax_amount": money_str(gst),
+            "total_price": money_str(invoice_total),
+        }]
+    return rows
 
 
 def _support_contact(inv: Invoice) -> tuple[str, str]:
@@ -166,22 +372,108 @@ def _invoice_template_copy(inv: Invoice) -> dict[str, str]:
     return result
 
 
+def _tourvaa_company_snapshot(inv: Invoice) -> dict:
+    from sqlalchemy.orm import object_session
+    from sqlalchemy.orm.exc import UnmappedInstanceError
+    from app.models.settings import AppSetting
+
+    defaults = {
+        "legal_business_name": "Tourvaa Ltd",
+        "business_address": "Level 1, 123 Queen Street, Auckland 1010, New Zealand",
+        "email": "support@tourvaa.com",
+        "website": "www.tourvaa.com",
+        "gst_number": "",
+    }
+    try:
+        session = object_session(inv)
+    except UnmappedInstanceError:
+        session = None
+    if session is not None:
+        keys = ["company_legal_name", "company_name", "company_address", "support_email", "company_gst_number"]
+        rows = session.query(AppSetting).filter(AppSetting.key.in_(keys)).all()
+        vals = {r.key: (r.value or "").strip() for r in rows}
+        if vals.get("company_legal_name"):
+            defaults["legal_business_name"] = vals["company_legal_name"]
+        elif vals.get("company_name"):
+            defaults["legal_business_name"] = vals["company_name"]
+        if vals.get("company_address"):
+            defaults["business_address"] = vals["company_address"]
+        if vals.get("support_email"):
+            defaults["email"] = vals["support_email"]
+        if vals.get("company_gst_number"):
+            defaults["gst_number"] = vals["company_gst_number"]
+    return defaults
+
+
 def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | None, items: list[dict]) -> dict:
     support_email, website = _support_contact(inv)
     currency, currency_symbol = _currency_metadata(inv)
+    tourvaa_company = _tourvaa_company_snapshot(inv)
+    label = {
+        "agent_reservation_invoice": "BOOKING INVOICE",
+        "deposit_receipt": "BOOKING INVOICE & PAYMENT RECEIPT",
+        "payment_receipt": "PAYMENT RECEIPT",
+    }.get(inv.invoice_type, "INVOICE")
+    snapshot = inv.document_snapshot or {}
+    recipient = snapshot.get("recipient") or {}
+    snapshot_booking = snapshot.get("booking") or {}
+    snapshot_payment = snapshot.get("payment") or {}
+    is_agent = recipient.get("type") == "agent" or booking.booking_source == "agent"
+    is_booking_invoice = inv.invoice_type == "agent_reservation_invoice"
+    is_deposit_document = inv.invoice_type == "deposit_receipt"
+    is_full_receipt = inv.invoice_type == "payment_receipt"
+
+    if is_booking_invoice:
+        label = "AGENT BOOKING INVOICE"
+    elif is_deposit_document:
+        label = "CUSTOMER DEPOSIT INVOICE & PAYMENT RECEIPT"
+    elif is_full_receipt:
+        label = "AGENT FULL PAYMENT RECEIPT" if is_agent else "CUSTOMER FULL PAYMENT RECEIPT"
     return {
         "support_email": support_email,
         "website": website,
         **_invoice_template_copy(inv),
+        "tourvaa_legal_business_name": tourvaa_company["legal_business_name"],
+        "tourvaa_business_address": tourvaa_company["business_address"],
+        "tourvaa_email": tourvaa_company["email"],
+        "tourvaa_website": tourvaa_company["website"],
+        "tourvaa_gst_number": tourvaa_company["gst_number"],
+        "is_booking_invoice": is_booking_invoice,
+        "is_deposit_document": is_deposit_document,
+        "is_full_receipt": is_full_receipt,
+        "is_agent": is_agent,
         "invoice_number": inv.invoice_number,
+        "document_label": label,
         "booking_code": booking.booking_code or str(booking.id),
-        # Same fallback as _traveller_names above: Customer.full_name is
-        # always set, customer.user is only set for a customer who actually
-        # has a login account.
-        "customer_name": (booking.customer.full_name or (booking.customer.user.name if booking.customer.user else "")) if booking.customer else "",
-        "tour_name": booking.tour_name or "-",
-        "traveller_names": _traveller_names(booking),
-        "payment_method": _payment_method_for(booking, payment),
+        "recipient_label": recipient.get("label") or "BILL TO",
+        "recipient_business_name": recipient.get("business_name") or "",
+        "recipient_contact_name": recipient.get("contact_name") or "",
+        "customer_name": recipient.get("name") or ((booking.customer.full_name or (booking.customer.user.name if booking.customer.user else "")) if booking.customer else ""),
+        "recipient_email": recipient.get("email") or "",
+        "recipient_phone": recipient.get("phone") or "",
+        "recipient_address": recipient.get("address") or "",
+        "recipient_tax_number": recipient.get("tax_number") or "",
+        "tour_name": snapshot_booking.get("tour_name") or booking.tour_name or "-",
+        "traveller_names": snapshot_booking.get("traveller_names") or _traveller_names(booking),
+        "travel_date": snapshot_booking.get("travel_date") or "",
+        "adult_count": snapshot_booking.get("adult_count") or 0,
+        "child_count": snapshot_booking.get("child_count") or 0,
+        "lead_traveller": snapshot_booking.get("lead_traveller") or "",
+        "pickup": snapshot_booking.get("pickup") or "",
+        "tour_price": snapshot_booking.get("tour_price") or "",
+        "addons_total": snapshot_booking.get("addons_total") or "",
+        "discount_total": snapshot_booking.get("discount_total") or "",
+        "tax_included": snapshot_booking.get("tax_amount") or "",
+        "payment_link": snapshot_booking.get("payment_link") or "",
+        "payment_method": snapshot_payment.get("method") or _payment_method_for(booking, payment),
+        "transaction_id": snapshot_payment.get("transaction_id") or "",
+        "payment_date": snapshot_payment.get("paid_at") or "",
+        "booking_total": snapshot_booking.get("total") or money_str(booking.final_amount or booking.total_cost),
+        "cumulative_paid": snapshot_booking.get("cumulative_paid") or money_str(booking.amount_paid),
+        "cancellation_policy": snapshot_booking.get("cancellation_policy") or "",
+        "terms_url": snapshot_booking.get("terms_url") or "",
+        "payment_status": booking.payment_status,
+        "booking_status": booking.booking_status,
         "invoice_date": utcnow().strftime("%Y-%m-%d"),
         "status": inv.status or "pending",
         "currency": currency,
@@ -192,14 +484,14 @@ def _build_invoice_pdf_data(inv: Invoice, booking: Booking, payment: Payment | N
         "total_amount": money_str(inv.total_amount),
         "amount_paid": money_str(inv.amount_paid),
         "amount_due": money_str(inv.amount_due),
-        "balance_due_date": inv.balance_due_date.strftime("%Y-%m-%d") if inv.balance_due_date else None,
+        "balance_due_date": snapshot_booking.get("balance_due_date") or (inv.balance_due_date.strftime("%Y-%m-%d") if inv.balance_due_date else None),
         "items": items,
     }
 
 
 def serialize_invoice(inv: Invoice, detail: bool = False) -> dict:
     currency, currency_symbol = _currency_metadata(inv)
-    data = {"id": inv.id, "invoice_number": inv.invoice_number, "booking_id": inv.booking_id, "booking_code": inv.booking.booking_code if inv.booking else None, "payment_id": inv.payment_id, "customer_id": inv.customer_id, "customer_name": inv.customer.full_name if inv.customer else None, "invoice_type": inv.invoice_type, "status": inv.status, "currency": currency, "currency_symbol": currency_symbol, "subtotal_amount": money_str(inv.subtotal_amount), "gst_rate": money_str(inv.gst_rate), "gst_amount": money_str(inv.gst_amount), "total_amount": money_str(inv.total_amount), "amount_paid": money_str(inv.amount_paid), "amount_due": money_str(inv.amount_due), "balance_due_date": inv.balance_due_date, "pdf_path": inv.pdf_path, "emailed_at": inv.emailed_at, "created_at": inv.created_at, "updated_at": inv.updated_at}
+    data = {"id": inv.id, "invoice_number": inv.invoice_number, "booking_id": inv.booking_id, "booking_code": inv.booking.booking_code if inv.booking else None, "payment_id": inv.payment_id, "customer_id": inv.customer_id, "customer_name": inv.customer.full_name if inv.customer else None, "recipient_type": inv.recipient_type, "invoice_type": inv.invoice_type, "status": inv.status, "currency": currency, "currency_symbol": currency_symbol, "subtotal_amount": money_str(inv.subtotal_amount), "gst_rate": money_str(inv.gst_rate), "gst_amount": money_str(inv.gst_amount), "total_amount": money_str(inv.total_amount), "amount_paid": money_str(inv.amount_paid), "amount_due": money_str(inv.amount_due), "balance_due_date": inv.balance_due_date, "pdf_path": inv.pdf_path, "emailed_at": inv.emailed_at, "created_at": inv.created_at, "updated_at": inv.updated_at}
     if detail:
         data["items"] = [{"id": i.id, "item_type": i.item_type, "description": i.description, "quantity": i.quantity, "unit_price": money_str(i.unit_price), "tax_amount": money_str(i.tax_amount), "total_price": money_str(i.total_price)} for i in inv.items]
     return data
@@ -233,8 +525,6 @@ def _ensure_invoice_access(inv: Invoice, actor: User | None) -> None:
     ):
         return
     booking = inv.booking
-    if role == "supplier" and booking and booking.supplier and booking.supplier.user_id == actor.id:
-        return
     if role == "agent" and booking and booking.agent and booking.agent.user_id == actor.id:
         return
     raise HTTPException(status_code=403, detail="Invoice access denied")
@@ -244,7 +534,9 @@ def list_invoices(db: Session, page: int = 1, limit: int = 20, booking_id: int |
     query = db.query(Invoice)
     role = _user_role(actor)
     if role == "supplier":
-        query = query.join(Invoice.booking).join(Booking.supplier).filter_by(user_id=actor.id)
+        # Financial documents are intentionally unavailable to suppliers:
+        # they must never see customer/agent billing or Tourvaa margins.
+        return {"items": [], "total": 0, "page": page, "limit": limit, "total_pages": 1}
     elif role == "agent":
         query = query.join(Invoice.booking).join(Booking.agent).filter_by(user_id=actor.id)
     elif role == "customer":
@@ -273,8 +565,25 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
     payment = db.query(Payment).filter(Payment.id == data.payment_id).first() if data.payment_id else None
     if payment and payment.booking_id != booking.id:
         raise HTTPException(status_code=400, detail="Payment does not belong to the specified booking")
+    _ensure_document_eligibility(booking, payment)
     existing = db.query(Invoice).filter(Invoice.booking_id == booking.id, Invoice.payment_id == (payment.id if payment else None)).first()
     if existing:
+        # Upgrade legacy records in place. Earlier records used generic types
+        # and had no immutable recipient/policy snapshot; a reissue must not
+        # preserve an outdated document merely because the ID already exists.
+        if not existing.document_snapshot:
+            booking_total = money(booking.final_amount or booking.total_cost or 0)
+            balance_due = max(money(0), booking_total - money(booking.amount_paid))
+            snapshot = _document_snapshot(db, booking, payment, balance_due)
+            existing.recipient_type = snapshot["recipient"]["type"]
+            existing.document_snapshot = snapshot
+            existing.invoice_type = _invoice_type(data.invoice_type, balance_due, booking, payment)
+            existing.amount_paid = money(payment.captured_amount if payment else booking.amount_paid)
+            existing.amount_due = balance_due
+            existing.balance_due_date = _invoice_due_date(booking, data.balance_due_date) if balance_due > 0 else None
+            db.add(existing)
+            db.commit()
+            return regenerate_invoice_pdf(db, existing.id, actor, request)
         # A prior process may have committed the invoice record before its
         # private PDF was persisted, or the file may have been removed during
         # a deployment. Re-running generation must repair that record instead
@@ -291,11 +600,14 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
     invoice_total = paid if payment else booking_total
     subtotal, gst = split_gst_inclusive(invoice_total, data.gst_rate)
     balance_due = max(money(0), booking_total - money(booking.amount_paid))
+    snapshot = _document_snapshot(db, booking, payment, balance_due)
     inv = Invoice(
         booking_id=booking.id,
         payment_id=payment.id if payment else None,
         customer_id=booking.customer_id,
-        invoice_type=_invoice_type(data.invoice_type, balance_due),
+        recipient_type=snapshot["recipient"]["type"],
+        document_snapshot=snapshot,
+        invoice_type=_invoice_type(data.invoice_type, balance_due, booking, payment),
         currency=booking.currency,
         subtotal_amount=subtotal,
         gst_rate=Decimal(str(data.gst_rate)).quantize(Decimal("0.0001")),
@@ -309,13 +621,15 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
     db.add(inv)
     db.flush()
     inv.invoice_number = _invoice_number(inv.id)
-    db.add(InvoiceItem(invoice_id=inv.id, item_type="booking", description=f"Booking {booking.booking_code or booking.id} - {booking.tour_name or 'Tour'}", quantity=1, unit_price=subtotal, tax_amount=gst, total_price=invoice_total))
+    document_items = _document_line_items(booking, invoice_total, subtotal, gst)
+    for item in document_items:
+        db.add(InvoiceItem(invoice_id=inv.id, item_type="booking", description=item["description"], quantity=item["quantity"], unit_price=item["unit_price"], tax_amount=item["tax_amount"], total_price=item["total_price"]))
     storage = get_private_docs_root().joinpath("invoices")
     storage.mkdir(parents=True, exist_ok=True)
     pdf_path = storage.joinpath(f"{inv.invoice_number}.pdf")
     invoice_data = _build_invoice_pdf_data(
         inv, booking, payment,
-        items=[{"description": f"Booking {booking.booking_code or booking.id} - {booking.tour_name or 'Tour'}", "quantity": 1, "unit_price": money_str(subtotal), "tax_amount": money_str(gst), "total_price": money_str(invoice_total)}],
+        items=document_items,
     )
     from app.utils.invoices_pdf import generate_pdf
     generate_pdf(pdf_path, invoice_data)
@@ -333,8 +647,11 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
     recipient_email = None
     recipient_type = None
     recipient_url = None
-    if booking.booking_source == "agent" and booking.agent and booking.agent.user:
-        recipient_name, recipient_email, recipient_type = booking.agent.agent_name, booking.agent.user.email, "agent"
+    snapshot_recipient = (inv.document_snapshot or {}).get("recipient") or {}
+    if booking.booking_source == "agent" and booking.agent:
+        recipient_name = snapshot_recipient.get("name") or booking.agent.agent_name
+        recipient_email = snapshot_recipient.get("email") or (booking.agent.user.email if booking.agent.user else None)
+        recipient_type = "agent"
         recipient_url = f"{settings.FRONTEND_URL}/agent/invoices"
     elif booking.customer:
         recipient_name, recipient_email, recipient_type = booking.customer.full_name, booking.customer.email, "customer"
@@ -343,13 +660,22 @@ def generate_invoice(db: Session, data: InvoiceGenerateRequest, actor: User | No
                       "booking_code": booking.booking_code or booking.id, "currency": inv.currency,
                       "total": money_str(inv.total_amount), "login_url": recipient_url or "",
                       "button_text": "View invoice", "button_url": recipient_url or ""}
+    # The issued PDF goes to the legal recipient only. A portal link remains
+    # available, but an email client must not require a later download to
+    # retain the exact receipt that was sent at issue time.
+    generated_attachments = []
+    if inv.pdf_path:
+        from app.utils.media import resolve_private_docs_path
+        generated_pdf = resolve_private_docs_path(inv.pdf_path, "/private-docs/")
+        if generated_pdf and generated_pdf.is_file():
+            generated_attachments.append((f"{inv.invoice_number}.pdf", generated_pdf.read_bytes(), "pdf"))
     dispatch_lifecycle_email(
         db, event="invoice_generated", entity_type="invoice", entity_id=inv.id,
         recipient_type=recipient_type or "booking_owner", recipient_email=recipient_email,
         template_key="invoice_generated", values=invoice_values,
         fallback_subject=f"Invoice available - {inv.invoice_number}",
         fallback_html=f"<p>Invoice {inv.invoice_number} is available for booking {booking.booking_code or booking.id}.</p><p><a href='{recipient_url or ''}'>View invoice</a></p>",
-        event_version=str(inv.id),
+        event_version=str(inv.id), attachments=generated_attachments,
     )
     admin_url = f"{settings.FRONTEND_URL}/admin/invoices/{inv.id}"
     dispatch_admin_lifecycle_emails(
@@ -428,7 +754,7 @@ def email_invoice_to_customer(db: Session, invoice_id: int, data: InvoiceEmailRe
         from app.models.agents import AgentInvoicing
 
         invoicing = db.query(AgentInvoicing).filter(AgentInvoicing.agent_id == booking.agent_id).first() if booking.agent_id else None
-        recipient = (
+        recipient = (inv.document_snapshot or {}).get("recipient", {}).get("email") or (
             (invoicing.email if invoicing and invoicing.email else None)
             or (booking.agent.user.email if booking.agent and booking.agent.user and booking.agent.user.email else None)
         )

@@ -260,7 +260,10 @@ def _status_after_payment_sync(booking: Booking, payment_status: str) -> str | N
     tour = getattr(booking, "tour", None)
     needs_supplier_confirmation = not tour or tour.requires_supplier_confirmation
     if booking.supplier_acceptance_status == "accepted":
-        return "supplier_accepted"
+        # Supplier acceptance is the final operational confirmation. This
+        # also repairs the late-payment path, where settlement happens after
+        # the supplier has already accepted the booking.
+        return "confirmed"
     if needs_supplier_confirmation and booking.supplier_id:
         return "pending_supplier_acceptance"
     # Settlement never grants final confirmation.  Operations must either

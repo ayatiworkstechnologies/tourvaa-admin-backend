@@ -41,6 +41,7 @@ PENDING_REVIEW_STATUSES = [
     "MORE_INFORMATION_REQUIRED",
 ]
 ADMIN_ROLE_SLUGS = ("super-admin", "admin", "sub-admin")
+PUBLIC_PORTAL_ROLE_SLUGS = ("customer", "supplier", "agent-reseller", "affiliate")
 
 # Maps role slug -> dashboard type key used by the frontend
 ROLE_TO_DASHBOARD_TYPE = {
@@ -213,9 +214,9 @@ def _get_role_slug(user: User) -> str:
 
 
 def _get_dashboard_type(role_slug: str) -> str:
-    # Custom roles must never be rendered as an Admin dashboard simply
-    # because their slug is new. They receive a permission-driven portal.
-    return ROLE_TO_DASHBOARD_TYPE.get(role_slug, "portal")
+    # Roles outside the four public portal types are created by back-office
+    # administrators, so they use the existing permission-filtered Admin UI.
+    return ROLE_TO_DASHBOARD_TYPE.get(role_slug, "admin")
 
 
 def _safe_count(db, model_class, *filters):
@@ -269,7 +270,9 @@ def _is_pending_review(column):
 def _is_admin_user():
     return or_(
         sqlfunc.upper(User.user_type) == "ADMIN",
-        User.role.has(Role.slug.in_(ADMIN_ROLE_SLUGS)),
+        # Custom roles created by back-office users are also back-office
+        # accounts. The four self-service portal roles remain excluded.
+        User.role.has(~Role.slug.in_(PUBLIC_PORTAL_ROLE_SLUGS)),
     )
 
 

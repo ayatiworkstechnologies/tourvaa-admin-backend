@@ -25,7 +25,7 @@ def test_admin_and_normal_roles_use_separate_authentication_domains(monkeypatch)
         jwt.decode(admin_token, "n" * 64, algorithms=[settings.JWT_ALGORITHM])
 
 
-@pytest.mark.parametrize("role", ["super-admin", "admin", "sub-admin"])
+@pytest.mark.parametrize("role", ["super-admin", "admin", "sub-admin", "accountant", "finance-manager"])
 def test_back_office_roles_share_admin_authentication(role):
     assert get_auth_domain_for_role(role) == "admin"
 
@@ -35,9 +35,9 @@ def test_customer_supplier_agent_and_affiliate_share_normal_authentication(role)
     assert get_auth_domain_for_role(role) == "normal"
 
 
-def test_unknown_role_cannot_fall_back_to_privileged_admin_authentication():
-    assert get_auth_domain_for_role("future-portal-role") == "normal"
-    assert get_portal_for_role("future-portal-role") == "portal"
+def test_custom_back_office_role_uses_permission_scoped_admin_shell():
+    assert get_auth_domain_for_role("future-portal-role") == "admin"
+    assert get_portal_for_role("future-portal-role") == "admin"
 
 
 def test_token_with_missing_domain_claim_is_rejected(monkeypatch):
@@ -49,3 +49,14 @@ def test_token_with_missing_domain_claim_is_rejected(monkeypatch):
         decode_auth_token(token)
 
     assert exc.value.status_code == 401
+
+
+def test_websocket_ticket_can_be_redeemed_without_redis(monkeypatch):
+    from app.services import messaging_ws
+
+    monkeypatch.setattr(messaging_ws, "get_redis_sync", lambda: None)
+    store = messaging_ws._TicketStore()
+
+    ticket = store.issue(42)
+
+    assert store.redeem(ticket) == 42

@@ -43,11 +43,11 @@ ROLE_SLUG_TO_PORTAL = {
 
 
 def get_portal_for_role(role_slug: str) -> str:
-    # Unknown/new roles must never inherit the privileged Admin JWT domain.
-    # Only the explicitly listed back-office roles above receive Admin JWTs.
-    # A custom role gets its own generic portal surface, rather than being
-    # mislabeled as a customer or being allowed into the Admin experience.
-    return ROLE_SLUG_TO_PORTAL.get((role_slug or "").lower(), "portal")
+    # Every role created from Admin -> Roles is a back-office role unless it
+    # is one of the explicit customer/supplier/agent/affiliate portal roles
+    # above. It uses the Admin shell, while its own assigned permissions
+    # remain the sole authority for menus and API actions.
+    return ROLE_SLUG_TO_PORTAL.get((role_slug or "").lower(), "admin")
 
 
 def get_auth_domain_for_portal(portal: str | None) -> str:

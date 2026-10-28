@@ -203,6 +203,9 @@ class Booking(Base):
     # Invoice.balance_due_date (which is auto-calculated) -- suppliers set
     # this manually via PATCH /supplier/bookings/{id}/due-date.
     payment_due_date = Column(DateTime(timezone=True), nullable=True)
+    # Immutable policy text accepted with this booking. Later supplier/admin
+    # edits must never rewrite the customer's financial documents.
+    cancellation_policy_snapshot = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

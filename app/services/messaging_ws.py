@@ -4,12 +4,14 @@ import logging
 import secrets
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import WebSocket
+from jose import JWTError, jwt
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.utils.redis_client import get_redis_async, get_redis_sync
 
 logger = logging.getLogger(__name__)
@@ -57,24 +59,32 @@ class _TicketStore:
 
     Backed by Redis (SETEX + GETDEL) when configured, since a ticket minted
     by one worker's REST call must be redeemable against a different
-    worker's WS handshake. Falls back to this same in-process dict when
-    Redis is unavailable - correct for a single worker/instance."""
+    worker's WS handshake. Without Redis, use a signed 30-second ticket so
+    local reload/multi-worker development remains reliable; Redis preserves
+    strict one-time redemption when it is available."""
 
     def __init__(self):
         self._tickets: dict[str, tuple[int, float]] = {}
 
     def issue(self, user_id: int) -> str:
-        ticket = secrets.token_urlsafe(32)
         r = get_redis_sync()
         if r is not None:
             try:
+                ticket = secrets.token_urlsafe(32)
                 r.setex(f"wsticket:{ticket}", TICKET_TTL_SECONDS, user_id)
                 return ticket
             except Exception as exc:
-                logger.warning("WS ticket store: Redis error on issue (%s), falling back to in-process", exc)
-        self._sweep()
-        self._tickets[ticket] = (user_id, time.monotonic() + TICKET_TTL_SECONDS)
-        return ticket
+                logger.warning("WS ticket store: Redis error on issue (%s), using signed fallback", exc)
+        return jwt.encode(
+            {
+                "sub": str(user_id),
+                "purpose": "ws_ticket",
+                "jti": secrets.token_urlsafe(16),
+                "exp": datetime.now(timezone.utc) + timedelta(seconds=TICKET_TTL_SECONDS),
+            },
+            settings.JWT_SECRET_KEY,
+            algorithm=settings.JWT_ALGORITHM,
+        )
 
     def redeem(self, ticket: str) -> int | None:
         r = get_redis_sync()
@@ -83,14 +93,14 @@ class _TicketStore:
                 value = r.getdel(f"wsticket:{ticket}")
                 return int(value) if value is not None else None
             except Exception as exc:
-                logger.warning("WS ticket store: Redis error on redeem (%s), falling back to in-process", exc)
-        entry = self._tickets.pop(ticket, None)
-        if not entry:
+                logger.warning("WS ticket store: Redis error on redeem (%s), trying signed fallback", exc)
+        try:
+            payload = jwt.decode(ticket, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+            if payload.get("purpose") != "ws_ticket":
+                return None
+            return int(payload["sub"])
+        except (JWTError, KeyError, TypeError, ValueError):
             return None
-        user_id, expires_at = entry
-        if time.monotonic() > expires_at:
-            return None
-        return user_id
 
     def _sweep(self):
         now = time.monotonic()

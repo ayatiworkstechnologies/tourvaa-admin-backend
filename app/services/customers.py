@@ -11,7 +11,7 @@ from app.services.audit import AuditLog, log_audit
 from app.services.auth import build_password_reset_url
 from app.config import settings
 from app.utils.email_templates import base_email, esc, password_reset_email
-from app.models.cms import City
+from app.models.cms import City, Country
 from app.models.customers import Customer, CustomerCommunication
 from app.models.sessions import LoginHistory
 from app.models.bookings import Booking
@@ -544,6 +544,18 @@ def update_customer(
         value = getattr(data, field)
         if value is not None:
             setattr(customer, field, value)
+
+    # The customer portal saves a human-readable Country. Keep the normalized
+    # foreign key in sync so a stale legacy country_id cannot override the
+    # just-saved value on the next profile load.
+    if data.country is not None and data.country_id is None:
+        country_name = data.country.strip()
+        matched_country = (
+            db.query(Country).filter(Country.country_name.ilike(country_name)).first()
+            if country_name
+            else None
+        )
+        customer.country_id = matched_country.id if matched_country else None
 
     log_audit(
         db,
