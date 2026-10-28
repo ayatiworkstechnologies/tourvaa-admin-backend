@@ -156,6 +156,13 @@ class BlogPayload(BaseModel):
     og_image: Optional[str] = Field(default=None, max_length=255)
     related_tour_ids: Optional[List[int]] = None
 
+    @field_validator("scheduled_at", mode="before")
+    @classmethod
+    def normalise_blank_schedule(cls, value):
+        # Older admin clients may submit an empty datetime-local field. Treat
+        # that as no schedule instead of returning an unhelpful 422 error.
+        return None if isinstance(value, str) and not value.strip() else value
+
     @field_validator("title", "slug", "excerpt", "featured_image", "banner_title", "banner_alt", "author", "seo_title", "seo_description", mode="before")
     @classmethod
     def strip_optional_text(cls, value):
