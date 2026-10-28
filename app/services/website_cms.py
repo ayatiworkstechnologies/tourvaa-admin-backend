@@ -672,6 +672,29 @@ def get_public_destination_guide(db, slug: str):
         return None
     return {"slug": normalized_slug, "data": row.data}
 
+
+def _validate_contact_offices(data: dict) -> None:
+    """Require an explicit, unique office identifier for each CMS office row.
+
+    City/country/map coordinates are fixed in the public UI. Applying CMS rows
+    by their list order allowed a Chennai record to be rendered as Auckland.
+    """
+    records = data.get("items")
+    if not isinstance(records, list):
+        return
+    allowed_ids = {"nz", "lk", "in"}
+    used_ids: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=422, detail="Each office entry must be an object")
+        office_id = str(record.get("office_id") or "").strip()
+        if office_id not in allowed_ids:
+            raise HTTPException(status_code=422, detail="Each office entry must select Auckland, Colombo, or Chennai")
+        if office_id in used_ids:
+            raise HTTPException(status_code=422, detail="Each office can appear only once")
+        used_ids.add(office_id)
+
+
 def upsert_content_block(db, key: str, data: ContentBlockPayload):
     if not _is_allowed_content_block_key(key):
         raise HTTPException(status_code=404, detail="Unknown content block")
@@ -684,6 +707,8 @@ def upsert_content_block(db, key: str, data: ContentBlockPayload):
                 status_code=422,
                 detail=f"{field} accepts at most {maximum} cards",
             )
+    if key == "contact_page_offices":
+        _validate_contact_offices(data.data)
     obj = db.query(HomepageContentBlock).filter(HomepageContentBlock.key == key).first()
     if obj:
         current_version = getattr(obj, "version", 1)

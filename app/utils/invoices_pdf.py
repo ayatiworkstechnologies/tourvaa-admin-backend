@@ -204,7 +204,12 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
             except Exception:
                 pass
 
-    if is_booking_invoice:
+    if inv.get("document_title"):
+        doc_title = str(inv["document_title"])
+        doc_subtitle = ""
+        doc_number_label = str(inv.get("doc_number_label") or ("Receipt No." if is_full_receipt else "Invoice No."))
+        recipient_heading = str(inv.get("recipient_heading") or ("RECEIVED FROM" if is_full_receipt else "BILL TO"))
+    elif is_booking_invoice:
         doc_title = "BOOKING INVOICE"
         doc_subtitle = ""
         doc_number_label = "Invoice No."
@@ -416,14 +421,13 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
         from_paragraphs.append(Paragraph(f"GST No.: {escape(str(tourvaa_gst))}", body_style))
 
     to_paragraphs = []
-    if is_agent:
-        # Agent business name
-        agent_biz = inv.get("recipient_business_name") or inv.get("customer_name") or "Agent Partner"
-        to_paragraphs.append(Paragraph(f"<b>{escape(str(agent_biz))}</b>", body_bold_style))
-        if inv.get("recipient_contact_name"):
+    if inv.get("recipient_business_name"):
+        biz_name = inv.get("recipient_business_name")
+        to_paragraphs.append(Paragraph(f"<b>{escape(str(biz_name))}</b>", body_bold_style))
+        if inv.get("recipient_contact_name") and inv.get("recipient_contact_name") != biz_name:
             to_paragraphs.append(Paragraph(f"Attn: {escape(str(inv['recipient_contact_name']))}", body_style))
     else:
-        # Registered customer
+        # Registered customer or individual
         cust_name = inv.get("customer_name") or inv.get("recipient_contact_name") or "Customer"
         to_paragraphs.append(Paragraph(f"<b>{escape(str(cust_name))}</b>", body_bold_style))
 

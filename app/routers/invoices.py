@@ -86,9 +86,11 @@ def sample_pdf(
     gst = vals.get("company_gst_number") or ""
 
     is_agent = "agent" in template_type
-    is_booking_invoice = template_type == "agent_reservation_invoice"
-    is_deposit_document = template_type == "deposit_receipt"
-    is_full_receipt = "full" in template_type or template_type == "payment_receipt"
+    is_supplier = "supplier" in template_type
+    is_tax_invoice = template_type == "tax_invoice"
+    is_booking_invoice = template_type in {"agent_reservation_invoice", "customer_reservation_invoice", "customer_reserve"}
+    is_deposit_document = template_type in {"deposit_receipt", "customer_deposit"}
+    is_full_receipt = "full" in template_type or template_type in {"payment_receipt", "tax_invoice", "supplier_remittance", "supplier_invoice"}
 
     curr = currency.strip() if currency.strip() else "AUD"
     t_name = tour_name.strip() if tour_name.strip() else "Rotorua Geothermal & Maori Cultural Experience"
@@ -101,8 +103,14 @@ def sample_pdf(
         rec_addr = recipient_address.strip() or "45 St Georges Terrace, Perth WA 6000, Australia"
         rec_email = recipient_email.strip() or "accounts@apexvoyages.com"
         rec_phone = recipient_phone.strip() or "+61 8 9222 1100"
+    elif is_supplier:
+        recipient_biz = recipient_business_name.strip() or "Rotorua Adventures & Cultural Experiences Ltd"
+        contact_name = recipient_contact_name.strip() or "Hemi Te Kanawa"
+        rec_addr = recipient_address.strip() or "88 Fenton Street, Rotorua 3010, New Zealand"
+        rec_email = recipient_email.strip() or "accounts@rotoruaadventures.co.nz"
+        rec_phone = recipient_phone.strip() or "+64 7 348 9900"
     else:
-        recipient_biz = ""
+        recipient_biz = recipient_business_name.strip() if (is_tax_invoice and recipient_business_name.strip()) else ""
         contact_name = recipient_contact_name.strip() or recipient_business_name.strip() or "David & Emily Miller"
         rec_addr = recipient_address.strip() or "12 Ocean Drive, Manly NSW 2095, Australia"
         rec_email = recipient_email.strip() or "david.miller@example.com"
@@ -129,6 +137,10 @@ def sample_pdf(
 
     booking_total_str = f"{total_calc:.2f}"
 
+    doc_title = None
+    doc_number_label = None
+    recipient_heading = None
+
     if is_booking_invoice:
         paid_str = "0.00"
         due_str = booking_total_str
@@ -136,7 +148,10 @@ def sample_pdf(
         p_date = ""
         p_method = ""
         tx_id = ""
-        doc_num = "TVA-INV-SAMPLE"
+        doc_num = "TVA-INV-SAMPLE" if is_agent else "TVA-INV-CUST-SAMPLE"
+        doc_title = "BOOKING INVOICE"
+        doc_number_label = "Invoice No."
+        recipient_heading = "BILL TO"
     elif is_deposit_document:
         paid_val = min(450.0, total_calc * 0.3)
         paid_str = f"{paid_val:.2f}"
@@ -146,6 +161,32 @@ def sample_pdf(
         p_method = "Apple Pay"
         tx_id = "ch_3Nxy987654321"
         doc_num = "TVA-DOC-SAMPLE"
+        doc_title = "BOOKING INVOICE & PAYMENT RECEIPT"
+        doc_number_label = "Document No."
+        recipient_heading = "BILL TO"
+    elif is_tax_invoice:
+        paid_str = booking_total_str
+        due_str = "0.00"
+        due_date = ""
+        p_date = "2026-10-28"
+        p_method = "Direct Settlement"
+        tx_id = "tx_tax_20261028"
+        doc_num = "TVA-TAX-SAMPLE"
+        doc_title = "TAX INVOICE"
+        doc_number_label = "Tax Inv No."
+        recipient_heading = "BILL TO"
+    elif is_supplier:
+        supplier_payout = total_calc * 0.85
+        paid_str = f"{supplier_payout:.2f}"
+        due_str = "0.00"
+        due_date = ""
+        p_date = "2026-10-28"
+        p_method = "Direct Bank Remittance (EFT)"
+        tx_id = "remit_batch_89021"
+        doc_num = "TVA-REMIT-SAMPLE"
+        doc_title = "SUPPLIER REMITTANCE VOUCHER"
+        doc_number_label = "Remittance No."
+        recipient_heading = "REMIT TO"
     else:
         paid_str = booking_total_str
         due_str = "0.00"
@@ -154,12 +195,18 @@ def sample_pdf(
         p_method = "Stripe Credit Card" if is_agent else "VISA Debit"
         tx_id = "ch_3Nxy123456789"
         doc_num = "TVA-REC-SAMPLE"
+        doc_title = "PAYMENT RECEIPT"
+        doc_number_label = "Receipt No."
+        recipient_heading = "RECEIVED FROM"
 
     data = {
         "is_agent": is_agent,
         "is_booking_invoice": is_booking_invoice,
         "is_deposit_document": is_deposit_document,
         "is_full_receipt": is_full_receipt,
+        "document_title": doc_title,
+        "doc_number_label": doc_number_label,
+        "recipient_heading": recipient_heading,
         "invoice_number": doc_num,
         "invoice_date": "2026-10-28",
         "tourvaa_legal_business_name": legal_name,
