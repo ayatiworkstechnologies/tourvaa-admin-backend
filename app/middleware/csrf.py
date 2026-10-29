@@ -1,7 +1,7 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from app.auth.cookies import csrf_cookie_name, portal_from_request
+from app.auth.cookies import csrf_cookie_name, portal_from_request, access_cookie_name
 
 CSRF_HEADER_NAME = "X-CSRF-Token"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -24,19 +24,23 @@ class CsrfMiddleware(BaseHTTPMiddleware):
     a cross-site form/fetch cannot read it, so a mismatch means the request
     didn't originate from the app.
 
-    Enforcement only triggers when the CSRF cookie is actually present, so a
-    session cookie issued before this protection existed isn't locked out -
-    it simply isn't checked until its next login/refresh reissues the CSRF
-    cookie too. Bearer-token (mobile) clients never receive this cookie and
-    are unaffected, since they aren't vulnerable to CSRF in the first place.
+    Enforcement triggers whenever browser session cookies are used for
+    mutating requests, preventing attackers from bypassing checks by
+    stripping the CSRF cookie. Bearer-token clients remain unaffected.
     """
 
     async def dispatch(self, request: Request, call_next):
         if request.method in UNSAFE_METHODS and request.url.path not in EXEMPT_PATHS:
-            cookie_token = request.cookies.get(csrf_cookie_name(portal_from_request(request)))
-            if cookie_token:
+            portal = portal_from_request(request)
+            auth_cookie = (
+                request.cookies.get(access_cookie_name(portal))
+                or request.cookies.get("tourvaa_access")
+                or request.cookies.get("tourvaa_admin_access")
+            )
+            cookie_token = request.cookies.get(csrf_cookie_name(portal))
+            if auth_cookie or cookie_token:
                 header_token = request.headers.get(CSRF_HEADER_NAME)
-                if not header_token or header_token != cookie_token:
+                if not cookie_token or not header_token or header_token != cookie_token:
                     return JSONResponse(
                         status_code=403,
                         content={"status": "error", "message": "CSRF token missing or invalid"},

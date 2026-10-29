@@ -703,6 +703,11 @@ async def _lifespan(_app: FastAPI):
     validate_database_migration_head()
     warn_if_redis_unconfigured()
     run_seed()
+    if _docs_enabled:
+        try:
+            _app.openapi()
+        except Exception as e:
+            logger.warning("OpenAPI schema pre-warm failed: %s", e)
     await start_background_jobs()
     try:
         yield
