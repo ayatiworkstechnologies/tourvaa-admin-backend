@@ -14,26 +14,34 @@ from app.models.cms import TourCategory, TourSubcategory
 
 
 CATALOG = {
-    "Adventure Tours": ["Hiking & Trekking", "Wildlife Safaris", "Water Adventures", "Outdoor Activities", "Mountaineering", "Camping", "River Rafting", "Paragliding", "Desert Adventures", "Cycling Tours"],
-    "Luxury Tours": ["Luxury Escapes", "Private Tours", "Luxury Cruises", "Premium Experiences"],
-    "Cultural Tours": ["Heritage & History", "Arts & Traditions", "Food & Culinary", "Local Experiences", "Village & Rural Experiences", "Festivals & Fairs", "Handicrafts & Textiles", "Tribal Culture"],
-    "Family Tours": ["Family Holidays", "Educational Trips", "Theme Parks", "Family Activities"],
-    "Beach & Island Tours": ["Island Hopping", "Beach Holidays", "Snorkelling & Diving", "Water Sports"],
-    "City Breaks": ["City Sightseeing", "Shopping Tours", "Nightlife & Entertainment", "Architecture & Museums"],
-    "Wellness Tours": ["Spa & Relaxation", "Yoga Retreats", "Health & Fitness", "Mindfulness Retreats", "Ayurveda Retreats", "Meditation Retreats", "Naturopathy Retreats"],
-    "Romantic Tours": ["Honeymoon Packages", "Couples Getaways", "Anniversary Trips", "Romantic Experiences"],
-    "Pilgrimage & Spiritual Tours": ["Temple Tours", "Char Dham Yatra", "Jyotirlinga Tours", "Buddhist Pilgrimage", "Sikh Pilgrimage", "Jain Pilgrimage", "Church Pilgrimage", "Sufi & Islamic Heritage", "Sacred Rivers & Ghats", "Ashrams & Spiritual Retreats"],
-    "Wildlife & Nature Tours": ["National Parks", "Tiger Safaris", "Birdwatching", "Elephant Safaris", "Forest & Jungle Tours", "Nature & Eco Tours"],
-    "Heritage & Historical Tours": ["UNESCO World Heritage Sites", "Forts & Palaces", "Ancient Monuments", "Royal Heritage", "Colonial Heritage", "Archaeological Sites"],
-    "Hill Station & Mountain Tours": ["Himalayan Getaways", "Hill Station Holidays", "Scenic Mountain Drives", "Snow Holidays", "Tea Plantation Stays"],
-    "Desert Tours": ["Desert Safaris", "Camel Safaris", "Desert Camping", "Desert Villages & Culture"],
-    "Backwater & Houseboat Tours": ["Kerala Backwaters", "Houseboat Stays", "Lake Cruises", "Village Waterways"],
-    "Food & Culinary Tours": ["Street Food Tours", "Regional Cuisine", "Cooking Classes", "Spice Plantation Tours", "Tea & Coffee Experiences"],
-    "Festival & Event Tours": ["Diwali Experiences", "Holi Experiences", "Onam Experiences", "Durga Puja Experiences", "Pushkar Fair", "Cultural Festivals"],
-    "Cruise & River Tours": ["River Cruises", "Coastal Cruises", "Sunset Cruises", "Luxury Cruises"],
-    "Rail & Road Trips": ["Heritage Rail Journeys", "Luxury Train Journeys", "Scenic Road Trips", "Motorcycle Tours"],
-    "Group Tours": ["Small Group Tours", "Senior Tours", "Women Only Tours", "Student Group Tours"],
-    "Seasonal Tours": ["Summer Holidays", "Monsoon Getaways", "Winter Holidays", "Spring Holidays"],
+    "Adventure Tours": ["Trekking & Hiking", "Camping", "Mountain Climbing", "Rafting", "Scuba Diving", "Safari Adventures", "Ziplining"],
+    "Cultural & Heritage Tours": ["Historical Tours", "Heritage Walks", "Temple Tours", "Museum Tours", "Architecture Tours", "Local Culture"],
+    "Nature & Wildlife Tours": ["Wildlife Safaris", "National Parks", "Bird Watching", "Nature Walks", "Rainforest Tours", "Eco Tours"],
+    "Beach & Island Tours": ["Beach Holidays", "Island Hopping", "Snorkeling", "Coastal Tours", "Water Sports", "Beach Resorts"],
+    "Hill Station & Mountain Tours": ["Hill Station Holidays", "Mountain Escapes", "Scenic Drives", "Snow Experiences", "Valley Tours"],
+    "Pilgrimage & Spiritual Tours": ["Temple Visits", "Religious Pilgrimages", "Sacred Sites", "Spiritual Retreats", "Meditation Tours"],
+    "Family & Leisure Tours": ["Family Holidays", "Theme Parks", "Leisure Getaways", "Kids-Friendly Tours", "Resort Holidays"],
+    "Honeymoon & Romantic Tours": ["Honeymoon Packages", "Romantic Getaways", "Private Couple Tours", "Luxury Retreats"],
+    "Luxury & Premium Tours": ["Luxury Holidays", "Private Guided Tours", "Premium Resorts", "VIP Experiences", "Luxury Cruises"],
+    "City & Sightseeing Tours": ["City Tours", "Walking Tours", "Hop-On Hop-Off Tours", "Landmark Visits", "Night Tours"],
+    "Food & Culinary Tours": ["Street Food Tours", "Local Cuisine", "Cooking Classes", "Food Tasting", "Farm-to-Table Experiences"],
+    "Wellness & Retreat Tours": ["Yoga Retreats", "Ayurveda Retreats", "Spa Holidays", "Meditation Retreats", "Wellness Escapes"],
+    "Cruise & Water Tours": ["River Cruises", "Houseboat Tours", "Sunset Cruises", "Boat Trips", "Yacht Experiences"],
+    "Road Trips & Scenic Tours": ["Road Trips", "Self-Drive Tours", "Scenic Routes", "Motorcycle Tours", "Countryside Tours"],
+    "Educational & Group Tours": ["School Tours", "College Trips", "Study Tours", "Corporate Outings", "Team Building", "Group Excursions"],
+    "Festival & Special Event Tours": ["Cultural Festivals", "Seasonal Celebrations", "Music Festivals", "Local Events", "Festival Experiences"],
+    "Photography & Exploration Tours": ["Wildlife Photography", "Landscape Photography", "Cultural Photography", "Offbeat Exploration"],
+    "Short Trips & Weekend Getaways": ["Day Trips", "Weekend Trips", "Overnight Tours", "2–3 Day Getaways", "Local Excursions"],
+}
+
+# These are only the legacy defaults previously supplied by this seed script.
+# Deactivation removes them from selection/public results while preserving old
+# tour references and administrator-created taxonomy records.
+LEGACY_CATEGORY_SLUGS = {
+    "luxury-tours", "cultural-tours", "family-tours", "city-breaks", "wellness-tours",
+    "romantic-tours", "wildlife-and-nature-tours", "heritage-and-historical-tours",
+    "desert-tours", "backwater-and-houseboat-tours", "festival-and-event-tours",
+    "cruise-and-river-tours", "rail-and-road-trips", "group-tours", "seasonal-tours",
 }
 
 
@@ -66,6 +74,17 @@ def run() -> None:
                         status="active",
                     ))
                 subcategory_count += 1
+        desired_category_slugs = {slugify(name) for name in CATALOG}
+        desired_subcategory_slugs = {
+            slugify(f"{category}-{subcategory}")
+            for category, subcategories in CATALOG.items()
+            for subcategory in subcategories
+        }
+        managed_category_slugs = desired_category_slugs | LEGACY_CATEGORY_SLUGS
+        for category in db.query(TourCategory).filter(TourCategory.slug.in_(managed_category_slugs)):
+            category.status = "active" if category.slug in desired_category_slugs else "inactive"
+        for subcategory in db.query(TourSubcategory).join(TourCategory).filter(TourCategory.slug.in_(managed_category_slugs)):
+            subcategory.status = "active" if subcategory.slug in desired_subcategory_slugs else "inactive"
         db.commit()
         print(f"Seeded {category_count} tour categories and {subcategory_count} subcategories.")
     except Exception:
