@@ -163,6 +163,15 @@ class BlogPayload(BaseModel):
         # that as no schedule instead of returning an unhelpful 422 error.
         return None if isinstance(value, str) and not value.strip() else value
 
+    @model_validator(mode="after")
+    def require_schedule_for_scheduled_post(self) -> "BlogPayload":
+        # A scheduled post with no timestamp never becomes public. Enforce
+        # this at the API boundary as well as in the editor so older or direct
+        # API clients cannot create an inert scheduled article.
+        if self.status == "scheduled" and self.scheduled_at is None:
+            raise ValueError("Scheduled posts require a publish date and time")
+        return self
+
     @field_validator("title", "slug", "excerpt", "featured_image", "banner_title", "banner_alt", "author", "seo_title", "seo_description", mode="before")
     @classmethod
     def strip_optional_text(cls, value):

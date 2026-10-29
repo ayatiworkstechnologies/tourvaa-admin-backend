@@ -10,7 +10,8 @@ from app.utils.ratelimit import check_rate_limit
 from app.utils.money import utcnow
 from app.models.users import User
 from app.config import settings
-from app.auth.security import create_token, decode_auth_token, get_auth_domain_for_role
+from app.auth.security import create_token, decode_auth_token, get_auth_domain_for_role, get_portal_for_role
+from app.auth.cookies import access_cookie_name, csrf_cookie_name, portal_from_request, refresh_cookie_name
 
 from app.schemas.auth import (
     ForceLogoutSchema,
@@ -53,31 +54,28 @@ from app.services.auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-ACCESS_COOKIE_NAME = "tourvaa_access"
-REFRESH_COOKIE_NAME = "tourvaa_refresh"
-CSRF_COOKIE_NAME = "tourvaa_csrf"
-
-
 def _set_auth_cookies(response: Response, result: dict, *, expose_access_token: bool = True) -> dict:
     access_token = result.get("access_token", "")
     refresh_token = result.pop("_refresh_token", "")
     secure = settings.APP_ENV.lower() == "production"
-    response.set_cookie(ACCESS_COOKIE_NAME, access_token, max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60, httponly=True, secure=secure, samesite="lax", path="/")
-    response.set_cookie(REFRESH_COOKIE_NAME, refresh_token, max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, httponly=True, secure=secure, samesite="lax", path="/api/auth")
+    role_slug = ((result.get("user") or {}).get("role") or {}).get("slug", "")
+    portal = get_portal_for_role(role_slug)
+    response.set_cookie(access_cookie_name(portal), access_token, max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60, httponly=True, secure=secure, samesite="lax", path="/")
+    response.set_cookie(refresh_cookie_name(portal), refresh_token, max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, httponly=True, secure=secure, samesite="lax", path="/api/auth")
     # Not httponly - the frontend reads this cookie and echoes it back as an
     # X-CSRF-Token header on state-changing requests (see CsrfMiddleware).
-    response.set_cookie(CSRF_COOKIE_NAME, secrets.token_urlsafe(32), max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, httponly=False, secure=secure, samesite="lax", path="/")
+    response.set_cookie(csrf_cookie_name(portal), secrets.token_urlsafe(32), max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400, httponly=False, secure=secure, samesite="lax", path="/")
     if not expose_access_token:
         result.pop("access_token", None)
         result.pop("token_type", None)
     return result
 
 
-def _clear_auth_cookies(response: Response) -> None:
+def _clear_auth_cookies(response: Response, portal: str | None) -> None:
     secure = settings.APP_ENV.lower() == "production"
-    response.delete_cookie(ACCESS_COOKIE_NAME, path="/", httponly=True, secure=secure, samesite="lax")
-    response.delete_cookie(REFRESH_COOKIE_NAME, path="/api/auth", httponly=True, secure=secure, samesite="lax")
-    response.delete_cookie(CSRF_COOKIE_NAME, path="/", httponly=False, secure=secure, samesite="lax")
+    response.delete_cookie(access_cookie_name(portal), path="/", httponly=True, secure=secure, samesite="lax")
+    response.delete_cookie(refresh_cookie_name(portal), path="/api/auth", httponly=True, secure=secure, samesite="lax")
+    response.delete_cookie(csrf_cookie_name(portal), path="/", httponly=False, secure=secure, samesite="lax")
 
 
 def _registration_response(user: User):
@@ -259,7 +257,8 @@ def refresh_token(
 ):
     from app.models.sessions import UserSession
 
-    token = request.cookies.get(REFRESH_COOKIE_NAME, "")
+    requested_portal = portal_from_request(request)
+    token = request.cookies.get(refresh_cookie_name(requested_portal), "")
     if not token:
         authorization = request.headers.get("Authorization", "")
         parts = authorization.split()
@@ -274,6 +273,8 @@ def refresh_token(
         raise
     if payload.get("token_type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if requested_portal and payload.get("portal") != requested_portal:
+        raise HTTPException(status_code=403, detail="Refresh token does not match the active portal")
 
     user_id = payload.get("user_id")
     token_version = payload.get("token_version")
@@ -347,7 +348,7 @@ def logout(
         )
         if session and session.status == "active":
             revoke_session(db, session.id)
-    _clear_auth_cookies(response)
+    _clear_auth_cookies(response, get_portal_for_role(current_user.role.slug if current_user.role else ""))
     return {
         "status": "success",
         "message": "Logged out successfully",
@@ -366,7 +367,7 @@ def logout_all(
     default behavior of /auth/logout, kept available for users who explicitly
     want to sign out everywhere."""
     force_logout_user(db, current_user, actor=current_user, request=request)
-    _clear_auth_cookies(response)
+    _clear_auth_cookies(response, get_portal_for_role(current_user.role.slug if current_user.role else ""))
     return {
         "status": "success",
         "message": "Logged out from all devices successfully",

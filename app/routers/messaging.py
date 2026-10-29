@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSock
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.auth.permissions import ACCESS_COOKIE_NAME, _decode_token, get_current_user, get_user_role_ids, require_any_permission
+from app.auth.permissions import _decode_token, get_current_user, get_user_role_ids, require_any_permission
+from app.auth.cookies import access_cookie_name
 from app.auth.security import decode_auth_token
 from app.database import SessionLocal, get_db
 from app.models.permissions import Permission, RolePermission
@@ -197,7 +198,7 @@ def _ws_user(websocket: WebSocket) -> User | None:
         # rejecting an otherwise authenticated socket. Cross-origin sockets
         # have no such cookie and continue to require a valid one-time ticket.
 
-    token = websocket.cookies.get(ACCESS_COOKIE_NAME, "")
+    token = websocket.cookies.get(access_cookie_name("admin"), "") or websocket.cookies.get(access_cookie_name(None), "")
     if not token:
         return None
     try:

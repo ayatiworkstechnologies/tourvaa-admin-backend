@@ -1,8 +1,8 @@
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from app.auth.cookies import csrf_cookie_name, portal_from_request
 
-CSRF_COOKIE_NAME = "tourvaa_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -33,7 +33,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if request.method in UNSAFE_METHODS and request.url.path not in EXEMPT_PATHS:
-            cookie_token = request.cookies.get(CSRF_COOKIE_NAME)
+            cookie_token = request.cookies.get(csrf_cookie_name(portal_from_request(request)))
             if cookie_token:
                 header_token = request.headers.get(CSRF_HEADER_NAME)
                 if not header_token or header_token != cookie_token:

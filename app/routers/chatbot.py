@@ -6,7 +6,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth.permissions import ACCESS_COOKIE_NAME, _decode_token, require_any_permission
+from app.auth.permissions import _decode_token, require_any_permission
+from app.auth.cookies import access_cookie_name, portal_from_request
 from app.models.customers import Customer
 from app.utils.pagination import pagination_params
 from app.utils.ratelimit import check_rate_limit
@@ -35,7 +36,7 @@ def _resolve_customer_id(request: Request, db: Session) -> int | None:
     if auth_header.lower().startswith("bearer "):
         token = auth_header[7:].strip()
     if not token:
-        token = request.cookies.get(ACCESS_COOKIE_NAME, "")
+        token = request.cookies.get(access_cookie_name(portal_from_request(request)), "")
     if not token:
         return None
     try:

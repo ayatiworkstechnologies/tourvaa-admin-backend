@@ -10,10 +10,9 @@ from app.models.suppliers import Supplier
 from app.models.agents import Agent
 from app.models.affiliates import Affiliate
 from app.auth.security import decode_auth_token, get_auth_domain_for_role
+from app.auth.cookies import access_cookie_name, portal_from_request
 
 bearer_scheme = HTTPBearer(auto_error=False)
-ACCESS_COOKIE_NAME = "tourvaa_access"
-
 SUPPLIER_APPROVAL_ERROR = {
     "success": False,
     "code": "SUPPLIER_APPROVAL_REQUIRED",
@@ -127,7 +126,7 @@ def _ensure_token_domain_matches_user(payload: dict, user: User) -> None:
 def _request_token(request: Request, credentials: HTTPAuthorizationCredentials | None) -> str:
     if credentials and credentials.scheme.lower() == "bearer" and credentials.credentials:
         return credentials.credentials
-    token = request.cookies.get(ACCESS_COOKIE_NAME, "")
+    token = request.cookies.get(access_cookie_name(portal_from_request(request)), "")
     if not token:
         raise HTTPException(status_code=401, detail="Authorization token missing")
     return token
