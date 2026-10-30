@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.utils.crypto import decrypt_secret, encrypt_secret
 from app.services.audit import log_audit
 from app.models.settings import ApiSetting, AppSetting, PaymentSetting, SmtpSetting
