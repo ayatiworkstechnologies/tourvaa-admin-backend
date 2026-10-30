@@ -57,9 +57,21 @@ def _resource_type_for(content_type: str | None, filename: str) -> str:
 
 
 def _local_public_media_path(folder: str, filename: str) -> tuple[Path, str]:
-    """Return a collision-safe local public-media path and its URL suffix."""
-    parts = PurePosixPath(folder.strip("/")).parts
+    """Return a compact collision-safe local path and its URL suffix.
+
+    Cloudinary needs its legacy ``tourvaa/...`` and ``tourvaa_demo/public/...``
+    prefixes to organize remote assets.  Local files do not: new local uploads
+    intentionally start directly below ``STORAGE_ROOT`` (for example,
+    ``storage/cms/videos`` or ``storage/profiles/12/images``).
+    """
+    parts = list(PurePosixPath(folder.strip("/")).parts)
     if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail="Invalid public media folder")
+    if parts[:2] == ["tourvaa_demo", "public"]:
+        parts = parts[2:]
+    elif parts[0] == "tourvaa":
+        parts = parts[1:]
+    if not parts:
         raise HTTPException(status_code=400, detail="Invalid public media folder")
     safe_name = PurePosixPath(filename).name
     if not safe_name or safe_name != filename:
@@ -67,7 +79,7 @@ def _local_public_media_path(folder: str, filename: str) -> tuple[Path, str]:
     suffix = Path(safe_name).suffix
     stem = Path(safe_name).stem or "file"
     stored_name = f"{stem}-{token_urlsafe(8).replace('-', '').replace('_', '')}{suffix}"
-    relative = PurePosixPath("public-media", *parts, stored_name)
+    relative = PurePosixPath(*parts, stored_name)
     destination = get_storage_root().joinpath(*relative.parts)
     destination.parent.mkdir(parents=True, exist_ok=True)
     return destination, relative.as_posix()

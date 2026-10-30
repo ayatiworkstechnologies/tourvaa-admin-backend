@@ -14,5 +14,5 @@ def test_local_public_media_uses_same_origin_storage_url(monkeypatch, tmp_path):
         content_type="image/jpeg",
     )
 
-    assert uploaded["url"].startswith("/storage/public-media/tourvaa_demo/public/tour/images/")
+    assert uploaded["url"].startswith("/storage/tour/images/")
     assert (tmp_path / uploaded["public_id"]).is_file()

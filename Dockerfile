@@ -41,9 +41,10 @@ RUN chmod 0755 /usr/local/bin/tourvaa-entrypoint
 
 USER tourvaa
 EXPOSE 8000
-VOLUME ["/data"]
+# Persistent storage is supplied by deployment as a host bind mount, for
+# example: /var/www/tourvaa/storage:/data/storage. Do not declare a Docker
+# VOLUME here, or Docker may create an anonymous/named volume instead.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.getenv('PORT', '8000')}/api/health\", timeout=3)"
 
 ENTRYPOINT ["tourvaa-entrypoint"]
-

@@ -216,7 +216,7 @@ def get_storage_root() -> Path:
 
     if not path.is_absolute():
         # Relative storage belongs beside the backend project, not inside
-        # app/. This keeps uploaded public files at ./storage/public-media
+        # app/. This keeps uploaded public files directly under ./storage
         # in both local development and deployments using a relative root.
         path = Path(__file__).resolve().parents[2] / path
 
