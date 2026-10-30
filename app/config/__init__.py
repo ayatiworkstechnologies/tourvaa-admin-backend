@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     TRUST_PROXY_HEADERS: bool = False
     MOBILE_DEEP_LINK_URL: str = "tourvaa://reset-password"
     STORAGE_ROOT: str = "storage"
+    # Optional separate root for legacy/private local documents. Docker uses
+    # this so moving public media to /cdn does not create /private-docs at
+    # the filesystem root.
+    PRIVATE_DOCS_ROOT: str = ""
 
     CLOUDINARY_URL: str = ""
     # Public website assets are deliberately segregated from authenticated
@@ -225,5 +229,10 @@ def get_storage_root() -> Path:
 
 def get_private_docs_root() -> Path:
     """Private document storage - outside the public /storage static-files mount."""
+    configured = Path(settings.PRIVATE_DOCS_ROOT.strip()) if settings.PRIVATE_DOCS_ROOT.strip() else None
+    if configured:
+        if not configured.is_absolute():
+            configured = Path(__file__).resolve().parents[2] / configured
+        return configured
     return get_storage_root().parent / "private-docs"
 
