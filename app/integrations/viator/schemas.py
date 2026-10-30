@@ -124,6 +124,7 @@ class ProviderSettingsUpdate(BaseModel):
     show_on_destination_pages: Optional[bool] = None
     show_on_itinerary: Optional[bool] = None
     show_in_search: Optional[bool] = None
+    environment: Optional[Literal["production", "sandbox"]] = None
 
 
 class DestinationMappingUpdate(BaseModel):

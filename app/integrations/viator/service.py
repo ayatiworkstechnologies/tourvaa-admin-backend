@@ -28,6 +28,7 @@ from app.integrations.external_tours.constants import (
     build_campaign,
     is_allowed_external_url,
     slugify_name,
+    to_live_site,
     with_campaign,
 )
 from app.integrations.viator.client import ViatorClient, base_url_for
@@ -120,12 +121,21 @@ def credentials(db: Session) -> tuple[str, str]:
     return (api_key or "").strip(), (pid or "").strip()
 
 
-def environment() -> str:
-    return "production" if settings.VIATOR_ENV.strip().lower() == "production" else "sandbox"
+def environment(db: Session | None = None) -> str:
+    """The admin-configured environment in api_settings.api_url wins (e.g.
+    'production' or 'sandbox'), falling back to VIATOR_ENV."""
+    if db is not None:
+        row = _api_row(db)
+        if row and row.api_url:
+            val = row.api_url.strip().lower()
+            if val in ("production", "sandbox"):
+                return val
+    env = getattr(settings, "VIATOR_ENV", "sandbox")
+    return "production" if (env or "").strip().lower() == "production" else "sandbox"
 
 
-def api_base_url() -> str:
-    return base_url_for(environment(), settings.VIATOR_API_BASE_URL)
+def api_base_url(db: Session | None = None) -> str:
+    return base_url_for(environment(db), getattr(settings, "VIATOR_API_BASE_URL", ""))
 
 
 def admin_enabled(db: Session) -> bool:
@@ -147,7 +157,7 @@ def get_client(db: Session) -> ViatorClient:
     if not is_enabled(db):
         raise ViatorNotConfigured("Viator is disabled or has no API key")
     api_key, _ = credentials(db)
-    return ViatorClient(api_key, api_base_url(), timeout=settings.VIATOR_TIMEOUT_SECONDS)
+    return ViatorClient(api_key, api_base_url(db), timeout=settings.VIATOR_TIMEOUT_SECONDS)
 
 
 def get_provider(db: Session) -> ExternalProvider:
@@ -390,7 +400,7 @@ def sync_destinations(db: Session) -> dict:
         row.provider_parent_destination_id = str(d["parentDestinationId"]) if d.get("parentDestinationId") else None
         row.provider_default_currency = (d.get("defaultCurrencyCode") or None)
         dest_url = d.get("destinationUrl")
-        row.provider_destination_url = dest_url if is_allowed_external_url(dest_url, PROVIDER) else None
+        row.provider_destination_url = to_live_site(dest_url, d["name"]) if is_allowed_external_url(dest_url, PROVIDER) else None
         row.slug = slugs[vid]
         row.is_active = True
         row.last_synced_at = now
@@ -483,7 +493,7 @@ def search(db: Session, req: ExternalTourSearchRequest, *, is_agent: bool = Fals
     campaign = build_campaign(settings.VIATOR_CAMPAIGN_PREFIX, req.source, is_agent=is_agent)
     payload = build_search_payload(req, destination.provider_destination_id)
 
-    cache_key = hashlib.sha256(json.dumps([payload, campaign, api_base_url()], sort_keys=True).encode()).hexdigest()
+    cache_key = hashlib.sha256(json.dumps([payload, campaign, api_base_url(db)], sort_keys=True).encode()).hexdigest()
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -625,7 +635,7 @@ def test_connection(db: Session) -> dict:
             provider.last_connection_message = "AFFILIATE_PID_MISMATCH"
         else:
             provider.last_connection_status = "connected"
-            provider.last_connection_message = f"Connected to the Viator {environment()} API"
+            provider.last_connection_message = f"Connected to the Viator {environment(db)} API"
     except ViatorNotConfigured:
         provider.last_connection_status = "disabled"
         provider.last_connection_message = "Viator is disabled or has no API key"
@@ -655,7 +665,25 @@ def product_result_pid(payload: dict) -> str | None:
     return None
 
 
+def fix_sandbox_destination_urls(db: Session) -> int:
+    """Rewrite any leftover sandbox URLs (shop.live.rc.viator.com) in destination mappings to www.viator.com."""
+    mappings = db.query(ExternalDestinationMapping).filter(
+        ExternalDestinationMapping.provider == PROVIDER,
+        ExternalDestinationMapping.provider_destination_url.like("%shop.live.rc.viator.com%")
+    ).all()
+    count = 0
+    for m in mappings:
+        if m.provider_destination_url:
+            m.provider_destination_url = to_live_site(m.provider_destination_url, m.provider_destination_name)
+            count += 1
+    if count:
+        db.commit()
+    return count
+
+
 def admin_status(db: Session) -> dict:
+    if environment(db) == "production":
+        fix_sandbox_destination_urls(db)
     provider = get_provider(db)
     api_key, pid = credentials(db)
     base = db.query(ExternalDestinationMapping).filter(ExternalDestinationMapping.provider == PROVIDER)
@@ -680,8 +708,8 @@ def admin_status(db: Session) -> dict:
         "enabled": enabled,
         "admin_enabled": admin_enabled(db),
         "env_enabled": bool(settings.VIATOR_ENABLED),
-        "environment": environment(),
-        "api_base_url": api_base_url(),
+        "environment": environment(db),
+        "api_base_url": api_base_url(db),
         "api_key_configured": bool(api_key),
         "api_key_masked": mask_tail(api_key),
         "pid_configured": bool(pid),
@@ -711,6 +739,15 @@ def update_provider_settings(db: Session, data: dict) -> dict:
     for key in ("show_on_homepage", "show_on_destination_pages", "show_on_itinerary", "show_in_search"):
         if data.get(key) is not None:
             setattr(provider, key, bool(data[key]))
+    if data.get("environment") is not None:
+        env = str(data["environment"]).strip().lower()
+        if env in ("production", "sandbox"):
+            row = _api_row(db)
+            if row:
+                row.api_url = env
+            else:
+                db.add(ApiSetting(api_name="viator", api_url=env, is_enabled=False))
+            clear_search_cache()
     db.commit()
     return admin_status(db)
 
