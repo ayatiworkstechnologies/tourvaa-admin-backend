@@ -285,6 +285,22 @@ def _setup_checks(db: Session) -> dict[str, list[tuple[str, bool]]]:
     smtp = db.query(SmtpSetting).filter(SmtpSetting.is_enabled.is_(True)).first()
     smtp_configured = bool((smtp and (smtp.host or "").strip()) or (getattr(app_settings, "SMTP_HOST", "") or "").strip())
     email_delivered = db.query(EmailLog.id).filter(EmailLog.status == "sent").first() is not None
+    public_media_provider = (getattr(app_settings, "PUBLIC_MEDIA_STORAGE", "cloudinary") or "cloudinary").strip().lower()
+    if public_media_provider == "local":
+        storage_check = (
+            "Local public-media storage configured",
+            # An empty base URL is intentional: uploads then return the
+            # same-origin /storage/... route, which both local and live
+            # frontends proxy to their configured backend.
+            bool((getattr(app_settings, "STORAGE_ROOT", "") or "").strip()),
+        )
+    elif public_media_provider == "cloudinary":
+        storage_check = (
+            "Cloudinary public-media storage configured",
+            bool((getattr(app_settings, "CLOUDINARY_URL", "") or "").strip()),
+        )
+    else:
+        storage_check = (f"Public-media provider '{public_media_provider}' is configured", False)
 
     import os
     try:
@@ -320,7 +336,7 @@ def _setup_checks(db: Session) -> dict[str, list[tuple[str, bool]]]:
             ("At least one email delivered", email_delivered),
         ],
         "storage_setup_completed": [
-            ("Cloudinary configured", bool((getattr(app_settings, "CLOUDINARY_URL", "") or "").strip())),
+            storage_check,
         ],
         "security_check_completed": [
             ("Admin JWT signing key is at least 32 characters", len(app_settings.get_auth_secret("admin").strip()) >= 32),
