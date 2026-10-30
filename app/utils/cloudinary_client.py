@@ -1,14 +1,15 @@
 from functools import lru_cache
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+from secrets import token_urlsafe
 from time import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import cloudinary
 import cloudinary.uploader
 import cloudinary.utils
 from fastapi import HTTPException
 
-from app.config import settings
+from app.config import get_storage_root, settings
 
 
 @lru_cache
@@ -55,6 +56,42 @@ def _resource_type_for(content_type: str | None, filename: str) -> str:
     return "raw"
 
 
+def _local_public_media_path(folder: str, filename: str) -> tuple[Path, str]:
+    """Return a collision-safe local public-media path and its URL suffix."""
+    parts = PurePosixPath(folder.strip("/")).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail="Invalid public media folder")
+    safe_name = PurePosixPath(filename).name
+    if not safe_name or safe_name != filename:
+        raise HTTPException(status_code=400, detail="Invalid public media filename")
+    suffix = Path(safe_name).suffix
+    stem = Path(safe_name).stem or "file"
+    stored_name = f"{stem}-{token_urlsafe(8).replace('-', '').replace('_', '')}{suffix}"
+    relative = PurePosixPath("public-media", *parts, stored_name)
+    destination = get_storage_root().joinpath(*relative.parts)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return destination, relative.as_posix()
+
+
+def _local_public_media_url(relative: str) -> str:
+    base = settings.PUBLIC_MEDIA_BASE_URL.strip().rstrip("/")
+    encoded = "/".join(quote(part) for part in relative.split("/"))
+    return f"{base}/{encoded}" if base else f"/storage/{encoded}"
+
+
+def _upload_public_media_locally(content: bytes, filename: str, folder: str, content_type: str | None) -> dict:
+    destination, relative = _local_public_media_path(folder, filename)
+    try:
+        destination.write_bytes(content)
+    except OSError as error:
+        raise HTTPException(status_code=502, detail="Local public-media storage upload failed") from error
+    return {
+        "url": _local_public_media_url(relative),
+        "public_id": relative,
+        "resource_type": _resource_type_for(content_type, filename),
+    }
+
+
 def upload_to_cloudinary(content: bytes, filename: str, folder: str, is_private: bool = False, content_type: str | None = None) -> dict:
     """Upload raw bytes to Cloudinary. Returns {"url", "public_id", "resource_type"}.
 
@@ -73,6 +110,14 @@ def upload_to_cloudinary(content: bytes, filename: str, folder: str, is_private:
     silently reusing or overwriting an unrelated asset that happens to
     sanitize to the same name.
     """
+    # The local provider is intentionally public-media only. Never place
+    # supplier/agent/affiliate documents on a public CDN/static mount.
+    provider = settings.PUBLIC_MEDIA_STORAGE.strip().lower() or "cloudinary"
+    if not is_private and provider == "local":
+        return _upload_public_media_locally(content, filename, folder, content_type)
+    if not is_private and provider != "cloudinary":
+        raise HTTPException(status_code=503, detail="PUBLIC_MEDIA_STORAGE must be cloudinary or local")
+
     _configure()
     resource_type = _resource_type_for(content_type, filename)
     try:

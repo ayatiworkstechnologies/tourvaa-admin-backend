@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # supplier, vehicle, agent, and affiliate documents. Cloudinary creates
     # these folders lazily on the first public upload.
     CLOUDINARY_PUBLIC_ROOT: str = "tourvaa_demo/public"
+    # Public media can be kept local during development before being moved to
+    # a configured CDN/SFTP provider. Private documents always remain on the
+    # authenticated storage path.
+    PUBLIC_MEDIA_STORAGE: str = "cloudinary"
+    PUBLIC_MEDIA_BASE_URL: str = ""
 
     SUPER_ADMIN_NAME: str = "Super Admin"
     SUPER_ADMIN_EMAIL: str = "admin@tourvaa.com"
