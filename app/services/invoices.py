@@ -265,7 +265,7 @@ def _document_line_items(booking: Booking, invoice_total: Decimal, subtotal: Dec
     - Total Tour Price: count of travellers
     - Add-ons / extras: count or 'Included'
     - Discount: '%'
-    - Including Tax: 'Included (do not add tax amount or percentage)'
+    - Including Tax: 'Included' only; never display a tax amount or rate.
     """
     traveller_count = int(booking.adults_count or booking.no_of_adults or 1) + int(booking.children_count or booking.no_of_children or 0)
     qty_str = f"{traveller_count} traveller{'s' if traveller_count > 1 else ''}"
@@ -299,10 +299,10 @@ def _document_line_items(booking: Booking, invoice_total: Decimal, subtotal: Dec
     if tax_amt > 0:
         rows.append({
             "description": "Including Tax",
-            "quantity": "Included (do not add tax amount or percentage)",
-            "unit_price": money_str(tax_amt),
+            "quantity": "Included",
+            "unit_price": "",
             "tax_amount": "0.00",
-            "total_price": money_str(tax_amt),
+            "total_price": "",
         })
     if not rows or money(booking.base_amount or 0) <= 0:
         rows = [{

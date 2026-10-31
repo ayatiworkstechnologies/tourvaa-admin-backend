@@ -133,7 +133,7 @@ def sample_pdf(
     if disc_val > 0:
         items.append({"description": "Discount", "quantity": "%", "total_price": f"-{disc_val:.2f}"})
     if tax_val > 0:
-        items.append({"description": "Including Tax", "quantity": "Included (do not add tax amount or percentage)", "total_price": f"{tax_val:.2f}"})
+        items.append({"description": "Including Tax", "quantity": "Included", "total_price": ""})
 
     booking_total_str = f"{total_calc:.2f}"
 

@@ -555,11 +555,11 @@ def _reportlab_pdf(path: Path, data: dict) -> None:
         qty = str(item.get("quantity") or "")
         tot = item.get("total_price")
 
-        # Visual styling per template:
-        # If Including Tax: Quantity shows 'Included (do not add tax amount or percentage)' in red
+        # Tax is included in the booking total but its rate and amount are
+        # intentionally not disclosed on customer-facing documents.
         if "Including Tax" in desc or "Tax" in desc and "Included" in qty:
-            qty_p = Paragraph(f'<font color="#C62828">{escape(qty)}</font>', body_style)
-            amt_p = Paragraph(_money(inv, tot), td_right_style)
+            qty_p = Paragraph(escape(qty), body_style)
+            amt_p = Paragraph("", td_right_style)
         elif "Discount" in desc:
             qty_p = Paragraph(escape(qty), td_center_style)
             try:
