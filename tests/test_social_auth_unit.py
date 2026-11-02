@@ -55,8 +55,9 @@ def test_facebook_start_uses_signed_state_and_same_origin_callback(monkeypatch):
     monkeypatch.setattr("app.routers.social_auth.decrypt_secret", lambda value: value)
     monkeypatch.setattr("app.routers.social_auth.settings.FRONTEND_URL", "https://tourvaa.example")
 
+    booking_return_path = "/booking/42?travel_date=2026-12-10&adults=2&children=1&add_ons=activity:7"
     response = _client({"oauth_facebook": _provider("facebook")}).get(
-        "/api/auth/oauth/facebook/start", params={"redirect": "/customer/dashboard"}, follow_redirects=False
+        "/api/auth/oauth/facebook/start", params={"redirect": booking_return_path}, follow_redirects=False
     )
 
     assert response.status_code == 307
@@ -67,6 +68,7 @@ def test_facebook_start_uses_signed_state_and_same_origin_callback(monkeypatch):
     state_payload = decode_auth_token(query["state"][0])
     assert state_payload["auth_domain"] == "normal"
     assert state_payload["token_type"] == "oauth_state"
+    assert state_payload["redirect"] == booking_return_path
 
 
 def test_social_callback_rejects_wrong_provider_state(monkeypatch):

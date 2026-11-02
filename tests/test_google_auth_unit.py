@@ -37,7 +37,12 @@ def test_google_login_redirects_with_configured_oauth_parameters(monkeypatch):
         "https://tourvaaapi.vercel.app/api/auth/google/callback",
     )
 
-    response = _client().get("/api/auth/google", follow_redirects=False)
+    booking_return_path = "/booking/42?travel_date=2026-12-10&adults=2&children=1&add_ons=activity:7"
+    response = _client().get(
+        "/api/auth/google",
+        params={"redirect": booking_return_path},
+        follow_redirects=False,
+    )
 
     assert response.status_code == 307
     parsed = urlparse(response.headers["location"])
@@ -57,6 +62,7 @@ def test_google_login_redirects_with_configured_oauth_parameters(monkeypatch):
     state_payload = decode_auth_token(query["state"][0])
     assert state_payload["auth_domain"] == "normal"
     assert state_payload["token_type"] == "google_oauth_state"
+    assert state_payload["redirect"] == booking_return_path
 
 
 def test_google_login_fails_cleanly_when_not_configured(monkeypatch):

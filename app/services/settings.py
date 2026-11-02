@@ -617,7 +617,7 @@ def compute_commission_preview(db: Session, sample_price=None) -> dict:
 
 
 def get_security_status(db: Session) -> dict:
-    """Read-only status for the separated admin and normal-user JWT keys."""
+    """Read-only status for authentication, cache, and media configuration."""
     from app.config import settings as app_settings
     import os
     try:
@@ -626,13 +626,22 @@ def get_security_status(db: Session) -> dict:
         workers = 1
     admin_jwt_secret = app_settings.get_auth_secret("admin").strip()
     normal_jwt_secret = app_settings.get_auth_secret("normal").strip()
+    public_media_provider = (str(getattr(app_settings, "PUBLIC_MEDIA_STORAGE", "local") or "local").strip().lower())
+    storage_root_configured = bool(str(getattr(app_settings, "STORAGE_ROOT", "") or "").strip())
+    if public_media_provider == "local":
+        public_media_status = "configured (local/CDN storage)" if storage_root_configured else "missing storage root"
+    elif public_media_provider == "cloudinary":
+        public_media_status = "configured (Cloudinary)" if str(getattr(app_settings, "CLOUDINARY_URL", "") or "").strip() else "not configured"
+    else:
+        public_media_status = f"unsupported provider ({public_media_provider})"
+
     return {
         "jwt_secrets": {
             "admin": "configured" if len(admin_jwt_secret) >= 32 else "missing or too short (minimum 32 characters)",
             "normal": "configured" if len(normal_jwt_secret) >= 32 else "missing or too short (minimum 32 characters)",
         },
         "redis": "configured" if str(getattr(app_settings, "REDIS_URL", "") or "").strip() else ("configured (not required for one worker)" if workers <= 1 else "missing (required for multiple workers)"),
-        "cloudinary": "configured" if str(getattr(app_settings, "CLOUDINARY_URL", "") or "").strip() else "not configured",
+        "public_media_storage": public_media_status,
         "settings_encryption_key": "configured" if str(getattr(app_settings, "SETTINGS_ENCRYPTION_KEY", "") or "").strip() else "missing",
     }
 
