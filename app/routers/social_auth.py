@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import logging
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -19,6 +20,7 @@ from app.services.auth import _finalize_login
 
 
 router = APIRouter(prefix="/auth/oauth", tags=["Social Authentication"])
+logger = logging.getLogger(__name__)
 
 
 def _provider(db: Session, name: str):
@@ -76,10 +78,23 @@ async def _facebook_identity(row: ApiSetting, code: str, callback: str) -> dict:
         token = await client.get("https://graph.facebook.com/v22.0/oauth/access_token", params={
             "client_id": client_id, "client_secret": secret, "redirect_uri": callback, "code": code,
         })
-        if token.status_code != 200 or not token.json().get("access_token"):
+        try:
+            token_data = token.json()
+        except ValueError:
+            token_data = {}
+        if token.status_code != 200 or not token_data.get("access_token"):
+            # Keep OAuth codes, access tokens, and client secrets out of logs. Meta's
+            # error code/type is enough to identify a bad secret, app, or callback URL.
+            provider_error = (token_data.get("error") or {})
+            logger.warning(
+                "Facebook OAuth token exchange rejected: status=%s error_code=%s error_type=%s",
+                token.status_code,
+                provider_error.get("code"),
+                provider_error.get("type"),
+            )
             raise HTTPException(status_code=401, detail="Facebook authorization code was rejected")
         profile = await client.get("https://graph.facebook.com/me", params={
-            "fields": "id,name,email,picture.type(large)", "access_token": token.json()["access_token"],
+            "fields": "id,name,email,picture.type(large)", "access_token": token_data["access_token"],
         })
     if profile.status_code != 200:
         raise HTTPException(status_code=401, detail="Facebook identity verification failed")
