@@ -55,6 +55,7 @@ def serialize_customer(customer: Customer, db: Session | None = None):
     return {
         "id": customer.id,
         "user_id": customer.user_id,
+        "auth_provider": customer.user.auth_provider if customer.user else None,
         "customer_code": customer.customer_code or _customer_code(customer.id),
         "customer_type": customer.customer_type,
         "agent_id": customer.agent_id,
@@ -214,6 +215,7 @@ def get_customers(
     agent_user_id: int | None = None,
 ):
     query = db.query(Customer).options(
+        joinedload(Customer.user),
         joinedload(Customer.country_ref),
         joinedload(Customer.city_ref).joinedload(City.state),
     )
