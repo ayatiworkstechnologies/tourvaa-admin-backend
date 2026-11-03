@@ -257,11 +257,11 @@ def list_suppliers(db: Session, page: int, limit: int, search: str = "", country
         return result
 
     tour_counts = {
-        supplier_id: {"total": int(total or 0), "draft": int(draft or 0)}
-        for supplier_id, total, draft in (
+        supplier_id: {"published": int(published or 0), "draft": int(draft or 0)}
+        for supplier_id, published, draft in (
             db.query(
                 Tour.supplier_id,
-                func.count(Tour.id),
+                func.sum(case((Tour.status == "published", 1), else_=0)),
                 func.sum(case((Tour.status == "draft", 1), else_=0)),
             )
             .filter(Tour.supplier_id.in_(supplier_ids))
@@ -270,8 +270,8 @@ def list_suppliers(db: Session, page: int, limit: int, search: str = "", country
         )
     }
     for item in result["items"]:
-        counts = tour_counts.get(item["id"], {"total": 0, "draft": 0})
-        item["number_of_tours"] = counts["total"]
+        counts = tour_counts.get(item["id"], {"published": 0, "draft": 0})
+        item["number_of_tours"] = counts["published"]
         item["draft_tours"] = counts["draft"]
     return result
 
