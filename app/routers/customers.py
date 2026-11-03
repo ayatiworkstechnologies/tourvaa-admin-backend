@@ -33,6 +33,7 @@ from app.services.customers import (
     update_customer,
     update_customer_status,
 )
+from app.services.users import delete_user
 from app.models.users import User
 from app.services.audit import log_audit
 
@@ -196,6 +197,14 @@ def remove_customer(
     current_user: User = Depends(require_any_permission("customers.delete", "delete-customers")),
 ):
     ensure_agent_customer_access(db, customer_id, current_user)
+    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    if customer and customer.user_id:
+        # A registered customer owns both a portal login and a customer profile.
+        # Keep them in sync so deleting from Customer Management cannot leave a
+        # live account without its profile.
+        delete_user(db, customer.user_id, actor=current_user, request=request)
+        return {"status": "success", "message": "Customer account deleted successfully"}
+
     delete_customer(db, customer_id, actor=current_user, request=request)
     return {"status": "success", "message": "Customer deleted successfully"}
 
