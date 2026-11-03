@@ -245,6 +245,7 @@ def get_agent_activity(db: Session, agent_id: int, recent_limit: int = 10):
 
 def list_agents(db: Session, page: int, limit: int, search: str = "", country_id: str = "", status: str = "", approval_status: str = "", start_date: str = "", end_date: str = "", sort_by: str = ""):
     query = db.query(Agent).options(
+        joinedload(Agent.user),
         joinedload(Agent.country),
         joinedload(Agent.city),
         joinedload(Agent.business_info),
