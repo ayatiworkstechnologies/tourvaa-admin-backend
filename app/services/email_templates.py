@@ -842,7 +842,7 @@ SAMPLE_VALUES = {
 
 def preview_template(db: Session, template_id: int) -> dict:
     """Render a template with sample data so admins can preview the outgoing design."""
-    from app.utils.email_templates import apply_template_values, base_email
+    from app.utils.email_templates import apply_template_values, base_email, get_email_branding
 
     template = get_template(db, template_id)
     variables = sorted(set(re.findall(r"{{\s*(\w+)\s*}}", f"{template.subject}\n{template.body}")))
@@ -857,6 +857,7 @@ def preview_template(db: Session, template_id: int) -> dict:
         body.replace("\n", "<br />"),
         "View in Tourvaa",
         values.get("login_url", "https://app.tourvaa.com"),
+        get_email_branding(db),
     )
 
     return {"subject": subject, "html": html, "variables": variables}

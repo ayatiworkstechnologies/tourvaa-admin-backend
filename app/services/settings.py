@@ -95,8 +95,8 @@ DEFAULT_SETTINGS = [
     {"key": "company_address", "label": "Company Address", "value": "", "group": "general", "is_public": True},
     {"key": "default_country", "label": "Default Country", "value": "India", "group": "general", "is_public": True},
     {"key": "default_currency", "label": "Default Currency", "value": "USD", "group": "general", "is_public": True},
-    {"key": "logo", "label": "Logo URL", "value": "", "group": "general", "is_public": True},
-    {"key": "favicon", "label": "Favicon URL", "value": "", "group": "general", "is_public": True},
+    {"key": "logo", "label": "Platform Logo", "value": "", "group": "general", "is_public": True},
+    {"key": "favicon", "label": "Browser Icon (Favicon)", "value": "", "group": "general", "is_public": True},
     # Invoice PDF copy is kept in editable AppSetting rows so admins can
     # maintain the approved document template without a deployment. Layout,
     # financial values, and statutory tax fields remain server-controlled.

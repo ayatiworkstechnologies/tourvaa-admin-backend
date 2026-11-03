@@ -8,14 +8,34 @@ def esc(value) -> str:
     return _html.escape(str(value)) if value is not None else ""
 
 
-def base_email(title: str, intro: str, body: str, button_text: str | None = None, button_url: str | None = None):
+def base_email(
+    title: str,
+    intro: str,
+    body: str,
+    button_text: str | None = None,
+    button_url: str | None = None,
+    branding: dict | None = None,
+):
     """Render the shared, email-client-safe wrapper used by transactional mail."""
     safe_title = esc(title)
     preheader = re.sub(r"<[^>]+>", " ", f"{title}. {intro}")
     preheader = re.sub(r"\s+", " ", _html.unescape(preheader)).strip()[:140]
-    frontend_url = (os.getenv("FRONTEND_URL") or "https://tourvaa.vercel.app").rstrip("/")
+    branding = branding or {}
+    frontend_url = (branding.get("frontend_url") or os.getenv("FRONTEND_URL") or "https://tourvaa.vercel.app").rstrip("/")
     hero_url = f"{frontend_url}/images/hero-1.jpg"
-    support_email = os.getenv("SMTP_REPLY_TO") or os.getenv("SMTP_FROM_EMAIL") or "support@tourvaa.com"
+    support_email = branding.get("support_email") or os.getenv("SMTP_REPLY_TO") or os.getenv("SMTP_FROM_EMAIL") or "support@tourvaa.com"
+    site_name = branding.get("site_name") or "Tourvaa"
+    logo_url = branding.get("logo_url") or ""
+    logo_markup = (
+        f'<img src="{esc(logo_url)}" width="190" alt="{esc(site_name)}" style="display:block;max-width:190px;max-height:64px;width:auto;height:auto;border:0;" />'
+        if logo_url else
+        '<div class="brand-name" style="font-size:38px;line-height:40px;font-weight:900;letter-spacing:-1.8px;color:#07566A;">Tour<span style="color:#21A99E;">vaa</span></div>'
+    )
+    footer_logo_markup = (
+        f'<img src="{esc(logo_url)}" width="150" alt="{esc(site_name)}" style="display:block;max-width:150px;max-height:48px;width:auto;height:auto;border:0;" />'
+        if logo_url else
+        '<div style="font-size:28px;line-height:31px;font-weight:900;letter-spacing:-1px;color:#07566A;">Tour<span style="color:#21A99E;">vaa</span></div>'
+    )
     button = ""
 
     if button_text and button_url:
@@ -71,7 +91,7 @@ def base_email(title: str, intro: str, body: str, button_text: str | None = None
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                       <tr>
                         <td valign="middle">
-                          <div class="brand-name" style="font-size:38px;line-height:40px;font-weight:900;letter-spacing:-1.8px;color:#07566A;">Tour<span style="color:#21A99E;">vaa</span></div>
+                          {logo_markup}
                           <div style="margin-top:7px;font-size:9px;line-height:13px;font-weight:800;letter-spacing:3px;color:#17364A;">EXPLORE &middot; TRAVEL &middot; BELONG</div>
                         </td>
                         <td align="right" valign="middle" class="brand-promise" style="font-size:21px;line-height:25px;font-weight:600;font-style:italic;color:#07566A;">Your Journey<br />Our Passion</td>
@@ -81,7 +101,7 @@ def base_email(title: str, intro: str, body: str, button_text: str | None = None
                 </tr>
                 <tr>
                   <td style="font-size:0;line-height:0;">
-                    <img class="hero-image" src="{esc(hero_url)}" width="760" alt="Discover memorable journeys with Tourvaa" style="display:block;width:100%;max-width:760px;height:230px;object-fit:cover;border:0;" />
+                    <img class="hero-image" src="{esc(hero_url)}" width="760" alt="Discover memorable journeys with {esc(site_name)}" style="display:block;width:100%;max-width:760px;height:230px;object-fit:cover;border:0;" />
                   </td>
                 </tr>
               </table>
@@ -133,12 +153,12 @@ def base_email(title: str, intro: str, body: str, button_text: str | None = None
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                       <tr>
                         <td valign="top">
-                          <div style="font-size:28px;line-height:31px;font-weight:900;letter-spacing:-1px;color:#07566A;">Tour<span style="color:#21A99E;">vaa</span></div>
+                          {footer_logo_markup}
                           <div style="margin-top:5px;font-size:8px;line-height:12px;font-weight:800;letter-spacing:2px;color:#17364A;">EXPLORE &middot; TRAVEL &middot; BELONG</div>
                         </td>
                         <td align="right" valign="top" style="font-size:12px;line-height:20px;color:#486581;">
                           <a href="mailto:{esc(support_email)}" style="color:#086A78;text-decoration:none;font-weight:700;">{esc(support_email)}</a><br />
-                          <a href="{esc(frontend_url)}" style="color:#486581;text-decoration:none;">Visit Tourvaa online</a>
+                          <a href="{esc(frontend_url)}" style="color:#486581;text-decoration:none;">Visit {esc(site_name)} online</a>
                         </td>
                       </tr>
                     </table>
@@ -149,7 +169,7 @@ def base_email(title: str, intro: str, body: str, button_text: str | None = None
                     <p style="margin:0;font-size:11px;line-height:18px;color:#6B8292;">
                       This service message relates to your Tourvaa account, booking, or travel activity. If you did not expect it, you can safely ignore it.
                     </p>
-                    <p style="margin:7px 0 0;font-size:11px;line-height:18px;color:#8297A5;">&copy; Tourvaa &middot; Explore &middot; Travel &middot; Belong</p>
+                    <p style="margin:7px 0 0;font-size:11px;line-height:18px;color:#8297A5;">&copy; {esc(site_name)} &middot; Explore &middot; Travel &middot; Belong</p>
                   </td>
                 </tr>
               </table>
@@ -199,9 +219,33 @@ def render_database_email(db, key: str, values: dict, fallback_subject: str, fal
         body.replace("\n", "<br />"),
         values.get("button_text"),
         values.get("button_url"),
+        get_email_branding(db),
     )
 
     return subject, html
+
+
+def get_email_branding(db) -> dict:
+    """Return the admin-managed public identity used by wrapped email templates.
+
+    Only an HTTPS logo is embedded: it keeps mail clients from loading an
+    insecure or malformed resource while allowing the public Cloudinary URL
+    stored by the platform settings screen.
+    """
+    from app.models.settings import AppSetting
+
+    values = {
+        setting.key: (setting.value or "").strip()
+        for setting in db.query(AppSetting).filter(
+            AppSetting.key.in_(("site_name", "support_email", "logo"))
+        ).all()
+    }
+    logo_url = values.get("logo", "")
+    return {
+        "site_name": values.get("site_name") or "Tourvaa",
+        "support_email": values.get("support_email") or "",
+        "logo_url": logo_url if logo_url.lower().startswith("https://") else "",
+    }
 
 
 def pending_approval_email(name: str):
