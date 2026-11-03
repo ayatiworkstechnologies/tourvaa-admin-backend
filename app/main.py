@@ -333,6 +333,7 @@ def schema_is_ready():
             "updated_at",
             "failed_login_attempts",
             "locked_until",
+            "auth_provider",
         },
     }
 

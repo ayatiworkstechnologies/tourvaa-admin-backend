@@ -19,6 +19,9 @@ class User(Base):
     city = Column(String(100), default="", nullable=False)
     pincode = Column(String(20), default="", nullable=False)
     password = Column(String(255), nullable=True)
+    # Set only for accounts that have authenticated through a supported OAuth
+    # provider. A null value represents the normal email/password flow.
+    auth_provider = Column(String(30), nullable=True, index=True)
 
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=True, index=True)
 

@@ -178,7 +178,7 @@ async def social_auth_callback(provider: str, request: Request, db: Session = De
             raise HTTPException(status_code=503, detail=f"{provider.title()} authentication is not configured")
         callback = _callback_url(provider)
         identity = await (_facebook_identity(row, code, callback) if provider == "facebook" else _apple_identity(row, code, callback))
-        user = _find_or_create_google_user(db, identity)
+        user = _find_or_create_google_user(db, identity, auth_provider=provider)
         if user.two_factor_enabled:
             return _frontend_redirect(oauth_error=f"{provider}_2fa_requires_password_login")
         result = _finalize_login(db, user, SimpleNamespace(client_type="web-cookie", device_id=None, device_name=f"{provider.title()} OAuth"), request=request)

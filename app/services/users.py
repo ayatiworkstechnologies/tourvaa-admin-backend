@@ -41,6 +41,7 @@ def serialize_user(user: User):
         "id": user.id,
         "name": user.name,
         "email": user.email,
+        "auth_provider": user.auth_provider,
         "phone": user.phone,
         "profile_image": existing_storage_path(user.profile_image),
         "address": user.address,

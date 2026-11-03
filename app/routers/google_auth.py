@@ -97,13 +97,22 @@ async def _google_identity(code: str, client_id: str, client_secret: str, redire
     return identity
 
 
-def _find_or_create_google_user(db: Session, identity: dict) -> User:
+def _find_or_create_google_user(db: Session, identity: dict, auth_provider: str = "google") -> User:
+    auth_provider = auth_provider.strip().lower()
+    if auth_provider not in {"google", "facebook", "apple"}:
+        raise HTTPException(status_code=400, detail="Unsupported authentication provider")
     email = str(identity["email"]).strip().lower()
     user = db.query(User).filter(User.email == email).first()
     if user:
+        changed = False
         if not user.email_verified:
             user.email_verified = True
             user.email_verified_at = user.email_verified_at or utcnow()
+            changed = True
+        if not user.auth_provider:
+            user.auth_provider = auth_provider
+            changed = True
+        if changed:
             db.commit()
             db.refresh(user)
         return user
@@ -116,6 +125,7 @@ def _find_or_create_google_user(db: Session, identity: dict) -> User:
     picture = str(identity.get("picture") or "").strip()[:255]
     user = User(
         name=name, email=email, profile_image=picture, password=None,
+        auth_provider=auth_provider,
         role_id=role.id, user_type="CUSTOMER", is_active=True,
         approval_status="not_required", email_verified=True,
         email_verified_at=utcnow(), account_status="ACTIVE",
@@ -123,7 +133,7 @@ def _find_or_create_google_user(db: Session, identity: dict) -> User:
     db.add(user)
     db.flush()
     db.add(UserRole(user_id=user.id, role_id=role.id))
-    db.add(UserStatusHistory(user_id=user.id, to_status="ACTIVE", reason="Registered with Google"))
+    db.add(UserStatusHistory(user_id=user.id, to_status="ACTIVE", reason=f"Registered with {auth_provider.title()}"))
     name_parts = name.split(" ", 1)
     db.add(Customer(
         user_id=user.id, first_name=name_parts[0],
