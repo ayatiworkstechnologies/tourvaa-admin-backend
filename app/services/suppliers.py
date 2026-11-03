@@ -2,6 +2,7 @@ import logging
 from decimal import Decimal
 
 from fastapi import BackgroundTasks, HTTPException, Request
+from sqlalchemy import case, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -19,6 +20,7 @@ from app.utils.operations import (
 from app.utils.money import utcnow
 
 from app.models.suppliers import Supplier, SupplierApprovalHistory, SupplierDocument, SupplierVehicle
+from app.models.cms import Tour
 from app.schemas.suppliers import (
     DocumentReviewRequest,
     SupplierCreate,
@@ -249,7 +251,29 @@ def list_suppliers(db: Session, page: int, limit: int, search: str = "", country
         selectinload(Supplier.documents),
     )
     query = filter_review_query(base_query, Supplier, search=search, country_id=country_id, status=status, approval_status=approval_status, start_date=start_date, end_date=end_date, sort_by=sort_by, name_field="supplier_name")
-    return simple_paginate(query, page, limit, serialize_supplier)
+    result = simple_paginate(query, page, limit, serialize_supplier)
+    supplier_ids = [item["id"] for item in result["items"]]
+    if not supplier_ids:
+        return result
+
+    tour_counts = {
+        supplier_id: {"total": int(total or 0), "draft": int(draft or 0)}
+        for supplier_id, total, draft in (
+            db.query(
+                Tour.supplier_id,
+                func.count(Tour.id),
+                func.sum(case((Tour.status == "draft", 1), else_=0)),
+            )
+            .filter(Tour.supplier_id.in_(supplier_ids))
+            .group_by(Tour.supplier_id)
+            .all()
+        )
+    }
+    for item in result["items"]:
+        counts = tour_counts.get(item["id"], {"total": 0, "draft": 0})
+        item["number_of_tours"] = counts["total"]
+        item["draft_tours"] = counts["draft"]
+    return result
 
 
 def get_supplier(db: Session, supplier_id: int):
