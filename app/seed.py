@@ -98,6 +98,7 @@ CUSTOMER_GRANULAR_PERMISSIONS = [
     {"name": "View Customers", "slug": "customers.view", "module": "customers", "action": "get"},
     {"name": "Create Customers", "slug": "customers.create", "module": "customers", "action": "post"},
     {"name": "Edit Customers", "slug": "customers.edit", "module": "customers", "action": "put"},
+    {"name": "Delete Customers", "slug": "customers.delete", "module": "customers", "action": "delete"},
     {"name": "Block Customers", "slug": "customers.block", "module": "customers", "action": "put"},
     {"name": "Unblock Customers", "slug": "customers.unblock", "module": "customers", "action": "put"},
     {"name": "Reset Customer Password", "slug": "customers.reset_password", "module": "customers", "action": "post"},
