@@ -13,6 +13,7 @@ from app.config import settings
 from app.utils.email_templates import base_email, esc, password_reset_email
 from app.models.cms import City, Country
 from app.models.customers import Customer, CustomerCommunication
+from app.models.checkout import CheckoutSession
 from app.models.sessions import LoginHistory
 from app.models.bookings import Booking
 from app.models.payments import Payment
@@ -335,6 +336,46 @@ def get_customer_by_id(db: Session, customer_id: int):
         raise HTTPException(status_code=404, detail="Customer not found")
 
     return customer
+
+
+def delete_customer(
+    db: Session,
+    customer_id: int,
+    actor: User | None = None,
+    request: Request | None = None,
+    *,
+    commit: bool = True,
+):
+    """Remove a customer profile only when it has no financial/travel history."""
+    customer = get_customer_by_id(db, customer_id)
+    has_bookings = db.query(Booking.id).filter(Booking.customer_id == customer.id).first()
+    has_payments = db.query(Payment.id).filter(Payment.customer_id == customer.id).first()
+    if has_bookings or has_payments:
+        raise HTTPException(
+            status_code=409,
+            detail="Customers with booking or payment history cannot be deleted. Block the account instead.",
+        )
+
+    old_values = serialize_customer(customer)
+    # An abandoned checkout is not financial history and can safely lose its
+    # optional customer link when the customer profile is removed.
+    db.query(CheckoutSession).filter(CheckoutSession.customer_id == customer.id).update(
+        {CheckoutSession.customer_id: None}, synchronize_session=False
+    )
+    db.delete(customer)
+    db.flush()
+    log_audit(
+        db,
+        actor=actor,
+        action="delete_customer",
+        entity_type="customer",
+        entity_id=customer_id,
+        old_values=old_values,
+        request=request,
+    )
+    if commit:
+        db.commit()
+    return True
 
 
 def get_customer_detail(db: Session, customer_id: int, actor: User | None = None, request: Request | None = None):

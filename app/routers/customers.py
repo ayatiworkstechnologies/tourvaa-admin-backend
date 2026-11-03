@@ -20,6 +20,7 @@ from app.services.agent_scope import ensure_agent_customer_access, is_agent_user
 from app.services.customers import (
     block_customer,
     create_customer,
+    delete_customer,
     get_customer_booking_history,
     get_customer_communication_history,
     get_customer_detail,
@@ -185,6 +186,18 @@ def edit_customer(
         "message": "Customer updated successfully",
         "data": update_customer(db, customer_id, data, actor=current_user, request=request),
     }
+
+
+@router.delete("/{customer_id}")
+def remove_customer(
+    customer_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_any_permission("customers.delete", "delete-customers")),
+):
+    ensure_agent_customer_access(db, customer_id, current_user)
+    delete_customer(db, customer_id, actor=current_user, request=request)
+    return {"status": "success", "message": "Customer deleted successfully"}
 
 
 @router.patch("/{customer_id}/status")

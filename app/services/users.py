@@ -732,6 +732,17 @@ def delete_user(
     from app.models.supplier_ledger import SupplierPayout
     from app.models.tour_versions import TourVersion
     from app.models.website_cms import Blog
+    from app.services.customers import delete_customer
+
+    # A customer account has a matching customer profile. Remove the profile
+    # together with a user account so it cannot remain visible in the customer
+    # portal after the login has been deleted. Historical customer records are
+    # deliberately protected by delete_customer instead of being detached.
+    linked_customer_ids = [
+        row.id for row in db.query(Customer.id).filter(Customer.user_id == user_id).all()
+    ]
+    for customer_id in linked_customer_ids:
+        delete_customer(db, customer_id, actor=actor, request=request, commit=False)
 
     def nullify_reference(model, column):
         db.query(model).filter(column == user_id).update(
@@ -743,7 +754,6 @@ def delete_user(
         (User, User.admin_verified_by),
         (User, User.deactivated_by),
         (UserStatusHistory, UserStatusHistory.changed_by),
-        (Customer, Customer.user_id),
         (Customer, Customer.blocked_by),
         (CustomerCommunication, CustomerCommunication.sent_by_user_id),
         (CustomerCancellationRequest, CustomerCancellationRequest.reviewed_by),
