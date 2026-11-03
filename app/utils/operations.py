@@ -111,6 +111,7 @@ def relationship_list(items, serializer):
 def serialize_common_review(item: Any, name_field: str, code_field: str):
     country = getattr(item, "country", None)
     city = getattr(item, "city", None)
+    account = getattr(item, "user", None)
     return {
         "id": item.id,
         "user_id": getattr(item, "user_id", None),
@@ -119,6 +120,11 @@ def serialize_common_review(item: Any, name_field: str, code_field: str):
         "name": getattr(item, name_field),
         name_field: getattr(item, name_field),
         "type": getattr(item, name_field.replace("_name", "_type"), ""),
+        # Supplier and agent sign-in contact details belong to the linked
+        # User account. Include them in the admin directory response instead
+        # of making the UI display an empty email for an existing account.
+        "email": getattr(account, "email", "") or "",
+        "phone": (getattr(account, "phone", None) or getattr(account, "mobile_number", None) or "") if account else "",
         "country_id": getattr(item, "country_id", None),
         "city_id": getattr(item, "city_id", None),
         "country_name": country.country_name if country else "",
@@ -322,4 +328,3 @@ def partial_approve_item(db: Session, item, data: PartialApprovalRequest, actor:
     db.commit()
     db.refresh(item)
     return serializer(item)
-
