@@ -1471,6 +1471,13 @@ def update_smtp_settings_payload(
             continue
         setattr(setting, column, value.strip() if isinstance(value, str) else value)
 
+    # SMTP over implicit TLS (SSL, conventionally port 465) and STARTTLS
+    # (usually port 587) cannot be used together. Keep the API defensive for
+    # older clients or direct API calls; the admin UI also prevents this
+    # invalid combination.
+    if setting.use_ssl and setting.use_starttls:
+        setting.use_starttls = False
+
     safe_old_values = {
         k: (mask_secret(decrypt_secret(v or "")) if k in _SMTP_SECRET_FIELDS else v)
         for k, v in old_values.items()

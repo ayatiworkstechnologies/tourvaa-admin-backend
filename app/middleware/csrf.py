@@ -38,7 +38,14 @@ class CsrfMiddleware(BaseHTTPMiddleware):
                 or request.cookies.get("tourvaa_admin_access")
             )
             cookie_token = request.cookies.get(csrf_cookie_name(portal))
-            if auth_cookie or cookie_token:
+            # A readable CSRF cookie is not an authenticated session by
+            # itself. It can legitimately outlive a cleared/expired access
+            # cookie, and public actions such as starting registration must
+            # not fail merely because that orphaned cookie remains in the
+            # browser. Once an authentication cookie is present, still
+            # require the matching double-submit token (including when the
+            # CSRF cookie is missing) to preserve session CSRF protection.
+            if auth_cookie:
                 header_token = request.headers.get(CSRF_HEADER_NAME)
                 if not cookie_token or not header_token or header_token != cookie_token:
                     return JSONResponse(

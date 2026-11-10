@@ -1,5 +1,9 @@
 import pytest
+from unittest.mock import MagicMock
 
+from app.models.settings import SmtpSetting
+import app.services.settings as settings_service
+from app.services.settings import update_smtp_settings_payload
 from app.utils.mailer import _SmtpConfig, _build_message, _normalise_smtp_transport
 
 
@@ -42,6 +46,19 @@ def test_ssl_transport_disables_conflicting_starttls_setting():
 
     assert normalized.use_ssl is True
     assert normalized.use_starttls is False
+
+
+def test_saving_smtp_with_ssl_normalizes_conflicting_starttls(monkeypatch):
+    setting = SmtpSetting(is_enabled=True, host="smtp.example.com", use_ssl=False, use_starttls=True)
+    setting.id = 1
+    db = MagicMock()
+    monkeypatch.setattr(settings_service, "get_or_create_smtp_settings", lambda _db: setting)
+    monkeypatch.setattr(settings_service, "log_audit", lambda *args, **kwargs: None)
+
+    payload = update_smtp_settings_payload(db, {"use_ssl": True, "use_starttls": True})
+
+    assert payload["use_ssl"] is True
+    assert payload["use_starttls"] is False
 
 
 @pytest.mark.parametrize(

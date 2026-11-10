@@ -92,6 +92,26 @@ async def test_csrf_allows_matching_double_submit_cookies():
 
 
 @pytest.mark.anyio
+async def test_csrf_allows_public_write_with_orphaned_csrf_cookie():
+    """A stale readable CSRF cookie must not block public registration."""
+    middleware = CsrfMiddleware(app=None)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/register",
+        "headers": [(b"cookie", b"tourvaa_csrf=stale_token")],
+    }
+    req = Request(scope)
+
+    async def call_next(r):
+        return Response("OK", status_code=200)
+
+    resp = await middleware.dispatch(req, call_next)
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_csrf_allows_bearer_token_requests():
     """Verify that non-cookie requests (e.g. mobile apps / API clients with Bearer token) pass through."""
     middleware = CsrfMiddleware(app=None)
