@@ -112,6 +112,29 @@ async def test_csrf_allows_public_write_with_orphaned_csrf_cookie():
 
 
 @pytest.mark.anyio
+async def test_csrf_does_not_apply_admin_session_to_public_registration_change():
+    """A parallel admin session must not block a public token-based flow."""
+    middleware = CsrfMiddleware(app=None)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/auth/change-registration-email",
+        "headers": [
+            (b"x-tourvaa-portal", b"public"),
+            (b"cookie", b"tourvaa_admin_access=admin_session; tourvaa_admin_csrf=admin_token"),
+        ],
+    }
+    req = Request(scope)
+
+    async def call_next(r):
+        return Response("OK", status_code=200)
+
+    resp = await middleware.dispatch(req, call_next)
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_csrf_allows_bearer_token_requests():
     """Verify that non-cookie requests (e.g. mobile apps / API clients with Bearer token) pass through."""
     middleware = CsrfMiddleware(app=None)

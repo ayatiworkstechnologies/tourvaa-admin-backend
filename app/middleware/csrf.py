@@ -32,11 +32,12 @@ class CsrfMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method in UNSAFE_METHODS and request.url.path not in EXEMPT_PATHS:
             portal = portal_from_request(request)
-            auth_cookie = (
-                request.cookies.get(access_cookie_name(portal))
-                or request.cookies.get("tourvaa_access")
-                or request.cookies.get("tourvaa_admin_access")
-            )
+            # Admin and public portals deliberately use independent browser
+            # sessions. Only the cookie for the requested portal can
+            # authenticate this request; treating the other portal's cookie
+            # as a reason to enforce its CSRF token blocks public actions
+            # such as changing a pending registration email.
+            auth_cookie = request.cookies.get(access_cookie_name(portal))
             cookie_token = request.cookies.get(csrf_cookie_name(portal))
             # A readable CSRF cookie is not an authenticated session by
             # itself. It can legitimately outlive a cleared/expired access
