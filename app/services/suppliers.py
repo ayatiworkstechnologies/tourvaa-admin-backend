@@ -36,8 +36,12 @@ logger = logging.getLogger(__name__)
 
 SUPPLIER_DOCUMENT_TYPES = {
     "company_registration": {"label": "Business Registration Certificate", "required": True},
-    "operating_licence": {"label": "Relevant Operating Licence", "required": True},
-    "public_liability_insurance": {"label": "Public Liability Insurance Certificate", "required": True},
+    "operating_licence": {
+        "label": "Relevant Operating Licence",
+        "description": "Upload an applicable operating licence, such as a Transport Authority Licence or Passenger Service Licence.",
+        "required": False,
+    },
+    "public_liability_insurance": {"label": "Public Liability Insurance Certificate", "required": False},
     "tourism_accreditation": {"label": "Tourism Accreditation", "required": False},
     "industry_certification": {"label": "Industry Certification", "required": False},
     "safety_certification": {"label": "Safety Certification", "required": False},
