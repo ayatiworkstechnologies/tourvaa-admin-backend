@@ -469,7 +469,7 @@ def approve_user(
         new_values=serialize_user(user),
         request=request,
     )
-    login_url = f"{settings.FRONTEND_URL}/login"
+    login_url = build_portal_login_url(user)
     from app.services.notification_delivery import dispatch_lifecycle_email
     dispatch_lifecycle_email(
         db, event="account_approved", entity_type="user", entity_id=user.id,
@@ -596,7 +596,7 @@ def reactivate_user(
         new_values=serialize_user(user),
         request=request,
     )
-    login_url = f"{settings.FRONTEND_URL}/login"
+    login_url = build_portal_login_url(user)
     from app.services.notification_delivery import dispatch_lifecycle_email
     dispatch_lifecycle_email(
         db, event="account_reactivated", entity_type="user", entity_id=user.id,

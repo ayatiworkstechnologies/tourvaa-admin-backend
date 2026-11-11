@@ -185,17 +185,13 @@ def build_email_verification_url(token: str, redirect: str | None = None):
 
 def build_portal_login_url(user: User):
     role_slug = user.role.slug if user.role else ""
-    if role_slug not in {"customer", "agent-reseller", "supplier", "affiliate"}:
-        return f"{settings.FRONTEND_URL}/admin/login"
-    role_param = {
-        "customer": "traveller",
-        "agent-reseller": "agent",
-        "supplier": "supplier",
-        "affiliate": "affiliate",
-    }.get(role_slug)
-    if role_param:
-        return f"{settings.FRONTEND_URL}/login?role={role_param}"
-    return f"{settings.FRONTEND_URL}/login"
+    portal_path = {
+        "customer": "/login",
+        "agent-reseller": "/agent-portal/login",
+        "supplier": "/supplier-portal/login",
+        "affiliate": "/affiliate-portal/login",
+    }.get(role_slug, "/admin/login")
+    return f"{settings.FRONTEND_URL}{portal_path}"
 
 
 def portal_display_name(user: User):
@@ -1183,7 +1179,7 @@ def send_password_changed_email(db: Session, user: User, background_tasks=None):
     """Security alert that the account password changed (reset link or a
     profile change). Sent in the background when possible so a slow SMTP
     server can never hold up the request."""
-    login_url = f"{settings.FRONTEND_URL}/login"
+    login_url = build_portal_login_url(user)
     from app.services.notification_delivery import dispatch_lifecycle_email
     dispatched = dispatch_lifecycle_email(
         db,

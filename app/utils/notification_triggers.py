@@ -334,7 +334,7 @@ def notify_supplier_account_status(
         entity_type="supplier",
         entity_id=supplier_id,
     )
-    login_url = f"{settings.FRONTEND_URL}/login"
+    login_url = f"{settings.FRONTEND_URL}/supplier-portal/login"
     template_key = "account_reactivated" if reactivated else "account_deactivated"
     send_templated_email(
         db,
