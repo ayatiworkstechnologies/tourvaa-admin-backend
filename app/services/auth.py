@@ -509,6 +509,10 @@ def complete_registration(db: Session, token: str, password: str, background_tas
     login_url = build_portal_login_url(user)
     name = getattr(user, "name", "")
     email = getattr(user, "email", "")
+    is_supplier = user.role.slug == "supplier" if user.role else False
+    button_text = "Login to Supplier Portal" if is_supplier else "Login to Tourvaa"
+    template_key = "supplier_registration_password_created" if is_supplier else "registration_password_created"
+    email_subject = "Your Tourvaa Supplier Account Is Ready to Sign In!" if is_supplier else "Your Tourvaa account is ready to sign in"
     from app.services.notification_delivery import dispatch_lifecycle_email
     dispatch_lifecycle_email(
         db,
@@ -517,17 +521,23 @@ def complete_registration(db: Session, token: str, password: str, background_tas
         entity_id=user.id,
         recipient_type=user.user_type.lower(),
         recipient_email=email,
-        template_key="registration_password_created",
+        template_key=template_key,
         values={
             "name": name,
             "email": email,
             "portal_name": portal_display_name(user),
             "login_url": login_url,
-            "button_text": "Login to Tourvaa",
+            "button_text": button_text,
             "button_url": login_url,
         },
-        fallback_subject="Your Tourvaa account is ready to sign in",
-        fallback_html=registration_password_created_email(name, login_url),
+        fallback_subject=email_subject,
+        fallback_html=registration_password_created_email(
+            name,
+            login_url,
+            title=email_subject if is_supplier else None,
+            button_text=button_text,
+            supplier=is_supplier,
+        ),
         background_tasks=background_tasks,
     )
     db.commit()

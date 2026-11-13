@@ -215,7 +215,7 @@ def render_database_email(db, key: str, values: dict, fallback_subject: str, fal
 
     html = base_email(
         subject,
-        f"Hi {esc(values.get('name', 'there'))},",
+        f"{esc(values.get('greeting', 'Hi'))} {esc(values.get('name', 'there'))},",
         body.replace("\n", "<br />"),
         values.get("button_text"),
         values.get("button_url"),
@@ -258,10 +258,25 @@ def pending_approval_email(name: str):
 
 def approved_email(name: str, login_url: str):
     return base_email(
-        "Your account is approved",
-        f"Hi {esc(name)},",
-        "Your Tourvaa account has been approved. You can now sign in and access the modules assigned to your role.",
-        "Login to Tourvaa",
+        "Your Tourvaa Supplier Account Has Been Approved!",
+        f"Dear {esc(name)},",
+        (
+            "Congratulations!<br /><br />"
+            "Your supplier account has been successfully approved by the Tourvaa team. "
+            "You can now access your Supplier Portal and start managing your tour offerings."
+            "<br /><br /><strong>Next Step: Create Your First Tour</strong><br />"
+            "Please log in to your Tourvaa Supplier Portal and navigate to the Create Tour section to add your tour details, including:"
+            "<ul>"
+            "<li>Tour title and description</li>"
+            "<li>Tour location and destination</li>"
+            "<li>Tour overview and itinerary</li>"
+            "<li>Pricing and passenger details</li>"
+            "<li>Tour images and other required information</li>"
+            "</ul>"
+            "Once you submit your tour, it will be available for the Tourvaa team to review and approve according to the platform's existing workflow."
+            "<br /><br />Thank you for partnering with Tourvaa!<br /><br />Tourvaa Team"
+        ),
+        "Log in to the Supplier Portal",
         login_url,
     )
 
@@ -327,12 +342,24 @@ def otp_login_email(name: str, code: str):
     )
 
 
-def registration_password_created_email(name: str, login_url: str):
+def registration_password_created_email(
+    name: str,
+    login_url: str,
+    *,
+    title: str | None = None,
+    button_text: str = "Login to Tourvaa",
+    supplier: bool = False,
+):
     return base_email(
-        "Your Tourvaa password is ready",
+        title or "Your Tourvaa password is ready",
         f"Hi {esc(name)},",
-        "Your email has been verified and your password has been created. You can now sign in to your Tourvaa account.",
-        "Login to Tourvaa",
+        (
+            "Welcome to Tourvaa! Your email has been successfully verified and your password has been created. "
+            "You can now access your Supplier Portal and manage your tour offerings."
+            if supplier else
+            "Your email has been verified and your password has been created. You can now sign in to your Tourvaa account."
+        ),
+        button_text,
         login_url,
     )
 

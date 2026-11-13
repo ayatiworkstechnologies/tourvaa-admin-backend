@@ -70,6 +70,15 @@ DEFAULT_EMAIL_TEMPLATES = [
         ),
     },
     {
+        "key": "supplier_registration_password_created",
+        "name": "Supplier Registration Password Created",
+        "subject": "Your Tourvaa Supplier Account Is Ready to Sign In!",
+        "body": (
+            "Welcome to Tourvaa! Your email has been successfully verified and your password has been created.\n\n"
+            "You can now access your Supplier Portal and manage your tour offerings."
+        ),
+    },
+    {
         "key": "verification_link_expired",
         "name": "Verification Link Expired",
         "subject": "Your Tourvaa verification link expired",
@@ -90,8 +99,22 @@ DEFAULT_EMAIL_TEMPLATES = [
     {
         "key": "supplier_approved",
         "name": "Supplier Approved",
-        "subject": "Your Tourvaa supplier operations are unlocked",
-        "body": "Hi {{supplier_name}}, your supplier profile is approved. Tour management, bookings, calendar and payouts are now available. Sign in here: {{login_url}}",
+        "subject": "Your Tourvaa Supplier Account Has Been Approved!",
+        "body": (
+            "Congratulations!\n\n"
+            "Your supplier account has been successfully approved by the Tourvaa team. "
+            "You can now access your Supplier Portal and start managing your tour offerings.\n\n"
+            "Next Step: Create Your First Tour\n"
+            "Please log in to your Tourvaa Supplier Portal and navigate to the Create Tour section to add your tour details, including:\n\n"
+            "• Tour title and description\n"
+            "• Tour location and destination\n"
+            "• Tour overview and itinerary\n"
+            "• Pricing and passenger details\n"
+            "• Tour images and other required information\n\n"
+            "Once you submit your tour, it will be available for the Tourvaa team to review and approve according to the platform's existing workflow.\n\n"
+            "Thank you for partnering with Tourvaa!\n\n"
+            "Tourvaa Team"
+        ),
     },
     {
         "key": "account_deactivated",
@@ -728,6 +751,17 @@ def seed_email_templates(db: Session):
             }
             if template.body == legacy_bodies[template.key]:
                 template.body = next(item["body"] for item in DEFAULT_EMAIL_TEMPLATES if item["key"] == template.key)
+        elif template.key == "supplier_approved":
+            # Upgrade only the stock approval template. Preserve any subject or
+            # body that an administrator has customized in Email Templates.
+            legacy_subject = "Your Tourvaa supplier operations are unlocked"
+            legacy_body = (
+                "Hi {{supplier_name}}, your supplier profile is approved. Tour management, bookings, "
+                "calendar and payouts are now available. Sign in here: {{login_url}}"
+            )
+            if template.subject == legacy_subject and template.body == legacy_body:
+                template.subject = item["subject"]
+                template.body = item["body"]
 
     db.commit()
 

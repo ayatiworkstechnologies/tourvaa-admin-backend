@@ -144,9 +144,10 @@ def tour_categories(
     search: str = Query(default=""),
     page: int = Query(default=1),
     limit: int = Query(default=200),
+    active_only: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    return {"status": "success", **list_categories(db, page, limit, search)}
+    return {"status": "success", **list_categories(db, page, limit, search, active_only=active_only)}
 
 
 # overview

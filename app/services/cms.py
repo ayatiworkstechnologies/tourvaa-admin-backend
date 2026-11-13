@@ -323,8 +323,10 @@ def save_city(db: Session, data: CityPayload, actor: User, request: Request | No
     return _city(item)
 
 
-def list_categories(db: Session, page: int, limit: int, search: str = ""):
+def list_categories(db: Session, page: int, limit: int, search: str = "", active_only: bool = False):
     query = db.query(TourCategory)
+    if active_only:
+        query = query.filter(TourCategory.status == "active")
     if search:
         query = query.filter(TourCategory.category_name.ilike(f"%{search.strip()}%"))
     return simple_paginate(query.order_by(TourCategory.id.desc()), page, limit, _category)
@@ -437,16 +439,12 @@ def save_tour(db: Session, data: TourPayload, actor: User, request: Request | No
     if is_supplier_user(actor):
         payload["tax_percentage"] = item.tax_percentage if tour_id else 0
         payload["service_fee"] = item.service_fee if tour_id else 0
-        # Tourvaa owns tour taxonomy.  A supplier's shared form intentionally
-        # does not expose it, so preserve the current category and mappings
-        # on edits rather than treating omitted fields as a request to clear
-        # the classification.
-        if tour_id:
+        # Suppliers may choose taxonomy in the supplier tour editor. Preserve
+        # existing classification only for older/partial clients that omit it.
+        if tour_id and "category_id" not in data.model_fields_set:
             payload["category_id"] = item.category_id
+        if tour_id and "subcategory_ids" not in data.model_fields_set:
             subcategory_ids = [link.subcategory_id for link in item.subcategory_links]
-        else:
-            payload["category_id"] = None
-            subcategory_ids = []
         # Search metadata is administered centrally. Keep it unchanged for
         # supplier edits and avoid accepting it on supplier-created tours.
         for field in (

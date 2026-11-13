@@ -574,13 +574,14 @@ def approve_supplier(
     item.user.admin_verified = True
     item.user.admin_verified_at = now
     item.user.admin_verified_by = actor.id
-    db.add(SupplierApprovalHistory(
+    approval_event = SupplierApprovalHistory(
         supplier_id=item.id,
         from_status=previous_status,
         to_status="approved",
         notes="Supplier operational access approved",
         changed_by=actor.id,
-    ))
+    )
+    db.add(approval_event)
     log_audit(
         db,
         actor=actor,
@@ -604,6 +605,7 @@ def approve_supplier(
             supplier_name=item.supplier_name,
             user_id=item.user_id,
             background_tasks=background_tasks,
+            event_version=str(approval_event.id),
         )
     except Exception:
         logger.exception("Failed to send supplier approval notification for supplier_id=%s", item.id)

@@ -254,12 +254,23 @@ def notify_supplier_approved(
     supplier_name: str,
     user_id: int | None = None,
     background_tasks: "BackgroundTasks | None" = None,
+    event_version: str = "1",
 ):
     from app.config import settings
     from app.services.notification_delivery import dispatch_lifecycle_email
     notify_admins(db, notification_type="supplier_approved", title="Supplier Approved", message=f"Supplier '{supplier_name}' has been approved.", entity_type="supplier", entity_id=supplier_id)
     if user_id:
-        enqueue_notification(db, user_id=user_id, notification_type="supplier_approved", title="Supplier operations unlocked", message=f"Your supplier profile '{supplier_name}' is approved. Tour, booking, calendar and payout features are now available.", entity_type="supplier", entity_id=supplier_id)
+        enqueue_notification(
+            db,
+            user_id=user_id,
+            notification_type="supplier_approved",
+            title="Supplier operations unlocked",
+            message=f"Your supplier profile '{supplier_name}' is approved. Tour, booking, calendar and payout features are now available.",
+            entity_type="supplier",
+            entity_id=supplier_id,
+            event_key="supplier_approved",
+            event_version=event_version,
+        )
         from app.utils.email_templates import approved_email
         login_url = f"{settings.FRONTEND_URL}/supplier-portal/login"
         # Account approval is a lifecycle event: reserve it durably before
@@ -273,9 +284,17 @@ def notify_supplier_approved(
             recipient_type="supplier",
             recipient_email=_user_email(db, user_id),
             template_key="supplier_approved",
-            values={"supplier_name": supplier_name, "name": supplier_name, "login_url": login_url},
-            fallback_subject="Your Tourvaa supplier operations are unlocked",
+            values={
+                "supplier_name": supplier_name,
+                "name": supplier_name,
+                "greeting": "Dear",
+                "login_url": login_url,
+                "button_text": "Log in to the Supplier Portal",
+                "button_url": login_url,
+            },
+            fallback_subject="Your Tourvaa Supplier Account Has Been Approved!",
             fallback_html=approved_email(supplier_name, login_url),
+            event_version=event_version,
             background_tasks=background_tasks,
         )
     db.flush()
