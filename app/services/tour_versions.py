@@ -321,7 +321,7 @@ def approve_version(db: Session, tour_id: int, version_id: int, actor: User, req
         from app.models.users import User as AccountUser
         from app.services.notification_delivery import dispatch_lifecycle_email
         recipient = db.query(AccountUser).filter(AccountUser.id == version.submitted_by).first()
-        supplier_url = f"{settings.FRONTEND_URL}/supplier/tours/{tour.id}"
+        supplier_url = f"{settings.FRONTEND_URL.rstrip('/')}/supplier/tours/{tour.id}/edit"
         if recipient and recipient.email:
             dispatch_lifecycle_email(db, event="tour_approved", entity_type="tour_version", entity_id=version.id,
                 recipient_type="supplier", recipient_email=recipient.email, template_key="tour_reviewed",
