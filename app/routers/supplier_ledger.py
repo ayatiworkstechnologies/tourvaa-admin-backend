@@ -51,7 +51,7 @@ def create_payout(
     if is_supplier_user(current_user):
         raise HTTPException(
             status_code=403,
-            detail="Supplier payouts are scheduled for month-end processing.",
+            detail="Supplier payouts are created by the admin after ledger entries become eligible.",
         )
     result = service.create_payout(db, data=data, actor=current_user, request=request)
     return {"status": "success", "message": "Payout created", "data": result}

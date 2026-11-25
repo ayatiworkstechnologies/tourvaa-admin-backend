@@ -1,4 +1,5 @@
 ﻿from decimal import Decimal
+from datetime import timedelta
 from math import ceil
 from typing import Optional
 
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.services.audit import log_audit
 from app.models.bookings import Booking
-from app.utils.money import money, utcnow
+from app.utils.money import as_aware_utc, money, utcnow
 from app.services.notifications import enqueue_notification
 from app.models.supplier_ledger import SupplierLedger, SupplierPayout, SupplierPayoutItem
 from app.schemas.supplier_ledger import SupplierPayoutCreate, SupplierPayoutMarkPaid
@@ -58,12 +59,26 @@ def _payout_code(payout_id: int) -> str:
 
 
 def _serialize_ledger(row: SupplierLedger) -> dict:
+    completed_at = row.booking.completed_at if row.booking else None
+    payout_eligible_at = completed_at + timedelta(days=7) if completed_at else None
+    payout_eligible = bool(
+        payout_eligible_at
+        and row.booking
+        and row.booking.booking_status == "completed"
+        and as_aware_utc(payout_eligible_at) <= utcnow()
+        and row.status in {"pending", "partial"}
+        and money(row.amount_pending) > 0
+    )
     return {
         "id": row.id,
         "supplier_id": row.supplier_id,
         "supplier_name": row.supplier.supplier_name if row.supplier else None,
         "booking_id": row.booking_id,
         "booking_code": row.booking.booking_code if row.booking else None,
+        "booking_status": row.booking.booking_status if row.booking else None,
+        "tour_completed_at": completed_at,
+        "payout_eligible_at": payout_eligible_at,
+        "payout_eligible": payout_eligible,
         "gross_amount": str(row.gross_amount),
         "commission_amount": str(row.commission_amount),
         "commission_percentage": str(row.commission_percentage),
@@ -304,13 +319,24 @@ def _select_payout_ledgers(db: Session, supplier_id: int, data: SupplierPayoutCr
     # Supplier earnings become payable only after the booked tour is marked
     # completed. Keep the account scope on the ledger row and join the booking
     # status so confirmed/ongoing reservations cannot be paid early.
+    eligibility_cutoff = utcnow() - timedelta(days=7)
     query = (
         db.query(SupplierLedger)
         .join(Booking, SupplierLedger.booking_id == Booking.id)
-        .filter(SupplierLedger.supplier_id == supplier_id, Booking.booking_status == "completed")
+        .filter(
+            SupplierLedger.supplier_id == supplier_id,
+            Booking.booking_status == "completed",
+            Booking.completed_at.isnot(None),
+            Booking.completed_at <= eligibility_cutoff,
+        )
     )
     if data.ledger_ids:
         ledger_rows = query.filter(SupplierLedger.id.in_(data.ledger_ids)).with_for_update().all()
+        if {row.id for row in ledger_rows} != set(data.ledger_ids):
+            raise HTTPException(
+                status_code=400,
+                detail="One or more selected ledger entries are not payout-eligible. Supplier payouts become eligible 7 days after tour completion.",
+            )
     else:
         ledger_rows = query.filter(
             SupplierLedger.status.in_(("pending", "partial")),

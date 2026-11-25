@@ -674,30 +674,56 @@ def get_public_destination_guide(db, slug: str):
 
 
 def _validate_contact_offices(data: dict) -> None:
-    """Require an explicit, unique office identifier for each CMS office row.
-
-    City/country/map coordinates are fixed in the public UI. Applying CMS rows
-    by their list order allowed a Chennai record to be rendered as Auckland.
-    """
+    """Validate dynamic contact office records while accepting legacy records."""
     records = data.get("items")
     if not isinstance(records, list):
         return
-    allowed_ids = {"nz", "lk", "in"}
     used_ids: set[str] = set()
+    used_locations: set[str] = set()
     for record in records:
         if not isinstance(record, dict):
             raise HTTPException(status_code=422, detail="Each office entry must be an object")
         office_id = str(record.get("office_id") or "").strip()
-        if office_id not in allowed_ids:
-            raise HTTPException(status_code=422, detail="Each office entry must select Auckland, Colombo, or Chennai")
+        location = str(record.get("location") or "").strip()
+        # Older CMS rows contain only a fixed legacy office ID. Continue to
+        # accept those records until an administrator saves them in the new UI.
+        if not office_id:
+            raise HTTPException(status_code=422, detail="Each office needs a stable unique ID")
+        if office_id not in {"nz", "lk", "in"} and not location:
+            raise HTTPException(status_code=422, detail="Each office needs an office name or location")
         if office_id in used_ids:
-            raise HTTPException(status_code=422, detail="Each office can appear only once")
+            raise HTTPException(status_code=422, detail="Office IDs must be unique")
         used_ids.add(office_id)
+        if location:
+            normalized_location = location.casefold()
+            if normalized_location in used_locations:
+                raise HTTPException(status_code=422, detail="Office names or locations must be unique")
+            used_locations.add(normalized_location)
+        latitude = record.get("latitude")
+        longitude = record.get("longitude")
+        if (latitude is None) != (longitude is None):
+            raise HTTPException(status_code=422, detail="Enter both map coordinates or leave both empty")
+        if latitude is not None and longitude is not None:
+            try:
+                lat = float(latitude)
+                lng = float(longitude)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="Office map coordinates must be numbers")
+            if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+                raise HTTPException(status_code=422, detail="Office map coordinates are out of range")
 
 
 def upsert_content_block(db, key: str, data: ContentBlockPayload):
     if not _is_allowed_content_block_key(key):
         raise HTTPException(status_code=404, detail="Unknown content block")
+    if key == "contact_page_channels" and "contact_email" in data.data:
+        contact_email = data.data["contact_email"]
+        if not isinstance(contact_email, str):
+            raise HTTPException(status_code=422, detail="Contact email must be a valid email address")
+        contact_email = contact_email.strip()
+        if contact_email and not re.fullmatch(r"\S+@\S+\.\S+", contact_email):
+            raise HTTPException(status_code=422, detail="Contact email must be a valid email address")
+        data.data["contact_email"] = contact_email
     limit = CONTENT_BLOCK_RECORD_LIMITS.get(key)
     if limit:
         field, maximum = limit

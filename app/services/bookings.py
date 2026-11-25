@@ -411,6 +411,8 @@ def _set_status(db: Session, booking: Booking, new_status: str, actor: User | No
     booking.booking_status = new_status
     if old_status != new_status:
         _history(db, booking, old_status, new_status, actor, source, reason, metadata)
+        if new_status == "completed" and booking.completed_at is None:
+            booking.completed_at = utcnow()
 
 
 BOOKING_STATUS_TRANSITIONS = {

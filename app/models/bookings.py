@@ -30,6 +30,8 @@ class Booking(Base):
     supplier_name = Column(String(150), default="", nullable=False)
     tour_start_date = Column(DateTime(timezone=True), nullable=True, index=True)
     tour_end_date = Column(DateTime(timezone=True), nullable=True)
+    # Actual completion time (distinct from the planned tour_end_date).
+    completed_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     no_of_adults = Column(Integer, default=1, nullable=False)
     no_of_children = Column(Integer, default=0, nullable=False)
